@@ -21,6 +21,7 @@ import { usePrefetchNip05 } from "@/hooks/usePrefetchNip05";
 import { useDnsIdentity } from "@/hooks/useDnsIdentity";
 import { useRepositoryState } from "@/hooks/useRepositoryState";
 import { useGraspServers, type GraspServer } from "@/hooks/useGraspServers";
+import { useGitPool } from "@/hooks/useGitPool";
 import { use$ } from "@/hooks/use$";
 import { useProfile } from "@/hooks/useProfile";
 import { useLoadProfile } from "@/hooks/useLoadProfile";
@@ -51,6 +52,7 @@ import {
   Settings,
   Workflow,
   UserPlus,
+  Check,
   CheckCircle2,
   Users,
   ChevronDown,
@@ -64,12 +66,14 @@ import {
 import { RepoContext, type RepoContextValue } from "./RepoContext";
 import {
   computeMaintainerLeadership,
-  getStateHead,
   getStateHeadCommit,
+  getStateRefs,
+  getRepoCloneUrls,
+  graspCloneUrlDomain,
   hasAcceptedRepositoryReference,
   REPO_KIND,
-  REPO_STATE_KIND,
   repoCoordinate,
+  type RepoStateRef,
   type RepoQueryOptions,
   type ResolvedRepo,
 } from "@/lib/nip34";
@@ -92,9 +96,15 @@ import { RepoRelaysContext } from "@/contexts/RepoRelaysContext";
 import { relayGroupUrls$ } from "@/models/RepositoryRelayGroup";
 import { EMPTY } from "rxjs";
 import { catchError } from "rxjs/operators";
-import { pool as nostrPool, publish } from "@/services/nostr";
-import { getOrCreatePool } from "@/lib/git-grasp-pool";
+import { pool as nostrPool } from "@/services/nostr";
 import { useToast } from "@/hooks/useToast";
+import { GraspServerSelector } from "@/components/GraspServerSelector";
+import {
+  selectGraspDomainsWithBackfill,
+  validateGraspServer,
+} from "@/lib/grasp";
+import { DEFAULT_GRASP_SERVERS } from "@/services/settings";
+import type { UrlState } from "@/lib/git-grasp-pool";
 // ---------------------------------------------------------------------------
 // RepoLayout
 // ---------------------------------------------------------------------------
@@ -322,6 +332,7 @@ function RepoLayoutResolved({
   const account = useActiveAccount();
   const {
     servers: accountGraspServers,
+    isFromUserList: accountGraspServersFromUserList,
     isLoading: accountGraspServersLoading,
   } = useGraspServers(account?.pubkey);
   const isMaintainer =
@@ -696,6 +707,7 @@ function RepoLayoutResolved({
             accountPubkey={account.pubkey}
             signer={account.signer}
             graspServers={accountGraspServers}
+            graspServersFromUserList={accountGraspServersFromUserList}
             ownStateEvent={repoStateEvents?.find(
               (event) => event.pubkey === account.pubkey,
             )}
@@ -812,16 +824,12 @@ function buildAcceptanceTemplate(
       name !== "p" &&
       !PERSONAL_ANNOUNCEMENT_TAGS.has(name),
   );
-  const personalTags = ownAnnouncement
-    ? ownAnnouncement.tags.filter(([name]) =>
-        PERSONAL_ANNOUNCEMENT_TAGS.has(name),
-      )
-    : buildDefaultPersonalTags(
-        latestAnnouncement,
-        accountPubkey,
-        repo.dTag,
-        graspServers,
-      );
+  const personalTags = buildPersonalTags(
+    ownAnnouncement ?? latestAnnouncement,
+    accountPubkey,
+    repo.dTag,
+    graspServers,
+  );
 
   return {
     kind: REPO_KIND,
@@ -839,8 +847,8 @@ function buildAcceptanceTemplate(
   };
 }
 
-function buildDefaultPersonalTags(
-  latestAnnouncement: NostrEvent,
+function buildPersonalTags(
+  sourceAnnouncement: NostrEvent,
   accountPubkey: string,
   dTag: string,
   graspServers: GraspServer[],
@@ -850,7 +858,7 @@ function buildDefaultPersonalTags(
     dTag,
     graspServers,
   );
-  const inheritedTags = latestAnnouncement.tags.filter(
+  const inheritedTags = sourceAnnouncement.tags.filter(
     ([name]) => name === "r" || name === "blossoms",
   );
 
@@ -874,6 +882,37 @@ function getDefaultPersonalInfrastructure(
     ),
     relayUrls: graspServers.map(({ wsUrl }) => wsUrl),
   };
+}
+
+function getAnnouncementGraspDomains(
+  announcement: NostrEvent | undefined,
+): string[] {
+  if (!announcement) return [];
+  return Array.from(
+    new Set(
+      getRepoCloneUrls(announcement)
+        .map(graspCloneUrlDomain)
+        .filter((domain): domain is string => !!domain),
+    ),
+  );
+}
+
+function getInvitationDefaultGraspDomains(
+  repo: ResolvedRepo,
+  ownAnnouncement: NostrEvent | undefined,
+  graspServers: GraspServer[],
+  graspServersFromUserList: boolean,
+): string[] {
+  return selectGraspDomainsWithBackfill(
+    [
+      getAnnouncementGraspDomains(ownAnnouncement),
+      graspServersFromUserList
+        ? graspServers.map((server) => server.domain)
+        : [],
+      repo.graspServerDomains,
+    ],
+    DEFAULT_GRASP_SERVERS,
+  );
 }
 
 function getAcceptanceMaintainerSelection(
@@ -906,6 +945,7 @@ function MaintainerInvitationBanner({
   accountPubkey,
   signer,
   graspServers,
+  graspServersFromUserList,
   ownStateEvent,
   stateCheckComplete,
   canonicalStateEvent,
@@ -916,6 +956,7 @@ function MaintainerInvitationBanner({
     signEvent(template: EventTemplate): Promise<NostrEvent>;
   };
   graspServers: GraspServer[];
+  graspServersFromUserList: boolean;
   ownStateEvent: NostrEvent | undefined;
   stateCheckComplete: boolean;
   canonicalStateEvent: NostrEvent | undefined;
@@ -951,7 +992,7 @@ function MaintainerInvitationBanner({
                 You’re invited to maintain {repo.name}
               </p>
               <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm text-muted-foreground">
-                {ownAnnouncement && inviters.length > 0 ? (
+                {inviters.length > 0 ? (
                   <>
                     <span>Invited by</span>
                     {inviters.map((pubkey) => (
@@ -962,36 +1003,9 @@ function MaintainerInvitationBanner({
                         nameClassName="text-sm"
                       />
                     ))}
-                    <span>
-                      · You already maintain an{" "}
-                      <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs text-foreground">
-                        {repo.dTag}
-                      </code>{" "}
-                      repository, so accepting will join the repositories.
-                    </span>
-                  </>
-                ) : inviters.length > 0 ? (
-                  <>
-                    <span>Invited by</span>
-                    {inviters.map((pubkey) => (
-                      <UserLink
-                        key={pubkey}
-                        pubkey={pubkey}
-                        avatarSize="xs"
-                        nameClassName="text-sm"
-                      />
-                    ))}
-                    <span>
-                      · We’ll copy the latest announcement and add your{" "}
-                      {graspServers.length} configured Grasp{" "}
-                      {graspServers.length === 1 ? "server" : "servers"}.
-                    </span>
                   </>
                 ) : (
-                  <span>
-                    We’ll copy the latest announcement, add your infrastructure,
-                    and link it to the maintainer group.
-                  </span>
+                  <span>Select how you want to join the maintainer group.</span>
                 )}
               </div>
             </div>
@@ -1013,17 +1027,6 @@ function MaintainerInvitationBanner({
                 state can be synchronized to every maintainer’s Git servers.
               </p>
             </div>
-          ) : !ownAnnouncement && !canonicalStateEvent ? (
-            <div className="max-w-md rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-sm">
-              <p className="font-medium text-amber-700 dark:text-amber-300">
-                Repository state is required
-              </p>
-              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                No canonical state event was found to mirror into your Grasp
-                infrastructure. Acceptance is paused so the new clone URLs do
-                not point at empty repositories.
-              </p>
-            </div>
           ) : (
             <MaintainerAcceptanceControls
               key={`${repo.selectedMaintainer}:${acceptanceSelection.options.join(
@@ -1034,6 +1037,7 @@ function MaintainerInvitationBanner({
               accountPubkey={accountPubkey}
               signer={signer}
               graspServers={graspServers}
+              graspServersFromUserList={graspServersFromUserList}
               canonicalStateEvent={canonicalStateEvent}
               {...acceptanceSelection}
             />
@@ -1050,6 +1054,7 @@ function MaintainerAcceptanceControls({
   accountPubkey,
   signer,
   graspServers,
+  graspServersFromUserList,
   canonicalStateEvent,
   options,
   defaults,
@@ -1062,121 +1067,113 @@ function MaintainerAcceptanceControls({
     signEvent(template: EventTemplate): Promise<NostrEvent>;
   };
   graspServers: GraspServer[];
+  graspServersFromUserList: boolean;
   canonicalStateEvent: NostrEvent | undefined;
   options: string[];
   defaults: string[];
   leadMaintainer?: string;
 }) {
   const { toast } = useToast();
-  const [isAccepting, setIsAccepting] = useState(false);
+  const [phase, setPhase] = useState<"idle" | "publishing" | "syncing">("idle");
   const [selectedMaintainers, setSelectedMaintainers] =
     useState<string[]>(defaults);
+  const [selectedDomains, setSelectedDomains] = useState<string[]>(() =>
+    getInvitationDefaultGraspDomains(
+      repo,
+      ownAnnouncement,
+      graspServers,
+      graspServersFromUserList,
+    ),
+  );
+  const selectedGraspServers = useMemo<GraspServer[]>(
+    () =>
+      selectedDomains.map(
+        (domain) =>
+          graspServers.find((server) => server.domain === domain) ?? {
+            domain,
+            wsUrl: `wss://${domain}`,
+          },
+      ),
+    [graspServers, selectedDomains],
+  );
+  const { cloneUrls, relayUrls } = useMemo(
+    () =>
+      getDefaultPersonalInfrastructure(
+        accountPubkey,
+        repo.dTag,
+        selectedGraspServers,
+      ),
+    [accountPubkey, repo.dTag, selectedGraspServers],
+  );
+  const stateRefs = useMemo(
+    () => (canonicalStateEvent ? getStateRefs(canonicalStateEvent) : []),
+    [canonicalStateEvent],
+  );
+  const { poolState } = useGitPool(phase === "syncing" ? cloneUrls : [], {
+    knownHeadCommit: canonicalStateEvent
+      ? getStateHeadCommit(canonicalStateEvent)
+      : undefined,
+    stateRefs,
+    stateCreatedAt: canonicalStateEvent?.created_at,
+  });
+  const serverSync = cloneUrls.map((cloneUrl) => ({
+    cloneUrl,
+    ready: cloneUrlMatchesState(poolState.urls[cloneUrl], stateRefs),
+  }));
+  const readyCount = serverSync.filter(({ ready }) => ready).length;
+  const allReady = serverSync.length > 0 && readyCount === serverSync.length;
 
   const accept = async () => {
-    if (isAccepting || selectedMaintainers.length === 0) return;
-    setIsAccepting(true);
+    if (
+      phase !== "idle" ||
+      selectedMaintainers.length === 0 ||
+      selectedGraspServers.length === 0
+    ) {
+      return;
+    }
+    setPhase("publishing");
     try {
+      const validationResults = await Promise.all(
+        selectedDomains.map(async (domain) => ({
+          domain,
+          error: await validateGraspServer(domain, {
+            requiredGrasps: ["GRASP-01", "GRASP-02"],
+          }),
+        })),
+      );
+      const invalidServers = validationResults.filter(({ error }) => !!error);
+      if (invalidServers.length > 0) {
+        throw new Error(
+          invalidServers
+            .map(({ domain, error }) => `${domain}: ${error}`)
+            .join("; "),
+        );
+      }
+
       const announcement = await signer.signEvent(
         buildAcceptanceTemplate(
           repo,
           ownAnnouncement,
           accountPubkey,
           selectedMaintainers,
-          graspServers,
+          selectedGraspServers,
         ),
       );
-
-      if (!ownAnnouncement) {
-        if (!canonicalStateEvent) {
-          throw new Error(
-            "A canonical repository state is required before creating new infrastructure.",
-          );
-        }
-
-        const headRef = getStateHead(canonicalStateEvent);
-        const headCommit = getStateHeadCommit(canonicalStateEvent);
-        if (!headRef || !headCommit) {
-          throw new Error(
-            "The canonical repository state does not declare a usable HEAD.",
-          );
-        }
-
-        const state = await signer.signEvent({
-          kind: REPO_STATE_KIND,
-          content: canonicalStateEvent.content,
-          created_at: Math.max(
-            Math.floor(Date.now() / 1000),
-            canonicalStateEvent.created_at + 1,
-          ),
-          tags: canonicalStateEvent.tags,
-        });
-        const { cloneUrls, relayUrls } = getDefaultPersonalInfrastructure(
-          accountPubkey,
-          repo.dTag,
-          graspServers,
-        );
-        if (cloneUrls.length === 0 || relayUrls.length === 0) {
-          throw new Error("No Grasp infrastructure is configured.");
-        }
-
-        await publishToGraspRelays(
-          announcement,
-          relayUrls,
-          "repository announcement",
-        );
-        await publishToGraspRelays(state, relayUrls, "repository state");
-
-        const gitPool = getOrCreatePool({ cloneUrls: repo.cloneUrls });
-        const delivery = await gitPool.pushRefUpdate(
-          [],
-          {
-            oldHash: headCommit,
-            newHash: headCommit,
-            refName: headRef,
-          },
-          {
-            targetCloneUrls: cloneUrls,
-            currentStateEvent: state,
-            fallbackUrls: repo.cloneUrls,
-          },
-        );
-
-        if (delivery.successCount !== delivery.totalCount) {
-          const failures = delivery.outcomes
-            .filter((outcome) => !outcome.ok)
-            .map((outcome) => `${outcome.cloneUrl}: ${outcome.message}`)
-            .join("; ");
-          throw new Error(
-            `Repository data reached ${delivery.successCount}/${delivery.totalCount} Grasp servers. ${failures}`,
-          );
-        }
-
-        const accountCoordinate = repoCoordinate(accountPubkey, repo.dTag);
-        await publish(announcement, [
-          ...repo.allCoordinates,
-          accountCoordinate,
-          "git-index",
-        ]);
-        await publish(state, [...repo.allCoordinates, accountCoordinate]);
-      } else {
-        await publish(announcement, [...repo.allCoordinates, "git-index"]);
-      }
+      await publishToGraspRelays(announcement, relayUrls);
+      setPhase("syncing");
 
       toast({
-        title: "Co-maintainership accepted",
-        description: ownAnnouncement
-          ? "Your signed repository announcement now links this copy to the maintainer group."
-          : `Your announcement and repository state were synchronized to ${graspServers.length} Grasp ${graspServers.length === 1 ? "server" : "servers"}.`,
+        title: "Invitation accepted",
+        description: "Your GRASP servers are syncing the repository.",
       });
     } catch (error) {
+      setPhase("idle");
       toast({
         title: "Could not accept invitation",
         description:
           error instanceof Error ? error.message : "Publishing failed.",
         variant: "destructive",
       });
-    } finally {
-      setIsAccepting(false);
     }
   };
 
@@ -1188,130 +1185,197 @@ function MaintainerAcceptanceControls({
     );
   };
 
-  return (
-    <div className="flex w-full shrink-0 flex-col gap-2 sm:w-auto sm:min-w-64">
-      <Popover>
-        <PopoverTrigger asChild>
-          <Button
-            type="button"
-            variant="outline"
-            className="w-full justify-between bg-background/80"
-          >
-            <span className="inline-flex min-w-0 items-center gap-2">
-              <Users className="h-4 w-4 shrink-0" />
-              <span className="truncate">
-                Select lead maintainer
-                {options.length === 1 ? "" : "(s)"} ·{" "}
-                {selectedMaintainers.length} selected
-              </span>
+  if (phase === "syncing") {
+    return (
+      <div className="w-full shrink-0 space-y-3 sm:w-96">
+        <div className="flex items-center gap-2">
+          <CheckCircle2 className="h-5 w-5 text-emerald-500" />
+          <p className="font-medium">Invitation accepted</p>
+        </div>
+        <div className="rounded-lg border bg-background/80 p-3">
+          <div className="flex items-center gap-2 text-sm">
+            {allReady ? (
+              <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+            ) : (
+              <Loader2 className="h-4 w-4 animate-spin text-pink-500" />
+            )}
+            <span>
+              {allReady
+                ? "GRASP servers are in sync"
+                : "Syncing up your GRASP servers"}
             </span>
-            <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
-          </Button>
-        </PopoverTrigger>
-        <PopoverContent align="end" className="w-80 space-y-3">
-          <div>
+            <span className="ml-auto text-xs text-muted-foreground">
+              {readyCount}/{serverSync.length}
+            </span>
+          </div>
+          <div className="mt-3 space-y-1.5">
+            {serverSync.map(({ cloneUrl, ready }) => (
+              <div
+                key={cloneUrl}
+                className="flex items-center gap-2 text-xs text-muted-foreground"
+              >
+                {ready ? (
+                  <Check className="h-3.5 w-3.5 text-emerald-500" />
+                ) : (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                )}
+                <span className="truncate font-mono">
+                  {new URL(cloneUrl).hostname}
+                </span>
+                <span className="ml-auto">{ready ? "ready" : "syncing"}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="w-full shrink-0 space-y-3 sm:w-96">
+      <div className="rounded-lg border bg-background/80 p-3">
+        <GraspServerSelector
+          selectedDomains={selectedDomains}
+          onSelectedDomainsChange={setSelectedDomains}
+          resolvedServers={graspServers}
+          isFromUserList={graspServersFromUserList}
+          additionalDomains={repo.graspServerDomains}
+          currentDomains={getAnnouncementGraspDomains(ownAnnouncement)}
+          requiredGrasps={["GRASP-01", "GRASP-02"]}
+          disabled={phase === "publishing"}
+        />
+      </div>
+
+      {options.length > 1 && (
+        <Popover>
+          <PopoverTrigger asChild>
+            <Button
+              type="button"
+              variant="outline"
+              className="w-full justify-between bg-background/80"
+            >
+              <span className="inline-flex min-w-0 items-center gap-2">
+                <Users className="h-4 w-4 shrink-0" />
+                <span className="truncate">
+                  Select lead maintainer(s) · {selectedMaintainers.length}{" "}
+                  selected
+                </span>
+              </span>
+              <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent align="end" className="w-80 space-y-3">
             <p className="text-sm font-medium">Select lead maintainer(s)</p>
-            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-              Choose which accepted maintainers lead the link into this
-              repository. Your existing maintainer relationships remain
-              unchanged.
-            </p>
-          </div>
-          <div className="max-h-64 space-y-1 overflow-y-auto">
-            {options.map((pubkey) => {
-              const checked = selectedMaintainers.includes(pubkey);
-              return (
-                <label
-                  key={pubkey}
-                  className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 hover:bg-muted/60"
+            <div className="max-h-64 space-y-1 overflow-y-auto">
+              {options.map((pubkey) => {
+                const checked = selectedMaintainers.includes(pubkey);
+                return (
+                  <label
+                    key={pubkey}
+                    className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 hover:bg-muted/60"
+                  >
+                    <Checkbox
+                      checked={checked}
+                      onCheckedChange={(value) =>
+                        toggleMaintainer(pubkey, value === true)
+                      }
+                    />
+                    <UserLink
+                      pubkey={pubkey}
+                      avatarSize="xs"
+                      nameClassName="text-sm"
+                      className="min-w-0 flex-1"
+                      noLink
+                    />
+                    {pubkey === leadMaintainer && (
+                      <Badge
+                        variant="outline"
+                        className="h-4 px-1.5 text-[10px] text-pink-600 dark:text-pink-400"
+                      >
+                        lead
+                      </Badge>
+                    )}
+                  </label>
+                );
+              })}
+            </div>
+            <div className="flex items-center justify-between border-t pt-2">
+              {leadMaintainer && options.includes(leadMaintainer) ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setSelectedMaintainers([leadMaintainer])}
                 >
-                  <Checkbox
-                    checked={checked}
-                    onCheckedChange={(value) =>
-                      toggleMaintainer(pubkey, value === true)
-                    }
-                  />
-                  <UserLink
-                    pubkey={pubkey}
-                    avatarSize="xs"
-                    nameClassName="text-sm"
-                    className="min-w-0 flex-1"
-                    noLink
-                  />
-                  {pubkey === leadMaintainer && (
-                    <Badge
-                      variant="outline"
-                      className="h-4 px-1.5 text-[10px] text-pink-600 dark:text-pink-400"
-                    >
-                      lead
-                    </Badge>
-                  )}
-                </label>
-              );
-            })}
-          </div>
-          <div className="flex items-center justify-between border-t pt-2">
-            {leadMaintainer && options.includes(leadMaintainer) ? (
+                  Lead only
+                </Button>
+              ) : (
+                <span />
+              )}
               <Button
                 type="button"
                 variant="ghost"
                 size="sm"
-                onClick={() => setSelectedMaintainers([leadMaintainer])}
+                onClick={() => setSelectedMaintainers(options)}
               >
-                Lead only
+                Select all
               </Button>
-            ) : (
-              <span />
-            )}
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={() => setSelectedMaintainers(options)}
-            >
-              Select all
-            </Button>
-          </div>
-        </PopoverContent>
-      </Popover>
+            </div>
+          </PopoverContent>
+        </Popover>
+      )}
+
       <Button
         type="button"
         onClick={accept}
-        disabled={isAccepting || selectedMaintainers.length === 0}
+        disabled={
+          phase === "publishing" ||
+          selectedMaintainers.length === 0 ||
+          selectedDomains.length === 0
+        }
         className="w-full bg-pink-600 text-white hover:bg-pink-700"
       >
-        {isAccepting ? (
+        {phase === "publishing" ? (
           <Loader2 className="mr-2 h-4 w-4 animate-spin" />
         ) : (
           <CheckCircle2 className="mr-2 h-4 w-4" />
         )}
-        {isAccepting
-          ? "Publishing…"
-          : ownAnnouncement
-            ? "Accept invitation"
-            : "Create announcement & accept"}
+        {phase === "publishing" ? "Accepting…" : "Accept invitation"}
       </Button>
     </div>
   );
 }
 
+function cloneUrlMatchesState(
+  urlState: UrlState | undefined,
+  stateRefs: RepoStateRef[],
+): boolean {
+  if (urlState?.status !== "ok" || !urlState.infoRefs) return false;
+  if (stateRefs.length === 0) return true;
+
+  return stateRefs.every(({ name, commitId }) => {
+    const advertisedCommit =
+      urlState.infoRefs?.refs[`${name}^{}`] ?? urlState.infoRefs?.refs[name];
+    return advertisedCommit === commitId;
+  });
+}
+
 async function publishToGraspRelays(
   event: NostrEvent,
   relayUrls: string[],
-  label: string,
 ): Promise<void> {
   const responses = await nostrPool.publish(relayUrls, event);
-  const failures = responses.filter((response) => !response.ok);
-  if (failures.length === 0 && responses.length === relayUrls.length) return;
+  const accepted = responses.filter((response) => response.ok);
+  if (accepted.length > 0) return;
 
-  const reasons = failures
+  const reasons = responses
     .map(
       (response) =>
         `${response.from}: ${response.message ?? "relay rejected event"}`,
     )
     .join("; ");
   throw new Error(
-    `The ${label} reached ${responses.length - failures.length}/${relayUrls.length} Grasp relays. ${reasons || "One or more relays did not respond."}`,
+    `All selected GRASP relays rejected the announcement. ${reasons || "No relay responded."}`,
   );
 }
 

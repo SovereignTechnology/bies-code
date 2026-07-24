@@ -32,7 +32,6 @@ import {
   Plus,
   X,
   Loader2,
-  Server,
   Radio,
   GitBranch,
   AlertTriangle,
@@ -50,7 +49,6 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Separator } from "@/components/ui/separator";
 import {
   Collapsible,
@@ -95,11 +93,10 @@ import {
 } from "@/lib/nip34";
 import type { RepositoryState } from "@/casts/RepositoryState";
 import { decodePubkeyIdentifier, repoToPath } from "@/lib/routeUtils";
-import { validateGraspServer } from "@/lib/grasp";
 import { publish } from "@/services/nostr";
 import { useGraspServers } from "@/hooks/useGraspServers";
-import { DEFAULT_GRASP_SERVERS } from "@/services/settings";
 import { GraspLogo } from "@/components/GraspLogo";
+import { GraspServerSelector } from "@/components/GraspServerSelector";
 import { cn } from "@/lib/utils";
 import { normalizeUrl } from "@/lib/url";
 import { SubordinateForkField } from "@/components/repo/SubordinateForkField";
@@ -428,11 +425,6 @@ function RepoSettingsForm({
   // Grasp server selection
   const [selectedDomains, setSelectedDomains] =
     useState<string[]>(currentGraspDomains);
-  const [customDomain, setCustomDomain] = useState("");
-  const [customDomainError, setCustomDomainError] = useState<
-    string | undefined
-  >();
-  const [validatingDomain, setValidatingDomain] = useState(false);
 
   // Other relays
   const [otherRelays, setOtherRelays] = useState<string[]>(currentOtherRelays);
@@ -569,22 +561,6 @@ function RepoSettingsForm({
     if (userHasSelectedBranch) return;
     setSelectedBranch(currentHeadBranch ?? branches[0] ?? "");
   }, [currentHeadBranch, branches, userHasSelectedBranch]);
-
-  // ---------------------------------------------------------------------------
-  // Computed: all known Grasp domains (resolved + custom added)
-  // ---------------------------------------------------------------------------
-
-  const allKnownDomains = useMemo(() => {
-    const fromResolved = resolvedServers.map((s) => s.domain);
-    // Also include any domains that are already selected but not in the user's
-    // resolved list (they came from the existing announcement)
-    const extra = selectedDomains.filter((d) => !fromResolved.includes(d));
-    // Make sure current announcement domains are always visible
-    const fromAnnouncement = currentGraspDomains.filter(
-      (d) => !fromResolved.includes(d) && !extra.includes(d),
-    );
-    return [...fromResolved, ...extra, ...fromAnnouncement];
-  }, [resolvedServers, selectedDomains, currentGraspDomains]);
 
   // ---------------------------------------------------------------------------
   // Union items from other maintainers
@@ -731,48 +707,6 @@ function RepoSettingsForm({
   ]);
 
   // ---------------------------------------------------------------------------
-  // Grasp server actions
-  // ---------------------------------------------------------------------------
-
-  const handleToggleServer = useCallback((domain: string) => {
-    setSelectedDomains((prev) =>
-      prev.includes(domain)
-        ? prev.filter((d) => d !== domain)
-        : [...prev, domain],
-    );
-  }, []);
-
-  const handleAddCustomDomain = useCallback(async () => {
-    const raw = customDomain.trim().toLowerCase();
-    if (!raw) return;
-
-    const domain = raw.replace(/^wss?:\/\//, "").replace(/\/+$/, "");
-
-    if (!domain || !/^[a-z0-9.-]+\.[a-z]{2,}$/.test(domain)) {
-      setCustomDomainError("Enter a valid domain (e.g. relay.example.com)");
-      return;
-    }
-    if (selectedDomains.includes(domain)) {
-      setCustomDomainError("Already in the list");
-      return;
-    }
-
-    setValidatingDomain(true);
-    setCustomDomainError(undefined);
-    const validationError = await validateGraspServer(domain);
-    setValidatingDomain(false);
-
-    if (validationError) {
-      setCustomDomainError(validationError);
-      return;
-    }
-
-    setSelectedDomains((prev) => [...prev, domain]);
-    setCustomDomain("");
-    setCustomDomainError(undefined);
-  }, [customDomain, selectedDomains]);
-
-  // ---------------------------------------------------------------------------
   // Other relay actions
   // ---------------------------------------------------------------------------
 
@@ -821,7 +755,7 @@ function RepoSettingsForm({
     }
     if (isGraspCloneUrl(raw)) {
       setGitServerInputError(
-        "This looks like a Grasp server URL — use the Grasp Servers section instead",
+        "This looks like a GRASP server URL — use the GRASP servers section instead",
       );
       return;
     }
@@ -1602,7 +1536,7 @@ function RepoSettingsForm({
             <div>
               <h2 className="text-sm font-semibold">Infrastructure</h2>
               <p className="text-xs text-muted-foreground mt-0.5">
-                Grasp servers provide git hosting and Nostr relay in one.
+                GRASP servers provide git hosting and Nostr relay in one.
                 Alternatively, specify both a relay and a git server manually.
               </p>
             </div>
@@ -1611,116 +1545,29 @@ function RepoSettingsForm({
             <div className="space-y-3">
               <div className="flex items-center gap-1.5 px-1">
                 <GraspLogo className="h-3.5 w-3.5 text-pink-500" />
-                <span className="text-sm font-medium">Grasp servers</span>
+                <span className="text-sm font-medium">GRASP servers</span>
               </div>
 
               <div className="space-y-3 pl-1">
                 <p className="text-xs text-muted-foreground leading-relaxed">
-                  Grasp servers host your git data and act as relays. Clone and
+                  GRASP servers host your git data and act as relays. Clone and
                   relay URLs are auto-generated from your server selection.
                   Adding a new server requires pushing via{" "}
                   <code className="font-mono">ngit</code> afterwards.
                 </p>
 
-                {/* Server checklist */}
-                <div className="space-y-1.5">
-                  {allKnownDomains.map((domain) => {
-                    const checked = selectedDomains.includes(domain);
-                    const isDefault = DEFAULT_GRASP_SERVERS.includes(domain);
-                    const isUserList =
-                      isFromUserList &&
-                      resolvedServers.some((s) => s.domain === domain);
-                    const isFromAnnouncement =
-                      currentGraspDomains.includes(domain);
-                    return (
-                      <label
-                        key={domain}
-                        className={cn(
-                          "flex items-center gap-2.5 rounded-md px-2.5 py-1.5 cursor-pointer hover:bg-muted/40 transition-colors",
-                        )}
-                      >
-                        <Checkbox
-                          checked={checked}
-                          onCheckedChange={() => handleToggleServer(domain)}
-                          id={`edit-server-${domain}`}
-                        />
-                        <Server className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                        <span className="text-sm font-mono flex-1">
-                          {domain}
-                        </span>
-                        {isFromAnnouncement && (
-                          <Badge
-                            variant="outline"
-                            className="text-[10px] px-1.5 py-0 h-4 text-pink-500 border-pink-500/30"
-                          >
-                            current
-                          </Badge>
-                        )}
-                        {isUserList && !isDefault && !isFromAnnouncement && (
-                          <Badge
-                            variant="secondary"
-                            className="text-[10px] px-1.5 py-0 h-4"
-                          >
-                            your list
-                          </Badge>
-                        )}
-                        {isDefault && !isFromAnnouncement && (
-                          <Badge
-                            variant="outline"
-                            className="text-[10px] px-1.5 py-0 h-4 text-muted-foreground"
-                          >
-                            default
-                          </Badge>
-                        )}
-                      </label>
-                    );
-                  })}
-                </div>
-
-                {/* Add custom server */}
-                <div className="space-y-1.5">
-                  <div className="flex gap-2">
-                    <Input
-                      placeholder="relay.example.com"
-                      value={customDomain}
-                      disabled={validatingDomain}
-                      onChange={(e) => {
-                        setCustomDomain(e.target.value);
-                        setCustomDomainError(undefined);
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") {
-                          e.preventDefault();
-                          void handleAddCustomDomain();
-                        }
-                      }}
-                      className="h-8 text-sm font-mono"
-                    />
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => void handleAddCustomDomain()}
-                      disabled={validatingDomain}
-                      className="h-8 px-2.5 shrink-0"
-                    >
-                      {validatingDomain ? (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      ) : (
-                        <Plus className="h-3.5 w-3.5" />
-                      )}
-                    </Button>
-                  </div>
-                  {customDomainError && (
-                    <p className="text-xs text-red-500 px-0.5">
-                      {customDomainError}
-                    </p>
-                  )}
-                </div>
+                <GraspServerSelector
+                  selectedDomains={selectedDomains}
+                  onSelectedDomainsChange={setSelectedDomains}
+                  resolvedServers={resolvedServers}
+                  isFromUserList={isFromUserList}
+                  currentDomains={currentGraspDomains}
+                  showTitle={false}
+                />
 
                 {!hasInfrastructure && (
                   <p className="text-xs text-amber-600 dark:text-amber-400 px-0.5">
-                    Select at least one Grasp server, or add both a relay and a
+                    Select at least one GRASP server, or add both a relay and a
                     git server below.
                   </p>
                 )}
@@ -1778,7 +1625,7 @@ function RepoSettingsForm({
 
               <CollapsibleContent className="space-y-3 pt-2 pl-1">
                 <p className="text-xs text-muted-foreground leading-relaxed">
-                  Additional Nostr relay URLs beyond Grasp servers.
+                  Additional Nostr relay URLs beyond GRASP servers.
                 </p>
 
                 {otherRelays.length > 0 && (
@@ -1889,7 +1736,7 @@ function RepoSettingsForm({
 
               <CollapsibleContent className="space-y-3 pt-2 pl-1">
                 <p className="text-xs text-muted-foreground leading-relaxed">
-                  Additional raw git clone URLs beyond Grasp servers (e.g.
+                  Additional raw git clone URLs beyond GRASP servers (e.g.
                   GitHub mirrors).
                 </p>
 

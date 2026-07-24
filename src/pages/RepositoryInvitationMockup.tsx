@@ -3,7 +3,6 @@ import { useSeoMeta } from "@unhead/react";
 import {
   Check,
   CheckCircle2,
-  ChevronDown,
   CircleDot,
   Clock3,
   GitFork,
@@ -11,7 +10,6 @@ import {
   Megaphone,
   Plus,
   Send,
-  Server,
   Settings2,
   UserPlus,
   UserRound,
@@ -31,6 +29,16 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
+import { GraspServerSelector } from "@/components/GraspServerSelector";
+
+const mockGraspServers = [
+  { domain: "relay.ngit.dev", wsUrl: "wss://relay.ngit.dev" },
+  { domain: "gitnostr.com", wsUrl: "wss://gitnostr.com" },
+  {
+    domain: "ngit.danconwaydev.com",
+    wsUrl: "wss://ngit.danconwaydev.com",
+  },
+];
 
 type PersonTone = "pink" | "violet" | "blue" | "amber" | "green";
 
@@ -156,18 +164,21 @@ function InvitationDiscoveryNote() {
   );
 }
 
-function MissingAnnouncementCard() {
+function SingleMaintainerCard() {
+  const [selectedDomains, setSelectedDomains] = useState(
+    mockGraspServers.map(({ domain }) => domain),
+  );
   const [accepted, setAccepted] = useState(false);
 
   return (
     <ScenarioCard
-      number="01"
-      title="No announcement"
-      description="Copy the latest announcement and state, then populate the invitee’s infrastructure."
+      number="01 / 02"
+      title="One maintainer invited you"
+      description="The acceptance flow is the same for every non-conflicting invitation."
       state={accepted ? "accepted" : "ready"}
     >
       {accepted ? (
-        <AcceptedPanel repo="open-fork" people="Maya" />
+        <SyncingPanel repo="open-fork" />
       ) : (
         <InvitationBanner>
           <div className="flex min-w-0 gap-3">
@@ -182,102 +193,24 @@ function MissingAnnouncementCard() {
             </div>
           </div>
 
-          <div className="mt-4 space-y-2 rounded-lg border bg-background/80 p-3">
-            <div className="flex items-center gap-2 text-xs">
-              <Megaphone className="h-3.5 w-3.5 text-violet-500" />
-              <span className="text-muted-foreground">
-                Copy metadata and state from
-              </span>
-              <Person name="Maya" tone="pink" compact />
-              <Badge variant="outline" className="ml-auto h-4 text-[10px]">
-                latest
-              </Badge>
-            </div>
-            <Separator />
-            <div className="flex items-center gap-2 text-xs">
-              <Server className="h-3.5 w-3.5 text-pink-500" />
-              <span className="font-medium">Your Grasp infrastructure</span>
-            </div>
-            <label className="flex items-center gap-2 text-xs text-muted-foreground">
-              <Checkbox checked disabled />
-              relay.ngit.dev
-              <Badge variant="secondary" className="ml-auto h-4 text-[10px]">
-                default
-              </Badge>
-            </label>
-            <label className="flex items-center gap-2 text-xs text-muted-foreground">
-              <Checkbox checked disabled />
-              gitnostr.com
-              <Badge variant="secondary" className="ml-auto h-4 text-[10px]">
-                default
-              </Badge>
-            </label>
-            <p className="border-t pt-2 text-[11px] leading-relaxed text-muted-foreground">
-              Missing Git objects are prepared from the existing servers and
-              each new server is verified before the events are broadcast.
-            </p>
+          <div className="mt-4 rounded-lg border bg-background/80 p-3">
+            <GraspServerSelector
+              selectedDomains={selectedDomains}
+              onSelectedDomainsChange={setSelectedDomains}
+              resolvedServers={mockGraspServers}
+              isFromUserList
+              requiredGrasps={["GRASP-01", "GRASP-02"]}
+            />
           </div>
           <Button
             type="button"
             onClick={() => setAccepted(true)}
+            disabled={selectedDomains.length === 0}
             className="mt-2 w-full bg-pink-600 text-white hover:bg-pink-700 dark:bg-pink-600"
           >
             <CheckCircle2 className="h-4 w-4" />
-            Prepare infrastructure & accept
+            Accept invitation
           </Button>
-        </InvitationBanner>
-      )}
-    </ScenarioCard>
-  );
-}
-
-function ExistingAnnouncementCard() {
-  const [accepted, setAccepted] = useState(false);
-
-  return (
-    <ScenarioCard
-      number="02"
-      title="Announcement, no state"
-      description="There is infrastructure to preserve but no competing repository state."
-      state={accepted ? "accepted" : "ready"}
-    >
-      {accepted ? (
-        <AcceptedPanel repo="relay-tools" people="Maya" />
-      ) : (
-        <InvitationBanner>
-          <div className="flex min-w-0 gap-3">
-            <InvitationIcon />
-            <div className="min-w-0">
-              <p className="font-semibold">
-                You’re invited to maintain relay-tools
-              </p>
-              <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
-                Invited by <Person name="Maya" tone="pink" compact /> · Your
-                existing repository will be linked.
-              </p>
-            </div>
-          </div>
-          <div className="mt-4 space-y-2">
-            <Button
-              type="button"
-              variant="outline"
-              className="w-full justify-between bg-background/80"
-            >
-              <span className="inline-flex items-center gap-2">
-                <Users className="h-4 w-4" />
-                Link through Maya
-              </span>
-              <ChevronDown className="h-4 w-4 text-muted-foreground" />
-            </Button>
-            <Button
-              type="button"
-              onClick={() => setAccepted(true)}
-              className="w-full bg-pink-600 text-white hover:bg-pink-700 dark:bg-pink-600"
-            >
-              <CheckCircle2 className="h-4 w-4" />
-              Accept invitation
-            </Button>
-          </div>
         </InvitationBanner>
       )}
     </ScenarioCard>
@@ -292,6 +225,9 @@ const inviteOptions = [
 
 function MultipleMaintainersCard() {
   const [selected, setSelected] = useState(["Maya"]);
+  const [selectedDomains, setSelectedDomains] = useState(
+    mockGraspServers.map(({ domain }) => domain),
+  );
   const [accepted, setAccepted] = useState(false);
 
   const toggle = (name: string, checked: boolean) => {
@@ -306,18 +242,11 @@ function MultipleMaintainersCard() {
     <ScenarioCard
       number="03"
       title="Several maintainers invited you"
-      description="A unique lead is selected alone; ambiguous leadership starts with none selected."
+      description="Choose the lead link and the GRASP servers for your repository."
       state={accepted ? "accepted" : "ready"}
     >
       {accepted ? (
-        <AcceptedPanel
-          repo="nostr-kit"
-          people={
-            selected.length === 1
-              ? selected[0]
-              : `${selected.length} maintainers`
-          }
-        />
+        <SyncingPanel repo="nostr-kit" />
       ) : (
         <InvitationBanner>
           <div className="flex min-w-0 gap-3">
@@ -333,6 +262,16 @@ function MultipleMaintainersCard() {
                 <Person name="Lena" tone="green" compact />
               </div>
             </div>
+          </div>
+
+          <div className="mt-4 rounded-lg border bg-background/80 p-3">
+            <GraspServerSelector
+              selectedDomains={selectedDomains}
+              onSelectedDomainsChange={setSelectedDomains}
+              resolvedServers={mockGraspServers}
+              isFromUserList
+              requiredGrasps={["GRASP-01", "GRASP-02"]}
+            />
           </div>
 
           <div className="mt-4 rounded-lg border bg-background/80 p-2">
@@ -362,19 +301,14 @@ function MultipleMaintainersCard() {
               </label>
             ))}
           </div>
-          <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
-            Maya is the unique lead, so only Maya is preselected. With no unique
-            lead, all options would start unchecked.
-          </p>
           <Button
             type="button"
             onClick={() => setAccepted(true)}
-            disabled={selected.length === 0}
+            disabled={selected.length === 0 || selectedDomains.length === 0}
             className="mt-2 w-full bg-pink-600 text-white hover:bg-pink-700 dark:bg-pink-600"
           >
-            <Link2 className="h-4 w-4" />
-            Accept through {selected.length}{" "}
-            {selected.length === 1 ? "maintainer" : "maintainers"}
+            <CheckCircle2 className="h-4 w-4" />
+            Accept invitation
           </Button>
         </InvitationBanner>
       )}
@@ -481,20 +415,19 @@ function InvitationIcon() {
   );
 }
 
-function AcceptedPanel({ repo, people }: { repo: string; people: string }) {
+function SyncingPanel({ repo }: { repo: string }) {
   return (
     <div className="flex h-full min-h-52 flex-col items-center justify-center rounded-xl border border-emerald-500/25 bg-emerald-500/[0.06] p-5 text-center">
       <span className="flex h-12 w-12 items-center justify-center rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
         <CheckCircle2 className="h-6 w-6" />
       </span>
-      <p className="mt-3 font-semibold">You now maintain {repo}</p>
-      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-        Your signed announcement links through {people}. Maintainer controls are
-        now available.
+      <p className="mt-3 font-semibold">Invitation accepted</p>
+      <p className="mt-1 text-xs text-muted-foreground">
+        Syncing up your GRASP servers for {repo}
       </p>
-      <Button type="button" variant="outline" size="sm" className="mt-4">
-        Open repository settings
-      </Button>
+      <div className="mt-4 flex items-center gap-2 text-xs text-muted-foreground">
+        <Clock3 className="h-3.5 w-3.5" />1 of 3 ready
+      </div>
     </div>
   );
 }
@@ -524,9 +457,8 @@ function InviteeView() {
             invitation is accepted.
           </p>
         </div>
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <MissingAnnouncementCard />
-          <ExistingAnnouncementCard />
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          <SingleMaintainerCard />
           <MultipleMaintainersCard />
           <ConflictingStateCard />
         </div>
@@ -615,25 +547,13 @@ function InviterSettings() {
           <MaintainerRow
             name="Sam"
             tone="amber"
-            detail={
-              <>
-                Invited by you · no announcement · will use configured
-                infrastructure
-              </>
-            }
+            detail="Invited by you"
             state="ready"
           />
           <MaintainerRow
             name="Alex"
             tone="blue"
-            detail={
-              <>
-                Invited by you and Theo ·{" "}
-                <span className="underline underline-offset-2">
-                  has existing repository
-                </span>
-              </>
-            }
+            detail="Invited by you and Theo"
             state="ready"
           />
           <MaintainerRow
@@ -717,7 +637,7 @@ function PublicRepositorySummary() {
           </div>
           <div className="flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
             <Person name="Alex" tone="blue" compact />
-            <span>(has existing repository) · invited by</span>
+            <span>invited by</span>
             <Person name="Maya" tone="pink" compact />
             <span>and</span>
             <Person name="Theo" tone="violet" compact />
@@ -777,8 +697,7 @@ function InviterView() {
             Track every invitation from one roster
           </h2>
           <p className="mt-2 max-w-2xl text-sm leading-relaxed text-muted-foreground">
-            The inviter sees who is confirmed, who can accept in the browser,
-            and who still needs to create a repository announcement.
+            The inviter sees who is confirmed and who can accept in the browser.
           </p>
         </div>
         <InviterSettings />
@@ -909,9 +828,8 @@ export default function RepositoryInvitationMockup() {
             </span>
           </h1>
           <p className="mt-5 max-w-3xl text-lg leading-relaxed text-muted-foreground">
-            Every place an invitation appears, how acceptance changes when you
-            already have a repository announcement, and what the inviter sees
-            while they wait.
+            Every place an invitation appears, the choices needed to accept, and
+            what the inviter sees while they wait.
           </p>
         </header>
 

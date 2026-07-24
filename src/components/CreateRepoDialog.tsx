@@ -14,10 +14,8 @@ import {
   Loader2,
   X,
   AlertTriangle,
-  Server,
   ChevronDown,
   ChevronRight,
-  Plus,
 } from "lucide-react";
 import {
   Dialog,
@@ -46,8 +44,7 @@ import {
 import { useGraspServers, type GraspServer } from "@/hooks/useGraspServers";
 import { useRepoPath } from "@/hooks/useRepoPath";
 import { usePublish } from "@/hooks/usePublish";
-import { DEFAULT_GRASP_SERVERS } from "@/services/settings";
-import { validateGraspServer } from "@/lib/grasp";
+import { GraspServerSelector } from "@/components/GraspServerSelector";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -205,12 +202,6 @@ export function CreateRepoDialog({ isOpen, onClose }: CreateRepoDialogProps) {
   // selectedDomains: the set of domains the user has chosen for this repo.
   // Initialised from resolvedServers once they load.
   const [selectedDomains, setSelectedDomains] = useState<string[]>([]);
-  // Custom domain input for adding a server not in the list
-  const [customDomain, setCustomDomain] = useState("");
-  const [customDomainError, setCustomDomainError] = useState<
-    string | undefined
-  >();
-  const [validatingDomain, setValidatingDomain] = useState(false);
   // Whether to save these servers as the user's default grasp list
   const [saveAsDefaults, setSaveAsDefaults] = useState(false);
 
@@ -243,9 +234,6 @@ export function CreateRepoDialog({ isOpen, onClose }: CreateRepoDialogProps) {
       setName("");
       setDescription("");
       setSelectedDomains(resolvedServers.map((s) => s.domain));
-      setCustomDomain("");
-      setCustomDomainError(undefined);
-      setValidatingDomain(false);
       setSaveAsDefaults(false);
       setAdvancedOpen(false);
       reset();
@@ -277,49 +265,6 @@ export function CreateRepoDialog({ isOpen, onClose }: CreateRepoDialogProps) {
     !identifierError &&
     selectedServers.length > 0 &&
     state.step === "idle";
-
-  // Add a custom domain to the selection
-  const handleAddCustomDomain = useCallback(async () => {
-    const raw = customDomain.trim().toLowerCase();
-    if (!raw) return;
-
-    // Strip protocol if pasted
-    const domain = raw.replace(/^wss?:\/\//, "").replace(/\/+$/, "");
-
-    if (!domain || !/^[a-z0-9.-]+\.[a-z]{2,}$/.test(domain)) {
-      setCustomDomainError("Enter a valid domain (e.g. relay.example.com)");
-      return;
-    }
-
-    if (selectedDomains.includes(domain)) {
-      setCustomDomainError("Already in the list");
-      return;
-    }
-
-    // Validate NIP-11 Grasp support before adding
-    setValidatingDomain(true);
-    setCustomDomainError(undefined);
-    const validationError = await validateGraspServer(domain);
-    setValidatingDomain(false);
-
-    if (validationError) {
-      setCustomDomainError(validationError);
-      return;
-    }
-
-    setSelectedDomains((prev) => [...prev, domain]);
-    setCustomDomain("");
-    setCustomDomainError(undefined);
-  }, [customDomain, selectedDomains]);
-
-  // Toggle a resolved server in/out of the selection
-  const handleToggleServer = useCallback((domain: string) => {
-    setSelectedDomains((prev) =>
-      prev.includes(domain)
-        ? prev.filter((d) => d !== domain)
-        : [...prev, domain],
-    );
-  }, []);
 
   const handleSubmit = useCallback(async () => {
     if (!canSubmit) return;
@@ -381,13 +326,6 @@ export function CreateRepoDialog({ isOpen, onClose }: CreateRepoDialogProps) {
 
   const isInProgress =
     state.step !== "idle" && state.step !== "done" && state.step !== "error";
-
-  // Servers available to toggle (resolved list + any custom ones already added)
-  const allKnownDomains = useMemo(() => {
-    const fromResolved = resolvedServers.map((s) => s.domain);
-    const extra = selectedDomains.filter((d) => !fromResolved.includes(d));
-    return [...fromResolved, ...extra];
-  }, [resolvedServers, selectedDomains]);
 
   // Whether the current selection differs from the resolved defaults
   const hasCustomSelection = useMemo(() => {
@@ -499,7 +437,7 @@ export function CreateRepoDialog({ isOpen, onClose }: CreateRepoDialogProps) {
                     ) : (
                       <ChevronRight className="h-3.5 w-3.5" />
                     )}
-                    Grasp servers
+                    GRASP servers
                   </span>
                   {!advancedOpen && (
                     <span className="text-xs font-mono text-muted-foreground/70 flex items-center gap-1">
@@ -526,90 +464,13 @@ export function CreateRepoDialog({ isOpen, onClose }: CreateRepoDialogProps) {
                   </div>
                 ) : (
                   <>
-                    {/* Server checklist */}
-                    <div className="space-y-1.5">
-                      {allKnownDomains.map((domain) => {
-                        const checked = selectedDomains.includes(domain);
-                        const isDefault =
-                          DEFAULT_GRASP_SERVERS.includes(domain);
-                        const isUserList =
-                          isFromUserList &&
-                          resolvedServers.some((s) => s.domain === domain);
-                        return (
-                          <label
-                            key={domain}
-                            className="flex items-center gap-2.5 rounded-md px-2.5 py-1.5 cursor-pointer hover:bg-muted/40 transition-colors"
-                          >
-                            <Checkbox
-                              checked={checked}
-                              onCheckedChange={() => handleToggleServer(domain)}
-                              id={`server-${domain}`}
-                            />
-                            <Server className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                            <span className="text-sm font-mono flex-1">
-                              {domain}
-                            </span>
-                            {isUserList && !isDefault && (
-                              <Badge
-                                variant="secondary"
-                                className="text-[10px] px-1.5 py-0 h-4"
-                              >
-                                your list
-                              </Badge>
-                            )}
-                            {isDefault && !isUserList && (
-                              <Badge
-                                variant="outline"
-                                className="text-[10px] px-1.5 py-0 h-4 text-muted-foreground"
-                              >
-                                default
-                              </Badge>
-                            )}
-                          </label>
-                        );
-                      })}
-                    </div>
-
-                    {/* Add custom server */}
-                    <div className="space-y-1.5">
-                      <div className="flex gap-2">
-                        <Input
-                          placeholder="relay.example.com"
-                          value={customDomain}
-                          disabled={validatingDomain}
-                          onChange={(e) => {
-                            setCustomDomain(e.target.value);
-                            setCustomDomainError(undefined);
-                          }}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") {
-                              e.preventDefault();
-                              void handleAddCustomDomain();
-                            }
-                          }}
-                          className="h-8 text-sm font-mono"
-                        />
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={() => void handleAddCustomDomain()}
-                          disabled={validatingDomain}
-                          className="h-8 px-2.5 shrink-0"
-                        >
-                          {validatingDomain ? (
-                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                          ) : (
-                            <Plus className="h-3.5 w-3.5" />
-                          )}
-                        </Button>
-                      </div>
-                      {customDomainError && (
-                        <p className="text-xs text-red-500 px-0.5">
-                          {customDomainError}
-                        </p>
-                      )}
-                    </div>
+                    <GraspServerSelector
+                      selectedDomains={selectedDomains}
+                      onSelectedDomainsChange={setSelectedDomains}
+                      resolvedServers={resolvedServers}
+                      isFromUserList={isFromUserList}
+                      showTitle={false}
+                    />
 
                     {/* Save as defaults */}
                     <label className="flex items-start gap-2.5 cursor-pointer rounded-md px-2.5 py-2 hover:bg-muted/40 transition-colors border border-border/40">
@@ -630,12 +491,6 @@ export function CreateRepoDialog({ isOpen, onClose }: CreateRepoDialogProps) {
                         </p>
                       </div>
                     </label>
-
-                    {selectedDomains.length === 0 && (
-                      <p className="text-xs text-amber-600 dark:text-amber-400 px-0.5">
-                        Select at least one server to continue.
-                      </p>
-                    )}
                   </>
                 )}
               </CollapsibleContent>

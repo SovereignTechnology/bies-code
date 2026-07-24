@@ -253,7 +253,7 @@ export const nostrConnectRelaysCustomised$ = isCustomised$(
 
 /**
  * Default Grasp server domains used when a user has no kind:10317 grasp list.
- * Matches the defaults in ngit CLI (relay.ngit.dev and gitnostr.com).
+ * Invitation acceptance backfills to three servers for redundancy.
  *
  * These are bare domains — the WebSocket URL is `wss://<domain>` and the
  * git HTTP URL is `https://<domain>/<npub>/<repo-id>.git`.
@@ -261,6 +261,7 @@ export const nostrConnectRelaysCustomised$ = isCustomised$(
 export const DEFAULT_GRASP_SERVERS: readonly string[] = [
   "relay.ngit.dev",
   "gitnostr.com",
+  "ngit.danconwaydev.com",
 ];
 
 // ---------------------------------------------------------------------------

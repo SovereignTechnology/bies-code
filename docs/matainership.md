@@ -244,17 +244,12 @@ authorization, but shows only reciprocally connected pubkeys as accepted
 maintainers. Present every directly listed, unreciprocated pubkey under the
 familiar **Invited maintainers** heading:
 
-- Pubkeys with no announcement for the identifier are straightforward
-  maintainer invitations.
-- Pubkeys with announcements may already form a reciprocal maintainer group.
-  Keep them in the same invited-maintainers list; explain the repository-join
-  consequence only in contextual warning and acceptance surfaces.
+- Present every invitation the same way unless the invitee has authored a
+  repository state event that requires explicit reconciliation.
 
 Keep the invited-maintainers list compact. Show who sent an invitation only
-when fewer than all confirmed maintainers listed that recipient. When the
-recipient already has an announcement for the identifier, add a muted
-**existing repository** link beside their name without explaining the join in
-the list itself.
+when fewer than all confirmed maintainers listed that recipient. Do not expose
+whether the recipient already has an announcement for the identifier.
 
 Repository-wide warnings should combine related join requests into one
 sentence: list all direct recipients, then list the requested repository groups
@@ -275,12 +270,18 @@ lead maintainer when one exists. When multiple maintainers have ambiguous
 leadership, it defaults to no selection and requires the invitee to choose one
 or more lead maintainers explicitly.
 
-If the invitee has no announcement for the identifier, the client can copy the
-latest shared announcement fields and add infrastructure derived from the
-invitee's kind:10317 Grasp list (or the application defaults). It copies the
-canonical state event, stages both events on those Grasp relays, transfers the
-missing Git objects to every selected server, verifies the advertised refs, and
-only then broadcasts the reciprocal announcement and state.
+For every invitation without an invitee-authored state event, the client
+publishes a reciprocal announcement to the invitee's selected GRASP servers.
+Server choices default, in order, to the invitee's existing repository
+announcement, their kind:10317 User Grasp List, or the other maintainers'
+servers. The client backfills from its default server list until three choices
+are selected.
+
+The selected servers MUST advertise GRASP-02. They discover the canonical state
+event from the relays and fetch its missing Git data from the other maintainers'
+clone URLs. The UI treats the invitation as accepted as soon as the reciprocal
+announcement is published, then shows **Syncing up your GRASP servers** while
+the client polls each new Git endpoint until every canonical ref is advertised.
 
 If the invitee already has both an announcement and a kind:30618 state event,
 the client MUST NOT accept by publishing only a reciprocal announcement. The
