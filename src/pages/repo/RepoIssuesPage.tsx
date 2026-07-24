@@ -41,7 +41,12 @@ import {
   Zap,
 } from "lucide-react";
 import { UserAvatar } from "@/components/UserAvatar";
-import type { IssueStatus, ResolvedIssueLite } from "@/lib/nip34";
+import {
+  hasAcceptedRepositoryReference,
+  type IssueStatus,
+  type ResolvedIssueLite,
+} from "@/lib/nip34";
+import { RepoItemAttributionWarning } from "@/components/RepoItemAttributionWarning";
 
 const DEFAULT_STATUS_FILTER: IssueStatus[] = ["open"];
 
@@ -124,6 +129,13 @@ export default function RepoIssuesPage() {
     });
   }, [issues, statusFilter, labelFilter, authorFilter, searchQuery]);
 
+  const unconfirmedIssueCount = useMemo(() => {
+    if (!issues || !repo) return 0;
+    return issues.filter(
+      (issue) => !hasAcceptedRepositoryReference(issue.repoCoords, repo),
+    ).length;
+  }, [issues, repo]);
+
   // "Active" means filters differ from the default state
   const hasActiveFilters =
     statusFilter.length !== DEFAULT_STATUS_FILTER.length ||
@@ -172,6 +184,16 @@ export default function RepoIssuesPage() {
             />
           </DialogContent>
         </Dialog>
+      )}
+
+      {repo && unconfirmedIssueCount > 0 && (
+        <RepoItemAttributionWarning
+          basePath={basePath}
+          repoName={repo.name}
+          itemLabel="issue"
+          count={unconfirmedIssueCount}
+          className="mb-4"
+        />
       )}
 
       {/* Search + filters */}

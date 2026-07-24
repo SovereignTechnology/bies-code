@@ -840,6 +840,30 @@ export interface ResolvedRepo {
   descriptionSource: FieldProvenance;
 }
 
+/**
+ * Whether an issue, PR, or patch explicitly references the selected
+ * maintainer or a maintainer with a reciprocal path back into that accepted
+ * component.
+ *
+ * Items that reference only directionally authorized / invited coordinates
+ * remain discoverable for ngit and GRASP interoperability, but their
+ * repository attribution is not confirmed and the UI must say so.
+ */
+export function hasAcceptedRepositoryReference(
+  repoCoords: Iterable<string>,
+  repo: Pick<ResolvedRepo, "confirmedMaintainers" | "dTag">,
+): boolean {
+  const acceptedCoordinates = new Set(
+    repo.confirmedMaintainers.map((pubkey) =>
+      repoCoordinate(pubkey, repo.dTag),
+    ),
+  );
+  for (const coordinate of repoCoords) {
+    if (acceptedCoordinates.has(coordinate)) return true;
+  }
+  return false;
+}
+
 function selectRepoLeadAnchor(resolved: ResolvedRepo): string {
   return (
     computeMaintainerLeadership(

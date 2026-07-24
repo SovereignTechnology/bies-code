@@ -89,7 +89,12 @@ import { useEventStore } from "@/hooks/useEventStore";
 import { use$ } from "@/hooks/use$";
 import { usePatchChain } from "@/hooks/usePatchChain";
 import { useInlineComments } from "@/hooks/useInlineComments";
-import { PATCH_KIND, PR_KIND, extractPatchDiff } from "@/lib/nip34";
+import {
+  PATCH_KIND,
+  PR_KIND,
+  extractPatchDiff,
+  hasAcceptedRepositoryReference,
+} from "@/lib/nip34";
 import { eventIdToNevent } from "@/lib/routeUtils";
 import { nip19 } from "nostr-tools";
 import type { NostrEvent } from "nostr-tools";
@@ -99,6 +104,7 @@ import {
 } from "@/lib/patch-commits";
 import type { Filter } from "applesauce-core/helpers";
 import type { Patch } from "@/casts/Patch";
+import { RepoItemAttributionWarning } from "@/components/RepoItemAttributionWarning";
 
 const PR_RETAINED_COMMIT_CHECK_LIMIT = 1000;
 
@@ -1240,6 +1246,20 @@ export default function PRPage() {
 
       {/* Content */}
       <div className="container max-w-screen-xl px-4 md:px-8 py-6">
+        {pr && repo && !hasAcceptedRepositoryReference(pr.repoCoords, repo) && (
+          <RepoItemAttributionWarning
+            basePath={repoToPath(
+              pubkey,
+              repoId,
+              resolved?.repo?.relays ?? [],
+              nip05,
+            )}
+            repoName={repo.name}
+            itemLabel={pr.itemType === "patch" ? "patch" : "pull request"}
+            className="mb-6"
+          />
+        )}
+
         {/* Commit detail view — shown instead of tab panels when on a commit URL */}
         {prCommitId ? (
           commitDetailContent

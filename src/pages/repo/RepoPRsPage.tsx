@@ -23,10 +23,16 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Search, MessageCircle, Users, X, Zap } from "lucide-react";
-import type { IssueStatus, ResolvedPRLite, PRItemType } from "@/lib/nip34";
+import {
+  hasAcceptedRepositoryReference,
+  type IssueStatus,
+  type ResolvedPRLite,
+  type PRItemType,
+} from "@/lib/nip34";
 import { useCIForPR } from "@/hooks/useCI";
 import { CIStatusIcon } from "@/components/ci/CIStatusIcon";
 import { ciStatusLabel } from "@/lib/ci";
+import { RepoItemAttributionWarning } from "@/components/RepoItemAttributionWarning";
 
 const TYPE_OPTIONS: MultiSelectOption[] = [
   { value: "pr", label: "Pull Requests" },
@@ -113,6 +119,13 @@ export default function RepoPRsPage() {
     });
   }, [prs, statusFilter, typeFilter, labelFilter, authorFilter, searchQuery]);
 
+  const unconfirmedItemCount = useMemo(() => {
+    if (!prs || !repo) return 0;
+    return prs.filter(
+      (pr) => !hasAcceptedRepositoryReference(pr.repoCoords, repo),
+    ).length;
+  }, [prs, repo]);
+
   // "Active" means filters differ from the default state
   const hasActiveFilters =
     statusFilter.length !== DEFAULT_STATUS_FILTER.length ||
@@ -141,6 +154,16 @@ export default function RepoPRsPage() {
 
   return (
     <div className="container max-w-screen-xl px-4 md:px-8 py-6">
+      {repo && unconfirmedItemCount > 0 && (
+        <RepoItemAttributionWarning
+          basePath={basePath}
+          repoName={repo.name}
+          itemLabel="pull request"
+          count={unconfirmedItemCount}
+          className="mb-4"
+        />
+      )}
+
       {/* Search + filters */}
       <div className="flex flex-col md:flex-row gap-3 mb-3">
         <div className="relative flex-1 max-w-sm">

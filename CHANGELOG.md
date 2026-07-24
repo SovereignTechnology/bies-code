@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Align recursive repository authorization with ngit and GRASP while clearly warning when issues, pull requests, or patches reference only an unaccepted maintainer coordinate.
 - Fix CI workflow duration counters so running checks update every second.
 - Show referenced work items and cross-repository comment mentions in discussions.
 - Preserve percent-encoded repository identifiers and the current relay hint in repository sub-page links.

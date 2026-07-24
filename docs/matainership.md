@@ -173,6 +173,22 @@ A client querying for issues/PRs/patches for a repository should **filter by any
 Practically: to fetch all issues for a repository, query for kind 1621 events that have an `a` tag matching `30617:<any-maintainer-pubkey>:<identifier>`.
 Also note: maintainer pubkeys are also added as `p` tags on patches/PRs (for notification routing), but the `a` tags are the authoritative repository reference.
 
+### Confirming Item Attribution
+
+The broad recursive query is a discovery boundary, not sufficient proof that
+every returned item belongs to the accepted repository group. For each issue,
+PR, or patch, intersect its `a` coordinates with the selected maintainer and
+the reciprocally confirmed maintainer coordinates.
+
+- If the intersection is non-empty, display the item normally.
+- If the item references only invited/unreciprocated coordinates, keep it
+  discoverable but show a prominent unconfirmed-attribution warning on list and
+  detail views.
+- Explain that the item may belong to another repository with the same
+  identifier. The invited maintainer can resolve this by accepting the
+  relationship; an unintended invitation should be removed by the selected
+  maintainer.
+
 ---
 
 ## The Selected Maintainer: A User's Starting Anchor

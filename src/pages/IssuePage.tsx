@@ -37,6 +37,8 @@ import { Separator } from "@/components/ui/separator";
 import { Button } from "@/components/ui/button";
 import { gitIndexRelays, fallbackRelays } from "@/services/settings";
 import { ArrowLeft, MessageCircle, Zap, Users, Clock, Pin } from "lucide-react";
+import { hasAcceptedRepositoryReference } from "@/lib/nip34";
+import { RepoItemAttributionWarning } from "@/components/RepoItemAttributionWarning";
 
 export default function IssuePage() {
   const { pubkey, repoId, resolved, issueId, nip05 } = useRepoContext();
@@ -273,6 +275,22 @@ export default function IssuePage() {
 
       {/* Content */}
       <div className="container max-w-screen-xl px-4 md:px-8 py-6">
+        {issue &&
+          repo &&
+          !hasAcceptedRepositoryReference(issue.repoCoords, repo) && (
+            <RepoItemAttributionWarning
+              basePath={repoToPath(
+                pubkey,
+                repoId,
+                resolved?.repo?.relays ?? [],
+                nip05,
+              )}
+              repoName={repo.name}
+              itemLabel="issue"
+              className="mb-6"
+            />
+          )}
+
         {!issue ? (
           <div className="min-h-[40vh] flex items-center justify-center">
             <div className="text-center space-y-3">
