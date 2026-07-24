@@ -53,7 +53,9 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { RepoContext, type RepoContextValue } from "./RepoContext";
 import {
+  hasAcceptedRepositoryReference,
   REPO_KIND,
+  repoCoordinate,
   type RepoQueryOptions,
   type ResolvedRepo,
 } from "@/lib/nip34";
@@ -258,6 +260,21 @@ function RepoLayoutResolved({
   const issues = useIssues(repo?.allCoordinates, repoRelayGroup, queryOptions);
   const prs = usePRs(repo?.allCoordinates, repoRelayGroup, queryOptions);
 
+  const acceptedRepoCoordinates = useMemo(
+    () =>
+      repo?.confirmedMaintainers.map((maintainer) =>
+        repoCoordinate(maintainer, repo.dTag),
+      ) ?? [],
+    [repo],
+  );
+  const acceptedAnnouncements = useMemo(
+    () =>
+      repo?.announcements.filter((announcement) =>
+        repo.confirmedMaintainers.includes(announcement.pubkey),
+      ) ?? [],
+    [repo],
+  );
+
   // Whether the repo has any CI events (ngit-ci kinds 9841/9842) — drives
   // visibility of the Actions tab. Cheap limit-1 probe by #a across all
   // maintainer coordinates.
@@ -271,15 +288,23 @@ function RepoLayoutResolved({
 
   // Count open issues for the tab badge
   const openIssueCount = useMemo(() => {
-    if (!issues) return undefined;
-    return issues.filter((i) => i.status === "open").length;
-  }, [issues]);
+    if (!issues || !repo) return undefined;
+    return issues.filter(
+      (issue) =>
+        issue.status === "open" &&
+        hasAcceptedRepositoryReference(issue.repoCoords, repo),
+    ).length;
+  }, [issues, repo]);
 
   // Count open PRs for the tab badge
   const openPRCount = useMemo(() => {
-    if (!prs) return undefined;
-    return prs.filter((p) => p.status === "open").length;
-  }, [prs]);
+    if (!prs || !repo) return undefined;
+    return prs.filter(
+      (pr) =>
+        pr.status === "open" &&
+        hasAcceptedRepositoryReference(pr.repoCoords, repo),
+    ).length;
+  }, [prs, repo]);
 
   // Determine if the logged-in user is a confirmed maintainer of this repo.
   const account = useActiveAccount();
@@ -514,15 +539,15 @@ function RepoLayoutResolved({
                     targetAnnouncement={repo.announcements.find(
                       (a) => a.pubkey === repo.selectedMaintainer,
                     )}
-                    repoCoords={repo.allCoordinates}
+                    repoCoords={acceptedRepoCoordinates}
                   />
-                  <FollowRepoButton allCoords={repo.allCoordinates} />
+                  <FollowRepoButton allCoords={acceptedRepoCoordinates} />
                   <StarButton
                     targetAnnouncement={repo.announcements.find(
                       (a) => a.pubkey === repo.selectedMaintainer,
                     )}
-                    allAnnouncements={repo.announcements}
-                    repoCoords={repo.allCoordinates}
+                    allAnnouncements={acceptedAnnouncements}
+                    repoCoords={acceptedRepoCoordinates}
                   />
                 </div>
               </div>

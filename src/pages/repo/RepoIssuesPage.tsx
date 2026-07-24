@@ -71,7 +71,7 @@ export default function RepoIssuesPage() {
   const [authorFilter, setAuthorFilter] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
 
-  // Compute per-status counts from the full (unfiltered) list.
+  // Status counts describe only work addressed to the accepted repository.
   const statusCounts = useMemo(() => {
     const counts: Record<IssueStatus, number> = {
       open: 0,
@@ -80,13 +80,15 @@ export default function RepoIssuesPage() {
       closed: 0,
       deleted: 0,
     };
-    if (issues) {
+    if (issues && repo) {
       for (const issue of issues) {
-        counts[issue.status]++;
+        if (hasAcceptedRepositoryReference(issue.repoCoords, repo)) {
+          counts[issue.status]++;
+        }
       }
     }
     return counts;
-  }, [issues]);
+  }, [issues, repo]);
 
   // Collect all unique labels and authors from resolved issues.
   const { allLabels, allAuthors } = useMemo(() => {
@@ -133,11 +135,23 @@ export default function RepoIssuesPage() {
     });
   }, [issues, statusFilter, labelFilter, authorFilter, searchQuery]);
 
-  const visibleUnconfirmedIssues = useMemo(() => {
-    if (!filteredIssues || !repo) return [];
-    return filteredIssues.filter(
-      (issue) => !hasAcceptedRepositoryReference(issue.repoCoords, repo),
-    );
+  const { visibleAcceptedIssues, visibleUnconfirmedIssues } = useMemo(() => {
+    if (!filteredIssues || !repo) {
+      return { visibleAcceptedIssues: [], visibleUnconfirmedIssues: [] };
+    }
+    const accepted: ResolvedIssueLite[] = [];
+    const unconfirmed: ResolvedIssueLite[] = [];
+    for (const issue of filteredIssues) {
+      if (hasAcceptedRepositoryReference(issue.repoCoords, repo)) {
+        accepted.push(issue);
+      } else {
+        unconfirmed.push(issue);
+      }
+    }
+    return {
+      visibleAcceptedIssues: accepted,
+      visibleUnconfirmedIssues: unconfirmed,
+    };
   }, [filteredIssues, repo]);
 
   // "Active" means filters differ from the default state
@@ -188,19 +202,6 @@ export default function RepoIssuesPage() {
             />
           </DialogContent>
         </Dialog>
-      )}
-
-      {repo && visibleUnconfirmedIssues.length > 0 && (
-        <RepoItemAttributionWarning
-          repo={repo}
-          repoCoords={visibleUnconfirmedIssues.flatMap(
-            (issue) => issue.repoCoords,
-          )}
-          itemLabel="issue"
-          pageSuffix="/issues"
-          count={visibleUnconfirmedIssues.length}
-          className="mb-4"
-        />
       )}
 
       {/* Search + filters */}
@@ -288,7 +289,7 @@ export default function RepoIssuesPage() {
               <IssueSkeleton key={i} />
             ))}
           </ul>
-        ) : filteredIssues.length === 0 ? (
+        ) : visibleAcceptedIssues.length === 0 ? (
           <div className="py-12 text-center">
             <p className="text-muted-foreground">
               {hasActiveFilters
@@ -298,12 +299,12 @@ export default function RepoIssuesPage() {
             <p className="text-muted-foreground/60 text-sm mt-1">
               {hasActiveFilters
                 ? "Try adjusting your filters"
-                : "Be the first to open an issue"}
+                : "Issues sent to this repository will appear here"}
             </p>
           </div>
         ) : (
           <ul className="divide-y divide-border">
-            {filteredIssues.map((issue) => (
+            {visibleAcceptedIssues.map((issue) => (
               <IssueRow
                 key={issue.id}
                 issue={issue}
@@ -315,6 +316,35 @@ export default function RepoIssuesPage() {
           </ul>
         )}
       </div>
+
+      {repo && visibleUnconfirmedIssues.length > 0 && (
+        <section className="mt-6">
+          <RepoItemAttributionWarning
+            repo={repo}
+            repoCoords={visibleUnconfirmedIssues.flatMap(
+              (issue) => issue.repoCoords,
+            )}
+            itemLabel="issue"
+            pageSuffix="/issues"
+            count={visibleUnconfirmedIssues.length}
+            title="Issues sent to invited maintainers’ repositories"
+            className="rounded-b-none shadow-none"
+          />
+          <div className="overflow-hidden rounded-b-lg border border-t-0 border-amber-500/40">
+            <ul className="divide-y divide-border">
+              {visibleUnconfirmedIssues.map((issue) => (
+                <IssueRow
+                  key={issue.id}
+                  issue={issue}
+                  repoPath={basePath}
+                  repoRelays={repo.relays}
+                  repo={repo}
+                />
+              ))}
+            </ul>
+          </div>
+        </section>
+      )}
     </div>
   );
 }

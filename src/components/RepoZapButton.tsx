@@ -47,7 +47,7 @@ interface RepoZapButtonProps {
    * kind:30617 event — the one the user is currently viewing.
    */
   targetAnnouncement: NostrEvent | undefined;
-  /** Repo coordinate strings used to count zaps across all maintainers. */
+  /** Accepted repo coordinates used to count repository zaps. */
   repoCoords: string[] | undefined;
   className?: string;
 }

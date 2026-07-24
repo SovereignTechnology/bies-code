@@ -59,7 +59,7 @@ export default function RepoPRsPage() {
   const [authorFilter, setAuthorFilter] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
 
-  // Compute per-status counts from the full (unfiltered) list.
+  // Status counts describe only work addressed to the accepted repository.
   const statusCounts = useMemo(() => {
     const counts: Record<IssueStatus, number> = {
       open: 0,
@@ -68,13 +68,15 @@ export default function RepoPRsPage() {
       closed: 0,
       deleted: 0,
     };
-    if (prs) {
+    if (prs && repo) {
       for (const pr of prs) {
-        counts[pr.status]++;
+        if (hasAcceptedRepositoryReference(pr.repoCoords, repo)) {
+          counts[pr.status]++;
+        }
       }
     }
     return counts;
-  }, [prs]);
+  }, [prs, repo]);
 
   // Collect all unique labels and authors from resolved PRs.
   const { allLabels, allAuthors } = useMemo(() => {
@@ -123,11 +125,23 @@ export default function RepoPRsPage() {
     });
   }, [prs, statusFilter, typeFilter, labelFilter, authorFilter, searchQuery]);
 
-  const visibleUnconfirmedItems = useMemo(() => {
-    if (!filteredPRs || !repo) return [];
-    return filteredPRs.filter(
-      (pr) => !hasAcceptedRepositoryReference(pr.repoCoords, repo),
-    );
+  const { visibleAcceptedItems, visibleUnconfirmedItems } = useMemo(() => {
+    if (!filteredPRs || !repo) {
+      return { visibleAcceptedItems: [], visibleUnconfirmedItems: [] };
+    }
+    const accepted: ResolvedPRLite[] = [];
+    const unconfirmed: ResolvedPRLite[] = [];
+    for (const pr of filteredPRs) {
+      if (hasAcceptedRepositoryReference(pr.repoCoords, repo)) {
+        accepted.push(pr);
+      } else {
+        unconfirmed.push(pr);
+      }
+    }
+    return {
+      visibleAcceptedItems: accepted,
+      visibleUnconfirmedItems: unconfirmed,
+    };
   }, [filteredPRs, repo]);
 
   // "Active" means filters differ from the default state
@@ -158,17 +172,6 @@ export default function RepoPRsPage() {
 
   return (
     <div className="container max-w-screen-xl px-4 md:px-8 py-6">
-      {repo && visibleUnconfirmedItems.length > 0 && (
-        <RepoItemAttributionWarning
-          repo={repo}
-          repoCoords={visibleUnconfirmedItems.flatMap((pr) => pr.repoCoords)}
-          itemLabel="pull request or patch"
-          pageSuffix="/prs"
-          count={visibleUnconfirmedItems.length}
-          className="mb-4"
-        />
-      )}
-
       {/* Search + filters */}
       <div className="flex flex-col md:flex-row gap-3 mb-3">
         <div className="relative flex-1 max-w-sm">
@@ -253,22 +256,20 @@ export default function RepoPRsPage() {
               <PRSkeleton key={i} />
             ))}
           </ul>
-        ) : filteredPRs.length === 0 ? (
+        ) : visibleAcceptedItems.length === 0 ? (
           <div className="py-12 text-center">
             <p className="text-muted-foreground">
-              {hasActiveFilters
-                ? "No PRs match your filters"
-                : "No pull requests yet"}
+              {hasActiveFilters ? "No PRs match your filters" : "No PRs yet"}
             </p>
             <p className="text-muted-foreground/60 text-sm mt-1">
               {hasActiveFilters
                 ? "Try adjusting your filters"
-                : "Pull requests and patches will appear here"}
+                : "PRs and patches sent to this repository will appear here"}
             </p>
           </div>
         ) : (
           <ul className="divide-y divide-border">
-            {filteredPRs.map((pr) => (
+            {visibleAcceptedItems.map((pr) => (
               <PRRow
                 key={pr.id}
                 pr={pr}
@@ -280,6 +281,33 @@ export default function RepoPRsPage() {
           </ul>
         )}
       </div>
+
+      {repo && visibleUnconfirmedItems.length > 0 && (
+        <section className="mt-6">
+          <RepoItemAttributionWarning
+            repo={repo}
+            repoCoords={visibleUnconfirmedItems.flatMap((pr) => pr.repoCoords)}
+            itemLabel="pull request or patch"
+            pageSuffix="/prs"
+            count={visibleUnconfirmedItems.length}
+            title="PRs and patches sent to invited maintainers’ repositories"
+            className="rounded-b-none shadow-none"
+          />
+          <div className="overflow-hidden rounded-b-lg border border-t-0 border-amber-500/40">
+            <ul className="divide-y divide-border">
+              {visibleUnconfirmedItems.map((pr) => (
+                <PRRow
+                  key={pr.id}
+                  pr={pr}
+                  repoPath={basePath}
+                  repoRelays={repo.relays}
+                  repo={repo}
+                />
+              ))}
+            </ul>
+          </div>
+        </section>
+      )}
     </div>
   );
 }

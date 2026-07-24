@@ -202,9 +202,11 @@ export function RepoItemAttributionWarning({
   itemLabel,
   pageSuffix,
   count,
+  title = "Check repository attribution",
   className,
 }: RepoItemAttributionProps & {
   count?: number;
+  title?: string;
   className?: string;
 }) {
   return (
@@ -216,7 +218,7 @@ export function RepoItemAttributionWarning({
     >
       <AlertTriangle className="h-4 w-4" />
       <AlertTitle className="text-amber-950 dark:text-amber-100">
-        Check repository attribution
+        {title}
       </AlertTitle>
       <AlertDescription className="text-muted-foreground">
         <AttributionMessage

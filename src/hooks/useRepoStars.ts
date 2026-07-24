@@ -2,7 +2,7 @@
  * useRepoStars — reactive star count for a repository.
  *
  * Stars are kind:7 reactions with content "+" targeting any of the repo's
- * announcement events (kind:30617) across the full maintainer set. The
+ * announcement events (kind:30617) across the accepted maintainer set. The
  * nip34RepoLoader already fetches these from repo relays via the #a coord
  * filter, so this hook only reads from the in-memory EventStore.
  *
