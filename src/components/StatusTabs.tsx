@@ -105,10 +105,7 @@ export function StatusTabs({
     }
   };
 
-  // Only show statuses that have items OR are currently selected
-  const visibleStatuses = (
-    Object.keys(issueStatusConfig) as IssueStatus[]
-  ).filter((status) => counts[status] > 0 || selected.includes(status));
+  const statuses = Object.keys(issueStatusConfig) as IssueStatus[];
 
   return (
     <div
@@ -116,7 +113,7 @@ export function StatusTabs({
       role="group"
       aria-label="Filter by status"
     >
-      {visibleStatuses.map((status) => {
+      {statuses.map((status) => {
         const config = issueStatusConfig[status];
         const override =
           variant === "pr" ? prStatusOverrides[status] : undefined;
