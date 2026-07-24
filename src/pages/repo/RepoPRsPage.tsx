@@ -303,7 +303,6 @@ export default function RepoPRsPage() {
             itemLabel="pull request or patch"
             pageSuffix="/prs"
             count={visibleUnconfirmedItems.length}
-            title="PRs and patches sent to invited maintainers’ repositories"
             className="rounded-b-none shadow-none"
           />
           <div className="overflow-hidden rounded-b-lg border border-t-0 border-amber-500/40">

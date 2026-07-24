@@ -499,6 +499,7 @@ export function CIRunRow({
   defaultOpen = false,
   canRetry = false,
   triggerContext,
+  attributionIndicator,
 }: {
   run: CIWorkflowRun;
   defaultOpen?: boolean;
@@ -509,6 +510,8 @@ export function CIRunRow({
    * right of the row — used by the repo Actions tab.
    */
   triggerContext?: ReactNode;
+  /** Optional repository-attribution warning shown at the right edge. */
+  attributionIndicator?: ReactNode;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const nowSeconds = useCurrentUnixSeconds(run.status === "pending");
@@ -561,6 +564,7 @@ export function CIRunRow({
               nameClassName="text-xs font-normal text-muted-foreground max-w-24 truncate"
             />
             {primaryEvent && <EventCardActions event={primaryEvent} />}
+            {attributionIndicator}
           </div>
         </div>
 

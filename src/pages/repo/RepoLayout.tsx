@@ -25,6 +25,7 @@ import { useProfile } from "@/hooks/useProfile";
 import { useLoadProfile } from "@/hooks/useLoadProfile";
 import { useUserPath } from "@/hooks/useUserPath";
 import { UserAvatar, UserLink } from "@/components/UserAvatar";
+import { RepoMaintainerRequestBanner } from "@/components/RepoItemAttributionWarning";
 import { EventSearchStatus } from "@/components/EventSearchStatus";
 import { nip34SupplementalRelayLoader } from "@/services/nostr";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -320,6 +321,9 @@ function RepoLayoutResolved({
   const basePath = useMemo(() => {
     return repoToPath(pubkey, repoId, relayHints, nip05);
   }, [pubkey, repoId, relayHints, nip05]);
+  const repoPageSuffix = location.pathname.startsWith(basePath)
+    ? location.pathname.slice(basePath.length)
+    : "";
 
   const isCodeTab =
     location.pathname.startsWith(`${basePath}/tree`) ||
@@ -664,6 +668,13 @@ function RepoLayoutResolved({
           </div>
         </div>
 
+        {repo && (
+          <RepoMaintainerRequestBanner
+            repo={repo}
+            pageSuffix={repoPageSuffix}
+          />
+        )}
+
         {repo && account?.pubkey && (
           <MaintainerInvitationBanner
             repo={repo}
@@ -815,7 +826,7 @@ function MaintainerInvitationBanner({
 }) {
   const { toast } = useToast();
   const [isAccepting, setIsAccepting] = useState(false);
-  const isInvited = repo.requestedMaintainers.includes(accountPubkey);
+  const isRequested = repo.requestedMaintainers.includes(accountPubkey);
   const ownAnnouncement = repo.announcements.find(
     (announcement) => announcement.pubkey === accountPubkey,
   );
@@ -827,7 +838,7 @@ function MaintainerInvitationBanner({
     ),
   );
 
-  if (!isInvited) return null;
+  if (!isRequested) return null;
 
   const accept = async () => {
     if (!ownAnnouncement || isAccepting) return;
@@ -867,7 +878,26 @@ function MaintainerInvitationBanner({
                 You’re invited to maintain {repo.name}
               </p>
               <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm text-muted-foreground">
-                {inviters.length > 0 ? (
+                {ownAnnouncement && inviters.length > 0 ? (
+                  <>
+                    <span>Invited by</span>
+                    {inviters.map((pubkey) => (
+                      <UserLink
+                        key={pubkey}
+                        pubkey={pubkey}
+                        avatarSize="xs"
+                        nameClassName="text-sm"
+                      />
+                    ))}
+                    <span>
+                      · You already maintain an{" "}
+                      <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs text-foreground">
+                        {repo.dTag}
+                      </code>{" "}
+                      repository, so accepting will join the repositories.
+                    </span>
+                  </>
+                ) : inviters.length > 0 ? (
                   <>
                     <span>Invited by</span>
                     {inviters.map((pubkey) => (

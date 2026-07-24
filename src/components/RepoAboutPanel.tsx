@@ -57,6 +57,7 @@ import {
   computeMaintainerLeadership,
   getRepoRelays,
   getRepoUpstreams,
+  groupRequestedMaintainers,
   REPO_KIND,
   type ResolvedRepo,
 } from "@/lib/nip34";
@@ -72,7 +73,7 @@ import {
   getReplaceableAddress,
 } from "applesauce-core/helpers";
 import { cn } from "@/lib/utils";
-import { relayUrlToSegment } from "@/lib/routeUtils";
+import { relayUrlToSegment, repoToPath } from "@/lib/routeUtils";
 import { format } from "date-fns";
 import { useRepoContext } from "@/pages/repo/RepoContext";
 import { useActiveAccount } from "applesauce-react/hooks";
@@ -207,6 +208,103 @@ function GitServersSidebarSection({ urls }: { urls: string[] }) {
             </TooltipContent>
           </Tooltip>
         )}
+      </div>
+    </div>
+  );
+}
+
+function invitedRepositoryPath(
+  repo: ResolvedRepo,
+  pubkey: string,
+  pageSuffix: string,
+): string {
+  const announcement = repo.announcements.find(
+    (event) => event.pubkey === pubkey,
+  );
+  const announcementRelays = announcement ? getRepoRelays(announcement) : [];
+  const relays =
+    announcementRelays.length > 0 ? announcementRelays : repo.relays;
+  return `${repoToPath(pubkey, repo.dTag, relays)}${pageSuffix}`;
+}
+
+function RequestedMaintainersSummary({
+  repo,
+  pageSuffix,
+  compact,
+}: {
+  repo: ResolvedRepo;
+  pageSuffix: string;
+  compact?: boolean;
+}) {
+  const groups = useMemo(() => groupRequestedMaintainers(repo), [repo]);
+  const confirmedMaintainers = new Set(repo.confirmedMaintainers);
+  const invitations = groups.flatMap((group) =>
+    group.recipientMaintainers.map((pubkey) => ({
+      pubkey,
+      requesters: Array.from(
+        new Set(
+          repo.maintainerEdges
+            .filter(
+              ({ from, to }) => to === pubkey && confirmedMaintainers.has(from),
+            )
+            .map(({ from }) => from),
+        ),
+      ),
+      existingRepositoryPath: group.hasAnnouncement
+        ? invitedRepositoryPath(repo, pubkey, pageSuffix)
+        : undefined,
+    })),
+  );
+
+  if (groups.length === 0) return null;
+
+  return (
+    <div className="space-y-2 pt-1">
+      <p className="text-xs text-muted-foreground/70">
+        Invited maintainer{invitations.length === 1 ? "" : "s"}
+      </p>
+      <div className="space-y-1.5">
+        {invitations.map(({ pubkey, requesters, existingRepositoryPath }) => (
+          <div
+            key={pubkey}
+            className="flex flex-wrap items-center gap-1 text-xs text-muted-foreground"
+          >
+            <UserLink
+              pubkey={pubkey}
+              avatarSize={compact ? "xs" : "sm"}
+              nameClassName="text-xs text-foreground"
+            />
+            {existingRepositoryPath && (
+              <span>
+                (has{" "}
+                <Link
+                  to={existingRepositoryPath}
+                  className="text-muted-foreground underline-offset-2 hover:underline"
+                >
+                  existing repository
+                </Link>
+                )
+              </span>
+            )}
+            {requesters.length > 0 &&
+              requesters.length < repo.confirmedMaintainers.length && (
+                <>
+                  <span>invited by</span>
+                  <span className="inline-flex flex-wrap items-center gap-1">
+                    {requesters.map((requester) => (
+                      <UserLink
+                        key={requester}
+                        pubkey={requester}
+                        avatarSize="xs"
+                        className="inline-flex"
+                        nameClassName="text-xs text-foreground"
+                      />
+                    ))}
+                  </span>
+                </>
+              )}
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -391,19 +489,7 @@ function SidebarVariant({
                 </div>
               ))}
             </div>
-            {repo.requestedMaintainers.length > 0 && (
-              <div className="space-y-2 pt-1">
-                <p className="text-xs text-muted-foreground/70">Invited</p>
-                {repo.requestedMaintainers.map((pk) => (
-                  <UserLink
-                    key={pk}
-                    pubkey={pk}
-                    avatarSize="sm"
-                    nameClassName="text-xs text-muted-foreground"
-                  />
-                ))}
-              </div>
-            )}
+            <RequestedMaintainersSummary repo={repo} pageSuffix="" compact />
           </div>
 
           {/* Topics */}
@@ -683,15 +769,7 @@ function FullVariant({
           {repo.requestedMaintainers.length > 0 && (
             <>
               <Separator />
-              <p className="text-xs text-muted-foreground">Invited</p>
-              {repo.requestedMaintainers.map((pk) => (
-                <UserLink
-                  key={pk}
-                  pubkey={pk}
-                  avatarSize="sm"
-                  nameClassName="text-xs text-muted-foreground"
-                />
-              ))}
+              <RequestedMaintainersSummary repo={repo} pageSuffix="/about" />
             </>
           )}
         </div>

@@ -89,11 +89,12 @@ import {
   isGraspCloneUrl,
   graspCloneUrlDomain,
   computeMaintainerLeadership,
+  groupRequestedMaintainers,
   type RepoUpstream,
   type ResolvedRepo,
 } from "@/lib/nip34";
 import type { RepositoryState } from "@/casts/RepositoryState";
-import { decodePubkeyIdentifier } from "@/lib/routeUtils";
+import { decodePubkeyIdentifier, repoToPath } from "@/lib/routeUtils";
 import { validateGraspServer } from "@/lib/grasp";
 import { publish } from "@/services/nostr";
 import { useGraspServers } from "@/hooks/useGraspServers";
@@ -613,6 +614,20 @@ function RepoSettingsForm({
   const requestedMaintainers = useMemo(
     () => Array.from(new Set(repo.requestedMaintainers)),
     [repo.requestedMaintainers],
+  );
+  const requestedMaintainerGroups = useMemo(
+    () => groupRequestedMaintainers(repo, requestedMaintainers),
+    [repo, requestedMaintainers],
+  );
+  const invitedMaintainers = Array.from(
+    new Set(
+      requestedMaintainerGroups.flatMap((group) => group.recipientMaintainers),
+    ),
+  );
+  const invitedMaintainersWithRepositories = new Set(
+    requestedMaintainerGroups
+      .filter((group) => group.hasAnnouncement)
+      .flatMap((group) => group.recipientMaintainers),
   );
 
   const requestedMaintainerListers = useMemo(
@@ -1434,34 +1449,69 @@ function RepoSettingsForm({
               {requestedMaintainers.length > 0 && (
                 <div className="space-y-2 border-t border-border/50 pt-3">
                   <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                    Invited / unconfirmed
+                    Invited maintainer
+                    {invitedMaintainers.length === 1 ? "" : "s"}
                   </p>
-                  <div className="space-y-1.5">
-                    {requestedMaintainers.map((pubkey) => {
-                      const listedBy =
-                        requestedMaintainerListers.get(pubkey) ?? [];
-                      return (
-                        <div
-                          key={pubkey}
-                          className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-dashed border-border/60 bg-muted/10 px-2.5 py-1.5"
+
+                  {invitedMaintainers.map((pubkey) => {
+                    const listedBy =
+                      requestedMaintainerListers.get(pubkey) ?? [];
+                    const announcement = repo.announcements.find(
+                      (event) => event.pubkey === pubkey,
+                    );
+                    const announcementRelays = announcement
+                      ? getRepoRelays(announcement)
+                      : [];
+                    const repositoryPath =
+                      invitedMaintainersWithRepositories.has(pubkey)
+                        ? repoToPath(
+                            pubkey,
+                            repo.dTag,
+                            announcementRelays.length > 0
+                              ? announcementRelays
+                              : repo.relays,
+                          )
+                        : undefined;
+                    return (
+                      <div
+                        key={pubkey}
+                        className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-dashed border-border/60 bg-muted/10 px-2.5 py-1.5"
+                      >
+                        <UserLink
+                          pubkey={pubkey}
+                          avatarSize="xs"
+                          nameClassName="text-xs text-muted-foreground whitespace-nowrap"
+                          className="min-w-fit flex-1"
+                        />
+                        {repositoryPath && (
+                          <span className="text-[11px] text-muted-foreground">
+                            (has{" "}
+                            <Link
+                              to={repositoryPath}
+                              className="underline-offset-2 hover:underline"
+                            >
+                              existing repository
+                            </Link>
+                            )
+                          </span>
+                        )}
+                        {listedBy.length > 0 &&
+                          listedBy.length <
+                            repo.confirmedMaintainers.length && (
+                            <MaintainerListedBy
+                              pubkeys={listedBy}
+                              label="Invited by"
+                            />
+                          )}
+                        <Badge
+                          variant="outline"
+                          className="h-4 px-1.5 text-[10px] text-muted-foreground"
                         >
-                          <UserLink
-                            pubkey={pubkey}
-                            avatarSize="xs"
-                            nameClassName="text-xs text-muted-foreground whitespace-nowrap"
-                            className="min-w-fit flex-1"
-                          />
-                          <MaintainerListedBy pubkeys={listedBy} />
-                          <Badge
-                            variant="outline"
-                            className="h-4 px-1.5 text-[10px] text-muted-foreground"
-                          >
-                            unconfirmed
-                          </Badge>
-                        </div>
-                      );
-                    })}
-                  </div>
+                          awaiting response
+                        </Badge>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -2178,18 +2228,24 @@ function computeMaintainerListers(
   return listedByPubkey;
 }
 
-function MaintainerListedBy({ pubkeys }: { pubkeys: string[] }) {
+function MaintainerListedBy({
+  pubkeys,
+  label = "Listed by",
+}: {
+  pubkeys: string[];
+  label?: string;
+}) {
   if (pubkeys.length === 0) {
     return (
       <span className="shrink-0 text-[11px] text-muted-foreground">
-        Not listed yet
+        {label === "Listed by" ? "Not listed yet" : `${label} unknown`}
       </span>
     );
   }
 
   return (
     <div className="flex min-w-0 max-w-full shrink items-center gap-1.5 text-[11px] text-muted-foreground">
-      <span className="shrink-0">Listed by</span>
+      <span className="shrink-0">{label}</span>
       <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
         {pubkeys.map((pubkey) => (
           <span key={pubkey} className="inline-flex min-w-0 items-center gap-1">

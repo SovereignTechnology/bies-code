@@ -171,10 +171,10 @@ export function StatusTabs({
                 className="-ml-0.5 inline-flex items-center gap-0.5 text-xs font-normal tabular-nums text-muted-foreground"
                 title={`${secondaryCount} ${
                   secondaryCount === 1 ? "item" : "items"
-                } sent to invited maintainers’ repositories`}
+                } sent to other repositories`}
                 aria-label={`${secondaryCount} ${
                   secondaryCount === 1 ? "item" : "items"
-                } sent to invited maintainers’ repositories`}
+                } sent to other repositories`}
               >
                 <AlertTriangle
                   className="h-3 w-3 text-amber-600 dark:text-amber-400"

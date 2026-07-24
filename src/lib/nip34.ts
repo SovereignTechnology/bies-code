@@ -2523,6 +2523,108 @@ export function resolveChain(
   };
 }
 
+export interface RequestedRepositoryGroup {
+  /** Reciprocally confirmed maintainers of this requested repository. */
+  members: string[];
+  /** Requested pubkeys whose coordinates resolved to this repository group. */
+  referencedMaintainers: string[];
+  /** Unique lead within the requested repository, when one can be inferred. */
+  leadMaintainer?: string;
+  /** Whether the requested pubkey has a repository announcement for this id. */
+  hasAnnouncement: boolean;
+  /** Confirmed maintainers who sent a direct request into this group. */
+  requestingMaintainers: string[];
+  /** Members of this group who directly received the request. */
+  recipientMaintainers: string[];
+}
+
+/**
+ * Classify requested maintainers as existing repository groups or individual
+ * invitations without an announcement.
+ *
+ * Several requested pubkeys may already be reciprocal maintainers of the same
+ * repository. Those pubkeys collapse into one group so the UI does not present
+ * a repository-join request as several unrelated maintainer invitations.
+ */
+export function groupRequestedMaintainers(
+  repo: ResolvedRepo,
+  requestedMaintainers: Iterable<string> = repo.requestedMaintainers,
+): RequestedRepositoryGroup[] {
+  const referenced = new Set(requestedMaintainers);
+  const requested = new Set(repo.requestedMaintainers);
+  const announced = new Set(
+    repo.announcements.map((announcement) => announcement.pubkey),
+  );
+  const groups = new Map<string, RequestedRepositoryGroup>();
+
+  for (const referencedMaintainer of referenced) {
+    const hasAnnouncement = announced.has(referencedMaintainer);
+    const alternateRepo = hasAnnouncement
+      ? resolveChain(repo.announcements, referencedMaintainer, repo.dTag)
+      : undefined;
+    const members = alternateRepo?.confirmedMaintainers.filter((pubkey) =>
+      requested.has(pubkey),
+    ) ?? [referencedMaintainer];
+    if (!members.includes(referencedMaintainer)) {
+      members.unshift(referencedMaintainer);
+    }
+
+    const uniqueMembers = Array.from(new Set(members));
+    const key = `${hasAnnouncement ? "repository" : "invitation"}:${[
+      ...uniqueMembers,
+    ]
+      .sort()
+      .join(",")}`;
+    const existing = groups.get(key);
+    if (existing) {
+      if (!existing.referencedMaintainers.includes(referencedMaintainer)) {
+        existing.referencedMaintainers.push(referencedMaintainer);
+      }
+      continue;
+    }
+
+    const leadMaintainer = alternateRepo
+      ? computeMaintainerLeadership(
+          uniqueMembers,
+          alternateRepo.maintainerEdges,
+        ).leadMaintainer
+      : undefined;
+    groups.set(key, {
+      members: uniqueMembers,
+      referencedMaintainers: [referencedMaintainer],
+      leadMaintainer,
+      hasAnnouncement,
+      requestingMaintainers: [],
+      recipientMaintainers: [],
+    });
+  }
+
+  const confirmed = new Set(repo.confirmedMaintainers);
+  return Array.from(groups.values(), (group) => {
+    const members = new Set(group.members);
+    const requestEdges = repo.maintainerEdges.filter(
+      ({ from, to }) => confirmed.has(from) && members.has(to),
+    );
+    return {
+      ...group,
+      requestingMaintainers: Array.from(
+        new Set(
+          requestEdges.length > 0
+            ? requestEdges.map(({ from }) => from)
+            : [repo.selectedMaintainer],
+        ),
+      ),
+      recipientMaintainers: Array.from(
+        new Set(
+          requestEdges.length > 0
+            ? requestEdges.map(({ to }) => to)
+            : group.referencedMaintainers.slice(0, 1),
+        ),
+      ),
+    };
+  });
+}
+
 /**
  * Given all 30617 events in the store, group them into resolved repositories.
  * Each connected component (by mutual maintainer listing) becomes one entry.

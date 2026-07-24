@@ -252,9 +252,16 @@ interface UserNameProps {
   className?: string;
   /** When true, wraps the name in a link to the user's profile page */
   linkToProfile?: boolean;
+  /** Suppress the profile hover card, for example inside another direct link. */
+  noHoverCard?: boolean;
 }
 
-export function UserName({ pubkey, className, linkToProfile }: UserNameProps) {
+export function UserName({
+  pubkey,
+  className,
+  linkToProfile,
+  noHoverCard,
+}: UserNameProps) {
   useLoadProfile(pubkey);
   const { name: displayName, isPlaceholder } = useUserDisplayName(pubkey);
   const userPath = useUserPath(pubkey);
@@ -284,6 +291,10 @@ export function UserName({ pubkey, className, linkToProfile }: UserNameProps) {
     );
   }
 
+  if (noHoverCard) {
+    return <span className={className}>{nameEl}</span>;
+  }
+
   return (
     <ProfileHoverCard pubkey={pubkey}>
       <span className={className}>{nameEl}</span>
@@ -296,6 +307,8 @@ interface UserLinkProps {
   className?: string;
   avatarSize?: "xs" | "sm" | "md" | "lg" | "xl";
   nameClassName?: string;
+  /** Compact baseline-aligned treatment for references embedded in prose. */
+  variant?: "default" | "inline";
   /** Set to true when UserLink is already inside an <a> element to avoid invalid nested anchors. */
   noLink?: boolean;
 }
@@ -312,10 +325,12 @@ export function UserLink({
   className,
   avatarSize = "sm",
   nameClassName,
+  variant = "default",
   noLink = false,
 }: UserLinkProps) {
   const { name: displayName, isPlaceholder } = useUserDisplayName(pubkey);
   const userPath = useUserPath(pubkey);
+  const inline = variant === "inline";
 
   const inner = (
     <>
@@ -323,12 +338,13 @@ export function UserLink({
       <UserAvatar
         pubkey={pubkey}
         size={avatarSize}
-        className="shrink-0"
+        className={cn("shrink-0", inline && "h-3.5 w-3.5")}
         noHoverCard
       />
       <span
         className={cn(
           "font-medium",
+          inline && "leading-none",
           !noLink && "hover:underline",
           isPlaceholder && "text-muted-foreground font-mono",
           nameClassName,
@@ -342,7 +358,14 @@ export function UserLink({
   if (noLink) {
     return (
       <ProfileHoverCard pubkey={pubkey}>
-        <span className={cn("flex items-center gap-1.5", className)}>
+        <span
+          className={cn(
+            inline
+              ? "inline-flex items-center gap-1 align-middle leading-none"
+              : "flex items-center gap-1.5",
+            className,
+          )}
+        >
           {inner}
         </span>
       </ProfileHoverCard>
@@ -355,7 +378,10 @@ export function UserLink({
         to={userPath}
         onClick={(e) => e.stopPropagation()}
         className={cn(
-          "flex items-center gap-1.5 hover:opacity-80 transition-opacity",
+          inline
+            ? "inline-flex items-center gap-1 align-middle leading-none"
+            : "flex items-center gap-1.5",
+          "hover:opacity-80 transition-opacity",
           className,
         )}
       >

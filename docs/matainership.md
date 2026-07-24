@@ -181,11 +181,11 @@ PR, or patch, intersect its `a` coordinates with the selected maintainer and
 the reciprocally confirmed maintainer coordinates.
 
 - If the intersection is non-empty, display the item normally.
-- If the item references only invited/unreciprocated coordinates, keep it
+- If the item references only requested/unreciprocated coordinates, keep it
   discoverable but show a prominent unconfirmed-attribution warning on list and
   detail views.
 - Explain that the item may belong to another repository with the same
-  identifier. The invited maintainer can resolve this by accepting the
+  identifier. Its maintainers can resolve this by accepting the
   relationship; an unintended invitation should be removed by the selected
   maintainer.
 
@@ -241,10 +241,33 @@ A client that shows Alice as a maintainer of Eve's repo is misleading users. It 
 
 A client uses every reachable pubkey for state, issue, PR, patch, and label
 authorization, but shows only reciprocally connected pubkeys as accepted
-maintainers. Unreciprocated pubkeys appear in a clearly separate "Invited"
-section. If the logged-in account is invited, the repository page should offer
-an explicit acceptance flow that publishes the account's own updated
-announcement.
+maintainers. Present every directly listed, unreciprocated pubkey under the
+familiar **Invited maintainers** heading:
+
+- Pubkeys with no announcement for the identifier are straightforward
+  maintainer invitations.
+- Pubkeys with announcements may already form a reciprocal maintainer group.
+  Keep them in the same invited-maintainers list; explain the repository-join
+  consequence only in contextual warning and acceptance surfaces.
+
+Keep the invited-maintainers list compact. Show who sent an invitation only
+when fewer than all confirmed maintainers listed that recipient. When the
+recipient already has an announcement for the identifier, add a muted
+**existing repository** link beside their name without explaining the join in
+the list itself.
+
+Repository-wide warnings should combine related join requests into one
+sentence: list all direct recipients, then list the requested repository groups
+as natural-language links rather than rendering one warning row per group.
+
+Derive the direction of every invitation from the direct announcement edge:
+the confirmed maintainer who lists another pubkey sent the invitation, and the
+maintainer they directly listed received it. A lead maintainer may represent
+the recipient's existing repository group, but must not be presented as the
+invitation recipient unless the direct edge names them.
+
+If the logged-in account is requested, the repository page should offer an
+explicit acceptance flow that publishes the account's own updated announcement.
 
 ---
 
@@ -268,7 +291,7 @@ A repository shown to the user is:
 | Web URLs    | Latest event across all maintainer announcements                   |
 | Clone URLs  | Union of all maintainer announcements (all copies available)       |
 | Relays      | Union of all maintainer announcements                              |
-| Maintainers | Reciprocally confirmed subset; show the remainder as invited       |
+| Maintainers | Reciprocally confirmed subset; group the remainder by repository   |
 
 ### Authoritative vs Suggestive Content
 
@@ -311,20 +334,21 @@ Without a trust anchor the client has no basis for filtering. Options:
 
 ## Summary
 
-| Concept                        | Definition                                                                           |
-| ------------------------------ | ------------------------------------------------------------------------------------ |
-| Repository identity            | An identifier + a directional graph rooted at the selected maintainer                |
-| Maintainer chain               | Recursive: owner lists maintainers, who list their own maintainers, etc.             |
-| Accepted maintainer            | A reachable pubkey whose announcement links back to the accepted component           |
-| Invited maintainer             | A reachable pubkey that has not linked an announcement back yet                      |
-| Split                          | Directional authorization ends when an upstream maintainer removes the outgoing path |
-| Selected maintainer            | The single user-chosen npub that anchors all discovery                               |
-| `selected_maintainer` field    | The starting pubkey for resolution; used in naddr coordinates                        |
-| Name / description / web       | Taken from the latest announcement event across all maintainers                      |
-| Clone URLs / relays            | Unioned across all maintainer announcements                                          |
-| Authoritative events           | State, issue/PR/patch status, and NIP-32 labels from any recursive maintainer        |
-| Suggestive events              | NIP-32 labels from outside the maintainer set                                        |
-| `a` tags on issues/PRs/patches | One per maintainer — all maintainer coordinates tagged, not just the selected one    |
-| Scam prevention                | Use unilateral listings for authorization, but label them invited until reciprocated |
+| Concept                        | Definition                                                                                |
+| ------------------------------ | ----------------------------------------------------------------------------------------- |
+| Repository identity            | An identifier + a directional graph rooted at the selected maintainer                     |
+| Maintainer chain               | Recursive: owner lists maintainers, who list their own maintainers, etc.                  |
+| Accepted maintainer            | A reachable pubkey whose announcement links back to the accepted component                |
+| Invited maintainer             | A directly listed pubkey that has not reciprocated the listing                            |
+| Existing-repository invitation | An invitation whose recipient already maintains a repository with the same identifier     |
+| Split                          | Directional authorization ends when an upstream maintainer removes the outgoing path      |
+| Selected maintainer            | The single user-chosen npub that anchors all discovery                                    |
+| `selected_maintainer` field    | The starting pubkey for resolution; used in naddr coordinates                             |
+| Name / description / web       | Taken from the latest announcement event across all maintainers                           |
+| Clone URLs / relays            | Unioned across all maintainer announcements                                               |
+| Authoritative events           | State, issue/PR/patch status, and NIP-32 labels from any recursive maintainer             |
+| Suggestive events              | NIP-32 labels from outside the maintainer set                                             |
+| `a` tags on issues/PRs/patches | One per maintainer — all maintainer coordinates tagged, not just the selected one         |
+| Scam prevention                | Use unilateral listings for authorization, but distinguish invitations from join requests |
 
 ---

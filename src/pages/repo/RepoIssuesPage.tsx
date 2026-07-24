@@ -340,7 +340,6 @@ export default function RepoIssuesPage() {
             itemLabel="issue"
             pageSuffix="/issues"
             count={visibleUnconfirmedIssues.length}
-            title="Issues sent to invited maintainers’ repositories"
             className="rounded-b-none shadow-none"
           />
           <div className="overflow-hidden rounded-b-lg border border-t-0 border-amber-500/40">
