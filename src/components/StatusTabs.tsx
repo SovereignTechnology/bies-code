@@ -8,6 +8,7 @@ import {
   Trash2,
   GitMerge,
   Check,
+  AlertTriangle,
 } from "lucide-react";
 
 interface StatusTabConfig {
@@ -82,8 +83,8 @@ interface StatusTabsProps {
   onChange: (selected: IssueStatus[]) => void;
   /** Use PR labels (e.g. "Merged" instead of "Resolved") */
   variant?: "issue" | "pr";
-  /** Keep zero-count, unselected statuses available as filters */
-  showZeroCountStatuses?: boolean;
+  /** De-emphasized counts for invitee-addressed items */
+  secondaryCounts?: Partial<Record<IssueStatus, number>>;
   className?: string;
 }
 
@@ -97,7 +98,7 @@ export function StatusTabs({
   selected,
   onChange,
   variant = "issue",
-  showZeroCountStatuses = false,
+  secondaryCounts,
   className,
 }: StatusTabsProps) {
   const toggle = (status: IssueStatus) => {
@@ -110,7 +111,9 @@ export function StatusTabs({
 
   const statuses = (Object.keys(issueStatusConfig) as IssueStatus[]).filter(
     (status) =>
-      showZeroCountStatuses || counts[status] > 0 || selected.includes(status),
+      counts[status] > 0 ||
+      (secondaryCounts?.[status] ?? 0) > 0 ||
+      selected.includes(status),
   );
 
   return (
@@ -127,6 +130,7 @@ export function StatusTabs({
         const label = override?.label ?? config.label;
         const isActive = selected.includes(status);
         const count = counts[status];
+        const secondaryCount = secondaryCounts?.[status] ?? 0;
 
         return (
           <button
@@ -162,6 +166,23 @@ export function StatusTabs({
             >
               {count}
             </span>
+            {secondaryCount > 0 && (
+              <span
+                className="-ml-0.5 inline-flex items-center gap-0.5 text-xs font-normal tabular-nums text-muted-foreground"
+                title={`${secondaryCount} ${
+                  secondaryCount === 1 ? "item" : "items"
+                } sent to invited maintainers’ repositories`}
+                aria-label={`${secondaryCount} ${
+                  secondaryCount === 1 ? "item" : "items"
+                } sent to invited maintainers’ repositories`}
+              >
+                <AlertTriangle
+                  className="h-3 w-3 text-amber-600 dark:text-amber-400"
+                  aria-hidden="true"
+                />
+                {secondaryCount}
+              </span>
+            )}
           </button>
         );
       })}

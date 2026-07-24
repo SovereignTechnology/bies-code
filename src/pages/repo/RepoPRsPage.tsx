@@ -60,7 +60,7 @@ export default function RepoPRsPage() {
   const [searchQuery, setSearchQuery] = useState("");
 
   // Status counts describe only work addressed to the accepted repository.
-  const { statusCounts, hasUnconfirmedItems } = useMemo(() => {
+  const { statusCounts, unconfirmedStatusCounts } = useMemo(() => {
     const counts: Record<IssueStatus, number> = {
       open: 0,
       draft: 0,
@@ -68,19 +68,25 @@ export default function RepoPRsPage() {
       closed: 0,
       deleted: 0,
     };
-    let hasUnconfirmed = false;
+    const unconfirmedCounts: Record<IssueStatus, number> = {
+      open: 0,
+      draft: 0,
+      resolved: 0,
+      closed: 0,
+      deleted: 0,
+    };
     if (prs && repo) {
       for (const pr of prs) {
         if (hasAcceptedRepositoryReference(pr.repoCoords, repo)) {
           counts[pr.status]++;
         } else {
-          hasUnconfirmed = true;
+          unconfirmedCounts[pr.status]++;
         }
       }
     }
     return {
       statusCounts: counts,
-      hasUnconfirmedItems: hasUnconfirmed,
+      unconfirmedStatusCounts: unconfirmedCounts,
     };
   }, [prs, repo]);
 
@@ -248,10 +254,10 @@ export default function RepoPRsPage() {
         <div className="flex items-center bg-muted/40 px-3 py-1.5 overflow-x-auto">
           <StatusTabs
             counts={statusCounts}
+            secondaryCounts={unconfirmedStatusCounts}
             selected={statusFilter}
             onChange={(v) => setStatusFilter(v as IssueStatus[])}
             variant="pr"
-            showZeroCountStatuses={hasUnconfirmedItems}
             className="border-b-0 pb-0 mb-0 flex-1"
           />
         </div>
