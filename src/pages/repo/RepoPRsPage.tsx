@@ -60,7 +60,7 @@ export default function RepoPRsPage() {
   const [searchQuery, setSearchQuery] = useState("");
 
   // Status counts describe only work addressed to the accepted repository.
-  const statusCounts = useMemo(() => {
+  const { statusCounts, hasUnconfirmedItems } = useMemo(() => {
     const counts: Record<IssueStatus, number> = {
       open: 0,
       draft: 0,
@@ -68,14 +68,20 @@ export default function RepoPRsPage() {
       closed: 0,
       deleted: 0,
     };
+    let hasUnconfirmed = false;
     if (prs && repo) {
       for (const pr of prs) {
         if (hasAcceptedRepositoryReference(pr.repoCoords, repo)) {
           counts[pr.status]++;
+        } else {
+          hasUnconfirmed = true;
         }
       }
     }
-    return counts;
+    return {
+      statusCounts: counts,
+      hasUnconfirmedItems: hasUnconfirmed,
+    };
   }, [prs, repo]);
 
   // Collect all unique labels and authors from resolved PRs.
@@ -245,6 +251,7 @@ export default function RepoPRsPage() {
             selected={statusFilter}
             onChange={(v) => setStatusFilter(v as IssueStatus[])}
             variant="pr"
+            showZeroCountStatuses={hasUnconfirmedItems}
             className="border-b-0 pb-0 mb-0 flex-1"
           />
         </div>

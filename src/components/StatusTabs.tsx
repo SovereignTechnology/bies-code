@@ -74,7 +74,7 @@ const prStatusOverrides: Partial<
 };
 
 interface StatusTabsProps {
-  /** Count of items per status (statuses with 0 count are still shown) */
+  /** Count of items per status */
   counts: Record<IssueStatus, number>;
   /** Currently selected statuses */
   selected: IssueStatus[];
@@ -82,6 +82,8 @@ interface StatusTabsProps {
   onChange: (selected: IssueStatus[]) => void;
   /** Use PR labels (e.g. "Merged" instead of "Resolved") */
   variant?: "issue" | "pr";
+  /** Keep zero-count, unselected statuses available as filters */
+  showZeroCountStatuses?: boolean;
   className?: string;
 }
 
@@ -95,6 +97,7 @@ export function StatusTabs({
   selected,
   onChange,
   variant = "issue",
+  showZeroCountStatuses = false,
   className,
 }: StatusTabsProps) {
   const toggle = (status: IssueStatus) => {
@@ -105,7 +108,10 @@ export function StatusTabs({
     }
   };
 
-  const statuses = Object.keys(issueStatusConfig) as IssueStatus[];
+  const statuses = (Object.keys(issueStatusConfig) as IssueStatus[]).filter(
+    (status) =>
+      showZeroCountStatuses || counts[status] > 0 || selected.includes(status),
+  );
 
   return (
     <div

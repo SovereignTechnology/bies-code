@@ -72,7 +72,7 @@ export default function RepoIssuesPage() {
   const [searchQuery, setSearchQuery] = useState("");
 
   // Status counts describe only work addressed to the accepted repository.
-  const statusCounts = useMemo(() => {
+  const { statusCounts, hasUnconfirmedIssues } = useMemo(() => {
     const counts: Record<IssueStatus, number> = {
       open: 0,
       draft: 0,
@@ -80,14 +80,20 @@ export default function RepoIssuesPage() {
       closed: 0,
       deleted: 0,
     };
+    let hasUnconfirmed = false;
     if (issues && repo) {
       for (const issue of issues) {
         if (hasAcceptedRepositoryReference(issue.repoCoords, repo)) {
           counts[issue.status]++;
+        } else {
+          hasUnconfirmed = true;
         }
       }
     }
-    return counts;
+    return {
+      statusCounts: counts,
+      hasUnconfirmedIssues: hasUnconfirmed,
+    };
   }, [issues, repo]);
 
   // Collect all unique labels and authors from resolved issues.
@@ -268,6 +274,7 @@ export default function RepoIssuesPage() {
             counts={statusCounts}
             selected={statusFilter}
             onChange={(v) => setStatusFilter(v as IssueStatus[])}
+            showZeroCountStatuses={hasUnconfirmedIssues}
             className="border-b-0 pb-0 mb-0 flex-1"
           />
           {account && repo && (
