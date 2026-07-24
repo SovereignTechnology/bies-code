@@ -611,6 +611,7 @@ function SidebarVariant({
                 <MultiAnnouncementsModal
                   announcements={repo.announcements}
                   selectedMaintainer={repo.selectedMaintainer}
+                  confirmedMaintainers={repo.confirmedMaintainers}
                   leadMaintainer={maintainerLeadership.leadMaintainer}
                   open={multiModalOpen}
                   onOpenChange={setMultiModalOpen}
@@ -645,7 +646,8 @@ function FullVariant({
     account?.pubkey && account.pubkey === repo.selectedMaintainer;
   const editPath = `${basePath}/settings`;
 
-  // For union display: find which relays/clone URLs are from other maintainers
+  // For union display: find which relays/clone URLs are from other reachable
+  // repository announcements.
   const selectedAnnouncement = useMemo(
     () => repo.announcements.find((a) => a.pubkey === repo.selectedMaintainer),
     [repo],
@@ -654,7 +656,11 @@ function FullVariant({
     () => (selectedAnnouncement ? getRepoUpstreams(selectedAnnouncement) : []),
     [selectedAnnouncement],
   );
-  const isMultiMaintainer = repo.announcements.length > 1;
+  const hasMultipleAnnouncements = repo.announcements.length > 1;
+  const confirmedMaintainerSet = useMemo(
+    () => new Set(repo.confirmedMaintainers),
+    [repo.confirmedMaintainers],
+  );
   const maintainerLeadership = useMemo(
     () =>
       computeMaintainerLeadership(
@@ -664,14 +670,15 @@ function FullVariant({
     [repo.confirmedMaintainers, repo.maintainerEdges],
   );
 
-  // Relays in other maintainers' announcements but NOT in the selected maintainer's
+  // Relays in other reachable announcements but not in the selected
+  // maintainer's announcement.
   const unionOnlyRelayUrls = useMemo((): Set<string> => {
-    if (!isMultiMaintainer || !selectedAnnouncement) return new Set();
+    if (!hasMultipleAnnouncements || !selectedAnnouncement) return new Set();
     const myRelays = new Set(
       getRepoRelays(selectedAnnouncement).map(normalizeUrl),
     );
     return new Set(repo.relays.filter((r) => !myRelays.has(normalizeUrl(r))));
-  }, [isMultiMaintainer, selectedAnnouncement, repo.relays]);
+  }, [hasMultipleAnnouncements, selectedAnnouncement, repo.relays]);
 
   // Helper: get the contributor pubkey for a union relay/clone
   const getContributorPubkey = useCallback(
@@ -807,7 +814,7 @@ function FullVariant({
                 ))}
             </div>
           )}
-          {/* Union relays from co-maintainers */}
+          {/* Union relays from accepted or invited repositories */}
           {repo.relays.some(
             (r) =>
               isGraspRelay(r, repo.graspServerDomains) &&
@@ -820,6 +827,7 @@ function FullVariant({
                   unionOnlyRelayUrls.has(r),
               )}
               getContributor={(r) => getContributorPubkey(r, false)}
+              confirmedMaintainers={confirmedMaintainerSet}
             />
           )}
         </section>
@@ -859,7 +867,7 @@ function FullVariant({
                 ))}
             </div>
           )}
-          {/* Union relays from co-maintainers */}
+          {/* Union relays from accepted or invited repositories */}
           {repo.relays.some(
             (r) =>
               !isGraspRelay(r, repo.graspServerDomains) &&
@@ -872,6 +880,7 @@ function FullVariant({
                   unionOnlyRelayUrls.has(r),
               )}
               getContributor={(r) => getContributorPubkey(r, false)}
+              confirmedMaintainers={confirmedMaintainerSet}
             />
           )}
         </section>
@@ -926,6 +935,9 @@ function FullVariant({
               <CloneServerList
                 graspCloneUrls={repo.graspCloneUrls}
                 additionalGitServerUrls={repo.additionalGitServerUrls}
+                getContributor={(url) => getContributorPubkey(url, true)}
+                confirmedMaintainers={confirmedMaintainerSet}
+                selectedMaintainer={repo.selectedMaintainer}
               />
             </>
           )}
@@ -937,6 +949,7 @@ function FullVariant({
         <FullVariantActionBar
           announcements={repo.announcements}
           selectedMaintainer={repo.selectedMaintainer}
+          confirmedMaintainers={repo.confirmedMaintainers}
           leadMaintainer={maintainerLeadership.leadMaintainer}
           editPath={isMaintainer ? editPath : undefined}
           repoCoords={isMaintainer ? repo.allCoordinates : undefined}
@@ -1016,9 +1029,15 @@ function NgitCloneField({ cloneUrl }: { cloneUrl: string }) {
 function CloneServerList({
   graspCloneUrls,
   additionalGitServerUrls,
+  getContributor,
+  confirmedMaintainers,
+  selectedMaintainer,
 }: {
   graspCloneUrls: string[];
   additionalGitServerUrls: string[];
+  getContributor?: (url: string) => string;
+  confirmedMaintainers?: ReadonlySet<string>;
+  selectedMaintainer?: string;
 }) {
   const hasGrasp = graspCloneUrls.length > 0;
   const hasAdditional = additionalGitServerUrls.length > 0;
@@ -1035,7 +1054,17 @@ function CloneServerList({
           </div>
           <div className="space-y-1">
             {graspCloneUrls.map((url) => (
-              <CloneServerRow key={url} url={url} isGrasp />
+              <CloneServerRow
+                key={url}
+                url={url}
+                isGrasp
+                sourceLabel={cloneServerSourceLabel(
+                  url,
+                  getContributor,
+                  confirmedMaintainers,
+                  selectedMaintainer,
+                )}
+              />
             ))}
           </div>
         </div>
@@ -1049,7 +1078,17 @@ function CloneServerList({
           </div>
           <div className="space-y-1">
             {additionalGitServerUrls.map((url) => (
-              <CloneServerRow key={url} url={url} isGrasp={false} />
+              <CloneServerRow
+                key={url}
+                url={url}
+                isGrasp={false}
+                sourceLabel={cloneServerSourceLabel(
+                  url,
+                  getContributor,
+                  confirmedMaintainers,
+                  selectedMaintainer,
+                )}
+              />
             ))}
           </div>
         </div>
@@ -1058,7 +1097,28 @@ function CloneServerList({
   );
 }
 
-function CloneServerRow({ url, isGrasp }: { url: string; isGrasp: boolean }) {
+function cloneServerSourceLabel(
+  url: string,
+  getContributor?: (url: string) => string,
+  confirmedMaintainers?: ReadonlySet<string>,
+  selectedMaintainer?: string,
+): string | undefined {
+  const contributor = getContributor?.(url);
+  if (!contributor || contributor === selectedMaintainer) return undefined;
+  return confirmedMaintainers?.has(contributor)
+    ? "accepted co-maintainer"
+    : "invited repository";
+}
+
+function CloneServerRow({
+  url,
+  isGrasp,
+  sourceLabel,
+}: {
+  url: string;
+  isGrasp: boolean;
+  sourceLabel?: string;
+}) {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = useCallback(async () => {
@@ -1090,6 +1150,14 @@ function CloneServerRow({ url, isGrasp }: { url: string; isGrasp: boolean }) {
         >
           {displayUrl}
         </p>
+        {sourceLabel && (
+          <Badge
+            variant="outline"
+            className="h-4 shrink-0 px-1.5 font-sans text-[9px] font-normal text-muted-foreground"
+          >
+            {sourceLabel}
+          </Badge>
+        )}
         {isGrasp && (pubkey ?? npub) && (
           <span className="inline-flex items-center gap-1 rounded-full border border-border/60 bg-popover px-1.5 py-0.5 shadow-sm whitespace-nowrap font-sans leading-none shrink-0">
             {pubkey ? (
@@ -1131,14 +1199,17 @@ function CloneServerRow({ url, isGrasp }: { url: string; isGrasp: boolean }) {
 function AnnouncementEventRows({
   announcements,
   selectedMaintainer,
+  confirmedMaintainers,
   leadMaintainer,
 }: {
   announcements: NostrEvent[];
   selectedMaintainer: string;
+  confirmedMaintainers: string[];
   leadMaintainer?: string;
 }) {
   const [jsonEvent, setJsonEvent] = useState<NostrEvent | null>(null);
   const isMulti = announcements.length > 1;
+  const confirmed = new Set(confirmedMaintainers);
 
   // Sort freshest first
   const sorted = [...announcements].sort((a, b) => b.created_at - a.created_at);
@@ -1148,22 +1219,19 @@ function AnnouncementEventRows({
       <div className="space-y-2">
         {isMulti && (
           <p className="text-xs text-muted-foreground leading-relaxed">
-            In a multi-maintainer repository each maintainer publishes their own
-            announcement event. Some fields (relays, clone URLs, maintainers)
-            are{" "}
+            Repository data is combined across accepted maintainers and
+            directionally authorized invited repositories. Infrastructure and
+            metadata from invited repositories remain active inputs and are{" "}
             <span className="text-foreground font-medium">
-              unioned across all announcements
+              explicitly labelled below
             </span>
-            , while others (name, description) are taken from the{" "}
-            <span className="text-foreground font-medium">
-              most recently updated
-            </span>{" "}
-            announcement.
+            .
           </p>
         )}
 
         {sorted.map((ev) => {
           const isSelected = ev.pubkey === selectedMaintainer;
+          const isAccepted = confirmed.has(ev.pubkey);
           const isLead = ev.pubkey === leadMaintainer;
           const updatedAt = format(
             new Date(ev.created_at * 1000),
@@ -1192,6 +1260,21 @@ function AnnouncementEventRows({
                     className="text-[10px] px-1.5 py-0 h-4 shrink-0 text-pink-600 border-pink-500/40 dark:text-pink-400"
                   >
                     selected
+                  </Badge>
+                )}
+                {isMulti && !isSelected && (
+                  <Badge
+                    variant="outline"
+                    className={cn(
+                      "h-4 shrink-0 px-1.5 text-[10px]",
+                      isAccepted
+                        ? "text-pink-600 border-pink-500/40 dark:text-pink-400"
+                        : "text-amber-700 border-amber-500/40 dark:text-amber-300",
+                    )}
+                  >
+                    {isAccepted
+                      ? "accepted co-maintainer"
+                      : "invited repository"}
                   </Badge>
                 )}
                 {isMulti && isLead && (
@@ -1249,12 +1332,14 @@ function AnnouncementEventRows({
 function FullVariantActionBar({
   announcements,
   selectedMaintainer,
+  confirmedMaintainers,
   leadMaintainer,
   editPath,
   repoCoords,
 }: {
   announcements: NostrEvent[];
   selectedMaintainer: string;
+  confirmedMaintainers: string[];
   leadMaintainer?: string;
   editPath?: string;
   repoCoords?: string[];
@@ -1340,6 +1425,7 @@ function FullVariantActionBar({
           <AnnouncementEventRows
             announcements={announcements}
             selectedMaintainer={selectedMaintainer}
+            confirmedMaintainers={confirmedMaintainers}
             leadMaintainer={leadMaintainer}
           />
         </div>
@@ -1685,12 +1771,14 @@ function RawEventJsonDialog({
 function MultiAnnouncementsModal({
   announcements,
   selectedMaintainer,
+  confirmedMaintainers,
   leadMaintainer,
   open,
   onOpenChange,
 }: {
   announcements: NostrEvent[];
   selectedMaintainer: string;
+  confirmedMaintainers: string[];
   leadMaintainer?: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -1708,6 +1796,7 @@ function MultiAnnouncementsModal({
           <AnnouncementEventRows
             announcements={announcements}
             selectedMaintainer={selectedMaintainer}
+            confirmedMaintainers={confirmedMaintainers}
             leadMaintainer={leadMaintainer}
           />
         </div>
@@ -1916,30 +2005,35 @@ function CloneDropdown({
 }
 
 // ---------------------------------------------------------------------------
-// UnionRelayGroup — shows relays contributed only by co-maintainers
+// UnionRelayGroup — shows relays contributed by other reachable repositories
 // ---------------------------------------------------------------------------
 
 function UnionRelayGroup({
   relays,
   getContributor,
+  confirmedMaintainers,
 }: {
   relays: string[];
   getContributor: (url: string) => string;
+  confirmedMaintainers: ReadonlySet<string>;
 }) {
   return (
     <div className="mt-1.5 space-y-1">
       <p className="text-[10px] text-muted-foreground/60 uppercase tracking-wide flex items-center gap-1">
         <Users className="h-2.5 w-2.5" />
-        Via co-maintainers
+        Via recursive repository graph
       </p>
       <div className="flex flex-wrap gap-1.5">
         {relays.map((relay) => {
           const contributor = getContributor(relay);
+          const sourceLabel = confirmedMaintainers.has(contributor)
+            ? "accepted co-maintainer"
+            : "invited repository";
           return (
             <div
               key={relay}
               className="inline-flex items-center gap-1 rounded-full border border-border/40 bg-muted/30 pl-1.5 pr-2 py-0.5"
-              title={`${relay} — contributed by co-maintainer`}
+              title={`${relay} — contributed by ${sourceLabel}`}
             >
               <Link
                 to={`/relay/${relayUrlToSegment(relay)}`}
@@ -1947,6 +2041,12 @@ function UnionRelayGroup({
               >
                 {displayRelay(relay)}
               </Link>
+              <Badge
+                variant="outline"
+                className="h-4 px-1.5 text-[9px] font-normal text-muted-foreground"
+              >
+                {sourceLabel}
+              </Badge>
               {contributor && (
                 <span className="text-[9px] text-muted-foreground/50 flex items-center gap-0.5">
                   via{" "}

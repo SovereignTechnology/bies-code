@@ -268,6 +268,15 @@ invitation recipient unless the direct edge names them.
 
 If the logged-in account is requested, the repository page should offer an
 explicit acceptance flow that publishes the account's own updated announcement.
+The flow preserves the account's existing maintainer relationships and lets the
+account choose which accepted maintainers in the joining repository to list. It
+defaults to the unique lead maintainer when one exists, otherwise to the full
+recursively accepted maintainer set.
+
+Infrastructure and metadata from directionally authorized invited repositories
+remain active consumption inputs. Detailed provenance views must label those
+sources as invited repositories rather than presenting them as accepted
+co-maintainers.
 
 ---
 

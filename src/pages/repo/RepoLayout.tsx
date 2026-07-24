@@ -31,6 +31,12 @@ import { nip34SupplementalRelayLoader } from "@/services/nostr";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { nip19, type EventTemplate, type NostrEvent } from "nostr-tools";
 import {
   ArrowLeft,
@@ -45,6 +51,8 @@ import {
   Workflow,
   UserPlus,
   CheckCircle2,
+  Users,
+  ChevronDown,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -54,6 +62,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { RepoContext, type RepoContextValue } from "./RepoContext";
 import {
+  computeMaintainerLeadership,
   hasAcceptedRepositoryReference,
   REPO_KIND,
   repoCoordinate,
@@ -771,23 +780,16 @@ function buildAcceptanceTemplate(
   repo: ResolvedRepo,
   ownAnnouncement: NostrEvent,
   accountPubkey: string,
+  selectedMaintainers: string[],
 ): EventTemplate {
   const latestAnnouncement = repo.announcements.reduce((latest, event) =>
     event.created_at > latest.created_at ? event : latest,
   );
-  const invitingMaintainers = repo.maintainerEdges
-    .filter(({ to }) => to === accountPubkey)
-    .map(({ from }) => from);
   const existingMaintainers =
     ownAnnouncement.tags.find(([name]) => name === "maintainers")?.slice(1) ??
     [];
   const maintainers = Array.from(
-    new Set([
-      accountPubkey,
-      ...repo.confirmedMaintainers,
-      ...invitingMaintainers,
-      ...existingMaintainers,
-    ]),
+    new Set([accountPubkey, ...existingMaintainers, ...selectedMaintainers]),
   );
 
   const sharedTags = latestAnnouncement.tags.filter(
@@ -803,7 +805,10 @@ function buildAcceptanceTemplate(
   return {
     kind: REPO_KIND,
     content: latestAnnouncement.content,
-    created_at: Math.floor(Date.now() / 1000),
+    created_at: Math.max(
+      Math.floor(Date.now() / 1000),
+      ownAnnouncement.created_at + 1,
+    ),
     tags: [
       ["d", repo.dTag],
       ...sharedTags,
@@ -811,6 +816,29 @@ function buildAcceptanceTemplate(
       ["maintainers", ...maintainers],
     ],
   };
+}
+
+function getAcceptanceMaintainerSelection(
+  repo: ResolvedRepo,
+  accountPubkey: string,
+): {
+  options: string[];
+  defaults: string[];
+  leadMaintainer?: string;
+} {
+  const options = repo.confirmedMaintainers.filter(
+    (pubkey) => pubkey !== accountPubkey,
+  );
+  const leadMaintainer = computeMaintainerLeadership(
+    repo.confirmedMaintainers,
+    repo.maintainerEdges,
+  ).leadMaintainer;
+  const defaults =
+    leadMaintainer && options.includes(leadMaintainer)
+      ? [leadMaintainer]
+      : options;
+
+  return { options, defaults, leadMaintainer };
 }
 
 function MaintainerInvitationBanner({
@@ -824,8 +852,6 @@ function MaintainerInvitationBanner({
     signEvent(template: EventTemplate): Promise<NostrEvent>;
   };
 }) {
-  const { toast } = useToast();
-  const [isAccepting, setIsAccepting] = useState(false);
   const isRequested = repo.requestedMaintainers.includes(accountPubkey);
   const ownAnnouncement = repo.announcements.find(
     (announcement) => announcement.pubkey === accountPubkey,
@@ -837,33 +863,12 @@ function MaintainerInvitationBanner({
         .map(({ from }) => from),
     ),
   );
+  const acceptanceSelection = getAcceptanceMaintainerSelection(
+    repo,
+    accountPubkey,
+  );
 
   if (!isRequested) return null;
-
-  const accept = async () => {
-    if (!ownAnnouncement || isAccepting) return;
-    setIsAccepting(true);
-    try {
-      const event = await signer.signEvent(
-        buildAcceptanceTemplate(repo, ownAnnouncement, accountPubkey),
-      );
-      await publish(event, [...repo.allCoordinates, "git-index"]);
-      toast({
-        title: "Co-maintainership accepted",
-        description:
-          "Your signed repository announcement now links this copy to the maintainer group.",
-      });
-    } catch (error) {
-      toast({
-        title: "Could not accept invitation",
-        description:
-          error instanceof Error ? error.message : "Publishing failed.",
-        variant: "destructive",
-      });
-    } finally {
-      setIsAccepting(false);
-    }
-  };
 
   return (
     <div className="border-b border-pink-500/20 bg-gradient-to-r from-pink-500/10 via-background to-violet-500/10">
@@ -924,19 +929,16 @@ function MaintainerInvitationBanner({
           </div>
 
           {ownAnnouncement ? (
-            <Button
-              type="button"
-              onClick={accept}
-              disabled={isAccepting}
-              className="shrink-0 bg-pink-600 text-white hover:bg-pink-700"
-            >
-              {isAccepting ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <CheckCircle2 className="mr-2 h-4 w-4" />
-              )}
-              {isAccepting ? "Publishing…" : "Accept invitation"}
-            </Button>
+            <MaintainerAcceptanceControls
+              key={`${repo.selectedMaintainer}:${acceptanceSelection.options.join(
+                ",",
+              )}:${acceptanceSelection.defaults.join(",")}`}
+              repo={repo}
+              ownAnnouncement={ownAnnouncement}
+              accountPubkey={accountPubkey}
+              signer={signer}
+              {...acceptanceSelection}
+            />
           ) : (
             <div className="max-w-sm rounded-lg border border-dashed px-3 py-2 text-sm text-muted-foreground">
               Clone the repository and run{" "}
@@ -948,6 +950,171 @@ function MaintainerInvitationBanner({
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+function MaintainerAcceptanceControls({
+  repo,
+  ownAnnouncement,
+  accountPubkey,
+  signer,
+  options,
+  defaults,
+  leadMaintainer,
+}: {
+  repo: ResolvedRepo;
+  ownAnnouncement: NostrEvent;
+  accountPubkey: string;
+  signer: {
+    signEvent(template: EventTemplate): Promise<NostrEvent>;
+  };
+  options: string[];
+  defaults: string[];
+  leadMaintainer?: string;
+}) {
+  const { toast } = useToast();
+  const [isAccepting, setIsAccepting] = useState(false);
+  const [selectedMaintainers, setSelectedMaintainers] =
+    useState<string[]>(defaults);
+
+  const accept = async () => {
+    if (isAccepting || selectedMaintainers.length === 0) return;
+    setIsAccepting(true);
+    try {
+      const event = await signer.signEvent(
+        buildAcceptanceTemplate(
+          repo,
+          ownAnnouncement,
+          accountPubkey,
+          selectedMaintainers,
+        ),
+      );
+      await publish(event, [...repo.allCoordinates, "git-index"]);
+      toast({
+        title: "Co-maintainership accepted",
+        description:
+          "Your signed repository announcement now links this copy to the maintainer group.",
+      });
+    } catch (error) {
+      toast({
+        title: "Could not accept invitation",
+        description:
+          error instanceof Error ? error.message : "Publishing failed.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsAccepting(false);
+    }
+  };
+
+  const toggleMaintainer = (pubkey: string, checked: boolean) => {
+    setSelectedMaintainers((current) =>
+      checked
+        ? Array.from(new Set([...current, pubkey]))
+        : current.filter((candidate) => candidate !== pubkey),
+    );
+  };
+
+  return (
+    <div className="flex w-full shrink-0 flex-col gap-2 sm:w-auto sm:min-w-64">
+      <Popover>
+        <PopoverTrigger asChild>
+          <Button
+            type="button"
+            variant="outline"
+            className="w-full justify-between bg-background/80"
+          >
+            <span className="inline-flex min-w-0 items-center gap-2">
+              <Users className="h-4 w-4 shrink-0" />
+              <span className="truncate">
+                Link through {selectedMaintainers.length}{" "}
+                {selectedMaintainers.length === 1
+                  ? "maintainer"
+                  : "maintainers"}
+              </span>
+            </span>
+            <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent align="end" className="w-80 space-y-3">
+          <div>
+            <p className="text-sm font-medium">Link through maintainers</p>
+            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+              Choose which accepted maintainers this announcement lists. Your
+              existing maintainer relationships remain unchanged.
+            </p>
+          </div>
+          <div className="max-h-64 space-y-1 overflow-y-auto">
+            {options.map((pubkey) => {
+              const checked = selectedMaintainers.includes(pubkey);
+              return (
+                <label
+                  key={pubkey}
+                  className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 hover:bg-muted/60"
+                >
+                  <Checkbox
+                    checked={checked}
+                    onCheckedChange={(value) =>
+                      toggleMaintainer(pubkey, value === true)
+                    }
+                  />
+                  <UserLink
+                    pubkey={pubkey}
+                    avatarSize="xs"
+                    nameClassName="text-sm"
+                    className="min-w-0 flex-1"
+                    noLink
+                  />
+                  {pubkey === leadMaintainer && (
+                    <Badge
+                      variant="outline"
+                      className="h-4 px-1.5 text-[10px] text-pink-600 dark:text-pink-400"
+                    >
+                      lead
+                    </Badge>
+                  )}
+                </label>
+              );
+            })}
+          </div>
+          <div className="flex items-center justify-between border-t pt-2">
+            {leadMaintainer && options.includes(leadMaintainer) ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => setSelectedMaintainers([leadMaintainer])}
+              >
+                Lead only
+              </Button>
+            ) : (
+              <span />
+            )}
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => setSelectedMaintainers(options)}
+            >
+              Select all
+            </Button>
+          </div>
+        </PopoverContent>
+      </Popover>
+      <Button
+        type="button"
+        onClick={accept}
+        disabled={isAccepting || selectedMaintainers.length === 0}
+        className="w-full bg-pink-600 text-white hover:bg-pink-700"
+      >
+        {isAccepting ? (
+          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+        ) : (
+          <CheckCircle2 className="mr-2 h-4 w-4" />
+        )}
+        {isAccepting ? "Publishing…" : "Accept invitation"}
+      </Button>
     </div>
   );
 }

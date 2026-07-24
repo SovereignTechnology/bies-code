@@ -2716,8 +2716,11 @@ export function groupIntoResolvedRepos(
             ? resolved
             : (resolveChain(events, leadAnchor, dTag) ?? resolved);
 
-        // Mark all members of this component as processed
-        for (const pk of anchored.maintainerSet) {
+        // Repository identity is the reciprocally accepted component, not the
+        // full directional authorization closure. Marking invited maintainers
+        // here can suppress their separate same-identifier repository when an
+        // announcement that points at them is processed first.
+        for (const pk of anchored.confirmedMaintainers) {
           processedComponents.add(`${pk}:${dTag}`);
         }
 
