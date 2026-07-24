@@ -270,8 +270,23 @@ If the logged-in account is requested, the repository page should offer an
 explicit acceptance flow that publishes the account's own updated announcement.
 The flow preserves the account's existing maintainer relationships and lets the
 account choose which accepted maintainers in the joining repository to list. It
-defaults to the unique lead maintainer when one exists, otherwise to the full
-recursively accepted maintainer set.
+defaults to the sole maintainer when there is only one option, or the unique
+lead maintainer when one exists. When multiple maintainers have ambiguous
+leadership, it defaults to no selection and requires the invitee to choose one
+or more lead maintainers explicitly.
+
+If the invitee has no announcement for the identifier, the client can copy the
+latest shared announcement fields and add infrastructure derived from the
+invitee's kind:10317 Grasp list (or the application defaults). It copies the
+canonical state event, stages both events on those Grasp relays, transfers the
+missing Git objects to every selected server, verifies the advertised refs, and
+only then broadcasts the reciprocal announcement and state.
+
+If the invitee already has both an announcement and a kind:30618 state event,
+the client MUST NOT accept by publishing only a reciprocal announcement. The
+two state histories must first be reconciled into an explicit combined ref set,
+then synchronized to every Grasp server involved before the reciprocal
+announcement is treated as complete.
 
 Infrastructure and metadata from directionally authorized invited repositories
 remain active consumption inputs. Detailed provenance views must label those

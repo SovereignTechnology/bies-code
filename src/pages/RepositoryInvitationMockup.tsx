@@ -1,21 +1,18 @@
 import { useState, type ReactNode } from "react";
 import { useSeoMeta } from "@unhead/react";
 import {
-  Bell,
   Check,
   CheckCircle2,
   ChevronDown,
   CircleDot,
   Clock3,
-  Copy,
   GitFork,
-  Inbox,
   Link2,
   Megaphone,
   Plus,
   Send,
+  Server,
   Settings2,
-  Terminal,
   UserPlus,
   UserRound,
   Users,
@@ -88,29 +85,18 @@ function MockupLabel({
   );
 }
 
-function RepositoryMark({ compact = false }: { compact?: boolean }) {
-  return (
-    <span
-      className={cn(
-        "inline-flex shrink-0 items-center justify-center rounded-lg border border-violet-500/20 bg-gradient-to-br from-violet-500/15 to-pink-500/15 text-violet-700 dark:text-violet-300",
-        compact ? "h-8 w-8" : "h-10 w-10",
-      )}
-    >
-      <GitFork className={compact ? "h-4 w-4" : "h-5 w-5"} />
-    </span>
-  );
-}
-
 function StateBadge({
   state,
 }: {
-  state: "setup" | "ready" | "waiting" | "accepted";
+  state: "setup" | "ready" | "waiting" | "accepted" | "review";
 }) {
   const styles = {
     setup:
       "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300",
     ready: "border-pink-500/30 bg-pink-500/10 text-pink-700 dark:text-pink-300",
     waiting: "border-border bg-muted/50 text-muted-foreground",
+    review:
+      "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300",
     accepted:
       "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
   };
@@ -118,6 +104,7 @@ function StateBadge({
     setup: "setup required",
     ready: "ready to accept",
     waiting: "awaiting response",
+    review: "merge required",
     accepted: "accepted",
   };
 
@@ -132,177 +119,114 @@ function StateBadge({
   );
 }
 
-function InvitationInbox() {
+function InvitationDiscoveryNote() {
   return (
-    <Card className="overflow-hidden border-border/70 shadow-sm">
-      <div className="flex flex-col gap-3 border-b bg-muted/20 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-2">
-          <span className="relative">
-            <Bell className="h-4 w-4" />
-            <span className="absolute -right-1.5 -top-1.5 h-2 w-2 rounded-full bg-pink-500 ring-2 ring-card" />
-          </span>
-          <span className="text-sm font-semibold">Invitations</span>
-          <Badge className="h-5 min-w-5 justify-center bg-pink-600 px-1.5 text-white">
-            2
-          </Badge>
+    <Card className="border-dashed border-border/80 bg-muted/10 shadow-none">
+      <CardContent className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center">
+        <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-violet-500/10 text-violet-600 dark:text-violet-400">
+          <GitFork className="h-5 w-5" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="font-semibold">
+              Invitations are contextual, not a global inbox
+            </p>
+            <Badge variant="outline" className="text-[10px]">
+              no relay-wide scan
+            </Badge>
+          </div>
+          <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+            The recipient sees the acceptance banner after opening a repository
+            from a direct link, search result, maintainer profile, or another
+            existing discovery path. The client does not download every
+            repository announcement to inspect its{" "}
+            <code className="font-mono text-xs text-foreground">
+              maintainers
+            </code>{" "}
+            tag.
+          </p>
         </div>
-        <div className="flex items-center gap-1 text-xs text-muted-foreground">
-          <Inbox className="h-3.5 w-3.5" />
-          Notifications · Maintainer invites
+        <div className="flex flex-wrap gap-2 sm:max-w-56 sm:justify-end">
+          <Badge variant="secondary">Direct link</Badge>
+          <Badge variant="secondary">Repository banner</Badge>
+          <Badge variant="secondary">Inviter settings</Badge>
         </div>
-      </div>
-
-      <div className="divide-y">
-        <InvitationInboxRow
-          repo="open-fork"
-          description="A privacy-friendly Git client"
-          people={
-            <>
-              <Person name="Maya" tone="pink" compact /> invited you
-            </>
-          }
-          state="setup"
-          action="Finish setup"
-          unread
-        />
-        <InvitationInboxRow
-          repo="relay-tools"
-          description="Utilities for Nostr relay operators"
-          people={
-            <>
-              <Person name="Theo" tone="violet" compact /> and{" "}
-              <Person name="Maya" tone="pink" compact /> invited you
-            </>
-          }
-          state="ready"
-          action="Review & accept"
-          unread
-        />
-        <InvitationInboxRow
-          repo="nostr-kit"
-          description="Composable Nostr primitives"
-          people={
-            <>
-              You joined <Person name="Lena" tone="green" compact /> and{" "}
-              <Person name="Omar" tone="blue" compact />
-            </>
-          }
-          state="accepted"
-          action="Open repository"
-        />
-      </div>
+      </CardContent>
     </Card>
   );
 }
 
-function InvitationInboxRow({
-  repo,
-  description,
-  people,
-  state,
-  action,
-  unread = false,
-}: {
-  repo: string;
-  description: string;
-  people: ReactNode;
-  state: "setup" | "ready" | "accepted";
-  action: string;
-  unread?: boolean;
-}) {
-  return (
-    <div
-      className={cn(
-        "relative flex flex-col gap-3 px-4 py-4 transition-colors sm:flex-row sm:items-center",
-        unread && "bg-pink-500/[0.035]",
-      )}
-    >
-      {unread && (
-        <span className="absolute left-1.5 top-6 h-1.5 w-1.5 rounded-full bg-pink-500" />
-      )}
-      <div className="flex min-w-0 flex-1 items-start gap-3">
-        <RepositoryMark compact />
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <p className="font-semibold">{repo}</p>
-            <StateBadge state={state} />
-          </div>
-          <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>
-          <div className="mt-2 flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
-            {people}
-            <span>· 12 min ago</span>
-          </div>
-        </div>
-      </div>
-      <Button
-        type="button"
-        variant={state === "ready" ? "default" : "outline"}
-        size="sm"
-        className={cn(
-          "w-full shrink-0 sm:w-auto",
-          state === "ready" &&
-            "bg-pink-600 text-white hover:bg-pink-700 dark:bg-pink-600",
-        )}
-      >
-        {action}
-      </Button>
-    </div>
-  );
-}
-
 function MissingAnnouncementCard() {
-  const [copied, setCopied] = useState(false);
-
-  const copyCommand = () => {
-    void navigator.clipboard?.writeText("ngit repo accept");
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1500);
-  };
+  const [accepted, setAccepted] = useState(false);
 
   return (
     <ScenarioCard
       number="01"
-      title="No announcement yet"
-      description="The invite is visible, but the safe acceptance path starts in Git."
-      state="setup"
+      title="No announcement"
+      description="Copy the latest announcement and state, then populate the invitee’s infrastructure."
+      state={accepted ? "accepted" : "ready"}
     >
-      <InvitationBanner>
-        <div className="flex min-w-0 gap-3">
-          <InvitationIcon />
-          <div className="min-w-0">
-            <p className="font-semibold">
-              You’re invited to maintain open-fork
-            </p>
-            <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
-              Invited by <Person name="Maya" tone="pink" compact />
+      {accepted ? (
+        <AcceptedPanel repo="open-fork" people="Maya" />
+      ) : (
+        <InvitationBanner>
+          <div className="flex min-w-0 gap-3">
+            <InvitationIcon />
+            <div className="min-w-0">
+              <p className="font-semibold">
+                You’re invited to maintain open-fork
+              </p>
+              <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+                Invited by <Person name="Maya" tone="pink" compact />
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-4 space-y-2 rounded-lg border bg-background/80 p-3">
+            <div className="flex items-center gap-2 text-xs">
+              <Megaphone className="h-3.5 w-3.5 text-violet-500" />
+              <span className="text-muted-foreground">
+                Copy metadata and state from
+              </span>
+              <Person name="Maya" tone="pink" compact />
+              <Badge variant="outline" className="ml-auto h-4 text-[10px]">
+                latest
+              </Badge>
+            </div>
+            <Separator />
+            <div className="flex items-center gap-2 text-xs">
+              <Server className="h-3.5 w-3.5 text-pink-500" />
+              <span className="font-medium">Your Grasp infrastructure</span>
+            </div>
+            <label className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Checkbox checked disabled />
+              relay.ngit.dev
+              <Badge variant="secondary" className="ml-auto h-4 text-[10px]">
+                default
+              </Badge>
+            </label>
+            <label className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Checkbox checked disabled />
+              gitnostr.com
+              <Badge variant="secondary" className="ml-auto h-4 text-[10px]">
+                default
+              </Badge>
+            </label>
+            <p className="border-t pt-2 text-[11px] leading-relaxed text-muted-foreground">
+              Missing Git objects are prepared from the existing servers and
+              each new server is verified before the events are broadcast.
             </p>
           </div>
-        </div>
-        <div className="mt-4 rounded-lg border border-dashed bg-background/70 p-3">
-          <div className="flex items-start gap-2">
-            <Terminal className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
-            <p className="text-xs leading-relaxed text-muted-foreground">
-              Clone the repository first so your announcement includes a real
-              Git server and repository state.
-            </p>
-          </div>
-          <div className="mt-3 flex items-center justify-between gap-2 rounded-md bg-zinc-950 px-3 py-2 text-zinc-100">
-            <code className="truncate font-mono text-xs">ngit repo accept</code>
-            <button
-              type="button"
-              onClick={copyCommand}
-              className="rounded p-1 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-pink-400"
-              aria-label="Copy acceptance command"
-            >
-              {copied ? (
-                <Check className="h-3.5 w-3.5 text-emerald-400" />
-              ) : (
-                <Copy className="h-3.5 w-3.5" />
-              )}
-            </button>
-          </div>
-        </div>
-      </InvitationBanner>
+          <Button
+            type="button"
+            onClick={() => setAccepted(true)}
+            className="mt-2 w-full bg-pink-600 text-white hover:bg-pink-700 dark:bg-pink-600"
+          >
+            <CheckCircle2 className="h-4 w-4" />
+            Prepare infrastructure & accept
+          </Button>
+        </InvitationBanner>
+      )}
     </ScenarioCard>
   );
 }
@@ -313,8 +237,8 @@ function ExistingAnnouncementCard() {
   return (
     <ScenarioCard
       number="02"
-      title="Announcement exists"
-      description="The matching repository is found, so acceptance can happen in the browser."
+      title="Announcement, no state"
+      description="There is infrastructure to preserve but no competing repository state."
       state={accepted ? "accepted" : "ready"}
     >
       {accepted ? (
@@ -367,7 +291,7 @@ const inviteOptions = [
 ];
 
 function MultipleMaintainersCard() {
-  const [selected, setSelected] = useState(["Maya", "Theo", "Lena"]);
+  const [selected, setSelected] = useState(["Maya"]);
   const [accepted, setAccepted] = useState(false);
 
   const toggle = (name: string, checked: boolean) => {
@@ -382,7 +306,7 @@ function MultipleMaintainersCard() {
     <ScenarioCard
       number="03"
       title="Several maintainers invited you"
-      description="Inviters are grouped into one request; you choose which links to publish."
+      description="A unique lead is selected alone; ambiguous leadership starts with none selected."
       state={accepted ? "accepted" : "ready"}
     >
       {accepted ? (
@@ -413,7 +337,7 @@ function MultipleMaintainersCard() {
 
           <div className="mt-4 rounded-lg border bg-background/80 p-2">
             <p className="px-2 pb-2 pt-1 text-xs font-medium">
-              Link through maintainers
+              Select lead maintainer(s)
             </p>
             {inviteOptions.map((person) => (
               <label
@@ -438,6 +362,10 @@ function MultipleMaintainersCard() {
               </label>
             ))}
           </div>
+          <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
+            Maya is the unique lead, so only Maya is preselected. With no unique
+            lead, all options would start unchecked.
+          </p>
           <Button
             type="button"
             onClick={() => setAccepted(true)}
@@ -454,6 +382,55 @@ function MultipleMaintainersCard() {
   );
 }
 
+function ConflictingStateCard() {
+  return (
+    <ScenarioCard
+      number="04"
+      title="Announcement + state"
+      description="Two repository histories require an explicit combined state before acceptance."
+      state="review"
+    >
+      <div className="h-full rounded-xl border border-amber-500/30 bg-amber-500/[0.06] p-4">
+        <div className="flex gap-3">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-amber-500/15 text-amber-700 dark:text-amber-300">
+            <GitFork className="h-4 w-4" />
+          </span>
+          <div>
+            <p className="font-semibold">Combine repository state first</p>
+            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+              Publishing either existing state as the newest event could hide
+              refs from the other repository.
+            </p>
+          </div>
+        </div>
+        <ol className="mt-4 space-y-2 text-xs text-muted-foreground">
+          {[
+            "Compare every branch and tag from both state events",
+            "Choose the desired combined ref set",
+            "Prepare only the Git objects each server is missing",
+            "Publish state to purgatory, then push to every server",
+          ].map((step, index) => (
+            <li key={step} className="flex gap-2">
+              <span className="font-mono text-amber-700 dark:text-amber-300">
+                {index + 1}.
+              </span>
+              {step}
+            </li>
+          ))}
+        </ol>
+        <Button
+          type="button"
+          disabled
+          variant="outline"
+          className="mt-4 w-full"
+        >
+          Review combined state · next phase
+        </Button>
+      </div>
+    </ScenarioCard>
+  );
+}
+
 function ScenarioCard({
   number,
   title,
@@ -464,7 +441,7 @@ function ScenarioCard({
   number: string;
   title: string;
   description: string;
-  state: "setup" | "ready" | "accepted";
+  state: "setup" | "ready" | "accepted" | "review";
   children: ReactNode;
 }) {
   return (
@@ -526,12 +503,10 @@ function InviteeView() {
   return (
     <div className="space-y-10">
       <section>
-        <MockupLabel icon={Bell}>First touch · notification inbox</MockupLabel>
-        <InvitationInbox />
-        <p className="mt-3 text-sm text-muted-foreground">
-          Related invites for the same repository are grouped, while the badge
-          makes the next available action clear.
-        </p>
+        <MockupLabel icon={GitFork}>
+          Discovery boundary · repository context
+        </MockupLabel>
+        <InvitationDiscoveryNote />
       </section>
 
       <section>
@@ -549,10 +524,11 @@ function InviteeView() {
             invitation is accepted.
           </p>
         </div>
-        <div className="grid gap-4 lg:grid-cols-3">
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <MissingAnnouncementCard />
           <ExistingAnnouncementCard />
           <MultipleMaintainersCard />
+          <ConflictingStateCard />
         </div>
       </section>
     </div>
@@ -641,10 +617,11 @@ function InviterSettings() {
             tone="amber"
             detail={
               <>
-                Invited by you · <span className="italic">no announcement</span>
+                Invited by you · no announcement · will use configured
+                infrastructure
               </>
             }
-            state="setup"
+            state="ready"
           />
           <MaintainerRow
             name="Alex"
@@ -815,8 +792,8 @@ function InviterView() {
           <PublicRepositorySummary />
         </div>
         <div>
-          <MockupLabel icon={Send}>
-            Notification · invitation accepted
+          <MockupLabel icon={CheckCircle2}>
+            Repository settings · reciprocity observed
           </MockupLabel>
           <AcceptanceNotice />
           <div className="mt-4 rounded-xl border bg-muted/15 p-4">
@@ -842,7 +819,11 @@ function InviterView() {
 function Lifecycle() {
   const steps = [
     { icon: Send, label: "Invite published", caption: "Inviter lists pubkey" },
-    { icon: Bell, label: "Invite discovered", caption: "Recipient sees inbox" },
+    {
+      icon: GitFork,
+      label: "Repository opened",
+      caption: "Context reveals invitation",
+    },
     {
       icon: Link2,
       label: "Link selected",

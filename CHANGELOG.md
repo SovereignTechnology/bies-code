@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Make maintainer-invitation acceptance create and populate missing repository infrastructure from the latest announcement and state, default ambiguous lead selection to none, and block repositories with existing state until their refs can be safely combined.
 - Align recursive repository authorization with ngit and GRASP, add compact existing-repository links for invited maintainers, consolidate repository-join warnings, and separate work sent only to those repositories from accepted repository and social-proof counts.
 - Fix CI workflow duration counters so running checks update every second.
 - Show referenced work items and cross-repository comment mentions in discussions.
