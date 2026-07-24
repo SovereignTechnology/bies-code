@@ -45,8 +45,12 @@ import {
   hasAcceptedRepositoryReference,
   type IssueStatus,
   type ResolvedIssueLite,
+  type ResolvedRepo,
 } from "@/lib/nip34";
-import { RepoItemAttributionWarning } from "@/components/RepoItemAttributionWarning";
+import {
+  RepoItemAttributionIndicator,
+  RepoItemAttributionWarning,
+} from "@/components/RepoItemAttributionWarning";
 
 const DEFAULT_STATUS_FILTER: IssueStatus[] = ["open"];
 
@@ -129,11 +133,11 @@ export default function RepoIssuesPage() {
     });
   }, [issues, statusFilter, labelFilter, authorFilter, searchQuery]);
 
-  const unconfirmedIssueCount = useMemo(() => {
-    if (!issues || !repo) return 0;
+  const unconfirmedIssues = useMemo(() => {
+    if (!issues || !repo) return [];
     return issues.filter(
       (issue) => !hasAcceptedRepositoryReference(issue.repoCoords, repo),
-    ).length;
+    );
   }, [issues, repo]);
 
   // "Active" means filters differ from the default state
@@ -186,12 +190,12 @@ export default function RepoIssuesPage() {
         </Dialog>
       )}
 
-      {repo && unconfirmedIssueCount > 0 && (
+      {repo && unconfirmedIssues.length > 0 && (
         <RepoItemAttributionWarning
-          basePath={basePath}
-          repoName={repo.name}
+          repo={repo}
+          repoCoords={unconfirmedIssues.flatMap((issue) => issue.repoCoords)}
           itemLabel="issue"
-          count={unconfirmedIssueCount}
+          count={unconfirmedIssues.length}
           className="mb-4"
         />
       )}
@@ -302,6 +306,7 @@ export default function RepoIssuesPage() {
                 issue={issue}
                 repoPath={basePath}
                 repoRelays={repo?.relays ?? []}
+                repo={repo}
               />
             ))}
           </ul>
@@ -324,10 +329,12 @@ function IssueRow({
   issue,
   repoPath,
   repoRelays,
+  repo,
 }: {
   issue: ResolvedIssueLite;
   repoPath: string;
   repoRelays: string[];
+  repo: ResolvedRepo | undefined;
 }) {
   const lastActive = formatDistanceToNow(
     new Date(issue.lastActivityAt * 1000),
@@ -335,12 +342,15 @@ function IssueRow({
   );
 
   const nevent = eventIdToNevent(issue.id, repoRelays.slice(0, 1));
+  const needsAttributionCheck =
+    repo !== undefined &&
+    !hasAcceptedRepositoryReference(issue.repoCoords, repo);
 
   return (
-    <li className="group hover:bg-accent/40 transition-colors">
+    <li className="group flex items-stretch hover:bg-accent/40 transition-colors">
       <Link
         to={`${repoPath}/issues/${nevent}`}
-        className="flex items-start gap-3 px-3 py-2.5 text-sm"
+        className="flex min-w-0 flex-1 items-start gap-3 px-3 py-2.5 text-sm"
       >
         {/* Status icon */}
         <StatusIcon status={issue.status} className="mt-0.5" />
@@ -400,6 +410,15 @@ function IssueRow({
           )}
         </div>
       </Link>
+      {needsAttributionCheck && (
+        <div className="flex shrink-0 items-center pr-2">
+          <RepoItemAttributionIndicator
+            repo={repo}
+            repoCoords={issue.repoCoords}
+            itemLabel="issue"
+          />
+        </div>
+      )}
     </li>
   );
 }

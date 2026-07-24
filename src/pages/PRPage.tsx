@@ -1248,13 +1248,8 @@ export default function PRPage() {
       <div className="container max-w-screen-xl px-4 md:px-8 py-6">
         {pr && repo && !hasAcceptedRepositoryReference(pr.repoCoords, repo) && (
           <RepoItemAttributionWarning
-            basePath={repoToPath(
-              pubkey,
-              repoId,
-              resolved?.repo?.relays ?? [],
-              nip05,
-            )}
-            repoName={repo.name}
+            repo={repo}
+            repoCoords={pr.repoCoords}
             itemLabel={pr.itemType === "patch" ? "patch" : "pull request"}
             className="mb-6"
           />

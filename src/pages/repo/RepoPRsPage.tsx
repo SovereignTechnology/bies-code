@@ -27,12 +27,16 @@ import {
   hasAcceptedRepositoryReference,
   type IssueStatus,
   type ResolvedPRLite,
+  type ResolvedRepo,
   type PRItemType,
 } from "@/lib/nip34";
 import { useCIForPR } from "@/hooks/useCI";
 import { CIStatusIcon } from "@/components/ci/CIStatusIcon";
 import { ciStatusLabel } from "@/lib/ci";
-import { RepoItemAttributionWarning } from "@/components/RepoItemAttributionWarning";
+import {
+  RepoItemAttributionIndicator,
+  RepoItemAttributionWarning,
+} from "@/components/RepoItemAttributionWarning";
 
 const TYPE_OPTIONS: MultiSelectOption[] = [
   { value: "pr", label: "Pull Requests" },
@@ -119,11 +123,11 @@ export default function RepoPRsPage() {
     });
   }, [prs, statusFilter, typeFilter, labelFilter, authorFilter, searchQuery]);
 
-  const unconfirmedItemCount = useMemo(() => {
-    if (!prs || !repo) return 0;
+  const unconfirmedItems = useMemo(() => {
+    if (!prs || !repo) return [];
     return prs.filter(
       (pr) => !hasAcceptedRepositoryReference(pr.repoCoords, repo),
-    ).length;
+    );
   }, [prs, repo]);
 
   // "Active" means filters differ from the default state
@@ -154,12 +158,12 @@ export default function RepoPRsPage() {
 
   return (
     <div className="container max-w-screen-xl px-4 md:px-8 py-6">
-      {repo && unconfirmedItemCount > 0 && (
+      {repo && unconfirmedItems.length > 0 && (
         <RepoItemAttributionWarning
-          basePath={basePath}
-          repoName={repo.name}
-          itemLabel="pull request"
-          count={unconfirmedItemCount}
+          repo={repo}
+          repoCoords={unconfirmedItems.flatMap((pr) => pr.repoCoords)}
+          itemLabel="pull request or patch"
+          count={unconfirmedItems.length}
           className="mb-4"
         />
       )}
@@ -269,6 +273,7 @@ export default function RepoPRsPage() {
                 pr={pr}
                 repoPath={basePath}
                 repoRelays={repo?.relays ?? []}
+                repo={repo}
               />
             ))}
           </ul>
@@ -291,10 +296,12 @@ function PRRow({
   pr,
   repoPath,
   repoRelays,
+  repo,
 }: {
   pr: ResolvedPRLite;
   repoPath: string;
   repoRelays: string[];
+  repo: ResolvedRepo | undefined;
 }) {
   const lastActive = formatDistanceToNow(new Date(pr.lastActivityAt * 1000), {
     addSuffix: true,
@@ -306,12 +313,14 @@ function PRRow({
   const ci = useCIForPR(pr.id);
 
   const nevent = eventIdToNevent(pr.id, repoRelays.slice(0, 1));
+  const needsAttributionCheck =
+    repo !== undefined && !hasAcceptedRepositoryReference(pr.repoCoords, repo);
 
   return (
-    <li className="group hover:bg-accent/40 transition-colors">
+    <li className="group flex items-stretch hover:bg-accent/40 transition-colors">
       <Link
         to={`${repoPath}/prs/${nevent}`}
-        className="flex items-start gap-3 px-3 py-2.5 text-sm"
+        className="flex min-w-0 flex-1 items-start gap-3 px-3 py-2.5 text-sm"
       >
         {/* Status icon — variant reflects PR vs patch */}
         <StatusIcon
@@ -383,6 +392,15 @@ function PRRow({
           )}
         </div>
       </Link>
+      {needsAttributionCheck && (
+        <div className="flex shrink-0 items-center pr-2">
+          <RepoItemAttributionIndicator
+            repo={repo}
+            repoCoords={pr.repoCoords}
+            itemLabel={pr.itemType === "patch" ? "patch" : "pull request"}
+          />
+        </div>
+      )}
     </li>
   );
 }

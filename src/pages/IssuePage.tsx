@@ -279,13 +279,8 @@ export default function IssuePage() {
           repo &&
           !hasAcceptedRepositoryReference(issue.repoCoords, repo) && (
             <RepoItemAttributionWarning
-              basePath={repoToPath(
-                pubkey,
-                repoId,
-                resolved?.repo?.relays ?? [],
-                nip05,
-              )}
-              repoName={repo.name}
+              repo={repo}
+              repoCoords={issue.repoCoords}
               itemLabel="issue"
               className="mb-6"
             />
