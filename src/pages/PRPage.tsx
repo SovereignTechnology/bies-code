@@ -242,6 +242,7 @@ export default function PRPage() {
     nip05,
     prCommitId,
     issues,
+    basePath,
   } = useRepoContext();
   const location = useLocation();
   const navigate = useNavigate();
@@ -1251,6 +1252,7 @@ export default function PRPage() {
             repo={repo}
             repoCoords={pr.repoCoords}
             itemLabel={pr.itemType === "patch" ? "patch" : "pull request"}
+            pageSuffix={location.pathname.slice(basePath.length)}
             className="mb-6"
           />
         )}

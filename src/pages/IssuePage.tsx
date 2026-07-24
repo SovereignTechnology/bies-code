@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { NostrEvent } from "nostr-tools";
 import { Link } from "react-router-dom";
-import { repoToPath } from "@/lib/routeUtils";
+import { eventIdToNevent, repoToPath } from "@/lib/routeUtils";
 import { compactNumber } from "@/lib/utils";
 import { useSeoMeta } from "@unhead/react";
 import { useProfile } from "@/hooks/useProfile";
@@ -282,6 +282,10 @@ export default function IssuePage() {
               repo={repo}
               repoCoords={issue.repoCoords}
               itemLabel="issue"
+              pageSuffix={`/issues/${eventIdToNevent(
+                issue.id,
+                repo.relays.slice(0, 1),
+              )}`}
               className="mb-6"
             />
           )}

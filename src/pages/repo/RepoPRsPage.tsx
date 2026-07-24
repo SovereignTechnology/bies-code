@@ -123,12 +123,12 @@ export default function RepoPRsPage() {
     });
   }, [prs, statusFilter, typeFilter, labelFilter, authorFilter, searchQuery]);
 
-  const unconfirmedItems = useMemo(() => {
-    if (!prs || !repo) return [];
-    return prs.filter(
+  const visibleUnconfirmedItems = useMemo(() => {
+    if (!filteredPRs || !repo) return [];
+    return filteredPRs.filter(
       (pr) => !hasAcceptedRepositoryReference(pr.repoCoords, repo),
     );
-  }, [prs, repo]);
+  }, [filteredPRs, repo]);
 
   // "Active" means filters differ from the default state
   const hasActiveFilters =
@@ -158,12 +158,13 @@ export default function RepoPRsPage() {
 
   return (
     <div className="container max-w-screen-xl px-4 md:px-8 py-6">
-      {repo && unconfirmedItems.length > 0 && (
+      {repo && visibleUnconfirmedItems.length > 0 && (
         <RepoItemAttributionWarning
           repo={repo}
-          repoCoords={unconfirmedItems.flatMap((pr) => pr.repoCoords)}
+          repoCoords={visibleUnconfirmedItems.flatMap((pr) => pr.repoCoords)}
           itemLabel="pull request or patch"
-          count={unconfirmedItems.length}
+          pageSuffix="/prs"
+          count={visibleUnconfirmedItems.length}
           className="mb-4"
         />
       )}
@@ -398,6 +399,7 @@ function PRRow({
             repo={repo}
             repoCoords={pr.repoCoords}
             itemLabel={pr.itemType === "patch" ? "patch" : "pull request"}
+            pageSuffix={`/prs/${nevent}`}
           />
         </div>
       )}

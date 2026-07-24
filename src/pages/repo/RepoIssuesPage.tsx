@@ -133,12 +133,12 @@ export default function RepoIssuesPage() {
     });
   }, [issues, statusFilter, labelFilter, authorFilter, searchQuery]);
 
-  const unconfirmedIssues = useMemo(() => {
-    if (!issues || !repo) return [];
-    return issues.filter(
+  const visibleUnconfirmedIssues = useMemo(() => {
+    if (!filteredIssues || !repo) return [];
+    return filteredIssues.filter(
       (issue) => !hasAcceptedRepositoryReference(issue.repoCoords, repo),
     );
-  }, [issues, repo]);
+  }, [filteredIssues, repo]);
 
   // "Active" means filters differ from the default state
   const hasActiveFilters =
@@ -190,12 +190,15 @@ export default function RepoIssuesPage() {
         </Dialog>
       )}
 
-      {repo && unconfirmedIssues.length > 0 && (
+      {repo && visibleUnconfirmedIssues.length > 0 && (
         <RepoItemAttributionWarning
           repo={repo}
-          repoCoords={unconfirmedIssues.flatMap((issue) => issue.repoCoords)}
+          repoCoords={visibleUnconfirmedIssues.flatMap(
+            (issue) => issue.repoCoords,
+          )}
           itemLabel="issue"
-          count={unconfirmedIssues.length}
+          pageSuffix="/issues"
+          count={visibleUnconfirmedIssues.length}
           className="mb-4"
         />
       )}
@@ -416,6 +419,7 @@ function IssueRow({
             repo={repo}
             repoCoords={issue.repoCoords}
             itemLabel="issue"
+            pageSuffix={`/issues/${nevent}`}
           />
         </div>
       )}

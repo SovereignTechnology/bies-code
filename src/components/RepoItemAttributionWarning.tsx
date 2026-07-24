@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { AlertTriangle, ArrowUpRight, UsersRound } from "lucide-react";
+import { AlertTriangle, ArrowUpRight } from "lucide-react";
 
 import { UserLink } from "@/components/UserAvatar";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -11,8 +11,10 @@ import {
   PopoverContent,
 } from "@/components/ui/popover";
 import {
+  computeMaintainerLeadership,
   getRepoRelays,
   parseRepoCoordinate,
+  resolveChain,
   type ResolvedRepo,
 } from "@/lib/nip34";
 import { repoToPath } from "@/lib/routeUtils";
@@ -28,31 +30,16 @@ interface RepoItemAttributionProps {
   repo: ResolvedRepo;
   repoCoords: Iterable<string>;
   itemLabel: RepoItemLabel;
+  pageSuffix: string;
 }
 
-const LABELS: Record<
-  RepoItemLabel,
-  { singular: string; plural: string; capitalized: string }
-> = {
-  issue: {
-    singular: "issue",
-    plural: "issues",
-    capitalized: "Issue",
-  },
-  "pull request": {
-    singular: "pull request",
-    plural: "pull requests",
-    capitalized: "Pull request",
-  },
-  patch: {
-    singular: "patch",
-    plural: "patches",
-    capitalized: "Patch",
-  },
+const LABELS: Record<RepoItemLabel, { singular: string; plural: string }> = {
+  issue: { singular: "issue", plural: "issues" },
+  "pull request": { singular: "PR", plural: "PRs" },
+  patch: { singular: "patch", plural: "patches" },
   "pull request or patch": {
-    singular: "pull request or patch",
-    plural: "pull requests or patches",
-    capitalized: "Pull request or patch",
+    singular: "PR or patch",
+    plural: "PRs or patches",
   },
 };
 
@@ -73,6 +60,37 @@ function referencedInvitedMaintainers(
   return Array.from(referenced);
 }
 
+/**
+ * If every referenced invitee belongs to one reciprocally accepted alternate
+ * repository, use that repository's unique lead as its canonical link.
+ */
+function repositoryLinkMaintainers(
+  referencedMaintainers: string[],
+  repo: ResolvedRepo,
+): string[] {
+  if (referencedMaintainers.length <= 1) return referencedMaintainers;
+
+  const alternateRepo = resolveChain(
+    repo.announcements,
+    referencedMaintainers[0],
+    repo.dTag,
+  );
+  if (
+    !alternateRepo ||
+    !referencedMaintainers.every((pubkey) =>
+      alternateRepo.confirmedMaintainers.includes(pubkey),
+    )
+  ) {
+    return referencedMaintainers;
+  }
+
+  const lead = computeMaintainerLeadership(
+    alternateRepo.confirmedMaintainers,
+    alternateRepo.maintainerEdges,
+  ).leadMaintainer;
+  return lead ? [lead] : referencedMaintainers;
+}
+
 function relayHintsForMaintainer(repo: ResolvedRepo, pubkey: string): string[] {
   const announcement = repo.announcements.find(
     (event) => event.pubkey === pubkey,
@@ -81,65 +99,39 @@ function relayHintsForMaintainer(repo: ResolvedRepo, pubkey: string): string[] {
   return maintainerRelays.length > 0 ? maintainerRelays : repo.relays;
 }
 
-function InlineMaintainers({ pubkeys }: { pubkeys: string[] }) {
-  return (
-    <span className="inline-flex flex-wrap items-center gap-x-1.5 gap-y-1 align-middle">
-      {pubkeys.map((pubkey, index) => (
-        <span key={pubkey} className="inline-flex items-center gap-1.5">
-          {index > 0 && (
-            <span className="text-muted-foreground">
-              {index === pubkeys.length - 1 ? "and" : ","}
-            </span>
-          )}
-          <UserLink
-            pubkey={pubkey}
-            avatarSize="xs"
-            className="inline-flex text-foreground"
-            nameClassName="text-sm"
-          />
-        </span>
-      ))}
-    </span>
-  );
-}
-
-function AlternateRepositoryLinks({
+function RepositoryReferenceLinks({
   repo,
   maintainers,
-  compact = false,
+  pageSuffix,
 }: {
   repo: ResolvedRepo;
   maintainers: string[];
-  compact?: boolean;
+  pageSuffix: string;
 }) {
   if (maintainers.length === 0) return null;
 
   return (
-    <div className={cn("flex flex-wrap gap-2", !compact && "pt-1")}>
+    <span className="ml-1 inline-flex flex-wrap gap-1.5 align-middle">
       {maintainers.map((pubkey) => (
         <Button
           key={pubkey}
           asChild
           variant="outline"
           size="sm"
-          className={cn(
-            "h-auto border-amber-500/40 bg-background/80 px-2.5 py-1.5",
-            compact && "text-xs",
-          )}
+          className="h-auto border-amber-500/40 bg-background/80 px-2 py-1 text-xs"
         >
           <Link
-            to={repoToPath(
+            to={`${repoToPath(
               pubkey,
               repo.dTag,
               relayHintsForMaintainer(repo, pubkey),
-            )}
+            )}${pageSuffix}`}
           >
-            <span>View</span>
             <UserLink
               pubkey={pubkey}
               avatarSize="xs"
               noLink
-              className="mx-1"
+              className="mr-1"
               nameClassName="text-xs"
             />
             <span className="font-mono">/{repo.dTag}</span>
@@ -147,7 +139,7 @@ function AlternateRepositoryLinks({
           </Link>
         </Button>
       ))}
-    </div>
+    </span>
   );
 }
 
@@ -155,73 +147,52 @@ function AttributionMessage({
   repo,
   repoCoords,
   itemLabel,
+  pageSuffix,
   count,
-  compact = false,
-}: RepoItemAttributionProps & {
-  count?: number;
-  compact?: boolean;
-}) {
+}: RepoItemAttributionProps & { count?: number }) {
   const referencedMaintainers = useMemo(
     () => referencedInvitedMaintainers(repoCoords, repo),
     [repoCoords, repo],
   );
+  const linkMaintainers = useMemo(
+    () => repositoryLinkMaintainers(referencedMaintainers, repo),
+    [referencedMaintainers, repo],
+  );
   const labels = LABELS[itemLabel];
-  const plural = count !== undefined && count > 1;
-  const subject = plural ? `These ${labels.plural}` : `This ${labels.singular}`;
+  const isListWarning = count !== undefined;
+  const plural = isListWarning && count > 1;
+  const subject = isListWarning
+    ? `${count} visible ${plural ? labels.plural : labels.singular}`
+    : `This ${labels.singular}`;
 
   return (
-    <div className={cn("space-y-3", compact && "space-y-2")}>
-      <p>
-        {subject} {plural ? "do" : "does"} not list{" "}
-        <UserLink
-          pubkey={repo.selectedMaintainer}
-          avatarSize="xs"
-          className="inline-flex text-foreground"
-          nameClassName="text-sm"
-        />{" "}
-        or another accepted maintainer for{" "}
-        <span className="font-medium text-foreground">{repo.dTag}</span>.
-      </p>
-
+    <p className="leading-relaxed">
+      {subject} {plural ? "were" : "was"} not sent to{" "}
+      <UserLink
+        pubkey={repo.selectedMaintainer}
+        avatarSize="xs"
+        className="inline-flex text-foreground"
+        nameClassName="text-sm"
+      />
       {referencedMaintainers.length > 0 ? (
-        <p>
-          {plural ? "They list" : "It lists"}{" "}
-          <InlineMaintainers pubkeys={referencedMaintainers} />, who{" "}
-          {referencedMaintainers.length === 1 ? "is" : "are"} in{" "}
-          <UserLink
-            pubkey={repo.selectedMaintainer}
-            avatarSize="xs"
-            className="inline-flex text-foreground"
-            nameClassName="text-sm"
-          />
-          ’s maintainer graph but{" "}
-          {referencedMaintainers.length === 1 ? "hasn’t" : "haven’t"} accepted
-          the invitation.
-        </p>
-      ) : (
-        <p>
-          {plural ? "They reference" : "It references"} only repository
-          coordinates outside the accepted maintainer group.
-        </p>
-      )}
-
-      {referencedMaintainers.length > 0 && (
         <>
-          <p className={cn(compact && "text-xs")}>
-            If you trust that attribution, view the repository through{" "}
-            {referencedMaintainers.length === 1
-              ? "that maintainer"
-              : "one of those maintainers"}
-            .
-          </p>
-          <AlternateRepositoryLinks
+          , but to {referencedMaintainers.length}{" "}
+          {referencedMaintainers.length === 1 ? "user" : "users"} whom they
+          invited as{" "}
+          {referencedMaintainers.length === 1 ? "a maintainer" : "maintainers"}{" "}
+          and who {referencedMaintainers.length === 1 ? "hasn’t" : "haven’t"}{" "}
+          responded. Consider switching:
+          <RepositoryReferenceLinks
             repo={repo}
-            maintainers={referencedMaintainers}
-            compact={compact}
+            maintainers={linkMaintainers}
+            pageSuffix={pageSuffix}
           />
+          .
         </>
+      ) : (
+        <> but only to unaccepted repository coordinates.</>
       )}
-    </div>
+    </p>
   );
 }
 
@@ -229,23 +200,13 @@ export function RepoItemAttributionWarning({
   repo,
   repoCoords,
   itemLabel,
+  pageSuffix,
   count,
   className,
 }: RepoItemAttributionProps & {
   count?: number;
   className?: string;
 }) {
-  const labels = LABELS[itemLabel];
-  const title =
-    count === undefined
-      ? `${labels.capitalized} needs an attribution check`
-      : `${count} ${count === 1 ? labels.singular : labels.plural} need an attribution check`;
-  const selectedRepoPath = repoToPath(
-    repo.selectedMaintainer,
-    repo.dTag,
-    relayHintsForMaintainer(repo, repo.selectedMaintainer),
-  );
-
   return (
     <Alert
       className={cn(
@@ -255,32 +216,16 @@ export function RepoItemAttributionWarning({
     >
       <AlertTriangle className="h-4 w-4" />
       <AlertTitle className="text-amber-950 dark:text-amber-100">
-        {title}
+        Check repository attribution
       </AlertTitle>
-      <AlertDescription className="space-y-3 text-muted-foreground">
+      <AlertDescription className="text-muted-foreground">
         <AttributionMessage
           repo={repo}
           repoCoords={repoCoords}
           itemLabel={itemLabel}
+          pageSuffix={pageSuffix}
           count={count}
         />
-        <div className="flex flex-col gap-3 border-t border-amber-500/20 pt-3 sm:flex-row sm:items-center sm:justify-between">
-          <p className="text-xs">
-            To accept, an invited maintainer must publish this repository and
-            list an accepted maintainer. Otherwise, remove the invitation.
-          </p>
-          <Button
-            asChild
-            variant="outline"
-            size="sm"
-            className="shrink-0 border-amber-500/50 bg-background/80"
-          >
-            <Link to={`${selectedRepoPath}/about`}>
-              <UsersRound className="mr-2 h-4 w-4" />
-              Review maintainers
-            </Link>
-          </Button>
-        </div>
       </AlertDescription>
     </Alert>
   );
@@ -290,6 +235,7 @@ export function RepoItemAttributionIndicator({
   repo,
   repoCoords,
   itemLabel,
+  pageSuffix,
 }: RepoItemAttributionProps) {
   const [open, setOpen] = useState(false);
   const closeTimer = useRef<ReturnType<typeof setTimeout>>();
@@ -331,7 +277,7 @@ export function RepoItemAttributionIndicator({
           type="button"
           aria-haspopup="dialog"
           aria-expanded={open}
-          aria-label={`${labels.capitalized} needs an attribution check`}
+          aria-label={`${labels.singular} needs an attribution check`}
           className="inline-flex h-8 w-8 items-center justify-center rounded-md text-amber-600 transition-colors hover:bg-amber-500/15 hover:text-amber-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 focus-visible:ring-offset-2 dark:text-amber-400 dark:hover:text-amber-300"
           onClick={() => {
             pinnedOpen.current = !pinnedOpen.current;
@@ -359,14 +305,14 @@ export function RepoItemAttributionIndicator({
       >
         <div className="mb-2 flex items-center gap-2 font-medium text-amber-900 dark:text-amber-100">
           <AlertTriangle className="h-4 w-4 shrink-0" />
-          Attribution check
+          Check repository attribution
         </div>
         <div className="text-sm text-muted-foreground">
           <AttributionMessage
             repo={repo}
             repoCoords={repoCoords}
             itemLabel={itemLabel}
-            compact
+            pageSuffix={pageSuffix}
           />
         </div>
       </PopoverContent>
