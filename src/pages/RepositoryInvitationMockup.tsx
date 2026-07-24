@@ -28,6 +28,14 @@ import {
 import { Checkbox } from "@/components/ui/checkbox";
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { GraspServerSelector } from "@/components/GraspServerSelector";
 
@@ -169,6 +177,7 @@ function SingleMaintainerCard() {
     mockGraspServers.map(({ domain }) => domain),
   );
   const [accepted, setAccepted] = useState(false);
+  const [dialogOpen, setDialogOpen] = useState(false);
 
   return (
     <ScenarioCard
@@ -180,38 +189,37 @@ function SingleMaintainerCard() {
       {accepted ? (
         <SyncingPanel repo="open-fork" />
       ) : (
-        <InvitationBanner>
-          <div className="flex min-w-0 gap-3">
-            <InvitationIcon />
-            <div className="min-w-0">
-              <p className="font-semibold">
-                You’re invited to maintain open-fork
-              </p>
-              <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
-                Invited by <Person name="Maya" tone="pink" compact />
-              </p>
+        <>
+          <InvitationBanner>
+            <div className="flex min-w-0 gap-3">
+              <InvitationIcon />
+              <div className="min-w-0">
+                <p className="font-semibold">
+                  You’re invited to maintain open-fork
+                </p>
+                <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+                  Invited by <Person name="Maya" tone="pink" compact />
+                </p>
+              </div>
             </div>
-          </div>
-
-          <div className="mt-4 rounded-lg border bg-background/80 p-3">
-            <GraspServerSelector
-              selectedDomains={selectedDomains}
-              onSelectedDomainsChange={setSelectedDomains}
-              resolvedServers={mockGraspServers}
-              isFromUserList
-              requiredGrasps={["GRASP-01", "GRASP-02"]}
-            />
-          </div>
-          <Button
-            type="button"
-            onClick={() => setAccepted(true)}
-            disabled={selectedDomains.length === 0}
-            className="mt-2 w-full bg-pink-600 text-white hover:bg-pink-700 dark:bg-pink-600"
-          >
-            <CheckCircle2 className="h-4 w-4" />
-            Accept invitation
-          </Button>
-        </InvitationBanner>
+            <Button
+              type="button"
+              onClick={() => setDialogOpen(true)}
+              className="mt-4 w-full bg-pink-600 text-white hover:bg-pink-700 dark:bg-pink-600"
+            >
+              <CheckCircle2 className="h-4 w-4" />
+              Accept invitation
+            </Button>
+          </InvitationBanner>
+          <MockAcceptanceDialog
+            repo="open-fork"
+            open={dialogOpen}
+            onOpenChange={setDialogOpen}
+            selectedDomains={selectedDomains}
+            onSelectedDomainsChange={setSelectedDomains}
+            onAccept={() => setAccepted(true)}
+          />
+        </>
       )}
     </ScenarioCard>
   );
@@ -229,6 +237,7 @@ function MultipleMaintainersCard() {
     mockGraspServers.map(({ domain }) => domain),
   );
   const [accepted, setAccepted] = useState(false);
+  const [dialogOpen, setDialogOpen] = useState(false);
 
   const toggle = (name: string, checked: boolean) => {
     setSelected((current) =>
@@ -248,71 +257,152 @@ function MultipleMaintainersCard() {
       {accepted ? (
         <SyncingPanel repo="nostr-kit" />
       ) : (
-        <InvitationBanner>
-          <div className="flex min-w-0 gap-3">
-            <InvitationIcon />
-            <div className="min-w-0">
-              <p className="font-semibold">
-                You’re invited to maintain nostr-kit
-              </p>
-              <div className="mt-1 flex flex-wrap items-center gap-1 text-sm text-muted-foreground">
-                Invited by
-                <Person name="Maya" tone="pink" compact />,
-                <Person name="Theo" tone="violet" compact /> and
-                <Person name="Lena" tone="green" compact />
+        <>
+          <InvitationBanner>
+            <div className="flex min-w-0 gap-3">
+              <InvitationIcon />
+              <div className="min-w-0">
+                <p className="font-semibold">
+                  You’re invited to maintain nostr-kit
+                </p>
+                <div className="mt-1 flex flex-wrap items-center gap-1 text-sm text-muted-foreground">
+                  Invited by
+                  <Person name="Maya" tone="pink" compact />,
+                  <Person name="Theo" tone="violet" compact /> and
+                  <Person name="Lena" tone="green" compact />
+                </div>
               </div>
             </div>
-          </div>
-
-          <div className="mt-4 rounded-lg border bg-background/80 p-3">
-            <GraspServerSelector
-              selectedDomains={selectedDomains}
-              onSelectedDomainsChange={setSelectedDomains}
-              resolvedServers={mockGraspServers}
-              isFromUserList
-              requiredGrasps={["GRASP-01", "GRASP-02"]}
-            />
-          </div>
-
-          <div className="mt-4 rounded-lg border bg-background/80 p-2">
-            <p className="px-2 pb-2 pt-1 text-xs font-medium">
-              Select lead maintainer(s)
-            </p>
-            {inviteOptions.map((person) => (
-              <label
-                key={person.name}
-                className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 transition-colors hover:bg-muted/60"
-              >
-                <Checkbox
-                  checked={selected.includes(person.name)}
-                  onCheckedChange={(checked) =>
-                    toggle(person.name, checked === true)
-                  }
-                />
-                <Person name={person.name} tone={person.tone} compact />
-                {person.lead && (
-                  <Badge
-                    variant="outline"
-                    className="ml-auto h-4 px-1.5 text-[10px] text-pink-600 dark:text-pink-400"
-                  >
-                    lead
-                  </Badge>
-                )}
-              </label>
-            ))}
-          </div>
-          <Button
-            type="button"
-            onClick={() => setAccepted(true)}
-            disabled={selected.length === 0 || selectedDomains.length === 0}
-            className="mt-2 w-full bg-pink-600 text-white hover:bg-pink-700 dark:bg-pink-600"
-          >
-            <CheckCircle2 className="h-4 w-4" />
-            Accept invitation
-          </Button>
-        </InvitationBanner>
+            <Button
+              type="button"
+              onClick={() => setDialogOpen(true)}
+              className="mt-4 w-full bg-pink-600 text-white hover:bg-pink-700 dark:bg-pink-600"
+            >
+              <CheckCircle2 className="h-4 w-4" />
+              Accept invitation
+            </Button>
+          </InvitationBanner>
+          <MockAcceptanceDialog
+            repo="nostr-kit"
+            open={dialogOpen}
+            onOpenChange={setDialogOpen}
+            selectedDomains={selectedDomains}
+            onSelectedDomainsChange={setSelectedDomains}
+            selectedMaintainers={selected}
+            onToggleMaintainer={toggle}
+            onAccept={() => setAccepted(true)}
+          />
+        </>
       )}
     </ScenarioCard>
+  );
+}
+
+function MockAcceptanceDialog({
+  repo,
+  open,
+  onOpenChange,
+  selectedDomains,
+  onSelectedDomainsChange,
+  selectedMaintainers,
+  onToggleMaintainer,
+  onAccept,
+}: {
+  repo: string;
+  open: boolean;
+  onOpenChange(open: boolean): void;
+  selectedDomains: string[];
+  onSelectedDomainsChange(domains: string[]): void;
+  selectedMaintainers?: string[];
+  onToggleMaintainer?(name: string, checked: boolean): void;
+  onAccept(): void;
+}) {
+  const canAccept =
+    selectedDomains.length > 0 &&
+    (!selectedMaintainers || selectedMaintainers.length > 0);
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-xl">
+        <DialogHeader>
+          <DialogTitle>Accept invitation</DialogTitle>
+          <DialogDescription>
+            Choose where to host your copy of {repo}.
+          </DialogDescription>
+        </DialogHeader>
+
+        <section className="space-y-3">
+          <div>
+            <h3 className="font-medium">Your GRASP servers</h3>
+            <p className="text-sm text-muted-foreground">
+              Where to store the data
+            </p>
+          </div>
+          <GraspServerSelector
+            selectedDomains={selectedDomains}
+            onSelectedDomainsChange={onSelectedDomainsChange}
+            resolvedServers={mockGraspServers}
+            isFromUserList
+            requiredGrasps={["GRASP-01", "GRASP-02"]}
+            showTitle={false}
+          />
+        </section>
+
+        {selectedMaintainers && onToggleMaintainer && (
+          <section className="space-y-3 border-t pt-4">
+            <h3 className="flex items-center gap-2 font-medium">
+              <Users className="h-4 w-4" />
+              Select lead maintainer(s)
+            </h3>
+            <div className="space-y-1">
+              {inviteOptions.map((person) => (
+                <label
+                  key={person.name}
+                  className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 transition-colors hover:bg-muted/60"
+                >
+                  <Checkbox
+                    checked={selectedMaintainers.includes(person.name)}
+                    onCheckedChange={(checked) =>
+                      onToggleMaintainer(person.name, checked === true)
+                    }
+                  />
+                  <Person name={person.name} tone={person.tone} compact />
+                  {person.lead && (
+                    <Badge
+                      variant="outline"
+                      className="ml-auto h-4 px-1.5 text-[10px] text-pink-600 dark:text-pink-400"
+                    >
+                      lead
+                    </Badge>
+                  )}
+                </label>
+              ))}
+            </div>
+          </section>
+        )}
+
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => onOpenChange(false)}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            disabled={!canAccept}
+            onClick={() => {
+              onOpenChange(false);
+              onAccept();
+            }}
+            className="bg-pink-600 text-white hover:bg-pink-700"
+          >
+            Accept invitation
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

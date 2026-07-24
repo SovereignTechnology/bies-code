@@ -35,10 +35,13 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { nip19, type EventTemplate, type NostrEvent } from "nostr-tools";
 import {
   ArrowLeft,
@@ -52,10 +55,8 @@ import {
   Settings,
   Workflow,
   UserPlus,
-  Check,
   CheckCircle2,
   Users,
-  ChevronDown,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -1074,6 +1075,7 @@ function MaintainerAcceptanceControls({
   leadMaintainer?: string;
 }) {
   const { toast } = useToast();
+  const [dialogOpen, setDialogOpen] = useState(false);
   const [phase, setPhase] = useState<"idle" | "publishing" | "syncing">("idle");
   const [selectedMaintainers, setSelectedMaintainers] =
     useState<string[]>(defaults);
@@ -1161,6 +1163,7 @@ function MaintainerAcceptanceControls({
       );
       await publishToGraspRelays(announcement, relayUrls);
       setPhase("syncing");
+      setDialogOpen(false);
 
       toast({
         title: "Invitation accepted",
@@ -1187,162 +1190,140 @@ function MaintainerAcceptanceControls({
 
   if (phase === "syncing") {
     return (
-      <div className="w-full shrink-0 space-y-3 sm:w-96">
-        <div className="flex items-center gap-2">
-          <CheckCircle2 className="h-5 w-5 text-emerald-500" />
-          <p className="font-medium">Invitation accepted</p>
-        </div>
-        <div className="rounded-lg border bg-background/80 p-3">
-          <div className="flex items-center gap-2 text-sm">
-            {allReady ? (
-              <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-            ) : (
-              <Loader2 className="h-4 w-4 animate-spin text-pink-500" />
-            )}
-            <span>
-              {allReady
-                ? "GRASP servers are in sync"
-                : "Syncing up your GRASP servers"}
-            </span>
-            <span className="ml-auto text-xs text-muted-foreground">
-              {readyCount}/{serverSync.length}
-            </span>
-          </div>
-          <div className="mt-3 space-y-1.5">
-            {serverSync.map(({ cloneUrl, ready }) => (
-              <div
-                key={cloneUrl}
-                className="flex items-center gap-2 text-xs text-muted-foreground"
-              >
-                {ready ? (
-                  <Check className="h-3.5 w-3.5 text-emerald-500" />
-                ) : (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                )}
-                <span className="truncate font-mono">
-                  {new URL(cloneUrl).hostname}
-                </span>
-                <span className="ml-auto">{ready ? "ready" : "syncing"}</span>
-              </div>
-            ))}
-          </div>
-        </div>
+      <div className="flex w-full shrink-0 items-center gap-2 rounded-lg border bg-background/80 px-3 py-2 text-sm sm:w-auto sm:min-w-72">
+        {allReady ? (
+          <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />
+        ) : (
+          <Loader2 className="h-4 w-4 shrink-0 animate-spin text-pink-500" />
+        )}
+        <span className="font-medium">
+          {allReady
+            ? "Invitation accepted · GRASP servers in sync"
+            : "Invitation accepted · syncing GRASP servers"}
+        </span>
+        <span className="ml-auto text-xs text-muted-foreground">
+          {readyCount}/{serverSync.length}
+        </span>
       </div>
     );
   }
 
   return (
-    <div className="w-full shrink-0 space-y-3 sm:w-96">
-      <div className="rounded-lg border bg-background/80 p-3">
-        <GraspServerSelector
-          selectedDomains={selectedDomains}
-          onSelectedDomainsChange={setSelectedDomains}
-          resolvedServers={graspServers}
-          isFromUserList={graspServersFromUserList}
-          additionalDomains={repo.graspServerDomains}
-          currentDomains={getAnnouncementGraspDomains(ownAnnouncement)}
-          requiredGrasps={["GRASP-01", "GRASP-02"]}
-          disabled={phase === "publishing"}
-        />
-      </div>
+    <>
+      <Button
+        type="button"
+        onClick={() => setDialogOpen(true)}
+        className="w-full shrink-0 bg-pink-600 text-white hover:bg-pink-700 sm:w-auto"
+      >
+        <CheckCircle2 className="mr-2 h-4 w-4" />
+        Accept invitation
+      </Button>
 
-      {options.length > 1 && (
-        <Popover>
-          <PopoverTrigger asChild>
+      <Dialog
+        open={dialogOpen}
+        onOpenChange={(open) => {
+          if (phase !== "publishing") setDialogOpen(open);
+        }}
+      >
+        <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-xl">
+          <DialogHeader>
+            <DialogTitle>Accept invitation</DialogTitle>
+            <DialogDescription>
+              Choose where to host your copy of {repo.name}.
+            </DialogDescription>
+          </DialogHeader>
+
+          <section className="space-y-3">
+            <div>
+              <h3 className="font-medium">Your GRASP servers</h3>
+              <p className="text-sm text-muted-foreground">
+                Where to store the data
+              </p>
+            </div>
+            <GraspServerSelector
+              selectedDomains={selectedDomains}
+              onSelectedDomainsChange={setSelectedDomains}
+              resolvedServers={graspServers}
+              isFromUserList={graspServersFromUserList}
+              additionalDomains={repo.graspServerDomains}
+              currentDomains={getAnnouncementGraspDomains(ownAnnouncement)}
+              requiredGrasps={["GRASP-01", "GRASP-02"]}
+              disabled={phase === "publishing"}
+              showTitle={false}
+            />
+          </section>
+
+          {options.length > 1 && (
+            <section className="space-y-3 border-t pt-4">
+              <h3 className="flex items-center gap-2 font-medium">
+                <Users className="h-4 w-4" />
+                Select lead maintainer(s)
+              </h3>
+              <div className="max-h-48 space-y-1 overflow-y-auto">
+                {options.map((pubkey) => {
+                  const checked = selectedMaintainers.includes(pubkey);
+                  return (
+                    <label
+                      key={pubkey}
+                      className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 hover:bg-muted/60"
+                    >
+                      <Checkbox
+                        checked={checked}
+                        disabled={phase === "publishing"}
+                        onCheckedChange={(value) =>
+                          toggleMaintainer(pubkey, value === true)
+                        }
+                      />
+                      <UserLink
+                        pubkey={pubkey}
+                        avatarSize="xs"
+                        nameClassName="text-sm"
+                        className="min-w-0 flex-1"
+                        noLink
+                      />
+                      {pubkey === leadMaintainer && (
+                        <Badge
+                          variant="outline"
+                          className="h-4 px-1.5 text-[10px] text-pink-600 dark:text-pink-400"
+                        >
+                          lead
+                        </Badge>
+                      )}
+                    </label>
+                  );
+                })}
+              </div>
+            </section>
+          )}
+
+          <DialogFooter>
             <Button
               type="button"
               variant="outline"
-              className="w-full justify-between bg-background/80"
+              disabled={phase === "publishing"}
+              onClick={() => setDialogOpen(false)}
             >
-              <span className="inline-flex min-w-0 items-center gap-2">
-                <Users className="h-4 w-4 shrink-0" />
-                <span className="truncate">
-                  Select lead maintainer(s) · {selectedMaintainers.length}{" "}
-                  selected
-                </span>
-              </span>
-              <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+              Cancel
             </Button>
-          </PopoverTrigger>
-          <PopoverContent align="end" className="w-80 space-y-3">
-            <p className="text-sm font-medium">Select lead maintainer(s)</p>
-            <div className="max-h-64 space-y-1 overflow-y-auto">
-              {options.map((pubkey) => {
-                const checked = selectedMaintainers.includes(pubkey);
-                return (
-                  <label
-                    key={pubkey}
-                    className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 hover:bg-muted/60"
-                  >
-                    <Checkbox
-                      checked={checked}
-                      onCheckedChange={(value) =>
-                        toggleMaintainer(pubkey, value === true)
-                      }
-                    />
-                    <UserLink
-                      pubkey={pubkey}
-                      avatarSize="xs"
-                      nameClassName="text-sm"
-                      className="min-w-0 flex-1"
-                      noLink
-                    />
-                    {pubkey === leadMaintainer && (
-                      <Badge
-                        variant="outline"
-                        className="h-4 px-1.5 text-[10px] text-pink-600 dark:text-pink-400"
-                      >
-                        lead
-                      </Badge>
-                    )}
-                  </label>
-                );
-              })}
-            </div>
-            <div className="flex items-center justify-between border-t pt-2">
-              {leadMaintainer && options.includes(leadMaintainer) ? (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setSelectedMaintainers([leadMaintainer])}
-                >
-                  Lead only
-                </Button>
-              ) : (
-                <span />
+            <Button
+              type="button"
+              onClick={accept}
+              disabled={
+                phase === "publishing" ||
+                selectedMaintainers.length === 0 ||
+                selectedDomains.length === 0
+              }
+              className="bg-pink-600 text-white hover:bg-pink-700"
+            >
+              {phase === "publishing" && (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               )}
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={() => setSelectedMaintainers(options)}
-              >
-                Select all
-              </Button>
-            </div>
-          </PopoverContent>
-        </Popover>
-      )}
-
-      <Button
-        type="button"
-        onClick={accept}
-        disabled={
-          phase === "publishing" ||
-          selectedMaintainers.length === 0 ||
-          selectedDomains.length === 0
-        }
-        className="w-full bg-pink-600 text-white hover:bg-pink-700"
-      >
-        {phase === "publishing" ? (
-          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-        ) : (
-          <CheckCircle2 className="mr-2 h-4 w-4" />
-        )}
-        {phase === "publishing" ? "Accepting…" : "Accept invitation"}
-      </Button>
-    </div>
+              {phase === "publishing" ? "Accepting…" : "Accept invitation"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 
