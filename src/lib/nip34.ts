@@ -798,20 +798,24 @@ export interface ResolvedRepo {
 
   // --- Maintainer set ---
   /**
-   * Confirmed maintainers: pubkeys that have published their own announcement
-   * for this dTag AND whose announcement lists at least one already-confirmed
-   * maintainer (mutual acknowledgment). The selectedMaintainer is always
-   * confirmed. This is the safe set to display publicly — it cannot be
-   * inflated by a bad actor simply listing a reputable pubkey.
+   * Full recursive authorization set rooted at selectedMaintainer. This
+   * intentionally matches ngit and ngit-grasp: listed maintainers are trusted
+   * for state and collaboration events even before they accept the invitation.
    */
   maintainerSet: string[];
   /**
-   * "30617:<pubkey>:<dTag>" for every confirmed maintainer — used for #a tag
-   * queries on issues, PRs, and patches.
+   * Maintainers that have explicitly linked their announcement back into the
+   * accepted component. Use this set for public identity and mutation controls;
+   * the selectedMaintainer is always included.
+   */
+  confirmedMaintainers: string[];
+  /**
+   * "30617:<pubkey>:<dTag>" for every recursively authorized maintainer — used
+   * for #a tag queries on issues, PRs, and patches.
    */
   allCoordinates: string[];
   /**
-   * Pubkeys that are not confirmed maintainers. Covers two cases:
+   * Recursively authorized pubkeys that have not accepted. Covers two cases:
    *   1. Listed by someone in the confirmed set but have no announcement at all.
    *   2. Have an announcement for this dTag but don't list any confirmed
    *      maintainer back (no reciprocation) — the reputation-hijack vector.
@@ -839,7 +843,7 @@ export interface ResolvedRepo {
 function selectRepoLeadAnchor(resolved: ResolvedRepo): string {
   return (
     computeMaintainerLeadership(
-      resolved.maintainerSet,
+      resolved.confirmedMaintainers,
       resolved.maintainerEdges,
     ).leadMaintainer ?? resolved.selectedMaintainer
   );
@@ -2369,9 +2373,12 @@ export function resolveChain(
     }
   }
 
-  // Collect all announcements for confirmed pubkeys only
+  // Merge every announcement in the recursively authorized graph. This is the
+  // same consuming model used by ngit: metadata and infrastructure are pooled
+  // directionally from the selected coordinate, while reciprocal confirmation
+  // remains a separate display/publishing concern.
   const announcements: NostrEvent[] = [];
-  for (const pubkey of confirmed) {
+  for (const pubkey of reachable) {
     const ev = byPubkey.get(pubkey);
     if (ev) announcements.push(ev);
   }
@@ -2450,7 +2457,8 @@ export function resolveChain(
     }
   }
 
-  const maintainerSet = Array.from(confirmed);
+  const maintainerSet = Array.from(reachable);
+  const confirmedMaintainers = Array.from(confirmed);
 
   const allCloneUrls = cloneUrlProvenance.map((p) => p.value);
   const graspCloneUrls = allCloneUrls.filter(isGraspCloneUrl);
@@ -2478,8 +2486,9 @@ export function resolveChain(
     graspServerDomains,
     relays: relayProvenance.map((p) => p.value),
     maintainerSet,
+    confirmedMaintainers,
     allCoordinates: maintainerSet.map((pk) => repoCoordinate(pk, dTag)),
-    requestedMaintainers: pending,
+    requestedMaintainers: Array.from(new Set(pending)),
     labels,
     announcements,
     maintainerEdges: edges,

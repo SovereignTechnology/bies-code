@@ -300,8 +300,12 @@ function SidebarVariant({
     : [];
   const isMultiAnnouncement = repo.announcements.length > 1;
   const maintainerLeadership = useMemo(
-    () => computeMaintainerLeadership(repo.maintainerSet, repo.maintainerEdges),
-    [repo.maintainerSet, repo.maintainerEdges],
+    () =>
+      computeMaintainerLeadership(
+        repo.confirmedMaintainers,
+        repo.maintainerEdges,
+      ),
+    [repo.confirmedMaintainers, repo.maintainerEdges],
   );
   const [multiModalOpen, setMultiModalOpen] = useState(false);
 
@@ -360,7 +364,7 @@ function SidebarVariant({
               Maintainers
             </p>
             <div className="space-y-2">
-              {repo.maintainerSet.map((pk) => (
+              {repo.confirmedMaintainers.map((pk) => (
                 <div key={pk} className="flex items-center gap-2">
                   <UserLink
                     pubkey={pk}
@@ -368,7 +372,7 @@ function SidebarVariant({
                     nameClassName="text-sm"
                   />
                   {pk === repo.selectedMaintainer &&
-                    repo.maintainerSet.length > 1 && (
+                    repo.confirmedMaintainers.length > 1 && (
                       <Badge
                         variant="outline"
                         className="text-[10px] px-1.5 py-0 h-4 text-pink-600 border-pink-500/40 dark:text-pink-400"
@@ -566,8 +570,12 @@ function FullVariant({
   );
   const isMultiMaintainer = repo.announcements.length > 1;
   const maintainerLeadership = useMemo(
-    () => computeMaintainerLeadership(repo.maintainerSet, repo.maintainerEdges),
-    [repo.maintainerSet, repo.maintainerEdges],
+    () =>
+      computeMaintainerLeadership(
+        repo.confirmedMaintainers,
+        repo.maintainerEdges,
+      ),
+    [repo.confirmedMaintainers, repo.maintainerEdges],
   );
 
   // Relays in other maintainers' announcements but NOT in the selected maintainer's
@@ -650,11 +658,11 @@ function FullVariant({
           Maintainers
         </h3>
         <div className="space-y-2.5">
-          {repo.maintainerSet.map((pk) => (
+          {repo.confirmedMaintainers.map((pk) => (
             <div key={pk} className="flex items-center gap-2">
               <UserLink pubkey={pk} avatarSize="md" nameClassName="text-sm" />
               {pk === repo.selectedMaintainer &&
-                repo.maintainerSet.length > 1 && (
+                repo.confirmedMaintainers.length > 1 && (
                   <Badge
                     variant="outline"
                     className="text-[10px] px-1.5 py-0 h-4 text-pink-600 border-pink-500/40 dark:text-pink-400"

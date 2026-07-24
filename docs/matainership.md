@@ -9,10 +9,14 @@
 
 A repository in the ngit model is **not** simply a pubkey + identifier pair. A repository is:
 
-> **An identifier string plus the interconnected set of pubkeys that mutually acknowledge each other through the maintainer chain.**
-> The set of pubkeys that recursively list each other as maintainers, with the same identifier, defines the boundary of that repository as a single collaborative unit.
+> **An identifier string plus the directional maintainer graph rooted at a selected maintainer.**
+> Following each `maintainers` tag recursively defines who is authorized for
+> that selected repository coordinate.
 
-## This distinction matters enormously for display. Two pubkeys that both have announcements for `my-project` and mutually list each other are **the same repository**. Two pubkeys that both have announcements for `my-project` but do not connect through the maintainer chain are **two different repositories** that happen to share a name.
+Authorization and public identity are deliberately separate. A listed pubkey is
+authorized immediately, matching ngit and ngit-grasp, while the UI presents that
+relationship as an invitation until the listed maintainer links their own
+announcement back into the accepted group.
 
 ## Repository Announcements (NIP-34 Kind 30617)
 
@@ -54,7 +58,7 @@ Bob's announcement for "my-project":
 Dave is now a **recursive maintainer** — authorized because Alice lists Bob, and Bob lists Dave. Alice's full authorized set = {Alice, Bob, Dave}.
 The chain can be arbitrarily deep. The relay computes the full transitive closure via `get_maintainers_recursive()` (`src/git/authorization.rs:386`) with cycle detection to prevent infinite loops.
 
-### Mutual Listing = One Repository
+### Reciprocal Listing = Accepted Membership
 
 When two pubkeys list each other (directly or transitively), they form a single repository unit:
 
@@ -63,7 +67,10 @@ Alice's announcement for "my-project": maintainers: [Bob]
 Bob's announcement for "my-project":   maintainers: [Alice]
 ```
 
-These are not two separate repositories. They are one repository with two maintainers. The git data is synchronized between them, state events from either are authoritative for the whole, and issues/PRs/labels from either are part of the same project.
+These announcements form an accepted repository group. State events from either
+were already authoritative from Alice's directional graph; reciprocation is the
+signed acknowledgement that makes Bob safe to present publicly as an accepted
+co-maintainer and enables maintainer publishing controls.
 
 ### Splitting: When the Chain Breaks
 
@@ -75,8 +82,9 @@ Alice's new announcement for "my-project": maintainers: []
 Bob's announcement for "my-project":       maintainers: [Alice]
 ```
 
-Now Alice's chain and Bob's chain are disconnected (Alice no longer reaches Bob). They are now **two separate repositories** that happen to share an identifier. Their git histories will diverge, their state events are no longer mutually authoritative, and their issues/PRs/labels belong to separate projects.
-Note the asymmetry: Bob still lists Alice, so from Bob's perspective Alice is still in his maintainer set. But Alice no longer lists Bob, so Alice's repository has split off. A full clean split only completes when both parties have removed each other.
+Alice no longer authorizes Bob from Alice's coordinate. Bob still reaches and
+authorizes Alice, so the split is intentionally asymmetric until Bob also
+removes Alice.
 
 ---
 
@@ -203,19 +211,24 @@ Eve's announcement for "my-project":
 
 Alice has never heard of Eve's project. But if a client naively displays "Alice is a maintainer of this repository", users may trust Eve's repo because of Alice's reputation.
 
-### Why It's Not an Authorization Problem
+### Authorization Is Directional
 
-From the relay's perspective this is harmless: being listed in Eve's announcement does not give Alice any push rights over Eve's repo — Alice still needs to publish her own state events. The relay's authorization logic only cares about the chain of announcements, not reputation.
+From Eve's selected coordinate, Alice is in the recursive authorization set.
+This permissive read model is required for interoperability and matches
+ngit-grasp push authorization. It does not mean Alice accepted the association.
 
 ### Why It IS a Display Problem
 
 A client that shows Alice as a maintainer of Eve's repo is misleading users. It could be used to lend false legitimacy to a scam project, a malicious fork, or a phishing repository.
 
-### The Solution: Only Show Chain-Reachable Maintainers
+### The Solution: Distinguish Authorized from Accepted
 
-A client should only display a pubkey as a maintainer if they are **reachable from the user's selected maintainer** via the recursive chain.
-If the user selects Alice, and Alice does not list Eve (and Eve is not reachable from Alice's chain), then Eve's repository simply does not appear. If Eve lists Alice but Alice does not list Eve back, Alice should **not** be shown as a maintainer of Eve's repository — the relationship is unilateral and unacknowledged.
-The chain must connect in both directions (transitively) for two pubkeys to be considered part of the same repository unit.
+A client uses every reachable pubkey for state, issue, PR, patch, and label
+authorization, but shows only reciprocally connected pubkeys as accepted
+maintainers. Unreciprocated pubkeys appear in a clearly separate "Invited"
+section. If the logged-in account is invited, the repository page should offer
+an explicit acceptance flow that publishes the account's own updated
+announcement.
 
 ---
 
@@ -226,8 +239,9 @@ The chain must connect in both directions (transitively) for two pubkeys to be c
 A repository shown to the user is:
 
 - A single identifier string
-- Plus the full set of pubkeys connected through mutual maintainer listings, reachable from the user's selected maintainer
-  All announcements in that connected set are part of the same repository. Show them unified, not as separate entries.
+- Plus the full directional recursive authorization set reachable from the
+  selected maintainer.
+- Plus an accepted subset used for maintainer identity and publishing controls.
 
 ### Displaying Repository Metadata
 
@@ -238,7 +252,7 @@ A repository shown to the user is:
 | Web URLs    | Latest event across all maintainer announcements                   |
 | Clone URLs  | Union of all maintainer announcements (all copies available)       |
 | Relays      | Union of all maintainer announcements                              |
-| Maintainers | Full recursive set                                                 |
+| Maintainers | Reciprocally confirmed subset; show the remainder as invited       |
 
 ### Authoritative vs Suggestive Content
 
@@ -281,19 +295,20 @@ Without a trust anchor the client has no basis for filtering. Options:
 
 ## Summary
 
-| Concept                        | Definition                                                                                     |
-| ------------------------------ | ---------------------------------------------------------------------------------------------- |
-| Repository identity            | An identifier + the interconnected set of mutually-listing pubkeys                             |
-| Maintainer chain               | Recursive: owner lists maintainers, who list their own maintainers, etc.                       |
-| Same repository                | Two pubkeys that connect transitively through mutual maintainer listings                       |
-| Split                          | The chain breaks — two formerly-connected pubkeys become separate repositories                 |
-| Selected maintainer            | The single user-chosen npub that anchors all discovery                                         |
-| `selected_maintainer` field    | The starting pubkey for resolution; used in naddr coordinates                                  |
-| Name / description / web       | Taken from the latest announcement event across all maintainers                                |
-| Clone URLs / relays            | Unioned across all maintainer announcements                                                    |
-| Authoritative events           | State, issue/PR/patch status, and NIP-32 labels from any recursive maintainer                  |
-| Suggestive events              | NIP-32 labels from outside the maintainer set                                                  |
-| `a` tags on issues/PRs/patches | One per maintainer — all maintainer coordinates tagged, not just the selected one              |
-| Scam prevention                | Only show maintainers reachable from the user's selected root — never show unilateral listings |
+| Concept                        | Definition                                                                           |
+| ------------------------------ | ------------------------------------------------------------------------------------ |
+| Repository identity            | An identifier + a directional graph rooted at the selected maintainer                |
+| Maintainer chain               | Recursive: owner lists maintainers, who list their own maintainers, etc.             |
+| Accepted maintainer            | A reachable pubkey whose announcement links back to the accepted component           |
+| Invited maintainer             | A reachable pubkey that has not linked an announcement back yet                      |
+| Split                          | Directional authorization ends when an upstream maintainer removes the outgoing path |
+| Selected maintainer            | The single user-chosen npub that anchors all discovery                               |
+| `selected_maintainer` field    | The starting pubkey for resolution; used in naddr coordinates                        |
+| Name / description / web       | Taken from the latest announcement event across all maintainers                      |
+| Clone URLs / relays            | Unioned across all maintainer announcements                                          |
+| Authoritative events           | State, issue/PR/patch status, and NIP-32 labels from any recursive maintainer        |
+| Suggestive events              | NIP-32 labels from outside the maintainer set                                        |
+| `a` tags on issues/PRs/patches | One per maintainer — all maintainer coordinates tagged, not just the selected one    |
+| Scam prevention                | Use unilateral listings for authorization, but label them invited until reciprocated |
 
 ---

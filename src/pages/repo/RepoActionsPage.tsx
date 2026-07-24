@@ -38,7 +38,7 @@ export default function RepoActionsPage() {
   const repo = resolved?.repo;
   const account = useActiveAccount();
   const isMaintainer =
-    !!account && !!repo?.maintainerSet.includes(account.pubkey);
+    !!account && !!repo?.confirmedMaintainers.includes(account.pubkey);
 
   const runs = useRepoCI(repo?.allCoordinates, resolved?.repoRelayGroup);
 

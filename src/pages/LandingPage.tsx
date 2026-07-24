@@ -63,7 +63,7 @@ function FeaturedRepoCard({ repo }: { repo: ResolvedRepo }) {
 
           <div className="flex items-center gap-2 mt-auto pt-2 border-t border-border/30">
             <div className="flex items-center gap-1.5 min-w-0 flex-1">
-              {repo.maintainerSet.slice(0, 2).map((pk) => (
+              {repo.confirmedMaintainers.slice(0, 2).map((pk) => (
                 <UserLink
                   key={pk}
                   pubkey={pk}

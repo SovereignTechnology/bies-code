@@ -248,10 +248,7 @@ interface RepoCardProps {
 }
 
 function getVisibleMaintainers(repo: ResolvedRepo): string[] {
-  if (repo.requestedMaintainers.length === 0) return repo.maintainerSet;
-
-  const requested = new Set(repo.requestedMaintainers);
-  return repo.maintainerSet.filter((pk) => !requested.has(pk));
+  return repo.confirmedMaintainers;
 }
 
 function RepoCard({ repo, isUserMatch }: RepoCardProps) {

@@ -24,13 +24,13 @@ import { use$ } from "@/hooks/use$";
 import { useProfile } from "@/hooks/useProfile";
 import { useLoadProfile } from "@/hooks/useLoadProfile";
 import { useUserPath } from "@/hooks/useUserPath";
-import { UserAvatar } from "@/components/UserAvatar";
+import { UserAvatar, UserLink } from "@/components/UserAvatar";
 import { EventSearchStatus } from "@/components/EventSearchStatus";
 import { nip34SupplementalRelayLoader } from "@/services/nostr";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { nip19 } from "nostr-tools";
+import { nip19, type EventTemplate, type NostrEvent } from "nostr-tools";
 import {
   ArrowLeft,
   CircleDot,
@@ -42,6 +42,8 @@ import {
   MoreHorizontal,
   Settings,
   Workflow,
+  UserPlus,
+  CheckCircle2,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -50,7 +52,11 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { RepoContext, type RepoContextValue } from "./RepoContext";
-import { type RepoQueryOptions } from "@/lib/nip34";
+import {
+  REPO_KIND,
+  type RepoQueryOptions,
+  type ResolvedRepo,
+} from "@/lib/nip34";
 import { relayCurationMode } from "@/services/settings";
 import { cn } from "@/lib/utils";
 import { StarButton } from "@/components/StarButton";
@@ -70,6 +76,8 @@ import { RepoRelaysContext } from "@/contexts/RepoRelaysContext";
 import { relayGroupUrls$ } from "@/models/RepositoryRelayGroup";
 import { EMPTY } from "rxjs";
 import { catchError } from "rxjs/operators";
+import { publish } from "@/services/nostr";
+import { useToast } from "@/hooks/useToast";
 // ---------------------------------------------------------------------------
 // RepoLayout
 // ---------------------------------------------------------------------------
@@ -277,7 +285,7 @@ function RepoLayoutResolved({
   const account = useActiveAccount();
   const isMaintainer =
     account?.pubkey && repo
-      ? repo.maintainerSet.includes(account.pubkey)
+      ? repo.confirmedMaintainers.includes(account.pubkey)
       : false;
 
   // Build an encoded base path for intra-repository links. `splat` is decoded
@@ -631,6 +639,14 @@ function RepoLayoutResolved({
           </div>
         </div>
 
+        {repo && account?.pubkey && (
+          <MaintainerInvitationBanner
+            repo={repo}
+            accountPubkey={account.pubkey}
+            signer={account.signer}
+          />
+        )}
+
         {/* Page content */}
         {ctxValue ? (
           <GitCommitLinkContext.Provider value={gitCommitLinkCtxValue}>
@@ -705,6 +721,179 @@ function RepoLayoutResolved({
         ) : null}
       </div>
     </RepoRelaysContext.Provider>
+  );
+}
+
+const PERSONAL_ANNOUNCEMENT_TAGS = new Set([
+  "clone",
+  "relays",
+  "blossoms",
+  "r",
+]);
+
+function buildAcceptanceTemplate(
+  repo: ResolvedRepo,
+  ownAnnouncement: NostrEvent,
+  accountPubkey: string,
+): EventTemplate {
+  const latestAnnouncement = repo.announcements.reduce((latest, event) =>
+    event.created_at > latest.created_at ? event : latest,
+  );
+  const invitingMaintainers = repo.maintainerEdges
+    .filter(({ to }) => to === accountPubkey)
+    .map(({ from }) => from);
+  const existingMaintainers =
+    ownAnnouncement.tags.find(([name]) => name === "maintainers")?.slice(1) ??
+    [];
+  const maintainers = Array.from(
+    new Set([
+      accountPubkey,
+      ...repo.confirmedMaintainers,
+      ...invitingMaintainers,
+      ...existingMaintainers,
+    ]),
+  );
+
+  const sharedTags = latestAnnouncement.tags.filter(
+    ([name]) =>
+      name !== "d" &&
+      name !== "maintainers" &&
+      !PERSONAL_ANNOUNCEMENT_TAGS.has(name),
+  );
+  const personalTags = ownAnnouncement.tags.filter(([name]) =>
+    PERSONAL_ANNOUNCEMENT_TAGS.has(name),
+  );
+
+  return {
+    kind: REPO_KIND,
+    content: latestAnnouncement.content,
+    created_at: Math.floor(Date.now() / 1000),
+    tags: [
+      ["d", repo.dTag],
+      ...sharedTags,
+      ...personalTags,
+      ["maintainers", ...maintainers],
+    ],
+  };
+}
+
+function MaintainerInvitationBanner({
+  repo,
+  accountPubkey,
+  signer,
+}: {
+  repo: ResolvedRepo;
+  accountPubkey: string;
+  signer: {
+    signEvent(template: EventTemplate): Promise<NostrEvent>;
+  };
+}) {
+  const { toast } = useToast();
+  const [isAccepting, setIsAccepting] = useState(false);
+  const isInvited = repo.requestedMaintainers.includes(accountPubkey);
+  const ownAnnouncement = repo.announcements.find(
+    (announcement) => announcement.pubkey === accountPubkey,
+  );
+  const inviters = Array.from(
+    new Set(
+      repo.maintainerEdges
+        .filter(({ to }) => to === accountPubkey)
+        .map(({ from }) => from),
+    ),
+  );
+
+  if (!isInvited) return null;
+
+  const accept = async () => {
+    if (!ownAnnouncement || isAccepting) return;
+    setIsAccepting(true);
+    try {
+      const event = await signer.signEvent(
+        buildAcceptanceTemplate(repo, ownAnnouncement, accountPubkey),
+      );
+      await publish(event, [...repo.allCoordinates, "git-index"]);
+      toast({
+        title: "Co-maintainership accepted",
+        description:
+          "Your signed repository announcement now links this copy to the maintainer group.",
+      });
+    } catch (error) {
+      toast({
+        title: "Could not accept invitation",
+        description:
+          error instanceof Error ? error.message : "Publishing failed.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsAccepting(false);
+    }
+  };
+
+  return (
+    <div className="border-b border-pink-500/20 bg-gradient-to-r from-pink-500/10 via-background to-violet-500/10">
+      <div className="container max-w-screen-xl px-4 py-4 md:px-8">
+        <div className="flex flex-col gap-4 rounded-xl border border-pink-500/30 bg-background/80 p-4 shadow-sm backdrop-blur sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex min-w-0 gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-pink-500/15 text-pink-600 dark:text-pink-400">
+              <UserPlus className="h-5 w-5" />
+            </div>
+            <div className="min-w-0 space-y-1">
+              <p className="font-semibold">
+                You’re invited to maintain {repo.name}
+              </p>
+              <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm text-muted-foreground">
+                {inviters.length > 0 ? (
+                  <>
+                    <span>Invited by</span>
+                    {inviters.map((pubkey) => (
+                      <UserLink
+                        key={pubkey}
+                        pubkey={pubkey}
+                        avatarSize="xs"
+                        nameClassName="text-sm"
+                      />
+                    ))}
+                    <span>
+                      · Accept to link your announcement and unlock maintainer
+                      controls.
+                    </span>
+                  </>
+                ) : (
+                  <span>
+                    Accept to link your announcement and unlock maintainer
+                    controls.
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {ownAnnouncement ? (
+            <Button
+              type="button"
+              onClick={accept}
+              disabled={isAccepting}
+              className="shrink-0 bg-pink-600 text-white hover:bg-pink-700"
+            >
+              {isAccepting ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <CheckCircle2 className="mr-2 h-4 w-4" />
+              )}
+              {isAccepting ? "Publishing…" : "Accept invitation"}
+            </Button>
+          ) : (
+            <div className="max-w-sm rounded-lg border border-dashed px-3 py-2 text-sm text-muted-foreground">
+              Clone the repository and run{" "}
+              <code className="font-mono text-foreground">
+                ngit repo accept
+              </code>{" "}
+              to create your announcement and attach your git servers safely.
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 

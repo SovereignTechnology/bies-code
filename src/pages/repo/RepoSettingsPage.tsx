@@ -589,21 +589,25 @@ function RepoSettingsForm({
   // Union items from other maintainers
   // ---------------------------------------------------------------------------
 
-  const isMultiMaintainer = repo.maintainerSet.length > 1;
+  const isMultiMaintainer = repo.confirmedMaintainers.length > 1;
 
   const maintainerLeadership = useMemo(
-    () => computeMaintainerLeadership(repo.maintainerSet, repo.maintainerEdges),
-    [repo.maintainerSet, repo.maintainerEdges],
+    () =>
+      computeMaintainerLeadership(
+        repo.confirmedMaintainers,
+        repo.maintainerEdges,
+      ),
+    [repo.confirmedMaintainers, repo.maintainerEdges],
   );
 
   const maintainerListers = useMemo(
     () =>
       computeMaintainerListers(
-        repo.maintainerSet,
-        repo.maintainerSet,
+        repo.confirmedMaintainers,
+        repo.confirmedMaintainers,
         repo.maintainerEdges,
       ),
-    [repo.maintainerSet, repo.maintainerEdges],
+    [repo.confirmedMaintainers, repo.maintainerEdges],
   );
 
   const requestedMaintainers = useMemo(
@@ -615,15 +619,18 @@ function RepoSettingsForm({
     () =>
       computeMaintainerListers(
         requestedMaintainers,
-        repo.maintainerSet,
+        repo.confirmedMaintainers,
         repo.maintainerEdges,
       ),
-    [requestedMaintainers, repo.maintainerSet, repo.maintainerEdges],
+    [requestedMaintainers, repo.confirmedMaintainers, repo.maintainerEdges],
   );
 
   const maintainerPickerPriorityPubkeys = useMemo(
-    () => Array.from(new Set([...repo.maintainerSet, ...requestedMaintainers])),
-    [repo.maintainerSet, requestedMaintainers],
+    () =>
+      Array.from(
+        new Set([...repo.confirmedMaintainers, ...requestedMaintainers]),
+      ),
+    [repo.confirmedMaintainers, requestedMaintainers],
   );
 
   const maintainerPickerExcludePubkeys = useMemo(
@@ -1379,7 +1386,7 @@ function RepoSettingsForm({
               </div>
 
               <div className="space-y-2">
-                {repo.maintainerSet.map((pubkey) => {
+                {repo.confirmedMaintainers.map((pubkey) => {
                   const listedBy = maintainerListers.get(pubkey) ?? [];
                   const isLead = maintainerLeadership.leadMaintainer === pubkey;
                   return (

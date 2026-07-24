@@ -791,9 +791,9 @@ export default function PRPage() {
 
   // Maintainer check: only maintainers (not just PR author) can merge
   const isMaintainer = useMemo(() => {
-    if (!activeAccount || !pr) return false;
-    return pr.maintainers.has(activeAccount.pubkey);
-  }, [activeAccount, pr]);
+    if (!activeAccount || !repo) return false;
+    return repo.confirmedMaintainers.includes(activeAccount.pubkey);
+  }, [activeAccount, repo]);
 
   const prStatusOptions = useMemo<StatusOption[]>(() => {
     const options: StatusOption[] = [
