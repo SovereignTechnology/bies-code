@@ -26,6 +26,7 @@ import { NIP19Page } from "./pages/NIP19Page";
 import NgitPage from "./pages/NgitPage";
 import About from "./pages/About";
 import OgImagePreview from "./pages/OgImagePreview";
+import RepositoryInvitationMockup from "./pages/RepositoryInvitationMockup";
 import NotFound from "./pages/NotFound";
 import { useRepoPath } from "./hooks/useRepoPath";
 import { REPO_KIND } from "./lib/nip34";
@@ -395,6 +396,10 @@ function AppRouter() {
             />
             <Route path="/about" element={<About />} />
             <Route path="/og-preview" element={<OgImagePreview />} />
+            <Route
+              path="/mockups/repository-invitations"
+              element={<RepositoryInvitationMockup />}
+            />
             {/* /relay/:relaySegment — browse repos on a specific relay.
                  The segment uses the same format as relay hints: wss:// is stripped,
                  ws:// uses a slash-free encoded scheme. e.g. /relay/relay.ngit.dev
