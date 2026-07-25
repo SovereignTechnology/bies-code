@@ -2,7 +2,8 @@
 
 ## [Unreleased]
 
-- Make maintainer-invitation acceptance use a compact banner and shared GRASP/lead-selection modal, publish only the reciprocal announcement for GRASP-02 servers to synchronize, show non-blocking sync progress, default ambiguous lead selection to none, and block repositories with existing state until their refs can be safely combined.
+- Fix maintainership invitation acceptance by using a compact banner and a shared modal for choosing GRASP servers and lead maintainers, then showing sync progress after acceptance. Repositories with conflicting existing state remain blocked until their refs can be safely combined.
+- Keep invitation syncing moving by telling GRASP where to find the existing repository, retrying servers while they create the new copy, and discarding cached refs as each server catches up.
 - Align recursive repository authorization with ngit and GRASP, add compact existing-repository links for invited maintainers, consolidate repository-join warnings, and separate work sent only to those repositories from accepted repository and social-proof counts.
 - Fix CI workflow duration counters so running checks update every second.
 - Show referenced work items and cross-repository comment mentions in discussions.

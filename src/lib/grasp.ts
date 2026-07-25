@@ -12,7 +12,7 @@ export interface ValidateGraspServerOptions {
   requiredGrasps?: readonly string[];
 }
 
-/** Normalize a pasted WebSocket URL or domain to a bare lowercase domain. */
+/** Normalize a pasted WebSocket URL or domain to a lowercase host[:port]. */
 export function normalizeGraspDomain(value: string): string {
   return value
     .trim()
@@ -21,9 +21,13 @@ export function normalizeGraspDomain(value: string): string {
     .replace(/\/+$/, "");
 }
 
-/** Whether a normalized value looks like a public DNS hostname. */
+/** Whether a normalized value looks like a public DNS hostname[:port]. */
 export function isValidGraspDomain(domain: string): boolean {
-  return /^[a-z0-9.-]+\.[a-z]{2,}$/.test(domain);
+  const match = domain.match(/^([a-z0-9.-]+\.[a-z]{2,})(?::(\d{1,5}))?$/);
+  if (!match) return false;
+  if (!match[2]) return true;
+  const port = Number(match[2]);
+  return port > 0 && port <= 65_535;
 }
 
 /** Deduplicate domains while preserving the first occurrence. */

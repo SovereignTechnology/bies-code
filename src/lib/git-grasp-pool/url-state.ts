@@ -188,6 +188,22 @@ export class UrlTracker {
     };
   }
 
+  /** Make a failed URL eligible for another probe. */
+  resetFailure(): void {
+    if (
+      this._state.status !== "error" &&
+      this._state.status !== "permanent-failure"
+    ) {
+      return;
+    }
+    this._state = {
+      ...this._state,
+      status: "untested",
+      lastError: null,
+      lastErrorKind: null,
+    };
+  }
+
   /**
    * Update the per-ref sync status computed by the pool.
    * Called after all infoRefs have settled and the pool has compared
@@ -282,6 +298,11 @@ export class UrlStateManager {
     return this.getAll()
       .filter((t) => t.status === "untested")
       .map((t) => t.url);
+  }
+
+  /** Revive URLs that may have been probed before repository provisioning. */
+  resetFailures(): void {
+    for (const tracker of this.trackers.values()) tracker.resetFailure();
   }
 
   /** Build the urls record for PoolState */

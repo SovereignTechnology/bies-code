@@ -830,6 +830,7 @@ function buildAcceptanceTemplate(
     accountPubkey,
     repo.dTag,
     graspServers,
+    repo.relays,
   );
 
   return {
@@ -853,6 +854,7 @@ function buildPersonalTags(
   accountPubkey: string,
   dTag: string,
   graspServers: GraspServer[],
+  sourceRelayUrls: string[],
 ): string[][] {
   const { cloneUrls, relayUrls } = getDefaultPersonalInfrastructure(
     accountPubkey,
@@ -862,11 +864,12 @@ function buildPersonalTags(
   const inheritedTags = sourceAnnouncement.tags.filter(
     ([name]) => name === "r" || name === "blossoms",
   );
+  const syncRelayUrls = Array.from(new Set([...relayUrls, ...sourceRelayUrls]));
 
   return [
     ...inheritedTags,
     ...(cloneUrls.length > 0 ? [["clone", ...cloneUrls]] : []),
-    ...(relayUrls.length > 0 ? [["relays", ...relayUrls]] : []),
+    ...(syncRelayUrls.length > 0 ? [["relays", ...syncRelayUrls]] : []),
   ];
 }
 
@@ -1117,6 +1120,7 @@ function MaintainerAcceptanceControls({
       : undefined,
     stateRefs,
     stateCreatedAt: canonicalStateEvent?.created_at,
+    expectRepositoryProvisioning: phase === "syncing",
   });
   const serverSync = cloneUrls.map((cloneUrl) => ({
     cloneUrl,

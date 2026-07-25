@@ -444,6 +444,7 @@ function findInTree(tree: Tree, segments: string[]): TreeEntry | undefined {
 export class GitHttpClient {
   private cache: GitObjectCache;
   private cors: CorsProxyManager;
+  private expectRepositoryProvisioning: boolean;
   /**
    * In-flight dedup for infoRefs fetches. Prevents duplicate HTTP requests
    * when multiple callers request the same URL concurrently.
@@ -478,9 +479,24 @@ export class GitHttpClient {
    */
   private inFlightRawObjects = new Map<string, Promise<RawObjectsEntry>>();
 
-  constructor(cache: GitObjectCache, cors: CorsProxyManager) {
+  constructor(
+    cache: GitObjectCache,
+    cors: CorsProxyManager,
+    expectRepositoryProvisioning = false,
+  ) {
     this.cache = cache;
     this.cors = cors;
+    this.expectRepositoryProvisioning = expectRepositoryProvisioning;
+  }
+
+  /**
+   * Empty repositories are expected while GRASP is creating a newly announced
+   * mirror. Enabling this after a shared pool already probed the URLs must also
+   * clear failures recorded by that early probe.
+   */
+  setExpectRepositoryProvisioning(expected: boolean): void {
+    this.expectRepositoryProvisioning = expected;
+    if (expected) this.permanentFailures.clear();
   }
 
   /** Check if a URL has permanently failed */
@@ -540,12 +556,15 @@ export class GitHttpClient {
         ) {
           // If we went direct (no proxy), this is likely a 404 or wrong path
           const kind = effectiveUrl === url ? "not-git" : "proxy-error";
-          const permanent = new GitFetchError(
+          const emptyResponse = new GitFetchError(
             `No git data returned from ${url} (server may have returned a non-git response)`,
             kind,
+            !this.expectRepositoryProvisioning,
           );
-          this.permanentFailures.set(url, permanent);
-          throw permanent;
+          if (!this.expectRepositoryProvisioning) {
+            this.permanentFailures.set(url, emptyResponse);
+          }
+          throw emptyResponse;
         }
         if (effectiveUrl === url) this.cors.markOriginDirect(url);
         this.cache.putInfoRefs(url, info);
@@ -585,12 +604,15 @@ export class GitHttpClient {
             info.capabilities.length === 0 &&
             Object.keys(info.refs).length === 0
           ) {
-            const permanent = new GitFetchError(
+            const emptyResponse = new GitFetchError(
               `No git data returned from ${url} via proxy (server may have returned a non-git response)`,
               "proxy-error",
+              !this.expectRepositoryProvisioning,
             );
-            this.permanentFailures.set(url, permanent);
-            throw permanent;
+            if (!this.expectRepositoryProvisioning) {
+              this.permanentFailures.set(url, emptyResponse);
+            }
+            throw emptyResponse;
           }
           this.cors.markOriginNeedsProxy(url);
           this.cache.putInfoRefs(url, info);

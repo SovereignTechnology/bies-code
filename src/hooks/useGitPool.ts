@@ -41,6 +41,11 @@ export interface UseGitPoolOptions {
   stateRefs?: RepoStateRef[];
   /** created_at of the state event (seconds). */
   stateCreatedAt?: number;
+  /**
+   * Keep retrying an empty Git endpoint while GRASP provisions this repo.
+   * Intended for newly published repository announcements.
+   */
+  expectRepositoryProvisioning?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -92,7 +97,12 @@ export function useGitPool(
   cloneUrls: string[],
   options: UseGitPoolOptions = {},
 ): UseGitPoolResult {
-  const { knownHeadCommit, stateRefs, stateCreatedAt } = options;
+  const {
+    knownHeadCommit,
+    stateRefs,
+    stateCreatedAt,
+    expectRepositoryProvisioning,
+  } = options;
 
   const urlsKey = cloneUrls.join(",");
 
@@ -154,6 +164,7 @@ export function useGitPool(
     const pool = getOrCreatePool({
       cloneUrls,
       stateEvent$: subject.asObservable(),
+      expectRepositoryProvisioning,
     });
     poolRef.current = pool;
 
@@ -170,7 +181,7 @@ export function useGitPool(
       // subscribers. Just drop our reference.
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [urlsKey]);
+  }, [urlsKey, expectRepositoryProvisioning]);
 
   return { poolState, pool: poolRef.current };
 }

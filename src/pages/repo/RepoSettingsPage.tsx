@@ -342,7 +342,7 @@ function RepoSettingsForm({
     const graspDomainSet = new Set(currentGraspDomains);
     return currentRelayUrls.filter((r) => {
       try {
-        return !graspDomainSet.has(new URL(r).hostname);
+        return !graspDomainSet.has(new URL(r).host);
       } catch {
         return true;
       }

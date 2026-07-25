@@ -356,13 +356,13 @@ export function isGraspCloneUrl(url: string): boolean {
 }
 
 /**
- * Extract the domain (hostname) from a Grasp clone URL.
+ * Extract the domain (host and optional port) from a Grasp clone URL.
  * Returns undefined if the URL is not a valid Grasp clone URL or cannot be parsed.
  */
 export function graspCloneUrlDomain(url: string): string | undefined {
   if (!isGraspCloneUrl(url)) return undefined;
   try {
-    return new URL(url).hostname;
+    return new URL(url).host;
   } catch {
     return undefined;
   }
