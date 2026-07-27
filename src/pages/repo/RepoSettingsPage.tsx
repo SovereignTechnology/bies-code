@@ -13,7 +13,8 @@
  *   - Relay URLs generated from selected Grasp servers
  *   - Items contributed only by co-maintainers (displayed as info)
  *
- * Only accessible when the logged-in user is the selected maintainer.
+ * Recursive maintainers are redirected to the same repository under their own
+ * announcement coordinate. Invitees without an announcement must accept first.
  */
 
 import {
@@ -25,7 +26,7 @@ import {
   useId,
   useRef,
 } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, Navigate, useNavigate } from "react-router-dom";
 import { useActiveAccount } from "applesauce-react/hooks";
 import {
   ArrowLeft,
@@ -242,9 +243,6 @@ export default function RepoSettingsPage() {
   const account = useActiveAccount();
   const repo = resolved?.repo;
 
-  const isMaintainer =
-    account?.pubkey && repo && account.pubkey === repo.selectedMaintainer;
-
   if (!repo) {
     return (
       <div className="container max-w-screen-xl px-4 md:px-8 py-8">
@@ -256,20 +254,73 @@ export default function RepoSettingsPage() {
     );
   }
 
-  if (!isMaintainer) {
+  const accountPubkey = account?.pubkey;
+  const isRecursiveMaintainer =
+    !!accountPubkey && repo.maintainerSet.includes(accountPubkey);
+  const accountAnnouncement = accountPubkey
+    ? repo.announcements.find(
+        (announcement) => announcement.pubkey === accountPubkey,
+      )
+    : undefined;
+
+  if (
+    accountPubkey &&
+    accountPubkey !== repo.selectedMaintainer &&
+    isRecursiveMaintainer &&
+    accountAnnouncement
+  ) {
+    const accountRepoPath = repoToPath(
+      accountPubkey,
+      repo.dTag,
+      getRepoRelays(accountAnnouncement),
+    );
+    return <Navigate to={`${accountRepoPath}/settings`} replace />;
+  }
+
+  if (
+    accountPubkey &&
+    accountPubkey !== repo.selectedMaintainer &&
+    isRecursiveMaintainer &&
+    !accountAnnouncement
+  ) {
     return (
-      <div className="container max-w-screen-xl px-4 md:px-8 py-8">
+      <div className="container max-w-screen-xl px-4 py-8 md:px-8">
         <div className="max-w-md">
-          <div className="flex items-center gap-2 text-destructive mb-4">
-            <AlertTriangle className="h-5 w-5" />
-            <p className="font-medium">Not authorised</p>
+          <div className="mb-4 flex items-center gap-2 text-pink-600 dark:text-pink-400">
+            <Users className="h-5 w-5" />
+            <p className="font-medium">Accept the invitation first</p>
           </div>
-          <p className="text-sm text-muted-foreground mb-4">
-            Only the selected maintainer can edit these repository settings.
+          <p className="mb-4 text-sm leading-relaxed text-muted-foreground">
+            You are in this repository&apos;s recursive maintainer set, but you
+            do not have your own repository announcement yet. Accept the
+            invitation above to publish it and continue to your settings page.
           </p>
           <Button asChild variant="outline" size="sm">
             <Link to={`${basePath}/about`}>
-              <ArrowLeft className="h-4 w-4 mr-2" />
+              <ArrowLeft className="mr-2 h-4 w-4" />
+              Back to About
+            </Link>
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  if (accountPubkey !== repo.selectedMaintainer) {
+    return (
+      <div className="container max-w-screen-xl px-4 py-8 md:px-8">
+        <div className="max-w-md">
+          <div className="mb-4 flex items-center gap-2 text-destructive">
+            <AlertTriangle className="h-5 w-5" />
+            <p className="font-medium">Not authorised</p>
+          </div>
+          <p className="mb-4 text-sm text-muted-foreground">
+            Only a maintainer in this repository&apos;s recursive maintainer set
+            can edit settings.
+          </p>
+          <Button asChild variant="outline" size="sm">
+            <Link to={`${basePath}/about`}>
+              <ArrowLeft className="mr-2 h-4 w-4" />
               Back to About
             </Link>
           </Button>

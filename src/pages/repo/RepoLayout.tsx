@@ -334,16 +334,18 @@ function RepoLayoutResolved({
     ).length;
   }, [prs, repo]);
 
-  // Determine if the logged-in user is a confirmed maintainer of this repo.
+  // Every recursively reachable maintainer can enter Settings. The settings
+  // page redirects maintainers with announcements to their own coordinate and
+  // sends invitees without one through acceptance first.
   const account = useActiveAccount();
   const {
     servers: accountGraspServers,
     isFromUserList: accountGraspServersFromUserList,
     isLoading: accountGraspServersLoading,
   } = useGraspServers(account?.pubkey);
-  const isMaintainer =
+  const canOpenSettings =
     account?.pubkey && repo
-      ? repo.confirmedMaintainers.includes(account.pubkey)
+      ? repo.maintainerSet.includes(account.pubkey)
       : false;
 
   // Build an encoded base path for intra-repository links. `splat` is decoded
@@ -635,7 +637,7 @@ function RepoLayoutResolved({
                   icon={<Info className="h-4 w-4" />}
                   label="About"
                 />
-                {isMaintainer && (
+                {canOpenSettings && (
                   <TabLink
                     to={`${basePath}/settings`}
                     active={isSettingsTab}
@@ -682,7 +684,7 @@ function RepoLayoutResolved({
                         About
                       </Link>
                     </DropdownMenuItem>
-                    {isMaintainer && (
+                    {canOpenSettings && (
                       <DropdownMenuItem asChild>
                         <Link
                           to={`${basePath}/settings`}
@@ -719,6 +721,12 @@ function RepoLayoutResolved({
             )}
             stateCheckComplete={repoRelayEose && !accountGraspServersLoading}
             canonicalState={repoState}
+            openAcceptanceInitially={
+              isSettingsTab &&
+              !repo.announcements.some(
+                (announcement) => announcement.pubkey === account.pubkey,
+              )
+            }
           />
         )}
 
@@ -854,6 +862,7 @@ function MaintainerInvitationBanner({
   ownState,
   stateCheckComplete,
   canonicalState,
+  openAcceptanceInitially,
 }: {
   repo: ResolvedRepo;
   accountPubkey: string;
@@ -865,6 +874,7 @@ function MaintainerInvitationBanner({
   ownState: RepositoryState | undefined;
   stateCheckComplete: boolean;
   canonicalState: RepositoryState | null | undefined;
+  openAcceptanceInitially: boolean;
 }) {
   const isRequested = repo.requestedMaintainers.includes(accountPubkey);
   const acceptanceJob = useMaintainerAcceptanceJob(
@@ -956,6 +966,7 @@ function MaintainerInvitationBanner({
               graspServers={graspServers}
               graspServersFromUserList={graspServersFromUserList}
               canonicalState={canonicalState}
+              openInitially={openAcceptanceInitially}
               {...acceptanceSelection}
             />
           )}
@@ -1061,6 +1072,7 @@ function MaintainerAcceptanceControls({
   options,
   defaults,
   leadMaintainer,
+  openInitially,
 }: {
   repo: ResolvedRepo;
   ownAnnouncement: NostrEvent | undefined;
@@ -1074,9 +1086,10 @@ function MaintainerAcceptanceControls({
   options: string[];
   defaults: string[];
   leadMaintainer?: string;
+  openInitially: boolean;
 }) {
   const { toast } = useToast();
-  const [dialogOpen, setDialogOpen] = useState(false);
+  const [dialogOpen, setDialogOpen] = useState(openInitially);
   const [publishing, setPublishing] = useState(false);
   const [selectedMaintainers, setSelectedMaintainers] =
     useState<string[]>(defaults);
@@ -1088,6 +1101,9 @@ function MaintainerAcceptanceControls({
       graspServersFromUserList,
     ),
   );
+  useEffect(() => {
+    if (openInitially) setDialogOpen(true);
+  }, [openInitially]);
   const selectedGraspServers = useMemo<GraspServer[]>(
     () =>
       selectedDomains.map(
