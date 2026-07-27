@@ -2,9 +2,11 @@ import type { NostrEvent } from "nostr-tools";
 import type { RepoStateRef } from "@/lib/nip34";
 import { pool } from "@/services/nostr";
 
-const STORAGE_KEY = "gitworkshop:maintainer-acceptance:v1";
+const STORAGE_KEY = "gitworkshop:maintainer-acceptance:v2";
 const MAX_STORED_JOBS = 20;
-const JOB_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+export const MAINTAINER_ACCEPTANCE_JOB_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+const DELIVERY_RETRY_INITIAL_MS = 5_000;
+const DELIVERY_RETRY_MAX_MS = 5 * 60 * 1000;
 
 export type MaintainerAcceptancePhase =
   | "publishing"
@@ -15,6 +17,7 @@ export type MaintainerAcceptancePhase =
 export interface MaintainerAcceptanceJob {
   key: string;
   accountPubkey: string;
+  invitationAnchor: string;
   dTag: string;
   announcement: NostrEvent;
   cloneUrls: string[];
@@ -22,10 +25,15 @@ export interface MaintainerAcceptanceJob {
   deliveredRelayUrls: string[];
   syncedCloneUrls: string[];
   relayErrors: Record<string, string>;
+  deliveryAttempt: number;
+  nextDeliveryRetryAt?: number;
+  broadcastReceived: boolean;
   phase: MaintainerAcceptancePhase;
   stateRefs: RepoStateRef[];
   knownHeadCommit?: string;
   stateCreatedAt?: number;
+  createdAt: number;
+  completedAt?: number;
   updatedAt: number;
 }
 
@@ -41,13 +49,19 @@ export interface MaintainerAcceptanceDeliveryDependencies {
 
 const jobs = new Map<string, MaintainerAcceptanceJob>();
 const listeners = new Set<() => void>();
+const deliveryRuns = new Map<
+  string,
+  Promise<MaintainerAcceptanceJob | undefined>
+>();
 let hydrated = false;
+let jobSnapshot: MaintainerAcceptanceJob[] = [];
 
 export function maintainerAcceptanceKey(
   accountPubkey: string,
+  invitationAnchor: string,
   dTag: string,
 ): string {
-  return `${accountPubkey}:${dTag}`;
+  return `${accountPubkey}:${invitationAnchor}:${dTag}`;
 }
 
 function storage(): Storage | undefined {
@@ -65,6 +79,7 @@ function isStoredJob(value: unknown): value is MaintainerAcceptanceJob {
   return (
     typeof candidate.key === "string" &&
     typeof candidate.accountPubkey === "string" &&
+    typeof candidate.invitationAnchor === "string" &&
     typeof candidate.dTag === "string" &&
     !!candidate.announcement &&
     Array.isArray(candidate.cloneUrls) &&
@@ -72,11 +87,14 @@ function isStoredJob(value: unknown): value is MaintainerAcceptanceJob {
     Array.isArray(candidate.deliveredRelayUrls) &&
     !!candidate.relayErrors &&
     typeof candidate.relayErrors === "object" &&
+    typeof candidate.deliveryAttempt === "number" &&
+    typeof candidate.broadcastReceived === "boolean" &&
     (candidate.phase === "publishing" ||
       candidate.phase === "delivery-error" ||
       candidate.phase === "syncing" ||
       candidate.phase === "synced") &&
     Array.isArray(candidate.stateRefs) &&
+    typeof candidate.createdAt === "number" &&
     typeof candidate.updatedAt === "number"
   );
 }
@@ -91,15 +109,17 @@ function ensureHydrated(): void {
   try {
     const parsed: unknown = JSON.parse(persisted);
     if (!Array.isArray(parsed)) return;
-    const cutoff = Date.now() - JOB_MAX_AGE_MS;
+    const cutoff = Date.now() - MAINTAINER_ACCEPTANCE_JOB_MAX_AGE_MS;
     for (const value of parsed) {
-      if (!isStoredJob(value) || value.updatedAt < cutoff) continue;
+      if (!isStoredJob(value) || value.createdAt < cutoff) continue;
       jobs.set(value.key, {
         ...value,
         syncedCloneUrls: Array.isArray(value.syncedCloneUrls)
           ? value.syncedCloneUrls
           : [],
         phase: value.phase === "publishing" ? "delivery-error" : value.phase,
+        nextDeliveryRetryAt:
+          value.phase === "publishing" ? Date.now() : value.nextDeliveryRetryAt,
         relayErrors:
           value.phase === "publishing"
             ? {
@@ -110,15 +130,20 @@ function ensureHydrated(): void {
             : value.relayErrors,
       });
     }
+    refreshSnapshot();
   } catch {
     storage()?.removeItem(STORAGE_KEY);
   }
 }
 
+function refreshSnapshot(): void {
+  jobSnapshot = Array.from(jobs.values()).sort(
+    (a, b) => b.updatedAt - a.updatedAt,
+  );
+}
+
 function persist(): void {
-  const values = Array.from(jobs.values())
-    .sort((a, b) => b.updatedAt - a.updatedAt)
-    .slice(0, MAX_STORED_JOBS);
+  const values = jobSnapshot.slice(0, MAX_STORED_JOBS);
   try {
     storage()?.setItem(STORAGE_KEY, JSON.stringify(values));
   } catch {
@@ -127,8 +152,14 @@ function persist(): void {
 }
 
 function emit(): void {
+  refreshSnapshot();
   persist();
   for (const listener of listeners) listener();
+}
+
+export function getMaintainerAcceptanceJobs(): MaintainerAcceptanceJob[] {
+  ensureHydrated();
+  return jobSnapshot;
 }
 
 export function getMaintainerAcceptanceJob(
@@ -170,6 +201,13 @@ export function clearMaintainerAcceptanceJob(key: string): void {
   ensureHydrated();
   if (!jobs.delete(key)) return;
   emit();
+}
+
+export function isMaintainerAcceptanceJobExpired(
+  job: MaintainerAcceptanceJob,
+  now = Date.now(),
+): boolean {
+  return now - job.createdAt >= MAINTAINER_ACCEPTANCE_JOB_MAX_AGE_MS;
 }
 
 function responseAccepted(ok: boolean, message: string | undefined): boolean {
@@ -223,9 +261,9 @@ const defaultDependencies: MaintainerAcceptanceDeliveryDependencies = {
 /**
  * Deliver a signed reciprocal announcement and transition its durable job.
  *
- * Every selected GRASP relay must acknowledge the event before the job enters
- * the Git-ref syncing phase. Successful targets are retained across retries so
- * a transient failure on one server never needlessly republishes to the rest.
+ * Git-ref polling can begin as soon as one selected GRASP relay acknowledges
+ * the event. Successful targets are retained across retries so a transient
+ * failure on one server never needlessly republishes to the rest.
  */
 export async function deliverMaintainerAcceptance(
   key: string,
@@ -235,8 +273,12 @@ export async function deliverMaintainerAcceptance(
   if (!current) return undefined;
 
   updateMaintainerAcceptanceJob(key, {
-    phase: "publishing",
+    phase:
+      current.deliveredRelayUrls.length > 0 || current.phase === "synced"
+        ? current.phase
+        : "publishing",
     relayErrors: {},
+    nextDeliveryRetryAt: undefined,
   });
 
   const pendingRelayUrls = current.relayUrls.filter(
@@ -270,9 +312,84 @@ export async function deliverMaintainerAcceptance(
   const everyRelayDelivered = latest.relayUrls.every((relayUrl) =>
     deliveredRelayUrls.includes(relayUrl),
   );
+  const anyRelayDelivered = deliveredRelayUrls.length > 0;
+  const deliveryAttempt =
+    everyRelayDelivered || deliveries.length === 0
+      ? 0
+      : latest.deliveryAttempt + 1;
+  const nextDeliveryRetryAt = everyRelayDelivered
+    ? undefined
+    : Date.now() +
+      Math.min(
+        DELIVERY_RETRY_INITIAL_MS * 2 ** Math.max(0, deliveryAttempt - 1),
+        DELIVERY_RETRY_MAX_MS,
+      );
   return updateMaintainerAcceptanceJob(key, {
     deliveredRelayUrls,
     relayErrors,
-    phase: everyRelayDelivered ? "syncing" : "delivery-error",
+    deliveryAttempt,
+    nextDeliveryRetryAt,
+    phase:
+      latest.phase === "synced"
+        ? "synced"
+        : anyRelayDelivered
+          ? "syncing"
+          : "delivery-error",
   });
+}
+
+export function runMaintainerAcceptanceDelivery(
+  key: string,
+): Promise<MaintainerAcceptanceJob | undefined> {
+  const existing = deliveryRuns.get(key);
+  if (existing) return existing;
+
+  const run = deliverMaintainerAcceptance(key).finally(() => {
+    deliveryRuns.delete(key);
+  });
+  deliveryRuns.set(key, run);
+  return run;
+}
+
+export function recordMaintainerAcceptanceBroadcast(
+  key: string,
+  event: NostrEvent,
+): MaintainerAcceptanceJob | undefined {
+  const job = getMaintainerAcceptanceJob(key);
+  if (!job || job.broadcastReceived || event.id !== job.announcement.id) {
+    return job;
+  }
+  return updateMaintainerAcceptanceJob(key, { broadcastReceived: true });
+}
+
+export function recordMaintainerAcceptanceCloneSync(
+  key: string,
+  cloneUrl: string,
+): MaintainerAcceptanceJob | undefined {
+  const job = getMaintainerAcceptanceJob(key);
+  if (!job || !job.cloneUrls.includes(cloneUrl)) return job;
+  if (job.syncedCloneUrls.includes(cloneUrl)) return job;
+  const syncedCloneUrls = Array.from(
+    new Set([...job.syncedCloneUrls, cloneUrl]),
+  );
+  return updateMaintainerAcceptanceJob(key, {
+    syncedCloneUrls,
+    phase: "synced",
+  });
+}
+
+export function settleMaintainerAcceptanceJob(
+  key: string,
+): MaintainerAcceptanceJob | undefined {
+  const job = getMaintainerAcceptanceJob(key);
+  if (!job) return undefined;
+  const allDelivered = job.relayUrls.every((url) =>
+    job.deliveredRelayUrls.includes(url),
+  );
+  const allSynced = job.cloneUrls.every((url) =>
+    job.syncedCloneUrls.includes(url),
+  );
+  if (!allDelivered || !allSynced || !job.broadcastReceived) return job;
+  if (job.completedAt) return job;
+  return updateMaintainerAcceptanceJob(key, { completedAt: Date.now() });
 }

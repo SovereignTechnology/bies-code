@@ -20,8 +20,8 @@ import { useRepoHasCI } from "@/hooks/useCI";
 import { usePrefetchNip05 } from "@/hooks/usePrefetchNip05";
 import { useDnsIdentity } from "@/hooks/useDnsIdentity";
 import { useRepositoryState } from "@/hooks/useRepositoryState";
+import type { RepositoryState } from "@/casts/RepositoryState";
 import { useGraspServers, type GraspServer } from "@/hooks/useGraspServers";
-import { useGitPool } from "@/hooks/useGitPool";
 import { useMaintainerAcceptanceJob } from "@/hooks/useMaintainerAcceptanceJob";
 import { use$ } from "@/hooks/use$";
 import { useProfile } from "@/hooks/useProfile";
@@ -67,15 +67,10 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { RepoContext, type RepoContextValue } from "./RepoContext";
 import {
-  computeMaintainerLeadership,
-  getStateHeadCommit,
-  getStateRefs,
   getRepoCloneUrls,
   graspCloneUrlDomain,
   hasAcceptedRepositoryReference,
-  REPO_KIND,
   repoCoordinate,
-  type RepoStateRef,
   type RepoQueryOptions,
   type ResolvedRepo,
 } from "@/lib/nip34";
@@ -105,15 +100,17 @@ import {
   validateGraspServer,
 } from "@/lib/grasp";
 import { DEFAULT_GRASP_SERVERS } from "@/services/settings";
-import type { UrlState } from "@/lib/git-grasp-pool";
 import {
-  clearMaintainerAcceptanceJob,
-  deliverMaintainerAcceptance,
   maintainerAcceptanceKey,
+  runMaintainerAcceptanceDelivery,
   saveMaintainerAcceptanceJob,
-  updateMaintainerAcceptanceJob,
   type MaintainerAcceptanceJob,
 } from "@/services/maintainerAcceptance";
+import {
+  buildMaintainerAcceptanceTemplate,
+  classifyInvitationState,
+  getAcceptanceMaintainerSelection,
+} from "@/lib/repositoryInvitation";
 // ---------------------------------------------------------------------------
 // RepoLayout
 // ---------------------------------------------------------------------------
@@ -717,11 +714,11 @@ function RepoLayoutResolved({
             signer={account.signer}
             graspServers={accountGraspServers}
             graspServersFromUserList={accountGraspServersFromUserList}
-            ownStateEvent={repoStateEvents?.find(
-              (event) => event.pubkey === account.pubkey,
+            ownState={repoStateEvents?.find(
+              (state) => state.publisherPubkey === account.pubkey,
             )}
             stateCheckComplete={repoRelayEose && !accountGraspServersLoading}
-            canonicalStateEvent={repoState?.event}
+            canonicalState={repoState}
           />
         )}
 
@@ -802,85 +799,6 @@ function RepoLayoutResolved({
   );
 }
 
-const PERSONAL_ANNOUNCEMENT_TAGS = new Set([
-  "clone",
-  "relays",
-  "blossoms",
-  "r",
-]);
-
-function buildAcceptanceTemplate(
-  repo: ResolvedRepo,
-  ownAnnouncement: NostrEvent | undefined,
-  accountPubkey: string,
-  selectedMaintainers: string[],
-  graspServers: GraspServer[],
-): EventTemplate {
-  const latestAnnouncement = repo.announcements.reduce((latest, event) =>
-    event.created_at > latest.created_at ? event : latest,
-  );
-  const existingMaintainers =
-    ownAnnouncement?.tags.find(([name]) => name === "maintainers")?.slice(1) ??
-    [];
-  const maintainers = Array.from(
-    new Set([accountPubkey, ...existingMaintainers, ...selectedMaintainers]),
-  );
-
-  const sharedTags = latestAnnouncement.tags.filter(
-    ([name]) =>
-      name !== "d" &&
-      name !== "maintainers" &&
-      name !== "p" &&
-      !PERSONAL_ANNOUNCEMENT_TAGS.has(name),
-  );
-  const personalTags = buildPersonalTags(
-    ownAnnouncement ?? latestAnnouncement,
-    accountPubkey,
-    repo.dTag,
-    graspServers,
-    repo.relays,
-  );
-
-  return {
-    kind: REPO_KIND,
-    content: latestAnnouncement.content,
-    created_at: Math.max(
-      Math.floor(Date.now() / 1000),
-      (ownAnnouncement?.created_at ?? 0) + 1,
-    ),
-    tags: [
-      ["d", repo.dTag],
-      ...sharedTags,
-      ...personalTags,
-      ["maintainers", ...maintainers],
-    ],
-  };
-}
-
-function buildPersonalTags(
-  sourceAnnouncement: NostrEvent,
-  accountPubkey: string,
-  dTag: string,
-  graspServers: GraspServer[],
-  sourceRelayUrls: string[],
-): string[][] {
-  const { cloneUrls, relayUrls } = getDefaultPersonalInfrastructure(
-    accountPubkey,
-    dTag,
-    graspServers,
-  );
-  const inheritedTags = sourceAnnouncement.tags.filter(
-    ([name]) => name === "r" || name === "blossoms",
-  );
-  const syncRelayUrls = Array.from(new Set([...relayUrls, ...sourceRelayUrls]));
-
-  return [
-    ...inheritedTags,
-    ...(cloneUrls.length > 0 ? [["clone", ...cloneUrls]] : []),
-    ...(syncRelayUrls.length > 0 ? [["relays", ...syncRelayUrls]] : []),
-  ];
-}
-
 function getDefaultPersonalInfrastructure(
   accountPubkey: string,
   dTag: string,
@@ -927,40 +845,15 @@ function getInvitationDefaultGraspDomains(
   );
 }
 
-function getAcceptanceMaintainerSelection(
-  repo: ResolvedRepo,
-  accountPubkey: string,
-): {
-  options: string[];
-  defaults: string[];
-  leadMaintainer?: string;
-} {
-  const options = repo.confirmedMaintainers.filter(
-    (pubkey) => pubkey !== accountPubkey,
-  );
-  const leadMaintainer = computeMaintainerLeadership(
-    repo.confirmedMaintainers,
-    repo.maintainerEdges,
-  ).leadMaintainer;
-  const defaults =
-    options.length === 1
-      ? options
-      : leadMaintainer && options.includes(leadMaintainer)
-        ? [leadMaintainer]
-        : [];
-
-  return { options, defaults, leadMaintainer };
-}
-
 function MaintainerInvitationBanner({
   repo,
   accountPubkey,
   signer,
   graspServers,
   graspServersFromUserList,
-  ownStateEvent,
+  ownState,
   stateCheckComplete,
-  canonicalStateEvent,
+  canonicalState,
 }: {
   repo: ResolvedRepo;
   accountPubkey: string;
@@ -969,12 +862,16 @@ function MaintainerInvitationBanner({
   };
   graspServers: GraspServer[];
   graspServersFromUserList: boolean;
-  ownStateEvent: NostrEvent | undefined;
+  ownState: RepositoryState | undefined;
   stateCheckComplete: boolean;
-  canonicalStateEvent: NostrEvent | undefined;
+  canonicalState: RepositoryState | null | undefined;
 }) {
   const isRequested = repo.requestedMaintainers.includes(accountPubkey);
-  const acceptanceJob = useMaintainerAcceptanceJob(accountPubkey, repo.dTag);
+  const acceptanceJob = useMaintainerAcceptanceJob(
+    accountPubkey,
+    repo.selectedMaintainer,
+    repo.dTag,
+  );
   const ownAnnouncement = repo.announcements.find(
     (announcement) => announcement.pubkey === accountPubkey,
   );
@@ -987,6 +884,11 @@ function MaintainerInvitationBanner({
   );
   const acceptanceSelection = getAcceptanceMaintainerSelection(
     repo,
+    accountPubkey,
+  );
+  const stateDecision = classifyInvitationState(
+    canonicalState,
+    ownState,
     accountPubkey,
   );
 
@@ -1025,24 +927,21 @@ function MaintainerInvitationBanner({
           </div>
 
           {acceptanceJob ? (
-            <MaintainerAcceptanceProgress
-              job={acceptanceJob}
-              confirmed={!isRequested}
-            />
+            <MaintainerAcceptanceProgress job={acceptanceJob} />
           ) : !stateCheckComplete ? (
             <Button type="button" disabled className="w-full sm:w-auto">
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               Checking repository state and infrastructure…
             </Button>
-          ) : ownAnnouncement && ownStateEvent ? (
+          ) : stateDecision.blocked ? (
             <div className="max-w-md rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-sm">
               <p className="font-medium text-amber-700 dark:text-amber-300">
-                Repository state must be combined first
+                Use ngit CLI to accept this invitation
               </p>
               <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                Your existing announcement has its own state event. Acceptance
-                is paused until you choose the combined refs and the resulting
-                state can be synchronized to every maintainer’s Git servers.
+                The repository owner has a newer state that would replace or
+                remove refs from your repository. Interactive ref selection and
+                combining is deferred to a future update.
               </p>
             </div>
           ) : (
@@ -1056,7 +955,7 @@ function MaintainerInvitationBanner({
               signer={signer}
               graspServers={graspServers}
               graspServersFromUserList={graspServersFromUserList}
-              canonicalStateEvent={canonicalStateEvent}
+              canonicalState={canonicalState}
               {...acceptanceSelection}
             />
           )}
@@ -1068,72 +967,22 @@ function MaintainerInvitationBanner({
 
 function MaintainerAcceptanceProgress({
   job,
-  confirmed,
 }: {
   job: MaintainerAcceptanceJob;
-  confirmed: boolean;
 }) {
   const { toast } = useToast();
-  const polling = job.phase === "syncing" || job.phase === "synced";
-  const { poolState } = useGitPool(polling ? job.cloneUrls : [], {
-    knownHeadCommit: job.knownHeadCommit,
-    stateRefs: job.stateRefs,
-    stateCreatedAt: job.stateCreatedAt,
-    expectRepositoryProvisioning: polling,
-  });
-  const serverSync = useMemo(
-    () =>
-      job.cloneUrls.map((cloneUrl) => ({
-        cloneUrl,
-        ready: cloneUrlMatchesState(poolState.urls[cloneUrl], job.stateRefs),
-      })),
-    [job.cloneUrls, job.stateRefs, poolState.urls],
+  const readyCount = job.syncedCloneUrls.length;
+  const allReady =
+    job.cloneUrls.length > 0 && readyCount === job.cloneUrls.length;
+  const allDelivered = job.relayUrls.every((url) =>
+    job.deliveredRelayUrls.includes(url),
   );
-  const syncedCloneUrls = useMemo(
-    () =>
-      Array.from(
-        new Set([
-          ...job.syncedCloneUrls,
-          ...serverSync
-            .filter(({ ready }) => ready)
-            .map(({ cloneUrl }) => cloneUrl),
-        ]),
-      ),
-    [job.syncedCloneUrls, serverSync],
-  );
-  const readyCount = syncedCloneUrls.length;
-  const anyReady = readyCount > 0;
-  const allReady = serverSync.length > 0 && readyCount === serverSync.length;
-
-  useEffect(() => {
-    const discoveredNewServer =
-      syncedCloneUrls.length !== job.syncedCloneUrls.length;
-    if (discoveredNewServer || (job.phase === "syncing" && anyReady)) {
-      updateMaintainerAcceptanceJob(job.key, {
-        syncedCloneUrls,
-        phase: anyReady ? "synced" : job.phase,
-      });
-    }
-  }, [
-    anyReady,
-    job.key,
-    job.phase,
-    job.syncedCloneUrls.length,
-    syncedCloneUrls,
-  ]);
-
-  useEffect(() => {
-    if (job.phase !== "synced" || !confirmed) return;
-    const timeout = window.setTimeout(
-      () => clearMaintainerAcceptanceJob(job.key),
-      10_000,
-    );
-    return () => window.clearTimeout(timeout);
-  }, [confirmed, job.key, job.phase]);
+  const pendingWork =
+    !allReady || !allDelivered || !job.broadcastReceived || !job.completedAt;
 
   const retry = async () => {
     try {
-      const result = await deliverMaintainerAcceptance(job.key);
+      const result = await runMaintainerAcceptanceDelivery(job.key);
       if (result?.phase === "delivery-error") {
         toast({
           title: "Some GRASP servers still did not accept the announcement",
@@ -1142,12 +991,10 @@ function MaintainerAcceptanceProgress({
         });
       }
     } catch (error) {
-      updateMaintainerAcceptanceJob(job.key, {
-        phase: "delivery-error",
-        relayErrors: {
-          ...job.relayErrors,
-          retry: error instanceof Error ? error.message : String(error),
-        },
+      toast({
+        title: "Could not retry invitation delivery",
+        description: error instanceof Error ? error.message : String(error),
+        variant: "destructive",
       });
     }
   };
@@ -1193,7 +1040,7 @@ function MaintainerAcceptanceProgress({
       </span>
       {job.phase !== "publishing" && (
         <span className="ml-auto flex items-center gap-1.5 text-xs text-muted-foreground">
-          {synced && !allReady && (
+          {synced && pendingWork && (
             <Loader2 className="h-3 w-3 animate-spin opacity-60" />
           )}
           {readyCount}/{job.cloneUrls.length}
@@ -1210,7 +1057,7 @@ function MaintainerAcceptanceControls({
   signer,
   graspServers,
   graspServersFromUserList,
-  canonicalStateEvent,
+  canonicalState,
   options,
   defaults,
   leadMaintainer,
@@ -1223,7 +1070,7 @@ function MaintainerAcceptanceControls({
   };
   graspServers: GraspServer[];
   graspServersFromUserList: boolean;
-  canonicalStateEvent: NostrEvent | undefined;
+  canonicalState: RepositoryState | null | undefined;
   options: string[];
   defaults: string[];
   leadMaintainer?: string;
@@ -1290,7 +1137,7 @@ function MaintainerAcceptanceControls({
       }
 
       const announcement = await signer.signEvent(
-        buildAcceptanceTemplate(
+        buildMaintainerAcceptanceTemplate(
           repo,
           ownAnnouncement,
           accountPubkey,
@@ -1299,10 +1146,16 @@ function MaintainerAcceptanceControls({
         ),
       );
       setDialogOpen(false);
-      const key = maintainerAcceptanceKey(accountPubkey, repo.dTag);
+      const key = maintainerAcceptanceKey(
+        accountPubkey,
+        repo.selectedMaintainer,
+        repo.dTag,
+      );
+      const now = Date.now();
       saveMaintainerAcceptanceJob({
         key,
         accountPubkey,
+        invitationAnchor: repo.selectedMaintainer,
         dTag: repo.dTag,
         announcement,
         cloneUrls,
@@ -1310,26 +1163,26 @@ function MaintainerAcceptanceControls({
         deliveredRelayUrls: [],
         syncedCloneUrls: [],
         relayErrors: {},
+        deliveryAttempt: 0,
+        broadcastReceived: false,
         phase: "publishing",
-        stateRefs: canonicalStateEvent ? getStateRefs(canonicalStateEvent) : [],
-        knownHeadCommit: canonicalStateEvent
-          ? getStateHeadCommit(canonicalStateEvent)
-          : undefined,
-        stateCreatedAt: canonicalStateEvent?.created_at,
-        updatedAt: Date.now(),
+        stateRefs: canonicalState?.refs ?? [],
+        knownHeadCommit: canonicalState?.headCommitId,
+        stateCreatedAt: canonicalState?.event.created_at,
+        createdAt: now,
+        updatedAt: now,
       });
-      const result = await deliverMaintainerAcceptance(key);
+      const result = await runMaintainerAcceptanceDelivery(key);
+      const startedSyncing = (result?.deliveredRelayUrls.length ?? 0) > 0;
 
       toast({
-        title:
-          result?.phase === "syncing"
-            ? "Invitation accepted"
-            : "Invitation accepted, but delivery needs attention",
-        description:
-          result?.phase === "syncing"
-            ? "Your GRASP servers are syncing the repository."
-            : "Retry the GRASP servers that did not accept your announcement.",
-        variant: result?.phase === "syncing" ? "default" : "destructive",
+        title: startedSyncing
+          ? "Invitation accepted"
+          : "Invitation accepted, but delivery needs attention",
+        description: startedSyncing
+          ? "Your GRASP servers are syncing the repository."
+          : "Retry the GRASP servers that did not accept your announcement.",
+        variant: startedSyncing ? "default" : "destructive",
       });
     } catch (error) {
       setPublishing(false);
@@ -1465,20 +1318,6 @@ function MaintainerAcceptanceControls({
       </Dialog>
     </>
   );
-}
-
-function cloneUrlMatchesState(
-  urlState: UrlState | undefined,
-  stateRefs: RepoStateRef[],
-): boolean {
-  if (urlState?.status !== "ok" || !urlState.infoRefs) return false;
-  if (stateRefs.length === 0) return true;
-
-  return stateRefs.every(({ name, commitId }) => {
-    const advertisedCommit =
-      urlState.infoRefs?.refs[`${name}^{}`] ?? urlState.infoRefs?.refs[name];
-    return advertisedCommit === commitId;
-  });
 }
 
 // ---------------------------------------------------------------------------

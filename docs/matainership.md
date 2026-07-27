@@ -270,24 +270,28 @@ lead maintainer when one exists. When multiple maintainers have ambiguous
 leadership, it defaults to no selection and requires the invitee to choose one
 or more lead maintainers explicitly.
 
-For every invitation without an invitee-authored state event, the client
-publishes a reciprocal announcement to the invitee's selected GRASP servers.
-Server choices default, in order, to the invitee's existing repository
-announcement, their kind:10317 User Grasp List, or the other maintainers'
-servers. The client backfills from its default server list until three choices
-are selected.
+For a safe invitation, the client publishes a reciprocal announcement to the
+invitee's selected GRASP servers. Server choices default, in order, to the
+invitee's existing repository announcement, their kind:10317 User Grasp List,
+or the other maintainers' servers. The client backfills from its default server
+list until three choices are selected. Existing non-GRASP clone URLs in the
+invitee's announcement are preserved.
 
 The selected servers MUST advertise GRASP-02. They discover the canonical state
 event from the relays and fetch its missing Git data from the other maintainers'
-clone URLs. The UI treats the invitation as accepted as soon as the reciprocal
-announcement is published, then shows **Syncing up your GRASP servers** while
-the client polls each new Git endpoint until every canonical ref is advertised.
+clone URLs. Relay delivery and Git readiness are tracked independently. Once
+one selected relay accepts the announcement, the client polls all selected Git
+endpoints in the background. The UI shows a successful acceptance as soon as
+the first endpoint advertises every canonical ref, while a subtle progress
+indicator and bounded retries continue for the remaining destinations across
+internal navigation.
 
-If the invitee already has both an announcement and a kind:30618 state event,
-the client MUST NOT accept by publishing only a reciprocal announcement. The
-two state histories must first be reconciled into an explicit combined ref set,
-then synchronized to every Grasp server involved before the reciprocal
-announcement is treated as complete.
+The in-app flow is safe when the invitee has no state, when the invitee's state
+is newer or tied, or when a newer non-invitee state preserves all invitee refs.
+It refuses only the destructive case: a strictly newer state from another
+maintainer would change or omit refs that exist in the invitee's state. That
+case recommends accepting with ngit CLI until an interactive ref-combination
+flow can let the user choose exactly which branches and tags to retain.
 
 Infrastructure and metadata from directionally authorized invited repositories
 remain active consumption inputs. Detailed provenance views must label those

@@ -1,19 +1,22 @@
 # Repository Invitation State Merge — Implementation Prompt
 
-Implement the safe acceptance flow for a maintainer invitation when the
-invitee already has both:
+Implement the interactive ref-combination flow for the one maintainer
+invitation case that gitworkshop intentionally leaves to ngit CLI today:
 
-- a kind `30617` announcement for the same repository identifier; and
-- at least one kind `30618` state event authored by the invitee.
+- the invitee has a kind `30618` state event for the repository identifier;
+- the canonical state is authored by another maintainer and has a strictly
+  newer `created_at`; and
+- that newer state changes or omits one or more refs in the invitee's state.
 
-The current UI intentionally blocks this case in
-`src/pages/repo/RepoLayout.tsx`. Preserve that guard until the complete flow
-below is implemented and validated.
+The current UI accepts invitations with no invitee state, an equal or newer
+invitee state, or a newer canonical state that preserves every invitee ref.
+Preserve those paths and the narrow destructive-state guard until the complete
+flow below is implemented and validated.
 
 ## Required outcome
 
-Acceptance must never let one repository's newer state event silently
-supersede the other and orphan branches, tags, or commits. The user must
+Acceptance in this destructive-state case must not let the owner's newer event
+silently orphan the invitee's branches, tags, or commits. The user must
 explicitly choose a combined repository state, after which the client prepares
 the minimum missing Git objects and synchronizes every writable Grasp server
 listed across the joining maintainer announcements.
