@@ -22,6 +22,7 @@ import { useDnsIdentity } from "@/hooks/useDnsIdentity";
 import { useRepositoryState } from "@/hooks/useRepositoryState";
 import { useGraspServers, type GraspServer } from "@/hooks/useGraspServers";
 import { useGitPool } from "@/hooks/useGitPool";
+import { useMaintainerAcceptanceJob } from "@/hooks/useMaintainerAcceptanceJob";
 import { use$ } from "@/hooks/use$";
 import { useProfile } from "@/hooks/useProfile";
 import { useLoadProfile } from "@/hooks/useLoadProfile";
@@ -97,7 +98,6 @@ import { RepoRelaysContext } from "@/contexts/RepoRelaysContext";
 import { relayGroupUrls$ } from "@/models/RepositoryRelayGroup";
 import { EMPTY } from "rxjs";
 import { catchError } from "rxjs/operators";
-import { pool as nostrPool } from "@/services/nostr";
 import { useToast } from "@/hooks/useToast";
 import { GraspServerSelector } from "@/components/GraspServerSelector";
 import {
@@ -106,6 +106,14 @@ import {
 } from "@/lib/grasp";
 import { DEFAULT_GRASP_SERVERS } from "@/services/settings";
 import type { UrlState } from "@/lib/git-grasp-pool";
+import {
+  clearMaintainerAcceptanceJob,
+  deliverMaintainerAcceptance,
+  maintainerAcceptanceKey,
+  saveMaintainerAcceptanceJob,
+  updateMaintainerAcceptanceJob,
+  type MaintainerAcceptanceJob,
+} from "@/services/maintainerAcceptance";
 // ---------------------------------------------------------------------------
 // RepoLayout
 // ---------------------------------------------------------------------------
@@ -966,6 +974,7 @@ function MaintainerInvitationBanner({
   canonicalStateEvent: NostrEvent | undefined;
 }) {
   const isRequested = repo.requestedMaintainers.includes(accountPubkey);
+  const acceptanceJob = useMaintainerAcceptanceJob(accountPubkey, repo.dTag);
   const ownAnnouncement = repo.announcements.find(
     (announcement) => announcement.pubkey === accountPubkey,
   );
@@ -981,7 +990,7 @@ function MaintainerInvitationBanner({
     accountPubkey,
   );
 
-  if (!isRequested) return null;
+  if (!isRequested && !acceptanceJob) return null;
 
   return (
     <div className="border-b border-pink-500/20 bg-gradient-to-r from-pink-500/10 via-background to-violet-500/10">
@@ -1015,7 +1024,12 @@ function MaintainerInvitationBanner({
             </div>
           </div>
 
-          {!stateCheckComplete ? (
+          {acceptanceJob ? (
+            <MaintainerAcceptanceProgress
+              job={acceptanceJob}
+              confirmed={!isRequested}
+            />
+          ) : !stateCheckComplete ? (
             <Button type="button" disabled className="w-full sm:w-auto">
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               Checking repository state and infrastructure…
@@ -1052,6 +1066,110 @@ function MaintainerInvitationBanner({
   );
 }
 
+function MaintainerAcceptanceProgress({
+  job,
+  confirmed,
+}: {
+  job: MaintainerAcceptanceJob;
+  confirmed: boolean;
+}) {
+  const { toast } = useToast();
+  const polling = job.phase === "syncing";
+  const { poolState } = useGitPool(polling ? job.cloneUrls : [], {
+    knownHeadCommit: job.knownHeadCommit,
+    stateRefs: job.stateRefs,
+    stateCreatedAt: job.stateCreatedAt,
+    expectRepositoryProvisioning: polling,
+  });
+  const serverSync = job.cloneUrls.map((cloneUrl) => ({
+    cloneUrl,
+    ready: cloneUrlMatchesState(poolState.urls[cloneUrl], job.stateRefs),
+  }));
+  const readyCount = serverSync.filter(({ ready }) => ready).length;
+  const allReady = serverSync.length > 0 && readyCount === serverSync.length;
+
+  useEffect(() => {
+    if (job.phase === "syncing" && allReady) {
+      updateMaintainerAcceptanceJob(job.key, { phase: "synced" });
+    }
+  }, [allReady, job.key, job.phase]);
+
+  useEffect(() => {
+    if (job.phase !== "synced" || !confirmed) return;
+    const timeout = window.setTimeout(
+      () => clearMaintainerAcceptanceJob(job.key),
+      10_000,
+    );
+    return () => window.clearTimeout(timeout);
+  }, [confirmed, job.key, job.phase]);
+
+  const retry = async () => {
+    try {
+      const result = await deliverMaintainerAcceptance(job.key);
+      if (result?.phase === "delivery-error") {
+        toast({
+          title: "Some GRASP servers still did not accept the announcement",
+          description: "Check the failed servers and retry.",
+          variant: "destructive",
+        });
+      }
+    } catch (error) {
+      updateMaintainerAcceptanceJob(job.key, {
+        phase: "delivery-error",
+        relayErrors: {
+          ...job.relayErrors,
+          retry: error instanceof Error ? error.message : String(error),
+        },
+      });
+    }
+  };
+
+  if (job.phase === "delivery-error") {
+    const failedTargets = Object.keys(job.relayErrors);
+    return (
+      <div className="flex w-full shrink-0 flex-col gap-2 rounded-lg border border-destructive/30 bg-background/80 px-3 py-2 text-sm sm:w-auto sm:min-w-80">
+        <div className="flex items-center gap-2">
+          <AlertCircle className="h-4 w-4 shrink-0 text-destructive" />
+          <span className="font-medium">Invitation delivery incomplete</span>
+          <span className="ml-auto text-xs text-muted-foreground">
+            {job.deliveredRelayUrls.length}/{job.relayUrls.length}
+          </span>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          {failedTargets.length} selected destination
+          {failedTargets.length === 1 ? "" : "s"} still need the announcement.
+        </p>
+        <Button type="button" size="sm" variant="outline" onClick={retry}>
+          Retry delivery
+        </Button>
+      </div>
+    );
+  }
+
+  const synced = job.phase === "synced";
+  return (
+    <div className="flex w-full shrink-0 items-center gap-2 rounded-lg border bg-background/80 px-3 py-2 text-sm sm:w-auto sm:min-w-72">
+      {synced ? (
+        <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />
+      ) : (
+        <Loader2 className="h-4 w-4 shrink-0 animate-spin text-pink-500" />
+      )}
+      <span className="font-medium">
+        {synced
+          ? "Invitation accepted · GRASP servers in sync"
+          : job.phase === "publishing"
+            ? "Accepting invitation · publishing announcement"
+            : "Invitation accepted · syncing GRASP servers"}
+      </span>
+      {job.phase !== "publishing" && (
+        <span className="ml-auto text-xs text-muted-foreground">
+          {synced ? job.cloneUrls.length : readyCount}/{job.cloneUrls.length}
+        </span>
+      )}
+    </div>
+  );
+}
+
 function MaintainerAcceptanceControls({
   repo,
   ownAnnouncement,
@@ -1079,7 +1197,7 @@ function MaintainerAcceptanceControls({
 }) {
   const { toast } = useToast();
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [phase, setPhase] = useState<"idle" | "publishing" | "syncing">("idle");
+  const [publishing, setPublishing] = useState(false);
   const [selectedMaintainers, setSelectedMaintainers] =
     useState<string[]>(defaults);
   const [selectedDomains, setSelectedDomains] = useState<string[]>(() =>
@@ -1110,34 +1228,16 @@ function MaintainerAcceptanceControls({
       ),
     [accountPubkey, repo.dTag, selectedGraspServers],
   );
-  const stateRefs = useMemo(
-    () => (canonicalStateEvent ? getStateRefs(canonicalStateEvent) : []),
-    [canonicalStateEvent],
-  );
-  const { poolState } = useGitPool(phase === "syncing" ? cloneUrls : [], {
-    knownHeadCommit: canonicalStateEvent
-      ? getStateHeadCommit(canonicalStateEvent)
-      : undefined,
-    stateRefs,
-    stateCreatedAt: canonicalStateEvent?.created_at,
-    expectRepositoryProvisioning: phase === "syncing",
-  });
-  const serverSync = cloneUrls.map((cloneUrl) => ({
-    cloneUrl,
-    ready: cloneUrlMatchesState(poolState.urls[cloneUrl], stateRefs),
-  }));
-  const readyCount = serverSync.filter(({ ready }) => ready).length;
-  const allReady = serverSync.length > 0 && readyCount === serverSync.length;
 
   const accept = async () => {
     if (
-      phase !== "idle" ||
+      publishing ||
       selectedMaintainers.length === 0 ||
       selectedGraspServers.length === 0
     ) {
       return;
     }
-    setPhase("publishing");
+    setPublishing(true);
     try {
       const validationResults = await Promise.all(
         selectedDomains.map(async (domain) => ({
@@ -1165,16 +1265,41 @@ function MaintainerAcceptanceControls({
           selectedGraspServers,
         ),
       );
-      await publishToGraspRelays(announcement, relayUrls);
-      setPhase("syncing");
       setDialogOpen(false);
+      const key = maintainerAcceptanceKey(accountPubkey, repo.dTag);
+      saveMaintainerAcceptanceJob({
+        key,
+        accountPubkey,
+        dTag: repo.dTag,
+        announcement,
+        cloneUrls,
+        relayUrls,
+        deliveredRelayUrls: [],
+        relayErrors: {},
+        outboxQueued: false,
+        phase: "publishing",
+        stateRefs: canonicalStateEvent ? getStateRefs(canonicalStateEvent) : [],
+        knownHeadCommit: canonicalStateEvent
+          ? getStateHeadCommit(canonicalStateEvent)
+          : undefined,
+        stateCreatedAt: canonicalStateEvent?.created_at,
+        updatedAt: Date.now(),
+      });
+      const result = await deliverMaintainerAcceptance(key);
 
       toast({
-        title: "Invitation accepted",
-        description: "Your GRASP servers are syncing the repository.",
+        title:
+          result?.phase === "syncing"
+            ? "Invitation accepted"
+            : "Invitation accepted, but delivery needs attention",
+        description:
+          result?.phase === "syncing"
+            ? "Your GRASP servers are syncing the repository."
+            : "Retry the GRASP servers that did not accept your announcement.",
+        variant: result?.phase === "syncing" ? "default" : "destructive",
       });
     } catch (error) {
-      setPhase("idle");
+      setPublishing(false);
       toast({
         title: "Could not accept invitation",
         description:
@@ -1192,26 +1317,6 @@ function MaintainerAcceptanceControls({
     );
   };
 
-  if (phase === "syncing") {
-    return (
-      <div className="flex w-full shrink-0 items-center gap-2 rounded-lg border bg-background/80 px-3 py-2 text-sm sm:w-auto sm:min-w-72">
-        {allReady ? (
-          <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />
-        ) : (
-          <Loader2 className="h-4 w-4 shrink-0 animate-spin text-pink-500" />
-        )}
-        <span className="font-medium">
-          {allReady
-            ? "Invitation accepted · GRASP servers in sync"
-            : "Invitation accepted · syncing GRASP servers"}
-        </span>
-        <span className="ml-auto text-xs text-muted-foreground">
-          {readyCount}/{serverSync.length}
-        </span>
-      </div>
-    );
-  }
-
   return (
     <>
       <Button
@@ -1226,7 +1331,7 @@ function MaintainerAcceptanceControls({
       <Dialog
         open={dialogOpen}
         onOpenChange={(open) => {
-          if (phase !== "publishing") setDialogOpen(open);
+          if (!publishing) setDialogOpen(open);
         }}
       >
         <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-xl">
@@ -1252,7 +1357,7 @@ function MaintainerAcceptanceControls({
               additionalDomains={repo.graspServerDomains}
               currentDomains={getAnnouncementGraspDomains(ownAnnouncement)}
               requiredGrasps={["GRASP-01", "GRASP-02"]}
-              disabled={phase === "publishing"}
+              disabled={publishing}
               showTitle={false}
             />
           </section>
@@ -1273,7 +1378,7 @@ function MaintainerAcceptanceControls({
                     >
                       <Checkbox
                         checked={checked}
-                        disabled={phase === "publishing"}
+                        disabled={publishing}
                         onCheckedChange={(value) =>
                           toggleMaintainer(pubkey, value === true)
                         }
@@ -1304,7 +1409,7 @@ function MaintainerAcceptanceControls({
             <Button
               type="button"
               variant="outline"
-              disabled={phase === "publishing"}
+              disabled={publishing}
               onClick={() => setDialogOpen(false)}
             >
               Cancel
@@ -1313,16 +1418,14 @@ function MaintainerAcceptanceControls({
               type="button"
               onClick={accept}
               disabled={
-                phase === "publishing" ||
+                publishing ||
                 selectedMaintainers.length === 0 ||
                 selectedDomains.length === 0
               }
               className="bg-pink-600 text-white hover:bg-pink-700"
             >
-              {phase === "publishing" && (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              )}
-              {phase === "publishing" ? "Accepting…" : "Accept invitation"}
+              {publishing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {publishing ? "Accepting…" : "Accept invitation"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1343,25 +1446,6 @@ function cloneUrlMatchesState(
       urlState.infoRefs?.refs[`${name}^{}`] ?? urlState.infoRefs?.refs[name];
     return advertisedCommit === commitId;
   });
-}
-
-async function publishToGraspRelays(
-  event: NostrEvent,
-  relayUrls: string[],
-): Promise<void> {
-  const responses = await nostrPool.publish(relayUrls, event);
-  const accepted = responses.filter((response) => response.ok);
-  if (accepted.length > 0) return;
-
-  const reasons = responses
-    .map(
-      (response) =>
-        `${response.from}: ${response.message ?? "relay rejected event"}`,
-    )
-    .join("; ");
-  throw new Error(
-    `All selected GRASP relays rejected the announcement. ${reasons || "No relay responded."}`,
-  );
 }
 
 // ---------------------------------------------------------------------------
