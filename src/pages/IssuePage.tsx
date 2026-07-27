@@ -438,6 +438,16 @@ export default function IssuePage() {
                 <ReplyBox
                   rootEvent={issue.rootEvent}
                   priorityPubkeys={mentionPriorityPubkeys}
+                  statusActions={
+                    canEdit && issue.status === "open"
+                      ? {
+                          itemId: issue.id,
+                          itemAuthorPubkey: issue.pubkey,
+                          repoCoords: repoAllCoords ?? issue.repoCoords,
+                          variant: "issue",
+                        }
+                      : undefined
+                  }
                 />
               )}
             </div>

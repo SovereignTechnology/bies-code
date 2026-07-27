@@ -1645,6 +1645,16 @@ export default function PRPage() {
                         : pr.rootEvent
                     }
                     priorityPubkeys={mentionPriorityPubkeys}
+                    statusActions={
+                      canEdit && (pr.status === "open" || pr.status === "draft")
+                        ? {
+                            itemId: pr.id,
+                            itemAuthorPubkey: pr.pubkey,
+                            repoCoords: repoAllCoords ?? pr.repoCoords,
+                            variant: "pr",
+                          }
+                        : undefined
+                    }
                   />
                 )}
               </TabsContent>

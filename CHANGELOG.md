@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Add combined comment-and-resolve/close actions for issue authors and maintainers, with comment-and-close available on pull requests.
 - Add lead-maintainer coordination to repository settings, including explicit no-lead mode, graph-aware removal warnings, safe restoration of the current maintainer listing when changing modes, and routing each recursive maintainer through their own repository announcement before editing.
 - Fix repository follow state and follower counts to track only the selected maintainer's announcement.
 - Fix maintainership invitation acceptance by using a compact banner and modal for choosing GRASP servers and lead maintainers, preserving existing non-GRASP clone URLs, and allowing every safe state ordering. Only a newer owner state that would replace or remove the invitee's refs is deferred to ngit CLI until interactive ref combining is available.

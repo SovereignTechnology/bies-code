@@ -18,7 +18,8 @@ import { createAnonRunner } from "@/lib/anonPublish";
 import { useToast } from "@/hooks/useToast";
 import { useProfile } from "@/hooks/useProfile";
 import { useUserDisplayName } from "@/hooks/useUserDisplayName";
-import { CreateComment } from "@/actions/nip34";
+import { ChangeIssueStatus, CreateComment } from "@/actions/nip34";
+import type { IssueStatus } from "@/lib/nip34";
 import {
   NostrComposer,
   type NostrComposerHandle,
@@ -29,8 +30,32 @@ import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { useAuthModal } from "@/contexts/AuthModalContext";
-import { Loader2, Paperclip } from "lucide-react";
+import {
+  CheckCircle2,
+  ChevronDown,
+  Loader2,
+  Paperclip,
+  XCircle,
+} from "lucide-react";
+import { cn } from "@/lib/utils";
+
+interface ReplyStatusActions {
+  /** The issue/PR event ID whose status will change after commenting. */
+  itemId: string;
+  /** Pubkey of the issue/PR author, used for status-event notifications. */
+  itemAuthorPubkey: string;
+  /** All accepted repository coordinates for publishing the status event. */
+  repoCoords: string[];
+  /** Issues may resolve or close; PRs may only close from the composer. */
+  variant: "issue" | "pr";
+}
 
 export interface ReplyBoxProps {
   /** The root issue/PR event being commented on */
@@ -48,6 +73,11 @@ export interface ReplyBoxProps {
    * parent author → thread participants → repo maintainers.
    */
   priorityPubkeys?: string[];
+  /**
+   * Enables maintainer/author-only combined comment and status actions.
+   * Omit for nested replies, logged-out users, and items that are not open.
+   */
+  statusActions?: ReplyStatusActions;
 }
 
 export function ReplyBox({
@@ -55,6 +85,7 @@ export function ReplyBox({
   parentEvent,
   onSubmitted,
   priorityPubkeys,
+  statusActions,
 }: ReplyBoxProps) {
   const composerRef = useRef<NostrComposerHandle>(null);
   const [body, setBody] = useState("");
@@ -86,7 +117,11 @@ export function ReplyBox({
   }, []);
 
   const submitComment = useCallback(
-    async (trimmed: string, useAnonMode: boolean) => {
+    async (
+      trimmed: string,
+      useAnonMode: boolean,
+      nextStatus?: Extract<IssueStatus, "resolved" | "closed">,
+    ) => {
       const activeRunner =
         !isLoggedIn && useAnonMode ? createAnonRunner() : runner;
 
@@ -102,14 +137,30 @@ export function ReplyBox({
         });
 
       setIsPending(true);
+      let commentPosted = false;
       try {
         await activeRunner.run(CreateComment, parent, trimmed, rootEvent, {
           extraTags: extraTags.length > 0 ? extraTags : undefined,
         });
+        commentPosted = true;
+
+        if (nextStatus && statusActions) {
+          await activeRunner.run(
+            ChangeIssueStatus,
+            statusActions.itemId,
+            statusActions.itemAuthorPubkey,
+            statusActions.repoCoords,
+            nextStatus,
+          );
+        }
 
         toast({
-          title: "Comment posted",
-          description: "Your comment has been published.",
+          title: nextStatus
+            ? `Comment posted and ${nextStatus === "resolved" ? "resolved" : "closed"}`
+            : "Comment posted",
+          description: nextStatus
+            ? `Your comment was published and the ${statusActions?.variant === "pr" ? "pull request" : "issue"} was ${nextStatus === "resolved" ? "resolved" : "closed"}.`
+            : "Your comment has been published.",
         });
 
         setBody("");
@@ -120,34 +171,60 @@ export function ReplyBox({
         const message =
           err instanceof Error ? err.message : "Failed to post comment";
         toast({
-          title: "Failed to post comment",
+          title: commentPosted
+            ? "Comment posted, but status unchanged"
+            : "Failed to post comment",
           description: message,
           variant: "destructive",
         });
+        if (commentPosted) {
+          setBody("");
+          setActiveTab("write");
+          setUploadedTagGroups([]);
+          onSubmitted?.();
+        }
       } finally {
         setIsPending(false);
       }
     },
-    [parent, rootEvent, onSubmitted, toast, isLoggedIn, uploadedTagGroups],
+    [
+      parent,
+      rootEvent,
+      onSubmitted,
+      toast,
+      isLoggedIn,
+      uploadedTagGroups,
+      statusActions,
+    ],
   );
 
-  const handleSubmit = useCallback(
-    async (e: React.FormEvent) => {
-      e.preventDefault();
-
+  const requestSubmit = useCallback(
+    async (nextStatus?: Extract<IssueStatus, "resolved" | "closed">) => {
       const trimmed = body.trim();
       if (!trimmed) return;
 
       // Not logged in and not anonymous — open auth modal and retry on success
       if (!isLoggedIn && !anonMode) {
-        openAuthModal("landing", () => submitComment(trimmed, false));
+        openAuthModal("landing", () =>
+          submitComment(trimmed, false, nextStatus),
+        );
         return;
       }
 
-      await submitComment(trimmed, anonMode);
+      await submitComment(trimmed, anonMode, nextStatus);
     },
     [body, isLoggedIn, anonMode, openAuthModal, submitComment],
   );
+
+  const handleSubmit = useCallback(
+    (e: React.FormEvent) => {
+      e.preventDefault();
+      void requestSubmit();
+    },
+    [requestSubmit],
+  );
+
+  const submitDisabled = isPending || !body.trim() || composerHasNsec(body);
 
   return (
     <div className="flex gap-3 items-start">
@@ -186,7 +263,7 @@ export function ReplyBox({
           onUploadedTags={handleUploadedTags}
         />
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {/* Attach + Write/Preview — visible on focus or when there is content */}
           {showToggle && (
             <>
@@ -243,21 +320,60 @@ export function ReplyBox({
               </div>
             )}
 
-            <Button
-              type="submit"
-              size="sm"
-              disabled={isPending || !body.trim() || composerHasNsec(body)}
-              className="gap-1.5 bg-pink-600 hover:bg-pink-700 text-white"
-            >
-              {isPending ? (
-                <>
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  Signing...
-                </>
-              ) : (
-                "Comment"
+            <div className="flex">
+              <Button
+                type="submit"
+                size="sm"
+                disabled={submitDisabled}
+                className={cn(
+                  "gap-1.5 bg-pink-600 hover:bg-pink-700 text-white",
+                  statusActions && "rounded-r-none",
+                )}
+              >
+                {isPending ? (
+                  <>
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    Signing...
+                  </>
+                ) : (
+                  "Comment"
+                )}
+              </Button>
+
+              {statusActions && (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      type="button"
+                      size="sm"
+                      disabled={submitDisabled}
+                      aria-label="More comment actions"
+                      className="rounded-l-none border-l border-pink-500 px-2 bg-pink-600 hover:bg-pink-700 text-white"
+                    >
+                      <ChevronDown className="h-3.5 w-3.5" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-52">
+                    {statusActions.variant === "issue" && (
+                      <DropdownMenuItem
+                        className="gap-2"
+                        onSelect={() => void requestSubmit("resolved")}
+                      >
+                        <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                        Comment and resolve
+                      </DropdownMenuItem>
+                    )}
+                    <DropdownMenuItem
+                      className="gap-2"
+                      onSelect={() => void requestSubmit("closed")}
+                    >
+                      <XCircle className="h-4 w-4 text-red-600" />
+                      Comment and close
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
               )}
-            </Button>
+            </div>
           </div>
         </div>
       </form>
