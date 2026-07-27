@@ -1,7 +1,6 @@
 import type { NostrEvent } from "nostr-tools";
 import type { RepoStateRef } from "@/lib/nip34";
-import { eventStore, pool } from "@/services/nostr";
-import { outboxStore } from "@/services/outbox";
+import { pool } from "@/services/nostr";
 
 const STORAGE_KEY = "gitworkshop:maintainer-acceptance:v1";
 const MAX_STORED_JOBS = 20;
@@ -21,8 +20,8 @@ export interface MaintainerAcceptanceJob {
   cloneUrls: string[];
   relayUrls: string[];
   deliveredRelayUrls: string[];
+  syncedCloneUrls: string[];
   relayErrors: Record<string, string>;
-  outboxQueued: boolean;
   phase: MaintainerAcceptancePhase;
   stateRefs: RepoStateRef[];
   knownHeadCommit?: string;
@@ -37,8 +36,6 @@ export interface RelayDelivery {
 }
 
 export interface MaintainerAcceptanceDeliveryDependencies {
-  addEvent(event: NostrEvent): void;
-  queueOutbox(event: NostrEvent, groupIds: string[]): Promise<void>;
   publishRelay(event: NostrEvent, relayUrl: string): Promise<RelayDelivery>;
 }
 
@@ -75,7 +72,6 @@ function isStoredJob(value: unknown): value is MaintainerAcceptanceJob {
     Array.isArray(candidate.deliveredRelayUrls) &&
     !!candidate.relayErrors &&
     typeof candidate.relayErrors === "object" &&
-    typeof candidate.outboxQueued === "boolean" &&
     (candidate.phase === "publishing" ||
       candidate.phase === "delivery-error" ||
       candidate.phase === "syncing" ||
@@ -100,6 +96,9 @@ function ensureHydrated(): void {
       if (!isStoredJob(value) || value.updatedAt < cutoff) continue;
       jobs.set(value.key, {
         ...value,
+        syncedCloneUrls: Array.isArray(value.syncedCloneUrls)
+          ? value.syncedCloneUrls
+          : [],
         phase: value.phase === "publishing" ? "delivery-error" : value.phase,
         relayErrors:
           value.phase === "publishing"
@@ -218,8 +217,6 @@ export async function publishAcceptanceToRelay(
 }
 
 const defaultDependencies: MaintainerAcceptanceDeliveryDependencies = {
-  addEvent: (event) => eventStore.add(event),
-  queueOutbox: (event, groupIds) => outboxStore.publish(event, groupIds),
   publishRelay: publishAcceptanceToRelay,
 };
 
@@ -241,33 +238,15 @@ export async function deliverMaintainerAcceptance(
     phase: "publishing",
     relayErrors: {},
   });
-  dependencies.addEvent(current.announcement);
 
   const pendingRelayUrls = current.relayUrls.filter(
     (relayUrl) => !current.deliveredRelayUrls.includes(relayUrl),
   );
-  const outboxPromise = current.outboxQueued
-    ? Promise.resolve({ ok: true as const })
-    : dependencies
-        .queueOutbox(current.announcement, [
-          `outbox:${current.accountPubkey}`,
-          "fallback-relays",
-          "git-index",
-        ])
-        .then(() => ({ ok: true as const }))
-        .catch((error: unknown) => ({
-          ok: false as const,
-          message: error instanceof Error ? error.message : String(error),
-        }));
-
-  const [outboxResult, deliveries] = await Promise.all([
-    outboxPromise,
-    Promise.all(
-      pendingRelayUrls.map((relayUrl) =>
-        dependencies.publishRelay(current.announcement, relayUrl),
-      ),
+  const deliveries = await Promise.all(
+    pendingRelayUrls.map((relayUrl) =>
+      dependencies.publishRelay(current.announcement, relayUrl),
     ),
-  ]);
+  );
 
   const latest = getMaintainerAcceptanceJob(key);
   if (!latest || latest.announcement.id !== current.announcement.id) {
@@ -287,7 +266,6 @@ export async function deliverMaintainerAcceptance(
       .filter((delivery) => !delivery.ok)
       .map((delivery) => [delivery.relayUrl, delivery.message]),
   );
-  if (!outboxResult.ok) relayErrors.outbox = outboxResult.message;
 
   const everyRelayDelivered = latest.relayUrls.every((relayUrl) =>
     deliveredRelayUrls.includes(relayUrl),
@@ -295,8 +273,6 @@ export async function deliverMaintainerAcceptance(
   return updateMaintainerAcceptanceJob(key, {
     deliveredRelayUrls,
     relayErrors,
-    outboxQueued: latest.outboxQueued || outboxResult.ok,
-    phase:
-      everyRelayDelivered && outboxResult.ok ? "syncing" : "delivery-error",
+    phase: everyRelayDelivered ? "syncing" : "delivery-error",
   });
 }

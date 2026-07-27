@@ -32,8 +32,8 @@ function makeJob(): MaintainerAcceptanceJob {
     ],
     relayUrls: ["wss://one.example", "wss://two.example"],
     deliveredRelayUrls: [],
+    syncedCloneUrls: [],
     relayErrors: {},
-    outboxQueued: false,
     phase: "publishing",
     stateRefs: [
       {
@@ -56,8 +56,6 @@ afterEach(() => {
 describe("maintainer acceptance delivery", () => {
   it("does not enter syncing until every selected GRASP relay accepts", async () => {
     saveMaintainerAcceptanceJob(makeJob());
-    const addEvent = vi.fn();
-    const queueOutbox = vi.fn().mockResolvedValue(undefined);
     const firstPublish = vi.fn(
       async (_event: NostrEvent, relayUrl: string) => ({
         relayUrl,
@@ -67,26 +65,16 @@ describe("maintainer acceptance delivery", () => {
       }),
     );
     const firstDependencies: MaintainerAcceptanceDeliveryDependencies = {
-      addEvent,
-      queueOutbox,
       publishRelay: firstPublish,
     };
 
     const partial = await deliverMaintainerAcceptance(key, firstDependencies);
 
     expect(partial?.phase).toBe("delivery-error");
-    expect(partial?.outboxQueued).toBe(true);
     expect(partial?.deliveredRelayUrls).toEqual(["wss://one.example"]);
     expect(partial?.relayErrors).toEqual({
       "wss://two.example": "connection failed",
     });
-    expect(addEvent).toHaveBeenCalledWith(announcement);
-    expect(queueOutbox).toHaveBeenCalledWith(announcement, [
-      `outbox:${announcement.pubkey}`,
-      "fallback-relays",
-      "git-index",
-    ]);
-
     const retryPublish = vi.fn(
       async (_event: NostrEvent, relayUrl: string) => ({
         relayUrl,
@@ -94,10 +82,7 @@ describe("maintainer acceptance delivery", () => {
         message: "accepted",
       }),
     );
-    const retryQueueOutbox = vi.fn().mockResolvedValue(undefined);
     const retryDependencies: MaintainerAcceptanceDeliveryDependencies = {
-      addEvent: vi.fn(),
-      queueOutbox: retryQueueOutbox,
       publishRelay: retryPublish,
     };
 
@@ -113,31 +98,26 @@ describe("maintainer acceptance delivery", () => {
       announcement,
       "wss://two.example",
     );
-    expect(retryQueueOutbox).not.toHaveBeenCalled();
   });
 
-  it("keeps the durable job in an error state when outbox persistence fails", async () => {
+  it("keeps the durable job in an error state when a GRASP relay rejects it", async () => {
     saveMaintainerAcceptanceJob(makeJob());
     const dependencies: MaintainerAcceptanceDeliveryDependencies = {
-      addEvent: vi.fn(),
-      queueOutbox: vi
-        .fn()
-        .mockRejectedValue(new Error("IndexedDB unavailable")),
       publishRelay: vi.fn(async (_event: NostrEvent, relayUrl: string) => ({
         relayUrl,
-        ok: true,
-        message: "accepted",
+        ok: relayUrl === "wss://one.example",
+        message:
+          relayUrl === "wss://one.example" ? "accepted" : "relay unavailable",
       })),
     };
 
     const result = await deliverMaintainerAcceptance(key, dependencies);
 
     expect(result?.phase).toBe("delivery-error");
-    expect(result?.deliveredRelayUrls).toEqual([
-      "wss://one.example",
-      "wss://two.example",
-    ]);
-    expect(result?.relayErrors.outbox).toBe("IndexedDB unavailable");
+    expect(result?.deliveredRelayUrls).toEqual(["wss://one.example"]);
+    expect(result?.relayErrors).toEqual({
+      "wss://two.example": "relay unavailable",
+    });
     expect(getMaintainerAcceptanceJob(key)).toEqual(result);
   });
 });

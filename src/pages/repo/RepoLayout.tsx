@@ -1074,25 +1074,53 @@ function MaintainerAcceptanceProgress({
   confirmed: boolean;
 }) {
   const { toast } = useToast();
-  const polling = job.phase === "syncing";
+  const polling = job.phase === "syncing" || job.phase === "synced";
   const { poolState } = useGitPool(polling ? job.cloneUrls : [], {
     knownHeadCommit: job.knownHeadCommit,
     stateRefs: job.stateRefs,
     stateCreatedAt: job.stateCreatedAt,
     expectRepositoryProvisioning: polling,
   });
-  const serverSync = job.cloneUrls.map((cloneUrl) => ({
-    cloneUrl,
-    ready: cloneUrlMatchesState(poolState.urls[cloneUrl], job.stateRefs),
-  }));
-  const readyCount = serverSync.filter(({ ready }) => ready).length;
+  const serverSync = useMemo(
+    () =>
+      job.cloneUrls.map((cloneUrl) => ({
+        cloneUrl,
+        ready: cloneUrlMatchesState(poolState.urls[cloneUrl], job.stateRefs),
+      })),
+    [job.cloneUrls, job.stateRefs, poolState.urls],
+  );
+  const syncedCloneUrls = useMemo(
+    () =>
+      Array.from(
+        new Set([
+          ...job.syncedCloneUrls,
+          ...serverSync
+            .filter(({ ready }) => ready)
+            .map(({ cloneUrl }) => cloneUrl),
+        ]),
+      ),
+    [job.syncedCloneUrls, serverSync],
+  );
+  const readyCount = syncedCloneUrls.length;
+  const anyReady = readyCount > 0;
   const allReady = serverSync.length > 0 && readyCount === serverSync.length;
 
   useEffect(() => {
-    if (job.phase === "syncing" && allReady) {
-      updateMaintainerAcceptanceJob(job.key, { phase: "synced" });
+    const discoveredNewServer =
+      syncedCloneUrls.length !== job.syncedCloneUrls.length;
+    if (discoveredNewServer || (job.phase === "syncing" && anyReady)) {
+      updateMaintainerAcceptanceJob(job.key, {
+        syncedCloneUrls,
+        phase: anyReady ? "synced" : job.phase,
+      });
     }
-  }, [allReady, job.key, job.phase]);
+  }, [
+    anyReady,
+    job.key,
+    job.phase,
+    job.syncedCloneUrls.length,
+    syncedCloneUrls,
+  ]);
 
   useEffect(() => {
     if (job.phase !== "synced" || !confirmed) return;
@@ -1156,14 +1184,19 @@ function MaintainerAcceptanceProgress({
       )}
       <span className="font-medium">
         {synced
-          ? "Invitation accepted · GRASP servers in sync"
+          ? allReady
+            ? "Invitation accepted · GRASP servers in sync"
+            : "Invitation accepted · GRASP server synced"
           : job.phase === "publishing"
             ? "Accepting invitation · publishing announcement"
             : "Invitation accepted · syncing GRASP servers"}
       </span>
       {job.phase !== "publishing" && (
-        <span className="ml-auto text-xs text-muted-foreground">
-          {synced ? job.cloneUrls.length : readyCount}/{job.cloneUrls.length}
+        <span className="ml-auto flex items-center gap-1.5 text-xs text-muted-foreground">
+          {synced && !allReady && (
+            <Loader2 className="h-3 w-3 animate-spin opacity-60" />
+          )}
+          {readyCount}/{job.cloneUrls.length}
         </span>
       )}
     </div>
@@ -1275,8 +1308,8 @@ function MaintainerAcceptanceControls({
         cloneUrls,
         relayUrls,
         deliveredRelayUrls: [],
+        syncedCloneUrls: [],
         relayErrors: {},
-        outboxQueued: false,
         phase: "publishing",
         stateRefs: canonicalStateEvent ? getStateRefs(canonicalStateEvent) : [],
         knownHeadCommit: canonicalStateEvent

@@ -1,10 +1,15 @@
-import { useEffect, useSyncExternalStore } from "react";
+import { useSyncExternalStore } from "react";
+import { mapEventsToStore } from "applesauce-core";
+import type { Filter } from "applesauce-core/helpers";
+import { onlyEvents } from "applesauce-relay";
+import { use$ } from "@/hooks/use$";
+import { resilientSubscription } from "@/lib/resilientSubscription";
 import {
   getMaintainerAcceptanceJob,
   maintainerAcceptanceKey,
   subscribeMaintainerAcceptanceJobs,
 } from "@/services/maintainerAcceptance";
-import { eventStore } from "@/services/nostr";
+import { eventStore, pool } from "@/services/nostr";
 
 export function useMaintainerAcceptanceJob(
   accountPubkey: string,
@@ -16,11 +21,21 @@ export function useMaintainerAcceptanceJob(
     () => getMaintainerAcceptanceJob(key),
     () => undefined,
   );
-  const announcement = job?.announcement;
+  const relayKey = job?.relayUrls.join(",") ?? "";
 
-  useEffect(() => {
-    if (announcement) eventStore.add(announcement);
-  }, [announcement]);
+  use$(() => {
+    if (!job || job.relayUrls.length === 0) return undefined;
+    const filter: Filter = {
+      kinds: [job.announcement.kind],
+      authors: [accountPubkey],
+      "#d": [dTag],
+    } as Filter;
+
+    return resilientSubscription(pool, job.relayUrls, [filter]).pipe(
+      onlyEvents(),
+      mapEventsToStore(eventStore),
+    );
+  }, [accountPubkey, dTag, job?.announcement.id, relayKey]);
 
   return job;
 }
