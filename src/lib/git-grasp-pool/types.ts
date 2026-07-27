@@ -388,6 +388,12 @@ export interface PoolOptions {
    * Defaults to 60_000 (1 minute).
    */
   infoRefsTtlMs?: number;
+  /**
+   * Treat an empty Git advertisement as temporary while a GRASP server is
+   * provisioning a repository. Ordinary clone URLs keep treating an empty
+   * response as a permanent wrong-path/not-Git failure.
+   */
+  expectRepositoryProvisioning?: boolean;
 }
 
 // ---------------------------------------------------------------------------

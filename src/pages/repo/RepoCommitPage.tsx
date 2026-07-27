@@ -17,7 +17,7 @@ export default function RepoCommitPage() {
   const repo = resolved?.repo;
   const account = useActiveAccount();
   const isMaintainer =
-    !!account && !!repo?.maintainerSet.includes(account.pubkey);
+    !!account && !!repo?.confirmedMaintainers.includes(account.pubkey);
   const repoOwnerProfile = useProfile(pubkey);
 
   useSeoMeta({

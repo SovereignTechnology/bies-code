@@ -58,7 +58,7 @@ function parseGraspListEvent(event: NostrEvent): GraspServer[] {
     try {
       // Parse the WebSocket URL to extract the domain
       const url = new URL(wsUrl);
-      const domain = url.hostname;
+      const domain = url.host;
       if (!seen.has(domain)) {
         seen.add(domain);
         servers.push({ wsUrl, domain });

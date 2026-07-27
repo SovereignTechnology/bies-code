@@ -27,6 +27,7 @@ import NgitPage from "./pages/NgitPage";
 import About from "./pages/About";
 import OgImagePreview from "./pages/OgImagePreview";
 import NotFound from "./pages/NotFound";
+import { MaintainerAcceptanceMonitor } from "./components/MaintainerAcceptanceMonitor";
 import { useRepoPath } from "./hooks/useRepoPath";
 import { REPO_KIND } from "./lib/nip34";
 import { getGitWorkshopPath } from "./lib/gitworkshopUrl";
@@ -370,6 +371,7 @@ function AppRouter() {
       <NativeGitWorkshopLinks />
       <NativeAndroidBackButton />
       <ScrollToTop />
+      <MaintainerAcceptanceMonitor />
       <div className="flex flex-col min-h-screen">
         <AppHeader />
         <main className="flex-1 flex flex-col">

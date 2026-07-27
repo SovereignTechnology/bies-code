@@ -19,6 +19,7 @@ import type { StateEventInput } from "./types";
 /** Backoff schedule: 2s, 4s, 8s, … capped at 5 min */
 const BACKOFF_INITIAL_MS = 2_000;
 const BACKOFF_MAX_MS = 5 * 60_000;
+export const PROVISIONING_BACKOFF_MAX_MS = 10_000;
 
 /**
  * A state event is considered "recent" if its created_at is within this
@@ -42,6 +43,7 @@ export class StateEventManager {
   private _currentState: StateEventInput = undefined;
   private backoffTimer: ReturnType<typeof setTimeout> | null = null;
   private backoffDelay = BACKOFF_INITIAL_MS;
+  private maxBackoffMs = BACKOFF_MAX_MS;
   /** Unix timestamp (ms) of the next scheduled retry, or null */
   private _retryAt: number | null = null;
 
@@ -56,6 +58,12 @@ export class StateEventManager {
    */
   get retryAt(): number | null {
     return this._retryAt;
+  }
+
+  /** Change the retry ceiling without disturbing an already scheduled fetch. */
+  setMaxBackoffMs(maxBackoffMs = BACKOFF_MAX_MS): void {
+    this.maxBackoffMs = maxBackoffMs;
+    this.backoffDelay = Math.min(this.backoffDelay, maxBackoffMs);
   }
 
   /**
@@ -111,7 +119,7 @@ export class StateEventManager {
       this._retryAt = null;
       callback();
     }, this.backoffDelay);
-    this.backoffDelay = Math.min(this.backoffDelay * 2, BACKOFF_MAX_MS);
+    this.backoffDelay = Math.min(this.backoffDelay * 2, this.maxBackoffMs);
   }
 
   /** Cancel any pending backoff timer */

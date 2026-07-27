@@ -151,6 +151,19 @@ function idbPut(storeName: string, value: unknown): Promise<void> {
   );
 }
 
+function idbDelete(storeName: string, key: string): Promise<void> {
+  if (!idbAvailable) return Promise.resolve();
+  return openDB().then(
+    (db) =>
+      new Promise((resolve, reject) => {
+        const tx = db.transaction(storeName, "readwrite");
+        const req = tx.objectStore(storeName).delete(key);
+        req.onsuccess = () => resolve();
+        req.onerror = () => reject(req.error);
+      }),
+  );
+}
+
 // ---------------------------------------------------------------------------
 // L1 in-memory caches (module-level singletons)
 // ---------------------------------------------------------------------------
@@ -166,6 +179,13 @@ const memInfoRefs = new Map<
   string,
   { info: InfoRefsUploadPackResponse; fetchedAt: number }
 >();
+/**
+ * URLs explicitly invalidated at a mutation/provisioning boundary.
+ *
+ * IDB deletion is asynchronous, so this synchronous guard prevents the next
+ * fetch from immediately repopulating L1 with the stale L2 advertisement.
+ */
+const invalidatedInfoRefs = new Set<string>();
 /** key: `${commitHash}:${maxCommits}` → Commit[] */
 const memCommitHistory = new Map<string, Commit[]>();
 /**
@@ -277,6 +297,7 @@ export class GitObjectCache {
   ): Promise<InfoRefsUploadPackResponse | undefined> {
     const mem = memInfoRefs.get(url);
     if (mem && Date.now() - mem.fetchedAt < this.infoRefsTtlMs) return mem.info;
+    if (invalidatedInfoRefs.has(url)) return undefined;
     const record = await idbGet<InfoRefsRecord>(STORE_INFO_REFS, url);
     if (record && Date.now() - record.fetchedAt < this.infoRefsTtlMs) {
       memInfoRefs.set(url, { info: record.info, fetchedAt: record.fetchedAt });
@@ -287,6 +308,7 @@ export class GitObjectCache {
 
   putInfoRefs(url: string, info: InfoRefsUploadPackResponse): void {
     const fetchedAt = Date.now();
+    invalidatedInfoRefs.delete(url);
     memInfoRefs.set(url, { info, fetchedAt });
     idbPut(STORE_INFO_REFS, { url, info, fetchedAt }).catch(() => {});
   }
@@ -294,6 +316,8 @@ export class GitObjectCache {
   /** Invalidate a specific URL's infoRefs (e.g. after a known push) */
   invalidateInfoRefs(url: string): void {
     memInfoRefs.delete(url);
+    invalidatedInfoRefs.add(url);
+    idbDelete(STORE_INFO_REFS, url).catch(() => {});
   }
 
   // -----------------------------------------------------------------------

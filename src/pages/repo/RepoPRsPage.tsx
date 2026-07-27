@@ -23,10 +23,20 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Search, MessageCircle, Users, X, Zap } from "lucide-react";
-import type { IssueStatus, ResolvedPRLite, PRItemType } from "@/lib/nip34";
+import {
+  hasAcceptedRepositoryReference,
+  type IssueStatus,
+  type ResolvedPRLite,
+  type ResolvedRepo,
+  type PRItemType,
+} from "@/lib/nip34";
 import { useCIForPR } from "@/hooks/useCI";
 import { CIStatusIcon } from "@/components/ci/CIStatusIcon";
 import { ciStatusLabel } from "@/lib/ci";
+import {
+  RepoItemAttributionIndicator,
+  RepoItemAttributionWarning,
+} from "@/components/RepoItemAttributionWarning";
 
 const TYPE_OPTIONS: MultiSelectOption[] = [
   { value: "pr", label: "Pull Requests" },
@@ -49,8 +59,8 @@ export default function RepoPRsPage() {
   const [authorFilter, setAuthorFilter] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
 
-  // Compute per-status counts from the full (unfiltered) list.
-  const statusCounts = useMemo(() => {
+  // Status counts describe only work addressed to the accepted repository.
+  const { statusCounts, unconfirmedStatusCounts } = useMemo(() => {
     const counts: Record<IssueStatus, number> = {
       open: 0,
       draft: 0,
@@ -58,13 +68,27 @@ export default function RepoPRsPage() {
       closed: 0,
       deleted: 0,
     };
-    if (prs) {
+    const unconfirmedCounts: Record<IssueStatus, number> = {
+      open: 0,
+      draft: 0,
+      resolved: 0,
+      closed: 0,
+      deleted: 0,
+    };
+    if (prs && repo) {
       for (const pr of prs) {
-        counts[pr.status]++;
+        if (hasAcceptedRepositoryReference(pr.repoCoords, repo)) {
+          counts[pr.status]++;
+        } else {
+          unconfirmedCounts[pr.status]++;
+        }
       }
     }
-    return counts;
-  }, [prs]);
+    return {
+      statusCounts: counts,
+      unconfirmedStatusCounts: unconfirmedCounts,
+    };
+  }, [prs, repo]);
 
   // Collect all unique labels and authors from resolved PRs.
   const { allLabels, allAuthors } = useMemo(() => {
@@ -112,6 +136,25 @@ export default function RepoPRsPage() {
       return true;
     });
   }, [prs, statusFilter, typeFilter, labelFilter, authorFilter, searchQuery]);
+
+  const { visibleAcceptedItems, visibleUnconfirmedItems } = useMemo(() => {
+    if (!filteredPRs || !repo) {
+      return { visibleAcceptedItems: [], visibleUnconfirmedItems: [] };
+    }
+    const accepted: ResolvedPRLite[] = [];
+    const unconfirmed: ResolvedPRLite[] = [];
+    for (const pr of filteredPRs) {
+      if (hasAcceptedRepositoryReference(pr.repoCoords, repo)) {
+        accepted.push(pr);
+      } else {
+        unconfirmed.push(pr);
+      }
+    }
+    return {
+      visibleAcceptedItems: accepted,
+      visibleUnconfirmedItems: unconfirmed,
+    };
+  }, [filteredPRs, repo]);
 
   // "Active" means filters differ from the default state
   const hasActiveFilters =
@@ -211,6 +254,7 @@ export default function RepoPRsPage() {
         <div className="flex items-center bg-muted/40 px-3 py-1.5 overflow-x-auto">
           <StatusTabs
             counts={statusCounts}
+            secondaryCounts={unconfirmedStatusCounts}
             selected={statusFilter}
             onChange={(v) => setStatusFilter(v as IssueStatus[])}
             variant="pr"
@@ -225,32 +269,57 @@ export default function RepoPRsPage() {
               <PRSkeleton key={i} />
             ))}
           </ul>
-        ) : filteredPRs.length === 0 ? (
+        ) : visibleAcceptedItems.length === 0 ? (
           <div className="py-12 text-center">
             <p className="text-muted-foreground">
-              {hasActiveFilters
-                ? "No PRs match your filters"
-                : "No pull requests yet"}
+              {hasActiveFilters ? "No PRs match your filters" : "No PRs yet"}
             </p>
             <p className="text-muted-foreground/60 text-sm mt-1">
               {hasActiveFilters
                 ? "Try adjusting your filters"
-                : "Pull requests and patches will appear here"}
+                : "PRs and patches sent to this repository will appear here"}
             </p>
           </div>
         ) : (
           <ul className="divide-y divide-border">
-            {filteredPRs.map((pr) => (
+            {visibleAcceptedItems.map((pr) => (
               <PRRow
                 key={pr.id}
                 pr={pr}
                 repoPath={basePath}
                 repoRelays={repo?.relays ?? []}
+                repo={repo}
               />
             ))}
           </ul>
         )}
       </div>
+
+      {repo && visibleUnconfirmedItems.length > 0 && (
+        <section className="mt-6">
+          <RepoItemAttributionWarning
+            repo={repo}
+            repoCoords={visibleUnconfirmedItems.flatMap((pr) => pr.repoCoords)}
+            itemLabel="pull request or patch"
+            pageSuffix="/prs"
+            count={visibleUnconfirmedItems.length}
+            className="rounded-b-none shadow-none"
+          />
+          <div className="overflow-hidden rounded-b-lg border border-t-0 border-amber-500/40">
+            <ul className="divide-y divide-border">
+              {visibleUnconfirmedItems.map((pr) => (
+                <PRRow
+                  key={pr.id}
+                  pr={pr}
+                  repoPath={basePath}
+                  repoRelays={repo.relays}
+                  repo={repo}
+                />
+              ))}
+            </ul>
+          </div>
+        </section>
+      )}
     </div>
   );
 }
@@ -268,10 +337,12 @@ function PRRow({
   pr,
   repoPath,
   repoRelays,
+  repo,
 }: {
   pr: ResolvedPRLite;
   repoPath: string;
   repoRelays: string[];
+  repo: ResolvedRepo | undefined;
 }) {
   const lastActive = formatDistanceToNow(new Date(pr.lastActivityAt * 1000), {
     addSuffix: true,
@@ -283,12 +354,14 @@ function PRRow({
   const ci = useCIForPR(pr.id);
 
   const nevent = eventIdToNevent(pr.id, repoRelays.slice(0, 1));
+  const needsAttributionCheck =
+    repo !== undefined && !hasAcceptedRepositoryReference(pr.repoCoords, repo);
 
   return (
-    <li className="group hover:bg-accent/40 transition-colors">
+    <li className="group flex items-stretch hover:bg-accent/40 transition-colors">
       <Link
         to={`${repoPath}/prs/${nevent}`}
-        className="flex items-start gap-3 px-3 py-2.5 text-sm"
+        className="flex min-w-0 flex-1 items-start gap-3 px-3 py-2.5 text-sm"
       >
         {/* Status icon — variant reflects PR vs patch */}
         <StatusIcon
@@ -360,6 +433,16 @@ function PRRow({
           )}
         </div>
       </Link>
+      {needsAttributionCheck && (
+        <div className="flex shrink-0 items-center pr-2">
+          <RepoItemAttributionIndicator
+            repo={repo}
+            repoCoords={pr.repoCoords}
+            itemLabel={pr.itemType === "patch" ? "patch" : "pull request"}
+            pageSuffix={`/prs/${nevent}`}
+          />
+        </div>
+      )}
     </li>
   );
 }

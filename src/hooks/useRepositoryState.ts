@@ -57,6 +57,9 @@ function pickWinningStateEvent(
  *     seen from each relay, derived reactively from the EventStore via
  *     getSeenRelays(). Callers can use this to determine whether a Grasp
  *     server is behind the canonical state and what commit it last announced.
+ *   - `stateEvents`: typed casts for every valid state event considered for
+ *     this repository, or `undefined` until the store first emits. Acceptance
+ *     flows use these to compare the invitee's refs with the canonical state.
  *
  * @param dTag           - The repository d-tag identifier
  * @param maintainerSet  - All maintainer pubkeys (from ResolvedRepo.maintainerSet)
@@ -66,7 +69,12 @@ export function useRepositoryState(
   dTag: string | undefined,
   maintainerSet: string[] | undefined,
   repoRelayGroup: RelayGroup | undefined,
-): [RepositoryState | null | undefined, boolean, Map<string, NostrEvent>] {
+): [
+  RepositoryState | null | undefined,
+  boolean,
+  Map<string, NostrEvent>,
+  RepositoryState[] | undefined,
+] {
   const store = useEventStore();
   const castStore = store as unknown as CastRefEventStore;
 
@@ -152,6 +160,23 @@ export function useRepositoryState(
     ) as unknown as Observable<RepositoryState | null>;
   }, [dTag, maintainerKey, store]);
 
+  const stateEvents = use$(() => {
+    if (!dTag || !maintainerSet || maintainerSet.length === 0) return undefined;
+
+    return store.timeline([storeFilter]).pipe(
+      map((events) =>
+        events.flatMap((event) => {
+          if (!isValidRepositoryState(event)) return [];
+          try {
+            return [new RepositoryState(event, castStore)];
+          } catch {
+            return [];
+          }
+        }),
+      ),
+    ) as unknown as Observable<RepositoryState[]>;
+  }, [dTag, maintainerKey, store]);
+
   // Per-relay state registry: for each relay URL, keep the best state event
   // seen from that relay. Derived reactively from the store — no side-channel
   // state needed because the loader stamps each event with its source relay
@@ -187,5 +212,5 @@ export function useRepositoryState(
     ) as unknown as Observable<Map<string, NostrEvent>>;
   }, [dTag, maintainerKey, store]);
 
-  return [repoState, repoRelayEose, relayStateMap ?? new Map()];
+  return [repoState, repoRelayEose, relayStateMap ?? new Map(), stateEvents];
 }

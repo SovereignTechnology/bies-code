@@ -13,7 +13,8 @@
  *   - Relay URLs generated from selected Grasp servers
  *   - Items contributed only by co-maintainers (displayed as info)
  *
- * Only accessible when the logged-in user is the selected maintainer.
+ * Recursive maintainers are redirected to the same repository under their own
+ * announcement coordinate. Invitees without an announcement must accept first.
  */
 
 import {
@@ -25,20 +26,22 @@ import {
   useId,
   useRef,
 } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, Navigate, useNavigate } from "react-router-dom";
 import { useActiveAccount } from "applesauce-react/hooks";
 import {
   ArrowLeft,
   Plus,
   X,
   Loader2,
-  Server,
   Radio,
   GitBranch,
   AlertTriangle,
   Users,
   Tag,
   CircleHelp,
+  CircleAlert,
+  Crown,
+  Network,
   ChevronDown,
   ChevronRight,
 } from "lucide-react";
@@ -50,8 +53,9 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Separator } from "@/components/ui/separator";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import {
   Collapsible,
   CollapsibleContent,
@@ -89,16 +93,16 @@ import {
   isGraspCloneUrl,
   graspCloneUrlDomain,
   computeMaintainerLeadership,
+  groupRequestedMaintainers,
   type RepoUpstream,
   type ResolvedRepo,
 } from "@/lib/nip34";
 import type { RepositoryState } from "@/casts/RepositoryState";
-import { decodePubkeyIdentifier } from "@/lib/routeUtils";
-import { validateGraspServer } from "@/lib/grasp";
+import { decodePubkeyIdentifier, repoToPath } from "@/lib/routeUtils";
 import { publish } from "@/services/nostr";
 import { useGraspServers } from "@/hooks/useGraspServers";
-import { DEFAULT_GRASP_SERVERS } from "@/services/settings";
 import { GraspLogo } from "@/components/GraspLogo";
+import { GraspServerSelector } from "@/components/GraspServerSelector";
 import { cn } from "@/lib/utils";
 import { normalizeUrl } from "@/lib/url";
 import { SubordinateForkField } from "@/components/repo/SubordinateForkField";
@@ -129,6 +133,7 @@ const KNOWN_TAG_NAMES = new Set([
 ]);
 
 const HEX_PUBKEY_INPUT_RE = /^[0-9a-fA-F]{64}$/;
+const NO_LEAD = "no-lead";
 const LEAD_MAINTAINER_HELP_TEXT =
   "The lead maintainer is the confirmed maintainer listed by more confirmed maintainers than anyone else. If the top listing count is tied, there is no single lead maintainer.";
 
@@ -238,9 +243,6 @@ export default function RepoSettingsPage() {
   const account = useActiveAccount();
   const repo = resolved?.repo;
 
-  const isMaintainer =
-    account?.pubkey && repo && account.pubkey === repo.selectedMaintainer;
-
   if (!repo) {
     return (
       <div className="container max-w-screen-xl px-4 md:px-8 py-8">
@@ -252,20 +254,73 @@ export default function RepoSettingsPage() {
     );
   }
 
-  if (!isMaintainer) {
+  const accountPubkey = account?.pubkey;
+  const isRecursiveMaintainer =
+    !!accountPubkey && repo.maintainerSet.includes(accountPubkey);
+  const accountAnnouncement = accountPubkey
+    ? repo.announcements.find(
+        (announcement) => announcement.pubkey === accountPubkey,
+      )
+    : undefined;
+
+  if (
+    accountPubkey &&
+    accountPubkey !== repo.selectedMaintainer &&
+    isRecursiveMaintainer &&
+    accountAnnouncement
+  ) {
+    const accountRepoPath = repoToPath(
+      accountPubkey,
+      repo.dTag,
+      getRepoRelays(accountAnnouncement),
+    );
+    return <Navigate to={`${accountRepoPath}/settings`} replace />;
+  }
+
+  if (
+    accountPubkey &&
+    accountPubkey !== repo.selectedMaintainer &&
+    isRecursiveMaintainer &&
+    !accountAnnouncement
+  ) {
     return (
-      <div className="container max-w-screen-xl px-4 md:px-8 py-8">
+      <div className="container max-w-screen-xl px-4 py-8 md:px-8">
         <div className="max-w-md">
-          <div className="flex items-center gap-2 text-destructive mb-4">
-            <AlertTriangle className="h-5 w-5" />
-            <p className="font-medium">Not authorised</p>
+          <div className="mb-4 flex items-center gap-2 text-pink-600 dark:text-pink-400">
+            <Users className="h-5 w-5" />
+            <p className="font-medium">Accept the invitation first</p>
           </div>
-          <p className="text-sm text-muted-foreground mb-4">
-            Only the selected maintainer can edit these repository settings.
+          <p className="mb-4 text-sm leading-relaxed text-muted-foreground">
+            You are in this repository&apos;s recursive maintainer set, but you
+            do not have your own repository announcement yet. Accept the
+            invitation above to publish it and continue to your settings page.
           </p>
           <Button asChild variant="outline" size="sm">
             <Link to={`${basePath}/about`}>
-              <ArrowLeft className="h-4 w-4 mr-2" />
+              <ArrowLeft className="mr-2 h-4 w-4" />
+              Back to About
+            </Link>
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  if (accountPubkey !== repo.selectedMaintainer) {
+    return (
+      <div className="container max-w-screen-xl px-4 py-8 md:px-8">
+        <div className="max-w-md">
+          <div className="mb-4 flex items-center gap-2 text-destructive">
+            <AlertTriangle className="h-5 w-5" />
+            <p className="font-medium">Not authorised</p>
+          </div>
+          <p className="mb-4 text-sm text-muted-foreground">
+            Only a maintainer in this repository&apos;s recursive maintainer set
+            can edit settings.
+          </p>
+          <Button asChild variant="outline" size="sm">
+            <Link to={`${basePath}/about`}>
+              <ArrowLeft className="mr-2 h-4 w-4" />
               Back to About
             </Link>
           </Button>
@@ -344,7 +399,7 @@ function RepoSettingsForm({
     const graspDomainSet = new Set(currentGraspDomains);
     return currentRelayUrls.filter((r) => {
       try {
-        return !graspDomainSet.has(new URL(r).hostname);
+        return !graspDomainSet.has(new URL(r).host);
       } catch {
         return true;
       }
@@ -378,6 +433,60 @@ function RepoSettingsForm({
       ),
     );
   }, [selectedAnnouncement, repo.selectedMaintainer]);
+  const isMultiMaintainer = repo.confirmedMaintainers.length > 1;
+  const maintainerLeadership = useMemo(
+    () =>
+      computeMaintainerLeadership(
+        repo.confirmedMaintainers,
+        repo.maintainerEdges,
+      ),
+    [repo.confirmedMaintainers, repo.maintainerEdges],
+  );
+  const maintainerListers = useMemo(
+    () =>
+      computeMaintainerListers(
+        repo.confirmedMaintainers,
+        repo.confirmedMaintainers,
+        repo.maintainerEdges,
+      ),
+    [repo.confirmedMaintainers, repo.maintainerEdges],
+  );
+  const initialCoordinationCandidatePubkeys = useMemo(
+    () =>
+      Array.from(
+        new Set([
+          repo.selectedMaintainer,
+          ...repo.maintainerSet,
+          ...currentMaintainers,
+        ]),
+      ),
+    [repo.selectedMaintainer, repo.maintainerSet, currentMaintainers],
+  );
+  const initialCoordinationChoice = useMemo(() => {
+    const lead = maintainerLeadership.leadMaintainer;
+    if (!lead || initialCoordinationCandidatePubkeys.length <= 2) {
+      return NO_LEAD;
+    }
+
+    if (lead !== repo.selectedMaintainer) {
+      return currentMaintainers.length === 1 && currentMaintainers[0] === lead
+        ? lead
+        : NO_LEAD;
+    }
+
+    const otherCandidates = initialCoordinationCandidatePubkeys.filter(
+      (pubkey) => pubkey !== repo.selectedMaintainer,
+    );
+    return currentMaintainers.length === otherCandidates.length &&
+      otherCandidates.every((pubkey) => currentMaintainers.includes(pubkey))
+      ? lead
+      : NO_LEAD;
+  }, [
+    currentMaintainers,
+    initialCoordinationCandidatePubkeys,
+    maintainerLeadership.leadMaintainer,
+    repo.selectedMaintainer,
+  ]);
   const currentEucHash = useMemo(
     () =>
       selectedAnnouncement?.tags.find(
@@ -419,6 +528,9 @@ function RepoSettingsForm({
   // Co-maintainers listed by this selected announcement.
   const [editedMaintainers, setEditedMaintainers] =
     useState<string[]>(currentMaintainers);
+  const [coordinationCandidatePubkeys, setCoordinationCandidatePubkeys] =
+    useState<string[]>(initialCoordinationCandidatePubkeys);
+  const [selectedLead, setSelectedLead] = useState(initialCoordinationChoice);
   const [maintainerInput, setMaintainerInput] = useState("");
   const [maintainerInputError, setMaintainerInputError] = useState<
     string | undefined
@@ -427,11 +539,6 @@ function RepoSettingsForm({
   // Grasp server selection
   const [selectedDomains, setSelectedDomains] =
     useState<string[]>(currentGraspDomains);
-  const [customDomain, setCustomDomain] = useState("");
-  const [customDomainError, setCustomDomainError] = useState<
-    string | undefined
-  >();
-  const [validatingDomain, setValidatingDomain] = useState(false);
 
   // Other relays
   const [otherRelays, setOtherRelays] = useState<string[]>(currentOtherRelays);
@@ -570,60 +677,140 @@ function RepoSettingsForm({
   }, [currentHeadBranch, branches, userHasSelectedBranch]);
 
   // ---------------------------------------------------------------------------
-  // Computed: all known Grasp domains (resolved + custom added)
-  // ---------------------------------------------------------------------------
-
-  const allKnownDomains = useMemo(() => {
-    const fromResolved = resolvedServers.map((s) => s.domain);
-    // Also include any domains that are already selected but not in the user's
-    // resolved list (they came from the existing announcement)
-    const extra = selectedDomains.filter((d) => !fromResolved.includes(d));
-    // Make sure current announcement domains are always visible
-    const fromAnnouncement = currentGraspDomains.filter(
-      (d) => !fromResolved.includes(d) && !extra.includes(d),
-    );
-    return [...fromResolved, ...extra, ...fromAnnouncement];
-  }, [resolvedServers, selectedDomains, currentGraspDomains]);
-
-  // ---------------------------------------------------------------------------
   // Union items from other maintainers
   // ---------------------------------------------------------------------------
-
-  const isMultiMaintainer = repo.maintainerSet.length > 1;
-
-  const maintainerLeadership = useMemo(
-    () => computeMaintainerLeadership(repo.maintainerSet, repo.maintainerEdges),
-    [repo.maintainerSet, repo.maintainerEdges],
-  );
-
-  const maintainerListers = useMemo(
-    () =>
-      computeMaintainerListers(
-        repo.maintainerSet,
-        repo.maintainerSet,
-        repo.maintainerEdges,
-      ),
-    [repo.maintainerSet, repo.maintainerEdges],
-  );
 
   const requestedMaintainers = useMemo(
     () => Array.from(new Set(repo.requestedMaintainers)),
     [repo.requestedMaintainers],
+  );
+  const requestedMaintainerGroups = useMemo(
+    () => groupRequestedMaintainers(repo, requestedMaintainers),
+    [repo, requestedMaintainers],
+  );
+  const invitedMaintainers = Array.from(
+    new Set(
+      requestedMaintainerGroups.flatMap((group) => group.recipientMaintainers),
+    ),
+  );
+  const invitedMaintainersWithRepositories = new Set(
+    requestedMaintainerGroups
+      .filter((group) => group.hasAnnouncement)
+      .flatMap((group) => group.recipientMaintainers),
   );
 
   const requestedMaintainerListers = useMemo(
     () =>
       computeMaintainerListers(
         requestedMaintainers,
-        repo.maintainerSet,
+        repo.confirmedMaintainers,
         repo.maintainerEdges,
       ),
-    [requestedMaintainers, repo.maintainerSet, repo.maintainerEdges],
+    [requestedMaintainers, repo.confirmedMaintainers, repo.maintainerEdges],
+  );
+
+  const orderedCoordinationCandidatePubkeys = useMemo(
+    () =>
+      Array.from(
+        new Set([
+          repo.selectedMaintainer,
+          ...coordinationCandidatePubkeys.filter(
+            (pubkey) => pubkey !== repo.selectedMaintainer,
+          ),
+        ]),
+      ),
+    [coordinationCandidatePubkeys, repo.selectedMaintainer],
+  );
+  const showMaintainerCoordination =
+    orderedCoordinationCandidatePubkeys.length > 2;
+  const coordinationCandidateListers = useMemo(
+    () =>
+      computeMaintainerListers(
+        orderedCoordinationCandidatePubkeys,
+        orderedCoordinationCandidatePubkeys,
+        repo.maintainerEdges,
+      ),
+    [orderedCoordinationCandidatePubkeys, repo.maintainerEdges],
+  );
+  const otherMaintainerListers = useMemo(
+    () =>
+      computeMaintainerListers(
+        orderedCoordinationCandidatePubkeys.filter(
+          (pubkey) => pubkey !== repo.selectedMaintainer,
+        ),
+        editedMaintainers,
+        repo.maintainerEdges,
+      ),
+    [
+      editedMaintainers,
+      orderedCoordinationCandidatePubkeys,
+      repo.maintainerEdges,
+      repo.selectedMaintainer,
+    ],
+  );
+  const coMaintainersListedByOthers = useMemo(
+    () =>
+      orderedCoordinationCandidatePubkeys
+        .filter((pubkey) => pubkey !== repo.selectedMaintainer)
+        .filter((pubkey) => !editedMaintainers.includes(pubkey))
+        .map((pubkey) => ({
+          pubkey,
+          listerPubkeys: otherMaintainerListers.get(pubkey) ?? [],
+        }))
+        .filter(({ listerPubkeys }) => listerPubkeys.length > 0),
+    [
+      editedMaintainers,
+      orderedCoordinationCandidatePubkeys,
+      otherMaintainerListers,
+      repo.selectedMaintainer,
+    ],
+  );
+  const removedCurrentMaintainers = useMemo(
+    () =>
+      currentMaintainers.filter(
+        (pubkey) => !editedMaintainers.includes(pubkey),
+      ),
+    [currentMaintainers, editedMaintainers],
+  );
+  const temporarilyRemovedMaintainers = useMemo(() => {
+    if (!showMaintainerCoordination || selectedLead === NO_LEAD) return [];
+    if (selectedLead === repo.selectedMaintainer) {
+      return removedCurrentMaintainers.filter(
+        (pubkey) => (otherMaintainerListers.get(pubkey) ?? []).length === 0,
+      );
+    }
+
+    return removedCurrentMaintainers.filter(
+      (pubkey) =>
+        !repo.maintainerEdges.some(
+          ({ from, to }) => from === selectedLead && to === pubkey,
+        ),
+    );
+  }, [
+    otherMaintainerListers,
+    removedCurrentMaintainers,
+    repo.maintainerEdges,
+    repo.selectedMaintainer,
+    selectedLead,
+    showMaintainerCoordination,
+  ]);
+  const stillRecognizedMaintainers = useMemo(
+    () =>
+      removedCurrentMaintainers
+        .map((pubkey) => ({
+          pubkey,
+          listerPubkeys: otherMaintainerListers.get(pubkey) ?? [],
+        }))
+        .filter(({ listerPubkeys }) => listerPubkeys.length > 0),
+    [otherMaintainerListers, removedCurrentMaintainers],
   );
 
   const maintainerPickerPriorityPubkeys = useMemo(
-    () => Array.from(new Set([...repo.maintainerSet, ...requestedMaintainers])),
-    [repo.maintainerSet, requestedMaintainers],
+    () =>
+      Array.from(
+        new Set([...repo.confirmedMaintainers, ...requestedMaintainers]),
+      ),
+    [repo.confirmedMaintainers, requestedMaintainers],
   );
 
   const maintainerPickerExcludePubkeys = useMemo(
@@ -709,48 +896,6 @@ function RepoSettingsForm({
   ]);
 
   // ---------------------------------------------------------------------------
-  // Grasp server actions
-  // ---------------------------------------------------------------------------
-
-  const handleToggleServer = useCallback((domain: string) => {
-    setSelectedDomains((prev) =>
-      prev.includes(domain)
-        ? prev.filter((d) => d !== domain)
-        : [...prev, domain],
-    );
-  }, []);
-
-  const handleAddCustomDomain = useCallback(async () => {
-    const raw = customDomain.trim().toLowerCase();
-    if (!raw) return;
-
-    const domain = raw.replace(/^wss?:\/\//, "").replace(/\/+$/, "");
-
-    if (!domain || !/^[a-z0-9.-]+\.[a-z]{2,}$/.test(domain)) {
-      setCustomDomainError("Enter a valid domain (e.g. relay.example.com)");
-      return;
-    }
-    if (selectedDomains.includes(domain)) {
-      setCustomDomainError("Already in the list");
-      return;
-    }
-
-    setValidatingDomain(true);
-    setCustomDomainError(undefined);
-    const validationError = await validateGraspServer(domain);
-    setValidatingDomain(false);
-
-    if (validationError) {
-      setCustomDomainError(validationError);
-      return;
-    }
-
-    setSelectedDomains((prev) => [...prev, domain]);
-    setCustomDomain("");
-    setCustomDomainError(undefined);
-  }, [customDomain, selectedDomains]);
-
-  // ---------------------------------------------------------------------------
   // Other relay actions
   // ---------------------------------------------------------------------------
 
@@ -799,7 +944,7 @@ function RepoSettingsForm({
     }
     if (isGraspCloneUrl(raw)) {
       setGitServerInputError(
-        "This looks like a Grasp server URL — use the Grasp Servers section instead",
+        "This looks like a GRASP server URL — use the GRASP servers section instead",
       );
       return;
     }
@@ -866,6 +1011,9 @@ function RepoSettingsForm({
       setEditedMaintainers((prev) =>
         prev.includes(pubkey) ? prev : [...prev, pubkey],
       );
+      setCoordinationCandidatePubkeys((prev) =>
+        prev.includes(pubkey) ? prev : [...prev, pubkey],
+      );
       setMaintainerInput("");
       setMaintainerInputError(undefined);
     },
@@ -887,6 +1035,40 @@ function RepoSettingsForm({
   const handleRemoveMaintainer = useCallback((pubkey: string) => {
     setEditedMaintainers((prev) => prev.filter((pk) => pk !== pubkey));
   }, []);
+
+  const handleSelectLead = useCallback(
+    (pubkey: string) => {
+      setSelectedLead(pubkey);
+      setMaintainerInput("");
+      setMaintainerInputError(undefined);
+
+      if (pubkey === NO_LEAD) {
+        setEditedMaintainers([...currentMaintainers]);
+        return;
+      }
+
+      if (pubkey === repo.selectedMaintainer) {
+        setEditedMaintainers((current) =>
+          Array.from(
+            new Set([
+              ...orderedCoordinationCandidatePubkeys.filter(
+                (candidate) => candidate !== repo.selectedMaintainer,
+              ),
+              ...current,
+            ]),
+          ),
+        );
+        return;
+      }
+
+      setEditedMaintainers([pubkey]);
+    },
+    [
+      currentMaintainers,
+      orderedCoordinationCandidatePubkeys,
+      repo.selectedMaintainer,
+    ],
+  );
 
   // ---------------------------------------------------------------------------
   // Save
@@ -1357,7 +1539,7 @@ function RepoSettingsForm({
                 <Users className="h-4 w-4" />
                 Maintainers
               </h2>
-              {isMultiMaintainer ? (
+              {isMultiMaintainer || showMaintainerCoordination ? (
                 <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">
                   You are editing only your selected announcement.
                   Co-maintainers become confirmed when the recursive maintainer
@@ -1379,7 +1561,7 @@ function RepoSettingsForm({
               </div>
 
               <div className="space-y-2">
-                {repo.maintainerSet.map((pubkey) => {
+                {repo.confirmedMaintainers.map((pubkey) => {
                   const listedBy = maintainerListers.get(pubkey) ?? [];
                   const isLead = maintainerLeadership.leadMaintainer === pubkey;
                   return (
@@ -1402,7 +1584,7 @@ function RepoSettingsForm({
                 })}
               </div>
 
-              {isMultiMaintainer ? (
+              {isMultiMaintainer || showMaintainerCoordination ? (
                 <div className="rounded-md border border-border/40 bg-background/40 px-2.5 py-2 text-xs">
                   {maintainerLeadership.leadMaintainer ? (
                     <LeadMaintainerSummary
@@ -1427,115 +1609,393 @@ function RepoSettingsForm({
               {requestedMaintainers.length > 0 && (
                 <div className="space-y-2 border-t border-border/50 pt-3">
                   <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                    Invited / unconfirmed
+                    Invited maintainer
+                    {invitedMaintainers.length === 1 ? "" : "s"}
                   </p>
-                  <div className="space-y-1.5">
-                    {requestedMaintainers.map((pubkey) => {
-                      const listedBy =
-                        requestedMaintainerListers.get(pubkey) ?? [];
-                      return (
-                        <div
-                          key={pubkey}
-                          className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-dashed border-border/60 bg-muted/10 px-2.5 py-1.5"
+
+                  {invitedMaintainers.map((pubkey) => {
+                    const listedBy =
+                      requestedMaintainerListers.get(pubkey) ?? [];
+                    const announcement = repo.announcements.find(
+                      (event) => event.pubkey === pubkey,
+                    );
+                    const announcementRelays = announcement
+                      ? getRepoRelays(announcement)
+                      : [];
+                    const repositoryPath =
+                      invitedMaintainersWithRepositories.has(pubkey)
+                        ? repoToPath(
+                            pubkey,
+                            repo.dTag,
+                            announcementRelays.length > 0
+                              ? announcementRelays
+                              : repo.relays,
+                          )
+                        : undefined;
+                    return (
+                      <div
+                        key={pubkey}
+                        className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-dashed border-border/60 bg-muted/10 px-2.5 py-1.5"
+                      >
+                        <UserLink
+                          pubkey={pubkey}
+                          avatarSize="xs"
+                          nameClassName="text-xs text-muted-foreground whitespace-nowrap"
+                          className="min-w-fit flex-1"
+                        />
+                        {repositoryPath && (
+                          <span className="text-[11px] text-muted-foreground">
+                            (has{" "}
+                            <Link
+                              to={repositoryPath}
+                              className="underline-offset-2 hover:underline"
+                            >
+                              existing repository
+                            </Link>
+                            )
+                          </span>
+                        )}
+                        {listedBy.length > 0 &&
+                          listedBy.length <
+                            repo.confirmedMaintainers.length && (
+                            <MaintainerListedBy
+                              pubkeys={listedBy}
+                              label="Invited by"
+                            />
+                          )}
+                        <Badge
+                          variant="outline"
+                          className="h-4 px-1.5 text-[10px] text-muted-foreground"
                         >
-                          <UserLink
-                            pubkey={pubkey}
-                            avatarSize="xs"
-                            nameClassName="text-xs text-muted-foreground whitespace-nowrap"
-                            className="min-w-fit flex-1"
-                          />
-                          <MaintainerListedBy pubkeys={listedBy} />
-                          <Badge
-                            variant="outline"
-                            className="h-4 px-1.5 text-[10px] text-muted-foreground"
-                          >
-                            unconfirmed
-                          </Badge>
-                        </div>
-                      );
-                    })}
-                  </div>
+                          awaiting response
+                        </Badge>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>
 
-            <div className="space-y-2">
-              <div>
-                <Label>
-                  {isMultiMaintainer
-                    ? "Co-maintainers you have listed"
-                    : "Add co-maintainers"}
-                </Label>
-                {isMultiMaintainer ? (
-                  <p className="text-xs text-muted-foreground mt-0.5">
-                    These are saved as the co-maintainers you list for this
-                    repo. Your own pubkey is included automatically.
+            {showMaintainerCoordination ? (
+              <div className="space-y-3">
+                <div>
+                  <Label className="flex items-center gap-1.5">
+                    <Crown className="h-3.5 w-3.5 text-pink-500" />
+                    Maintainer coordination
+                  </Label>
+                  <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                    With more than two maintainers, choose one person to
+                    coordinate or explicitly keep responsibility shared. This
+                    updates your maintainer list; it does not grant extra
+                    permissions.
                   </p>
-                ) : null}
-              </div>
+                </div>
 
-              {editedMaintainers.length > 0 ? (
-                <div className="space-y-1.5">
-                  {editedMaintainers.map((pubkey) => (
-                    <div
-                      key={pubkey}
-                      className="flex items-center gap-2 rounded-md border border-border/60 bg-muted/20 px-3 py-1.5"
-                    >
-                      <UserLink
-                        pubkey={pubkey}
-                        avatarSize="xs"
-                        nameClassName="text-sm"
-                        className="min-w-0 flex-1"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => handleRemoveMaintainer(pubkey)}
-                        className="text-muted-foreground hover:text-foreground transition-colors shrink-0"
-                        aria-label={`Remove maintainer ${pubkey}`}
-                      >
-                        <X className="h-3.5 w-3.5" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="rounded-md border border-dashed border-border/70 bg-muted/10 px-3 py-3 text-xs text-muted-foreground">
-                  You have not listed any co-maintainers.
-                </div>
-              )}
+                <RadioGroup
+                  value={selectedLead}
+                  onValueChange={handleSelectLead}
+                  className="grid gap-2 sm:grid-cols-2"
+                  aria-label="Maintainer coordination preference"
+                >
+                  {orderedCoordinationCandidatePubkeys.map((pubkey, index) => {
+                    const selected = selectedLead === pubkey;
+                    const listedByCount =
+                      coordinationCandidateListers.get(pubkey)?.length ?? 0;
 
-              <div className="space-y-1.5">
-                <div className="flex gap-2">
-                  <MaintainerUserInput
-                    placeholder="@name, npub1…, or hex pubkey"
-                    value={maintainerInput}
-                    onValueChange={(value) => {
-                      setMaintainerInput(value);
-                      setMaintainerInputError(undefined);
-                    }}
-                    onAdd={handleAddMaintainer}
-                    onSelectPubkey={addMaintainerPubkey}
-                    priorityPubkeys={maintainerPickerPriorityPubkeys}
-                    excludePubkeys={maintainerPickerExcludePubkeys}
-                    className="h-8 text-sm font-mono"
-                  />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={handleAddMaintainer}
-                    className="h-8 px-2.5 shrink-0"
-                  >
-                    <Plus className="h-3.5 w-3.5" />
-                  </Button>
-                </div>
-                {maintainerInputError && (
-                  <p className="text-xs text-red-500 px-0.5">
-                    {maintainerInputError}
+                    return (
+                      <div key={pubkey} className="contents">
+                        <label
+                          className={cn(
+                            "flex cursor-pointer items-center gap-2 rounded-md border px-2.5 py-2 transition-colors",
+                            "focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2",
+                            selected
+                              ? "border-pink-500/50 bg-pink-500/5"
+                              : "border-border/60 hover:bg-muted/30",
+                          )}
+                        >
+                          <RadioGroupItem
+                            value={pubkey}
+                            aria-label={`Choose ${pubkey} as lead`}
+                          />
+                          <UserAvatar pubkey={pubkey} size="xs" noHoverCard />
+                          <UserName
+                            pubkey={pubkey}
+                            className="min-w-0 flex-1 truncate text-xs"
+                            noHoverCard
+                          />
+                          {pubkey === repo.selectedMaintainer ? (
+                            <Badge
+                              variant="outline"
+                              className="h-5 shrink-0 px-1.5 text-[10px]"
+                            >
+                              you
+                            </Badge>
+                          ) : (
+                            <span className="shrink-0 text-[10px] text-muted-foreground">
+                              {listedByCount} listing
+                              {listedByCount === 1 ? "" : "s"}
+                            </span>
+                          )}
+                        </label>
+
+                        {index === 0 ? (
+                          <label
+                            className={cn(
+                              "flex cursor-pointer items-center gap-2 rounded-md border px-2.5 py-2 transition-colors",
+                              "focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2",
+                              selectedLead === NO_LEAD
+                                ? "border-pink-500/50 bg-pink-500/5"
+                                : "border-border/60 hover:bg-muted/30",
+                            )}
+                          >
+                            <RadioGroupItem
+                              value={NO_LEAD}
+                              aria-label="Choose no lead"
+                            />
+                            <Network className="h-4 w-4 shrink-0 text-sky-600 dark:text-sky-400" />
+                            <div className="min-w-0">
+                              <p className="text-xs font-medium">No lead</p>
+                              <p className="text-[11px] text-muted-foreground">
+                                List everyone you recognize
+                              </p>
+                            </div>
+                          </label>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </RadioGroup>
+
+                {selectedLead === NO_LEAD ? (
+                  <p className="rounded-md bg-muted/40 px-2.5 py-2 text-xs leading-relaxed text-muted-foreground">
+                    Everyone lists the maintainers they recognize. Removing
+                    someone requires the maintainers you still recognize to
+                    remove them too.
+                  </p>
+                ) : selectedLead === repo.selectedMaintainer ? (
+                  <p className="rounded-md bg-muted/40 px-2.5 py-2 text-xs leading-relaxed text-muted-foreground">
+                    As lead, your announcement lists every maintainer. The
+                    others must list you back before the shared graph recognizes
+                    you as lead.
+                  </p>
+                ) : (
+                  <p className="rounded-md bg-muted/40 px-2.5 py-2 text-xs leading-relaxed text-muted-foreground">
+                    Your announcement will keep{" "}
+                    <UserName
+                      pubkey={selectedLead}
+                      className="text-xs text-foreground"
+                      linkToProfile
+                    />{" "}
+                    as its direct maintainer link.
                   </p>
                 )}
               </div>
-            </div>
+            ) : null}
+
+            {!showMaintainerCoordination ||
+            selectedLead === NO_LEAD ||
+            selectedLead === repo.selectedMaintainer ? (
+              <div className="space-y-2">
+                <div>
+                  <Label>
+                    {isMultiMaintainer || showMaintainerCoordination
+                      ? "Co-maintainers you have listed"
+                      : "Add co-maintainers"}
+                  </Label>
+                  {isMultiMaintainer || showMaintainerCoordination ? (
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      These people are written to your repository announcement.
+                      Your own pubkey is the event signer.
+                    </p>
+                  ) : null}
+                </div>
+
+                {editedMaintainers.length > 0 ? (
+                  <div className="space-y-1.5">
+                    {editedMaintainers.map((pubkey) => (
+                      <div
+                        key={pubkey}
+                        className="flex items-center gap-2 rounded-md border border-border/60 bg-muted/20 px-3 py-1.5"
+                      >
+                        <UserLink
+                          pubkey={pubkey}
+                          avatarSize="xs"
+                          nameClassName="text-sm"
+                          className="min-w-0 flex-1"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveMaintainer(pubkey)}
+                          className="shrink-0 text-muted-foreground transition-colors hover:text-foreground"
+                          aria-label={`Remove maintainer ${pubkey}`}
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="rounded-md border border-dashed border-border/70 bg-muted/10 px-3 py-3 text-xs text-muted-foreground">
+                    You have not listed any co-maintainers.
+                  </div>
+                )}
+
+                <div className="space-y-1.5">
+                  <div className="flex gap-2">
+                    <MaintainerUserInput
+                      placeholder="@name, npub1…, or hex pubkey"
+                      value={maintainerInput}
+                      onValueChange={(value) => {
+                        setMaintainerInput(value);
+                        setMaintainerInputError(undefined);
+                      }}
+                      onAdd={handleAddMaintainer}
+                      onSelectPubkey={addMaintainerPubkey}
+                      priorityPubkeys={maintainerPickerPriorityPubkeys}
+                      excludePubkeys={maintainerPickerExcludePubkeys}
+                      className="h-8 text-sm font-mono"
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={handleAddMaintainer}
+                      className="h-8 shrink-0 px-2.5"
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                  {maintainerInputError && (
+                    <p className="px-0.5 text-xs text-red-500">
+                      {maintainerInputError}
+                    </p>
+                  )}
+                </div>
+              </div>
+            ) : null}
+
+            {showMaintainerCoordination &&
+            selectedLead === repo.selectedMaintainer &&
+            coMaintainersListedByOthers.length > 0 ? (
+              <div className="space-y-2">
+                <div>
+                  <Label>Co-maintainers listed by others</Label>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    These people are also listed by co-maintainers you
+                    recognize.
+                  </p>
+                </div>
+
+                <Alert className="border-amber-500/50 bg-amber-500/5">
+                  <CircleAlert className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+                  <AlertTitle>
+                    Removing them from your list is not enough
+                  </AlertTitle>
+                  <AlertDescription className="text-muted-foreground">
+                    To fully remove one of these maintainers, the other
+                    maintainers who list them must remove them too.
+                  </AlertDescription>
+                </Alert>
+
+                <div className="space-y-1.5">
+                  {coMaintainersListedByOthers.map(
+                    ({ pubkey, listerPubkeys }) => (
+                      <div
+                        key={pubkey}
+                        className="rounded-md border border-border/60 bg-background/60 px-2.5 py-2"
+                      >
+                        <UserLink
+                          pubkey={pubkey}
+                          avatarSize="xs"
+                          nameClassName="text-sm"
+                        />
+                        <p className="ml-6 mt-1 text-xs leading-relaxed text-muted-foreground">
+                          Ask <MaintainerNameList pubkeys={listerPubkeys} /> to
+                          remove{" "}
+                          <UserName
+                            pubkey={pubkey}
+                            className="text-xs text-foreground"
+                            linkToProfile
+                          />{" "}
+                          from{" "}
+                          {listerPubkeys.length === 1
+                            ? "their repository announcement"
+                            : "each of their repository announcements"}{" "}
+                          too.
+                        </p>
+                      </div>
+                    ),
+                  )}
+                </div>
+              </div>
+            ) : null}
+
+            {temporarilyRemovedMaintainers.length > 0 ? (
+              <Alert className="border-amber-500/50 bg-amber-500/5">
+                <CircleAlert className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+                <AlertTitle>
+                  This can temporarily remove{" "}
+                  <MaintainerNameList pubkeys={temporarilyRemovedMaintainers} />
+                </AlertTitle>
+                <AlertDescription className="text-muted-foreground">
+                  {selectedLead !== repo.selectedMaintainer ? (
+                    <>
+                      Consider asking{" "}
+                      <MaintainerNameList pubkeys={[selectedLead]} /> to add{" "}
+                      <MaintainerNameList
+                        pubkeys={temporarilyRemovedMaintainers}
+                      />{" "}
+                      first. Otherwise saving will, at least temporarily, remove
+                      them from this maintainer chain.
+                    </>
+                  ) : (
+                    <>
+                      Restore{" "}
+                      <MaintainerNameList
+                        pubkeys={temporarilyRemovedMaintainers}
+                      />{" "}
+                      unless you intend to remove them from your lead
+                      announcement.
+                    </>
+                  )}
+                </AlertDescription>
+              </Alert>
+            ) : null}
+
+            {showMaintainerCoordination &&
+            selectedLead === NO_LEAD &&
+            stillRecognizedMaintainers.length > 0 ? (
+              <Alert className="border-sky-500/40 bg-sky-500/5">
+                <Network className="h-4 w-4 text-sky-600 dark:text-sky-400" />
+                <AlertTitle>Your change alone is not enough</AlertTitle>
+                <AlertDescription className="space-y-2 text-muted-foreground">
+                  {stillRecognizedMaintainers.map(
+                    ({ pubkey, listerPubkeys }) => (
+                      <p key={pubkey}>
+                        <UserName
+                          pubkey={pubkey}
+                          className="text-sm text-foreground"
+                          linkToProfile
+                        />{" "}
+                        is still listed by{" "}
+                        <MaintainerNameList pubkeys={listerPubkeys} />, whom you
+                        continue to recognize. Ask{" "}
+                        {listerPubkeys.length === 1
+                          ? "them"
+                          : "those maintainers"}{" "}
+                        to remove{" "}
+                        <UserName
+                          pubkey={pubkey}
+                          className="text-sm text-foreground"
+                          linkToProfile
+                        />{" "}
+                        too.
+                      </p>
+                    ),
+                  )}
+                </AlertDescription>
+              </Alert>
+            ) : null}
           </section>
 
           <Separator />
@@ -1545,7 +2005,7 @@ function RepoSettingsForm({
             <div>
               <h2 className="text-sm font-semibold">Infrastructure</h2>
               <p className="text-xs text-muted-foreground mt-0.5">
-                Grasp servers provide git hosting and Nostr relay in one.
+                GRASP servers provide git hosting and Nostr relay in one.
                 Alternatively, specify both a relay and a git server manually.
               </p>
             </div>
@@ -1554,116 +2014,29 @@ function RepoSettingsForm({
             <div className="space-y-3">
               <div className="flex items-center gap-1.5 px-1">
                 <GraspLogo className="h-3.5 w-3.5 text-pink-500" />
-                <span className="text-sm font-medium">Grasp servers</span>
+                <span className="text-sm font-medium">GRASP servers</span>
               </div>
 
               <div className="space-y-3 pl-1">
                 <p className="text-xs text-muted-foreground leading-relaxed">
-                  Grasp servers host your git data and act as relays. Clone and
+                  GRASP servers host your git data and act as relays. Clone and
                   relay URLs are auto-generated from your server selection.
                   Adding a new server requires pushing via{" "}
                   <code className="font-mono">ngit</code> afterwards.
                 </p>
 
-                {/* Server checklist */}
-                <div className="space-y-1.5">
-                  {allKnownDomains.map((domain) => {
-                    const checked = selectedDomains.includes(domain);
-                    const isDefault = DEFAULT_GRASP_SERVERS.includes(domain);
-                    const isUserList =
-                      isFromUserList &&
-                      resolvedServers.some((s) => s.domain === domain);
-                    const isFromAnnouncement =
-                      currentGraspDomains.includes(domain);
-                    return (
-                      <label
-                        key={domain}
-                        className={cn(
-                          "flex items-center gap-2.5 rounded-md px-2.5 py-1.5 cursor-pointer hover:bg-muted/40 transition-colors",
-                        )}
-                      >
-                        <Checkbox
-                          checked={checked}
-                          onCheckedChange={() => handleToggleServer(domain)}
-                          id={`edit-server-${domain}`}
-                        />
-                        <Server className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                        <span className="text-sm font-mono flex-1">
-                          {domain}
-                        </span>
-                        {isFromAnnouncement && (
-                          <Badge
-                            variant="outline"
-                            className="text-[10px] px-1.5 py-0 h-4 text-pink-500 border-pink-500/30"
-                          >
-                            current
-                          </Badge>
-                        )}
-                        {isUserList && !isDefault && !isFromAnnouncement && (
-                          <Badge
-                            variant="secondary"
-                            className="text-[10px] px-1.5 py-0 h-4"
-                          >
-                            your list
-                          </Badge>
-                        )}
-                        {isDefault && !isFromAnnouncement && (
-                          <Badge
-                            variant="outline"
-                            className="text-[10px] px-1.5 py-0 h-4 text-muted-foreground"
-                          >
-                            default
-                          </Badge>
-                        )}
-                      </label>
-                    );
-                  })}
-                </div>
-
-                {/* Add custom server */}
-                <div className="space-y-1.5">
-                  <div className="flex gap-2">
-                    <Input
-                      placeholder="relay.example.com"
-                      value={customDomain}
-                      disabled={validatingDomain}
-                      onChange={(e) => {
-                        setCustomDomain(e.target.value);
-                        setCustomDomainError(undefined);
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") {
-                          e.preventDefault();
-                          void handleAddCustomDomain();
-                        }
-                      }}
-                      className="h-8 text-sm font-mono"
-                    />
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => void handleAddCustomDomain()}
-                      disabled={validatingDomain}
-                      className="h-8 px-2.5 shrink-0"
-                    >
-                      {validatingDomain ? (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      ) : (
-                        <Plus className="h-3.5 w-3.5" />
-                      )}
-                    </Button>
-                  </div>
-                  {customDomainError && (
-                    <p className="text-xs text-red-500 px-0.5">
-                      {customDomainError}
-                    </p>
-                  )}
-                </div>
+                <GraspServerSelector
+                  selectedDomains={selectedDomains}
+                  onSelectedDomainsChange={setSelectedDomains}
+                  resolvedServers={resolvedServers}
+                  isFromUserList={isFromUserList}
+                  currentDomains={currentGraspDomains}
+                  showTitle={false}
+                />
 
                 {!hasInfrastructure && (
                   <p className="text-xs text-amber-600 dark:text-amber-400 px-0.5">
-                    Select at least one Grasp server, or add both a relay and a
+                    Select at least one GRASP server, or add both a relay and a
                     git server below.
                   </p>
                 )}
@@ -1721,7 +2094,7 @@ function RepoSettingsForm({
 
               <CollapsibleContent className="space-y-3 pt-2 pl-1">
                 <p className="text-xs text-muted-foreground leading-relaxed">
-                  Additional Nostr relay URLs beyond Grasp servers.
+                  Additional Nostr relay URLs beyond GRASP servers.
                 </p>
 
                 {otherRelays.length > 0 && (
@@ -1832,7 +2205,7 @@ function RepoSettingsForm({
 
               <CollapsibleContent className="space-y-3 pt-2 pl-1">
                 <p className="text-xs text-muted-foreground leading-relaxed">
-                  Additional raw git clone URLs beyond Grasp servers (e.g.
+                  Additional raw git clone URLs beyond GRASP servers (e.g.
                   GitHub mirrors).
                 </p>
 
@@ -2136,6 +2509,19 @@ function MaintainerUserInput({
   );
 }
 
+function MaintainerNameList({ pubkeys }: { pubkeys: string[] }) {
+  return (
+    <span className="inline">
+      {pubkeys.map((pubkey, index) => (
+        <span key={pubkey}>
+          {index > 0 && (index === pubkeys.length - 1 ? " and " : ", ")}
+          <UserName pubkey={pubkey} className="text-inherit" linkToProfile />
+        </span>
+      ))}
+    </span>
+  );
+}
+
 function computeMaintainerListers(
   listedPubkeys: string[],
   listerPubkeys: string[],
@@ -2171,18 +2557,24 @@ function computeMaintainerListers(
   return listedByPubkey;
 }
 
-function MaintainerListedBy({ pubkeys }: { pubkeys: string[] }) {
+function MaintainerListedBy({
+  pubkeys,
+  label = "Listed by",
+}: {
+  pubkeys: string[];
+  label?: string;
+}) {
   if (pubkeys.length === 0) {
     return (
       <span className="shrink-0 text-[11px] text-muted-foreground">
-        Not listed yet
+        {label === "Listed by" ? "Not listed yet" : `${label} unknown`}
       </span>
     );
   }
 
   return (
     <div className="flex min-w-0 max-w-full shrink items-center gap-1.5 text-[11px] text-muted-foreground">
-      <span className="shrink-0">Listed by</span>
+      <span className="shrink-0">{label}</span>
       <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
         {pubkeys.map((pubkey) => (
           <span key={pubkey} className="inline-flex min-w-0 items-center gap-1">

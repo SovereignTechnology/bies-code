@@ -8,6 +8,7 @@ import {
   Trash2,
   GitMerge,
   Check,
+  AlertTriangle,
 } from "lucide-react";
 
 interface StatusTabConfig {
@@ -74,7 +75,7 @@ const prStatusOverrides: Partial<
 };
 
 interface StatusTabsProps {
-  /** Count of items per status (statuses with 0 count are still shown) */
+  /** Count of items per status */
   counts: Record<IssueStatus, number>;
   /** Currently selected statuses */
   selected: IssueStatus[];
@@ -82,6 +83,8 @@ interface StatusTabsProps {
   onChange: (selected: IssueStatus[]) => void;
   /** Use PR labels (e.g. "Merged" instead of "Resolved") */
   variant?: "issue" | "pr";
+  /** De-emphasized counts for invitee-addressed items */
+  secondaryCounts?: Partial<Record<IssueStatus, number>>;
   className?: string;
 }
 
@@ -95,6 +98,7 @@ export function StatusTabs({
   selected,
   onChange,
   variant = "issue",
+  secondaryCounts,
   className,
 }: StatusTabsProps) {
   const toggle = (status: IssueStatus) => {
@@ -105,10 +109,12 @@ export function StatusTabs({
     }
   };
 
-  // Only show statuses that have items OR are currently selected
-  const visibleStatuses = (
-    Object.keys(issueStatusConfig) as IssueStatus[]
-  ).filter((status) => counts[status] > 0 || selected.includes(status));
+  const statuses = (Object.keys(issueStatusConfig) as IssueStatus[]).filter(
+    (status) =>
+      counts[status] > 0 ||
+      (secondaryCounts?.[status] ?? 0) > 0 ||
+      selected.includes(status),
+  );
 
   return (
     <div
@@ -116,7 +122,7 @@ export function StatusTabs({
       role="group"
       aria-label="Filter by status"
     >
-      {visibleStatuses.map((status) => {
+      {statuses.map((status) => {
         const config = issueStatusConfig[status];
         const override =
           variant === "pr" ? prStatusOverrides[status] : undefined;
@@ -124,6 +130,7 @@ export function StatusTabs({
         const label = override?.label ?? config.label;
         const isActive = selected.includes(status);
         const count = counts[status];
+        const secondaryCount = secondaryCounts?.[status] ?? 0;
 
         return (
           <button
@@ -159,6 +166,23 @@ export function StatusTabs({
             >
               {count}
             </span>
+            {secondaryCount > 0 && (
+              <span
+                className="-ml-0.5 inline-flex items-center gap-0.5 text-xs font-normal tabular-nums text-muted-foreground"
+                title={`${secondaryCount} ${
+                  secondaryCount === 1 ? "item" : "items"
+                } sent to other repositories`}
+                aria-label={`${secondaryCount} ${
+                  secondaryCount === 1 ? "item" : "items"
+                } sent to other repositories`}
+              >
+                <AlertTriangle
+                  className="h-3 w-3 text-amber-600 dark:text-amber-400"
+                  aria-hidden="true"
+                />
+                {secondaryCount}
+              </span>
+            )}
           </button>
         );
       })}

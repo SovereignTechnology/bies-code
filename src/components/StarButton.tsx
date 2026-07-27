@@ -5,8 +5,8 @@
  * maintainer's announcement event. Unstarring sends a NIP-09 deletion
  * request for the user's existing star event.
  *
- * The star count is deduplicated across all maintainer announcements so a
- * user who starred multiple announcements for the same repo is counted once.
+ * The star count is deduplicated across accepted maintainer announcements so
+ * an unaccepted invitation cannot contribute social proof to the repository.
  *
  * Clicking the count opens a popover listing all stargazers.
  *
@@ -44,10 +44,10 @@ interface StarButtonProps {
    */
   targetAnnouncement: NostrEvent | undefined;
   /**
-   * All announcement events for this repo (used for the deduplicated count).
+   * Accepted announcement events for this repo (used for the count).
    */
   allAnnouncements: NostrEvent[] | undefined;
-  /** Repo coordinate strings for relay group keying. */
+  /** Accepted repo coordinates for relay group keying. */
   repoCoords: string[];
   className?: string;
 }

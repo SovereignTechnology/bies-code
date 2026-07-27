@@ -17,6 +17,10 @@ import { GitPullRequest, X } from "lucide-react";
 import { useRepoContext } from "./RepoContext";
 import { useRepoCI } from "@/hooks/useCI";
 import { CIRunRow, CITriggerRefBadge } from "@/components/ci/CIChecksPanel";
+import {
+  RepoItemAttributionIndicator,
+  RepoItemAttributionWarning,
+} from "@/components/RepoItemAttributionWarning";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -28,6 +32,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { eventIdToNevent } from "@/lib/routeUtils";
+import { hasAcceptedRepositoryReference, type ResolvedRepo } from "@/lib/nip34";
 import type { CIWorkflowRun } from "@/lib/ci";
 import { useActiveAccount } from "applesauce-react/hooks";
 
@@ -38,7 +43,7 @@ export default function RepoActionsPage() {
   const repo = resolved?.repo;
   const account = useActiveAccount();
   const isMaintainer =
-    !!account && !!repo?.maintainerSet.includes(account.pubkey);
+    !!account && !!repo?.confirmedMaintainers.includes(account.pubkey);
 
   const runs = useRepoCI(repo?.allCoordinates, resolved?.repoRelayGroup);
 
@@ -72,6 +77,27 @@ export default function RepoActionsPage() {
         (triggerFilter === ALL || run.trigger === triggerFilter),
     );
   }, [runs, workflowFilter, triggerFilter]);
+
+  const visibleUnconfirmedRuns = useMemo(() => {
+    if (!repo || !filteredRuns) return [];
+    return filteredRuns.filter(
+      (run) =>
+        !hasAcceptedRepositoryReference(workflowRunRepoCoords(run), repo),
+    );
+  }, [filteredRuns, repo]);
+
+  const unconfirmedRunKeys = useMemo(
+    () => new Set(visibleUnconfirmedRuns.map((run) => run.key)),
+    [visibleUnconfirmedRuns],
+  );
+  const visibleAcceptedRuns = useMemo(
+    () => filteredRuns?.filter((run) => !unconfirmedRunKeys.has(run.key)) ?? [],
+    [filteredRuns, unconfirmedRunKeys],
+  );
+  const unconfirmedRepoCoords = useMemo(
+    () => visibleUnconfirmedRuns.flatMap(workflowRunRepoCoords),
+    [visibleUnconfirmedRuns],
+  );
 
   useSeoMeta({
     title: repo ? `Actions - ${repo.name} - ngit` : "Actions - ngit",
@@ -143,7 +169,7 @@ export default function RepoActionsPage() {
             ))}
           </ul>
         </div>
-      ) : filteredRuns.length === 0 ? (
+      ) : visibleAcceptedRuns.length === 0 ? (
         <Card className="border-dashed">
           <CardContent className="py-12 px-8 text-center">
             <p className="text-muted-foreground max-w-sm mx-auto">
@@ -156,25 +182,98 @@ export default function RepoActionsPage() {
       ) : (
         <div className="rounded-lg border border-border overflow-hidden">
           <ul className="divide-y divide-border">
-            {filteredRuns.map((run) => (
-              <CIRunRow
+            {visibleAcceptedRuns.map((run) => (
+              <RepoActionRunRow
                 key={run.key}
                 run={run}
+                repo={repo}
+                basePath={basePath}
                 canRetry={isMaintainer}
-                triggerContext={
-                  <RunTriggerContext
-                    run={run}
-                    basePath={basePath}
-                    repoRelays={repo?.relays ?? []}
-                  />
-                }
               />
             ))}
           </ul>
         </div>
       )}
+
+      {repo && visibleUnconfirmedRuns.length > 0 && (
+        <section className="mt-6">
+          <RepoItemAttributionWarning
+            repo={repo}
+            repoCoords={unconfirmedRepoCoords}
+            itemLabel="workflow"
+            pageSuffix="/actions"
+            count={visibleUnconfirmedRuns.length}
+            className="rounded-b-none shadow-none"
+          />
+          <div className="overflow-hidden rounded-b-lg border border-t-0 border-amber-500/40">
+            <ul className="divide-y divide-border">
+              {visibleUnconfirmedRuns.map((run) => (
+                <RepoActionRunRow
+                  key={run.key}
+                  run={run}
+                  repo={repo}
+                  basePath={basePath}
+                  canRetry={isMaintainer}
+                />
+              ))}
+            </ul>
+          </div>
+        </section>
+      )}
     </div>
   );
+}
+
+function RepoActionRunRow({
+  run,
+  repo,
+  basePath,
+  canRetry,
+}: {
+  run: CIWorkflowRun;
+  repo: ResolvedRepo | undefined;
+  basePath: string;
+  canRetry: boolean;
+}) {
+  const repoCoords = workflowRunRepoCoords(run);
+  const needsAttributionCheck =
+    repo !== undefined && !hasAcceptedRepositoryReference(repoCoords, repo);
+
+  return (
+    <CIRunRow
+      run={run}
+      canRetry={canRetry}
+      attributionIndicator={
+        needsAttributionCheck ? (
+          <RepoItemAttributionIndicator
+            repo={repo}
+            repoCoords={repoCoords}
+            itemLabel="workflow"
+            pageSuffix="/actions"
+          />
+        ) : undefined
+      }
+      triggerContext={
+        <RunTriggerContext
+          run={run}
+          basePath={basePath}
+          repoRelays={repo?.relays ?? []}
+        />
+      }
+    />
+  );
+}
+
+/**
+ * Use the workflow result/progress marker as the attribution container.
+ * Job coordinates are only a fallback for incomplete container events.
+ */
+function workflowRunRepoCoords(run: CIWorkflowRun): string[] {
+  const containerCoords =
+    run.workflowResult?.repoCoords ?? run.pendingRun?.repoCoords;
+  if (containerCoords && containerCoords.length > 0) return containerCoords;
+
+  return Array.from(new Set(run.jobs.flatMap((job) => job.result.repoCoords)));
 }
 
 /**

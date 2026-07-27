@@ -1187,7 +1187,7 @@ function PinnedRepoCard({
           {/* Footer */}
           <div className="flex items-center gap-3 flex-wrap">
             <div className="flex items-center gap-2 flex-wrap">
-              {repo.maintainerSet.map((pk) => (
+              {repo.confirmedMaintainers.map((pk) => (
                 <UserLink
                   key={pk}
                   pubkey={pk}
@@ -1335,7 +1335,7 @@ function UserRepoCard({
 
               <div className="flex items-center gap-3 ml-9 flex-wrap">
                 <div className="flex items-center gap-2 flex-wrap">
-                  {repo.maintainerSet.map((pk) => (
+                  {repo.confirmedMaintainers.map((pk) => (
                     <UserLink
                       key={pk}
                       pubkey={pk}

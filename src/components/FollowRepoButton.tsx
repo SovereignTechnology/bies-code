@@ -2,12 +2,12 @@
  * FollowRepoButton — follow / unfollow a repository, with a followers popover.
  *
  * Manages the NIP-51 Git repositories follow list (kind:10018). When the user
- * follows, ALL announcement coordinates from the recursive maintainer set are
- * added so the follow is discoverable via any maintainer's announcement. When
- * unfollowing, all those coordinates are removed.
+ * follows, all accepted maintainer coordinates are added so the follow is
+ * discoverable via any accepted maintainer's announcement. Unaccepted
+ * invitations are deliberately excluded from both the action and count.
  *
- * The follower count is deduplicated across all maintainer announcements so a
- * user who followed multiple announcements for the same repo is counted once.
+ * The follower count is deduplicated across accepted maintainer announcements
+ * so a user who followed multiple announcements is counted once.
  *
  * Clicking the count opens a popover listing all followers.
  *

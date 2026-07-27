@@ -42,7 +42,7 @@ import {
   isNonHttpUrl,
 } from "./git-http";
 import { UrlStateManager, UrlTracker } from "./url-state";
-import { StateEventManager } from "./state-event";
+import { PROVISIONING_BACKOFF_MAX_MS, StateEventManager } from "./state-event";
 import {
   pushRefUpdateToGraspServers,
   type PushDeliverySummary,
@@ -365,9 +365,16 @@ export class GitGraspPool {
       options.knownCorsBlockedOrigins,
     );
     this.cache = new GitObjectCache(options.infoRefsTtlMs);
-    this.http = new GitHttpClient(this.cache, this.cors);
+    this.http = new GitHttpClient(
+      this.cache,
+      this.cors,
+      options.expectRepositoryProvisioning,
+    );
     this.urlManager = new UrlStateManager(this.cors);
     this.stateManager = new StateEventManager();
+    if (options.expectRepositoryProvisioning) {
+      this.stateManager.setMaxBackoffMs(PROVISIONING_BACKOFF_MAX_MS);
+    }
 
     // Add initial URLs
     this.urlManager.addUrls(options.cloneUrls);
@@ -388,6 +395,19 @@ export class GitGraspPool {
     this.stateEventSub = stateEvent$.subscribe((stateEvent) => {
       this.onStateEventChange(stateEvent);
     });
+  }
+
+  /**
+   * Configure the pool for a repository that GRASP is actively provisioning.
+   * Pools are shared, so this may be enabled after an earlier consumer already
+   * classified the not-yet-created endpoints.
+   */
+  setRepositoryProvisioningExpected(expected: boolean): void {
+    this.http.setExpectRepositoryProvisioning(expected);
+    this.stateManager.setMaxBackoffMs(
+      expected ? PROVISIONING_BACKOFF_MAX_MS : undefined,
+    );
+    if (expected) this.urlManager.resetFailures();
   }
 
   // -----------------------------------------------------------------------
@@ -1277,7 +1297,9 @@ export class GitGraspPool {
 
         if (!gitIsAhead) {
           // State is ahead of git — servers haven't caught up yet, retry
-          this.stateManager.scheduleBackoffFetch(() => this.startFetch());
+          this.stateManager.scheduleBackoffFetch(() =>
+            this.refreshAdvertisedRefs(),
+          );
           // Update retryAt in state now that it's been set
           this.setState((prev) => ({
             ...prev,
@@ -1294,7 +1316,9 @@ export class GitGraspPool {
       // All failed — retry if there are retryable URLs
       const hasRetryable = this.urlManager.getLiveUrls().length > 0;
       if (hasRetryable && this.stateManager.currentState) {
-        this.stateManager.scheduleBackoffFetch(() => this.startFetch());
+        this.stateManager.scheduleBackoffFetch(() =>
+          this.refreshAdvertisedRefs(),
+        );
       }
     }
   }

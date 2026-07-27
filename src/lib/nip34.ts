@@ -356,13 +356,13 @@ export function isGraspCloneUrl(url: string): boolean {
 }
 
 /**
- * Extract the domain (hostname) from a Grasp clone URL.
+ * Extract the domain (host and optional port) from a Grasp clone URL.
  * Returns undefined if the URL is not a valid Grasp clone URL or cannot be parsed.
  */
 export function graspCloneUrlDomain(url: string): string | undefined {
   if (!isGraspCloneUrl(url)) return undefined;
   try {
-    return new URL(url).hostname;
+    return new URL(url).host;
   } catch {
     return undefined;
   }
@@ -798,20 +798,24 @@ export interface ResolvedRepo {
 
   // --- Maintainer set ---
   /**
-   * Confirmed maintainers: pubkeys that have published their own announcement
-   * for this dTag AND whose announcement lists at least one already-confirmed
-   * maintainer (mutual acknowledgment). The selectedMaintainer is always
-   * confirmed. This is the safe set to display publicly — it cannot be
-   * inflated by a bad actor simply listing a reputable pubkey.
+   * Full recursive authorization set rooted at selectedMaintainer. This
+   * intentionally matches ngit and ngit-grasp: listed maintainers are trusted
+   * for state and collaboration events even before they accept the invitation.
    */
   maintainerSet: string[];
   /**
-   * "30617:<pubkey>:<dTag>" for every confirmed maintainer — used for #a tag
-   * queries on issues, PRs, and patches.
+   * Maintainers that have explicitly linked their announcement back into the
+   * accepted component. Use this set for public identity and mutation controls;
+   * the selectedMaintainer is always included.
+   */
+  confirmedMaintainers: string[];
+  /**
+   * "30617:<pubkey>:<dTag>" for every recursively authorized maintainer — used
+   * for #a tag queries on issues, PRs, and patches.
    */
   allCoordinates: string[];
   /**
-   * Pubkeys that are not confirmed maintainers. Covers two cases:
+   * Recursively authorized pubkeys that have not accepted. Covers two cases:
    *   1. Listed by someone in the confirmed set but have no announcement at all.
    *   2. Have an announcement for this dTag but don't list any confirmed
    *      maintainer back (no reciprocation) — the reputation-hijack vector.
@@ -836,10 +840,34 @@ export interface ResolvedRepo {
   descriptionSource: FieldProvenance;
 }
 
+/**
+ * Whether an issue, PR, or patch explicitly references the selected
+ * maintainer or a maintainer with a reciprocal path back into that accepted
+ * component.
+ *
+ * Items that reference only directionally authorized / invited coordinates
+ * remain discoverable for ngit and GRASP interoperability, but their
+ * repository attribution is not confirmed and the UI must say so.
+ */
+export function hasAcceptedRepositoryReference(
+  repoCoords: Iterable<string>,
+  repo: Pick<ResolvedRepo, "confirmedMaintainers" | "dTag">,
+): boolean {
+  const acceptedCoordinates = new Set(
+    repo.confirmedMaintainers.map((pubkey) =>
+      repoCoordinate(pubkey, repo.dTag),
+    ),
+  );
+  for (const coordinate of repoCoords) {
+    if (acceptedCoordinates.has(coordinate)) return true;
+  }
+  return false;
+}
+
 function selectRepoLeadAnchor(resolved: ResolvedRepo): string {
   return (
     computeMaintainerLeadership(
-      resolved.maintainerSet,
+      resolved.confirmedMaintainers,
       resolved.maintainerEdges,
     ).leadMaintainer ?? resolved.selectedMaintainer
   );
@@ -2369,9 +2397,12 @@ export function resolveChain(
     }
   }
 
-  // Collect all announcements for confirmed pubkeys only
+  // Merge every announcement in the recursively authorized graph. This is the
+  // same consuming model used by ngit: metadata and infrastructure are pooled
+  // directionally from the selected coordinate, while reciprocal confirmation
+  // remains a separate display/publishing concern.
   const announcements: NostrEvent[] = [];
-  for (const pubkey of confirmed) {
+  for (const pubkey of reachable) {
     const ev = byPubkey.get(pubkey);
     if (ev) announcements.push(ev);
   }
@@ -2450,7 +2481,8 @@ export function resolveChain(
     }
   }
 
-  const maintainerSet = Array.from(confirmed);
+  const maintainerSet = Array.from(reachable);
+  const confirmedMaintainers = Array.from(confirmed);
 
   const allCloneUrls = cloneUrlProvenance.map((p) => p.value);
   const graspCloneUrls = allCloneUrls.filter(isGraspCloneUrl);
@@ -2478,8 +2510,9 @@ export function resolveChain(
     graspServerDomains,
     relays: relayProvenance.map((p) => p.value),
     maintainerSet,
+    confirmedMaintainers,
     allCoordinates: maintainerSet.map((pk) => repoCoordinate(pk, dTag)),
-    requestedMaintainers: pending,
+    requestedMaintainers: Array.from(new Set(pending)),
     labels,
     announcements,
     maintainerEdges: edges,
@@ -2488,6 +2521,108 @@ export function resolveChain(
     nameSource,
     descriptionSource,
   };
+}
+
+export interface RequestedRepositoryGroup {
+  /** Reciprocally confirmed maintainers of this requested repository. */
+  members: string[];
+  /** Requested pubkeys whose coordinates resolved to this repository group. */
+  referencedMaintainers: string[];
+  /** Unique lead within the requested repository, when one can be inferred. */
+  leadMaintainer?: string;
+  /** Whether the requested pubkey has a repository announcement for this id. */
+  hasAnnouncement: boolean;
+  /** Confirmed maintainers who sent a direct request into this group. */
+  requestingMaintainers: string[];
+  /** Members of this group who directly received the request. */
+  recipientMaintainers: string[];
+}
+
+/**
+ * Classify requested maintainers as existing repository groups or individual
+ * invitations without an announcement.
+ *
+ * Several requested pubkeys may already be reciprocal maintainers of the same
+ * repository. Those pubkeys collapse into one group so the UI does not present
+ * a repository-join request as several unrelated maintainer invitations.
+ */
+export function groupRequestedMaintainers(
+  repo: ResolvedRepo,
+  requestedMaintainers: Iterable<string> = repo.requestedMaintainers,
+): RequestedRepositoryGroup[] {
+  const referenced = new Set(requestedMaintainers);
+  const requested = new Set(repo.requestedMaintainers);
+  const announced = new Set(
+    repo.announcements.map((announcement) => announcement.pubkey),
+  );
+  const groups = new Map<string, RequestedRepositoryGroup>();
+
+  for (const referencedMaintainer of referenced) {
+    const hasAnnouncement = announced.has(referencedMaintainer);
+    const alternateRepo = hasAnnouncement
+      ? resolveChain(repo.announcements, referencedMaintainer, repo.dTag)
+      : undefined;
+    const members = alternateRepo?.confirmedMaintainers.filter((pubkey) =>
+      requested.has(pubkey),
+    ) ?? [referencedMaintainer];
+    if (!members.includes(referencedMaintainer)) {
+      members.unshift(referencedMaintainer);
+    }
+
+    const uniqueMembers = Array.from(new Set(members));
+    const key = `${hasAnnouncement ? "repository" : "invitation"}:${[
+      ...uniqueMembers,
+    ]
+      .sort()
+      .join(",")}`;
+    const existing = groups.get(key);
+    if (existing) {
+      if (!existing.referencedMaintainers.includes(referencedMaintainer)) {
+        existing.referencedMaintainers.push(referencedMaintainer);
+      }
+      continue;
+    }
+
+    const leadMaintainer = alternateRepo
+      ? computeMaintainerLeadership(
+          uniqueMembers,
+          alternateRepo.maintainerEdges,
+        ).leadMaintainer
+      : undefined;
+    groups.set(key, {
+      members: uniqueMembers,
+      referencedMaintainers: [referencedMaintainer],
+      leadMaintainer,
+      hasAnnouncement,
+      requestingMaintainers: [],
+      recipientMaintainers: [],
+    });
+  }
+
+  const confirmed = new Set(repo.confirmedMaintainers);
+  return Array.from(groups.values(), (group) => {
+    const members = new Set(group.members);
+    const requestEdges = repo.maintainerEdges.filter(
+      ({ from, to }) => confirmed.has(from) && members.has(to),
+    );
+    return {
+      ...group,
+      requestingMaintainers: Array.from(
+        new Set(
+          requestEdges.length > 0
+            ? requestEdges.map(({ from }) => from)
+            : [repo.selectedMaintainer],
+        ),
+      ),
+      recipientMaintainers: Array.from(
+        new Set(
+          requestEdges.length > 0
+            ? requestEdges.map(({ to }) => to)
+            : group.referencedMaintainers.slice(0, 1),
+        ),
+      ),
+    };
+  });
 }
 
 /**
@@ -2581,8 +2716,11 @@ export function groupIntoResolvedRepos(
             ? resolved
             : (resolveChain(events, leadAnchor, dTag) ?? resolved);
 
-        // Mark all members of this component as processed
-        for (const pk of anchored.maintainerSet) {
+        // Repository identity is the reciprocally accepted component, not the
+        // full directional authorization closure. Marking invited maintainers
+        // here can suppress their separate same-identifier repository when an
+        // announcement that points at them is processed first.
+        for (const pk of anchored.confirmedMaintainers) {
           processedComponents.add(`${pk}:${dTag}`);
         }
 

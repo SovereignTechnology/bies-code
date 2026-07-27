@@ -41,7 +41,16 @@ import {
   Zap,
 } from "lucide-react";
 import { UserAvatar } from "@/components/UserAvatar";
-import type { IssueStatus, ResolvedIssueLite } from "@/lib/nip34";
+import {
+  hasAcceptedRepositoryReference,
+  type IssueStatus,
+  type ResolvedIssueLite,
+  type ResolvedRepo,
+} from "@/lib/nip34";
+import {
+  RepoItemAttributionIndicator,
+  RepoItemAttributionWarning,
+} from "@/components/RepoItemAttributionWarning";
 
 const DEFAULT_STATUS_FILTER: IssueStatus[] = ["open"];
 
@@ -62,8 +71,8 @@ export default function RepoIssuesPage() {
   const [authorFilter, setAuthorFilter] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
 
-  // Compute per-status counts from the full (unfiltered) list.
-  const statusCounts = useMemo(() => {
+  // Status counts describe only work addressed to the accepted repository.
+  const { statusCounts, unconfirmedStatusCounts } = useMemo(() => {
     const counts: Record<IssueStatus, number> = {
       open: 0,
       draft: 0,
@@ -71,13 +80,27 @@ export default function RepoIssuesPage() {
       closed: 0,
       deleted: 0,
     };
-    if (issues) {
+    const unconfirmedCounts: Record<IssueStatus, number> = {
+      open: 0,
+      draft: 0,
+      resolved: 0,
+      closed: 0,
+      deleted: 0,
+    };
+    if (issues && repo) {
       for (const issue of issues) {
-        counts[issue.status]++;
+        if (hasAcceptedRepositoryReference(issue.repoCoords, repo)) {
+          counts[issue.status]++;
+        } else {
+          unconfirmedCounts[issue.status]++;
+        }
       }
     }
-    return counts;
-  }, [issues]);
+    return {
+      statusCounts: counts,
+      unconfirmedStatusCounts: unconfirmedCounts,
+    };
+  }, [issues, repo]);
 
   // Collect all unique labels and authors from resolved issues.
   const { allLabels, allAuthors } = useMemo(() => {
@@ -123,6 +146,25 @@ export default function RepoIssuesPage() {
       return true;
     });
   }, [issues, statusFilter, labelFilter, authorFilter, searchQuery]);
+
+  const { visibleAcceptedIssues, visibleUnconfirmedIssues } = useMemo(() => {
+    if (!filteredIssues || !repo) {
+      return { visibleAcceptedIssues: [], visibleUnconfirmedIssues: [] };
+    }
+    const accepted: ResolvedIssueLite[] = [];
+    const unconfirmed: ResolvedIssueLite[] = [];
+    for (const issue of filteredIssues) {
+      if (hasAcceptedRepositoryReference(issue.repoCoords, repo)) {
+        accepted.push(issue);
+      } else {
+        unconfirmed.push(issue);
+      }
+    }
+    return {
+      visibleAcceptedIssues: accepted,
+      visibleUnconfirmedIssues: unconfirmed,
+    };
+  }, [filteredIssues, repo]);
 
   // "Active" means filters differ from the default state
   const hasActiveFilters =
@@ -236,6 +278,7 @@ export default function RepoIssuesPage() {
         <div className="flex items-center bg-muted/40 px-3 py-1.5 overflow-x-auto">
           <StatusTabs
             counts={statusCounts}
+            secondaryCounts={unconfirmedStatusCounts}
             selected={statusFilter}
             onChange={(v) => setStatusFilter(v as IssueStatus[])}
             className="border-b-0 pb-0 mb-0 flex-1"
@@ -259,7 +302,7 @@ export default function RepoIssuesPage() {
               <IssueSkeleton key={i} />
             ))}
           </ul>
-        ) : filteredIssues.length === 0 ? (
+        ) : visibleAcceptedIssues.length === 0 ? (
           <div className="py-12 text-center">
             <p className="text-muted-foreground">
               {hasActiveFilters
@@ -269,22 +312,51 @@ export default function RepoIssuesPage() {
             <p className="text-muted-foreground/60 text-sm mt-1">
               {hasActiveFilters
                 ? "Try adjusting your filters"
-                : "Be the first to open an issue"}
+                : "Issues sent to this repository will appear here"}
             </p>
           </div>
         ) : (
           <ul className="divide-y divide-border">
-            {filteredIssues.map((issue) => (
+            {visibleAcceptedIssues.map((issue) => (
               <IssueRow
                 key={issue.id}
                 issue={issue}
                 repoPath={basePath}
                 repoRelays={repo?.relays ?? []}
+                repo={repo}
               />
             ))}
           </ul>
         )}
       </div>
+
+      {repo && visibleUnconfirmedIssues.length > 0 && (
+        <section className="mt-6">
+          <RepoItemAttributionWarning
+            repo={repo}
+            repoCoords={visibleUnconfirmedIssues.flatMap(
+              (issue) => issue.repoCoords,
+            )}
+            itemLabel="issue"
+            pageSuffix="/issues"
+            count={visibleUnconfirmedIssues.length}
+            className="rounded-b-none shadow-none"
+          />
+          <div className="overflow-hidden rounded-b-lg border border-t-0 border-amber-500/40">
+            <ul className="divide-y divide-border">
+              {visibleUnconfirmedIssues.map((issue) => (
+                <IssueRow
+                  key={issue.id}
+                  issue={issue}
+                  repoPath={basePath}
+                  repoRelays={repo.relays}
+                  repo={repo}
+                />
+              ))}
+            </ul>
+          </div>
+        </section>
+      )}
     </div>
   );
 }
@@ -302,10 +374,12 @@ function IssueRow({
   issue,
   repoPath,
   repoRelays,
+  repo,
 }: {
   issue: ResolvedIssueLite;
   repoPath: string;
   repoRelays: string[];
+  repo: ResolvedRepo | undefined;
 }) {
   const lastActive = formatDistanceToNow(
     new Date(issue.lastActivityAt * 1000),
@@ -313,12 +387,15 @@ function IssueRow({
   );
 
   const nevent = eventIdToNevent(issue.id, repoRelays.slice(0, 1));
+  const needsAttributionCheck =
+    repo !== undefined &&
+    !hasAcceptedRepositoryReference(issue.repoCoords, repo);
 
   return (
-    <li className="group hover:bg-accent/40 transition-colors">
+    <li className="group flex items-stretch hover:bg-accent/40 transition-colors">
       <Link
         to={`${repoPath}/issues/${nevent}`}
-        className="flex items-start gap-3 px-3 py-2.5 text-sm"
+        className="flex min-w-0 flex-1 items-start gap-3 px-3 py-2.5 text-sm"
       >
         {/* Status icon */}
         <StatusIcon status={issue.status} className="mt-0.5" />
@@ -378,6 +455,16 @@ function IssueRow({
           )}
         </div>
       </Link>
+      {needsAttributionCheck && (
+        <div className="flex shrink-0 items-center pr-2">
+          <RepoItemAttributionIndicator
+            repo={repo}
+            repoCoords={issue.repoCoords}
+            itemLabel="issue"
+            pageSuffix={`/issues/${nevent}`}
+          />
+        </div>
+      )}
     </li>
   );
 }

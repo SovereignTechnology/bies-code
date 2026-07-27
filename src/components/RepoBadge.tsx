@@ -25,6 +25,8 @@
  *              and "/" separator are hidden. Useful in contexts where the
  *              author is already clear from surrounding UI (e.g. notifications).
  *
+ * to           Optional route override for links to an equivalent sub-page.
+ *
  * className    Extra classes forwarded to the outer element.
  *
  * Efficiency
@@ -36,6 +38,7 @@
  * • Avatar and username share the same profile lookup via UserAvatar/UserName.
  */
 
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import { use$ } from "@/hooks/use$";
 import { useEventStore } from "@/hooks/useEventStore";
@@ -139,7 +142,10 @@ interface RepoBadgeProps {
    */
   asSpan?: boolean;
 
-  /** Extra classes forwarded to the outer <span>. */
+  /** Override the repository link destination. */
+  to?: string;
+
+  /** Extra classes forwarded to the outer element. */
   className?: string;
 }
 
@@ -159,6 +165,7 @@ export function RepoBadge({
   repoName,
   repoNameOnly,
   asSpan,
+  to,
   className,
 }: RepoBadgeProps) {
   const parsed = parseCoord(coord);
@@ -184,6 +191,7 @@ export function RepoBadge({
       repoName={repoName}
       repoNameOnly={repoNameOnly}
       asSpan={asSpan}
+      to={to}
       className={className}
     />
   );
@@ -196,6 +204,7 @@ function RepoBadgeInner({
   repoName,
   repoNameOnly,
   asSpan,
+  to,
   className,
 }: {
   pubkey: string;
@@ -203,6 +212,7 @@ function RepoBadgeInner({
   repoName?: string;
   repoNameOnly?: boolean;
   asSpan?: boolean;
+  to?: string;
   className?: string;
 }) {
   const name = useRepoName(pubkey, dTag, repoName);
@@ -242,11 +252,143 @@ function RepoBadgeInner({
 
   return (
     <Link
-      to={repoPath}
+      to={to ?? repoPath}
       onClick={(e) => e.stopPropagation()}
       className={badgeClass}
     >
       {content}
+    </Link>
+  );
+}
+
+export interface RepoGroupBadgeMaintainer {
+  pubkey: string;
+  to: string;
+}
+
+interface RepoGroupBadgeProps {
+  maintainers: RepoGroupBadgeMaintainer[];
+  repoName: string;
+  leadMaintainer?: string;
+  initialMaintainer?: string;
+  className?: string;
+}
+
+function RepoGroupMaintainerSegment({
+  maintainer,
+  selected,
+  lead,
+  onSelect,
+  className,
+}: {
+  maintainer: RepoGroupBadgeMaintainer;
+  selected: boolean;
+  lead?: boolean;
+  onSelect: (pubkey: string) => void;
+  className?: string;
+}) {
+  return (
+    <span
+      onMouseEnter={() => onSelect(maintainer.pubkey)}
+      onPointerDown={() => onSelect(maintainer.pubkey)}
+      title={lead ? "Lead maintainer" : "Open through this maintainer"}
+      className={cn(
+        "inline-flex items-center gap-1 px-2 py-0.5 transition-colors",
+        selected && "bg-secondary/80",
+        className,
+      )}
+    >
+      <UserAvatar
+        pubkey={maintainer.pubkey}
+        size="xs"
+        className="h-3.5 w-3.5 shrink-0"
+        noHoverCard
+      />
+      <UserName
+        pubkey={maintainer.pubkey}
+        className="sr-only text-xs font-normal text-muted-foreground sm:not-sr-only sm:max-w-28 sm:truncate"
+        noHoverCard
+      />
+    </span>
+  );
+}
+
+/**
+ * Multi-maintainer extension of RepoBadge.
+ *
+ * A unique lead is shown as `lead +N / repo`; without a lead every
+ * maintainer remains visible. The entire badge is one repository link.
+ * Hovering or pressing a maintainer selects which equivalent coordinate that
+ * link opens.
+ */
+export function RepoGroupBadge({
+  maintainers,
+  repoName,
+  leadMaintainer,
+  initialMaintainer,
+  className,
+}: RepoGroupBadgeProps) {
+  const initialPubkey =
+    leadMaintainer ?? initialMaintainer ?? maintainers[0]?.pubkey;
+  const [selectedPubkey, setSelectedPubkey] = useState(initialPubkey);
+  const selectedMaintainer =
+    maintainers.find((maintainer) => maintainer.pubkey === selectedPubkey) ??
+    maintainers[0];
+
+  if (!selectedMaintainer) return null;
+
+  const lead = leadMaintainer
+    ? maintainers.find((maintainer) => maintainer.pubkey === leadMaintainer)
+    : undefined;
+  const otherMaintainerCount = lead ? maintainers.length - 1 : 0;
+
+  return (
+    <Link
+      to={selectedMaintainer.to}
+      onClick={(event) => event.stopPropagation()}
+      title="Open this repository"
+      className={cn(
+        "inline-flex max-w-full items-stretch overflow-hidden rounded-full bg-secondary text-xs text-secondary-foreground align-middle transition-colors hover:bg-secondary/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        className,
+      )}
+    >
+      {lead ? (
+        <>
+          <RepoGroupMaintainerSegment
+            maintainer={lead}
+            selected={false}
+            lead
+            onSelect={setSelectedPubkey}
+          />
+          {otherMaintainerCount > 0 && (
+            <span
+              className="py-0.5 pr-2 text-muted-foreground"
+              title={`${otherMaintainerCount} other ${
+                otherMaintainerCount === 1 ? "maintainer" : "maintainers"
+              }`}
+            >
+              +{otherMaintainerCount}
+            </span>
+          )}
+        </>
+      ) : (
+        maintainers.map((maintainer, index) => (
+          <RepoGroupMaintainerSegment
+            key={maintainer.pubkey}
+            maintainer={maintainer}
+            selected={
+              maintainers.length > 1 &&
+              selectedMaintainer.pubkey === maintainer.pubkey
+            }
+            onSelect={setSelectedPubkey}
+            className={cn(index > 0 && "border-l border-muted-foreground/20")}
+          />
+        ))
+      )}
+      <span className="inline-flex min-w-0 items-center py-0.5 pr-2 font-medium">
+        <span className="text-muted-foreground/40 font-normal">/</span>
+        <span className="ml-1 max-w-40 truncate">{repoName}</span>
+      </span>
     </Link>
   );
 }

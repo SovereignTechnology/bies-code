@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { NostrEvent } from "nostr-tools";
 import { Link } from "react-router-dom";
-import { repoToPath } from "@/lib/routeUtils";
+import { eventIdToNevent, repoToPath } from "@/lib/routeUtils";
 import { compactNumber } from "@/lib/utils";
 import { useSeoMeta } from "@unhead/react";
 import { useProfile } from "@/hooks/useProfile";
@@ -37,6 +37,8 @@ import { Separator } from "@/components/ui/separator";
 import { Button } from "@/components/ui/button";
 import { gitIndexRelays, fallbackRelays } from "@/services/settings";
 import { ArrowLeft, MessageCircle, Zap, Users, Clock, Pin } from "lucide-react";
+import { hasAcceptedRepositoryReference } from "@/lib/nip34";
+import { RepoItemAttributionWarning } from "@/components/RepoItemAttributionWarning";
 
 export default function IssuePage() {
   const { pubkey, repoId, resolved, issueId, nip05 } = useRepoContext();
@@ -273,6 +275,21 @@ export default function IssuePage() {
 
       {/* Content */}
       <div className="container max-w-screen-xl px-4 md:px-8 py-6">
+        {issue &&
+          repo &&
+          !hasAcceptedRepositoryReference(issue.repoCoords, repo) && (
+            <RepoItemAttributionWarning
+              repo={repo}
+              repoCoords={issue.repoCoords}
+              itemLabel="issue"
+              pageSuffix={`/issues/${eventIdToNevent(
+                issue.id,
+                repo.relays.slice(0, 1),
+              )}`}
+              className="mb-6"
+            />
+          )}
+
         {!issue ? (
           <div className="min-h-[40vh] flex items-center justify-center">
             <div className="text-center space-y-3">

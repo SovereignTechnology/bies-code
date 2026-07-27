@@ -565,7 +565,7 @@ function GraspRelaysSection() {
       <CardHeader>
         <div className="flex items-start justify-between gap-2">
           <div className="space-y-1.5">
-            <CardTitle>Grasp Servers</CardTitle>
+            <CardTitle>GRASP servers</CardTitle>
             <CardDescription>
               Servers used to host your git repositories via the Grasp protocol
             </CardDescription>
@@ -603,7 +603,7 @@ function GraspRelaysSection() {
                 <Info className="h-4 w-4 text-blue-500 mt-0.5 shrink-0" />
                 <div className="flex-1 space-y-2">
                   <p className="text-xs text-muted-foreground leading-relaxed">
-                    You don&apos;t have a Grasp server list yet. These defaults
+                    You don&apos;t have a GRASP server list yet. These defaults
                     are used:
                   </p>
                   {account && (
@@ -762,7 +762,7 @@ function GraspRelaysSection() {
 
             {!account && (
               <p className="text-xs text-muted-foreground">
-                Log in to manage your Grasp server list.
+                Log in to manage your GRASP server list.
               </p>
             )}
           </>

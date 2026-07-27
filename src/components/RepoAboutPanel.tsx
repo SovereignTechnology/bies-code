@@ -57,6 +57,7 @@ import {
   computeMaintainerLeadership,
   getRepoRelays,
   getRepoUpstreams,
+  groupRequestedMaintainers,
   REPO_KIND,
   type ResolvedRepo,
 } from "@/lib/nip34";
@@ -72,7 +73,7 @@ import {
   getReplaceableAddress,
 } from "applesauce-core/helpers";
 import { cn } from "@/lib/utils";
-import { relayUrlToSegment } from "@/lib/routeUtils";
+import { relayUrlToSegment, repoToPath } from "@/lib/routeUtils";
 import { format } from "date-fns";
 import { useRepoContext } from "@/pages/repo/RepoContext";
 import { useActiveAccount } from "applesauce-react/hooks";
@@ -212,6 +213,103 @@ function GitServersSidebarSection({ urls }: { urls: string[] }) {
   );
 }
 
+function invitedRepositoryPath(
+  repo: ResolvedRepo,
+  pubkey: string,
+  pageSuffix: string,
+): string {
+  const announcement = repo.announcements.find(
+    (event) => event.pubkey === pubkey,
+  );
+  const announcementRelays = announcement ? getRepoRelays(announcement) : [];
+  const relays =
+    announcementRelays.length > 0 ? announcementRelays : repo.relays;
+  return `${repoToPath(pubkey, repo.dTag, relays)}${pageSuffix}`;
+}
+
+function RequestedMaintainersSummary({
+  repo,
+  pageSuffix,
+  compact,
+}: {
+  repo: ResolvedRepo;
+  pageSuffix: string;
+  compact?: boolean;
+}) {
+  const groups = useMemo(() => groupRequestedMaintainers(repo), [repo]);
+  const confirmedMaintainers = new Set(repo.confirmedMaintainers);
+  const invitations = groups.flatMap((group) =>
+    group.recipientMaintainers.map((pubkey) => ({
+      pubkey,
+      requesters: Array.from(
+        new Set(
+          repo.maintainerEdges
+            .filter(
+              ({ from, to }) => to === pubkey && confirmedMaintainers.has(from),
+            )
+            .map(({ from }) => from),
+        ),
+      ),
+      existingRepositoryPath: group.hasAnnouncement
+        ? invitedRepositoryPath(repo, pubkey, pageSuffix)
+        : undefined,
+    })),
+  );
+
+  if (groups.length === 0) return null;
+
+  return (
+    <div className="space-y-2 pt-1">
+      <p className="text-xs text-muted-foreground/70">
+        Invited maintainer{invitations.length === 1 ? "" : "s"}
+      </p>
+      <div className="space-y-1.5">
+        {invitations.map(({ pubkey, requesters, existingRepositoryPath }) => (
+          <div
+            key={pubkey}
+            className="flex flex-wrap items-center gap-1 text-xs text-muted-foreground"
+          >
+            <UserLink
+              pubkey={pubkey}
+              avatarSize={compact ? "xs" : "sm"}
+              nameClassName="text-xs text-foreground"
+            />
+            {existingRepositoryPath && (
+              <span>
+                (has{" "}
+                <Link
+                  to={existingRepositoryPath}
+                  className="text-muted-foreground underline-offset-2 hover:underline"
+                >
+                  existing repository
+                </Link>
+                )
+              </span>
+            )}
+            {requesters.length > 0 &&
+              requesters.length < repo.confirmedMaintainers.length && (
+                <>
+                  <span>invited by</span>
+                  <span className="inline-flex flex-wrap items-center gap-1">
+                    {requesters.map((requester) => (
+                      <UserLink
+                        key={requester}
+                        pubkey={requester}
+                        avatarSize="xs"
+                        className="inline-flex"
+                        nameClassName="text-xs text-foreground"
+                      />
+                    ))}
+                  </span>
+                </>
+              )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Main panel
 // ---------------------------------------------------------------------------
@@ -300,8 +398,12 @@ function SidebarVariant({
     : [];
   const isMultiAnnouncement = repo.announcements.length > 1;
   const maintainerLeadership = useMemo(
-    () => computeMaintainerLeadership(repo.maintainerSet, repo.maintainerEdges),
-    [repo.maintainerSet, repo.maintainerEdges],
+    () =>
+      computeMaintainerLeadership(
+        repo.confirmedMaintainers,
+        repo.maintainerEdges,
+      ),
+    [repo.confirmedMaintainers, repo.maintainerEdges],
   );
   const [multiModalOpen, setMultiModalOpen] = useState(false);
 
@@ -360,7 +462,7 @@ function SidebarVariant({
               Maintainers
             </p>
             <div className="space-y-2">
-              {repo.maintainerSet.map((pk) => (
+              {repo.confirmedMaintainers.map((pk) => (
                 <div key={pk} className="flex items-center gap-2">
                   <UserLink
                     pubkey={pk}
@@ -368,7 +470,7 @@ function SidebarVariant({
                     nameClassName="text-sm"
                   />
                   {pk === repo.selectedMaintainer &&
-                    repo.maintainerSet.length > 1 && (
+                    repo.confirmedMaintainers.length > 1 && (
                       <Badge
                         variant="outline"
                         className="text-[10px] px-1.5 py-0 h-4 text-pink-600 border-pink-500/40 dark:text-pink-400"
@@ -387,19 +489,7 @@ function SidebarVariant({
                 </div>
               ))}
             </div>
-            {repo.requestedMaintainers.length > 0 && (
-              <div className="space-y-2 pt-1">
-                <p className="text-xs text-muted-foreground/70">Invited</p>
-                {repo.requestedMaintainers.map((pk) => (
-                  <UserLink
-                    key={pk}
-                    pubkey={pk}
-                    avatarSize="sm"
-                    nameClassName="text-xs text-muted-foreground"
-                  />
-                ))}
-              </div>
-            )}
+            <RequestedMaintainersSummary repo={repo} pageSuffix="" compact />
           </div>
 
           {/* Topics */}
@@ -521,6 +611,7 @@ function SidebarVariant({
                 <MultiAnnouncementsModal
                   announcements={repo.announcements}
                   selectedMaintainer={repo.selectedMaintainer}
+                  confirmedMaintainers={repo.confirmedMaintainers}
                   leadMaintainer={maintainerLeadership.leadMaintainer}
                   open={multiModalOpen}
                   onOpenChange={setMultiModalOpen}
@@ -555,7 +646,8 @@ function FullVariant({
     account?.pubkey && account.pubkey === repo.selectedMaintainer;
   const editPath = `${basePath}/settings`;
 
-  // For union display: find which relays/clone URLs are from other maintainers
+  // For union display: find which relays/clone URLs are from other reachable
+  // repository announcements.
   const selectedAnnouncement = useMemo(
     () => repo.announcements.find((a) => a.pubkey === repo.selectedMaintainer),
     [repo],
@@ -564,20 +656,29 @@ function FullVariant({
     () => (selectedAnnouncement ? getRepoUpstreams(selectedAnnouncement) : []),
     [selectedAnnouncement],
   );
-  const isMultiMaintainer = repo.announcements.length > 1;
+  const hasMultipleAnnouncements = repo.announcements.length > 1;
+  const confirmedMaintainerSet = useMemo(
+    () => new Set(repo.confirmedMaintainers),
+    [repo.confirmedMaintainers],
+  );
   const maintainerLeadership = useMemo(
-    () => computeMaintainerLeadership(repo.maintainerSet, repo.maintainerEdges),
-    [repo.maintainerSet, repo.maintainerEdges],
+    () =>
+      computeMaintainerLeadership(
+        repo.confirmedMaintainers,
+        repo.maintainerEdges,
+      ),
+    [repo.confirmedMaintainers, repo.maintainerEdges],
   );
 
-  // Relays in other maintainers' announcements but NOT in the selected maintainer's
+  // Relays in other reachable announcements but not in the selected
+  // maintainer's announcement.
   const unionOnlyRelayUrls = useMemo((): Set<string> => {
-    if (!isMultiMaintainer || !selectedAnnouncement) return new Set();
+    if (!hasMultipleAnnouncements || !selectedAnnouncement) return new Set();
     const myRelays = new Set(
       getRepoRelays(selectedAnnouncement).map(normalizeUrl),
     );
     return new Set(repo.relays.filter((r) => !myRelays.has(normalizeUrl(r))));
-  }, [isMultiMaintainer, selectedAnnouncement, repo.relays]);
+  }, [hasMultipleAnnouncements, selectedAnnouncement, repo.relays]);
 
   // Helper: get the contributor pubkey for a union relay/clone
   const getContributorPubkey = useCallback(
@@ -650,11 +751,11 @@ function FullVariant({
           Maintainers
         </h3>
         <div className="space-y-2.5">
-          {repo.maintainerSet.map((pk) => (
+          {repo.confirmedMaintainers.map((pk) => (
             <div key={pk} className="flex items-center gap-2">
               <UserLink pubkey={pk} avatarSize="md" nameClassName="text-sm" />
               {pk === repo.selectedMaintainer &&
-                repo.maintainerSet.length > 1 && (
+                repo.confirmedMaintainers.length > 1 && (
                   <Badge
                     variant="outline"
                     className="text-[10px] px-1.5 py-0 h-4 text-pink-600 border-pink-500/40 dark:text-pink-400"
@@ -675,15 +776,7 @@ function FullVariant({
           {repo.requestedMaintainers.length > 0 && (
             <>
               <Separator />
-              <p className="text-xs text-muted-foreground">Invited</p>
-              {repo.requestedMaintainers.map((pk) => (
-                <UserLink
-                  key={pk}
-                  pubkey={pk}
-                  avatarSize="sm"
-                  nameClassName="text-xs text-muted-foreground"
-                />
-              ))}
+              <RequestedMaintainersSummary repo={repo} pageSuffix="/about" />
             </>
           )}
         </div>
@@ -721,7 +814,7 @@ function FullVariant({
                 ))}
             </div>
           )}
-          {/* Union relays from co-maintainers */}
+          {/* Union relays from accepted or invited repositories */}
           {repo.relays.some(
             (r) =>
               isGraspRelay(r, repo.graspServerDomains) &&
@@ -734,6 +827,7 @@ function FullVariant({
                   unionOnlyRelayUrls.has(r),
               )}
               getContributor={(r) => getContributorPubkey(r, false)}
+              confirmedMaintainers={confirmedMaintainerSet}
             />
           )}
         </section>
@@ -773,7 +867,7 @@ function FullVariant({
                 ))}
             </div>
           )}
-          {/* Union relays from co-maintainers */}
+          {/* Union relays from accepted or invited repositories */}
           {repo.relays.some(
             (r) =>
               !isGraspRelay(r, repo.graspServerDomains) &&
@@ -786,6 +880,7 @@ function FullVariant({
                   unionOnlyRelayUrls.has(r),
               )}
               getContributor={(r) => getContributorPubkey(r, false)}
+              confirmedMaintainers={confirmedMaintainerSet}
             />
           )}
         </section>
@@ -840,6 +935,9 @@ function FullVariant({
               <CloneServerList
                 graspCloneUrls={repo.graspCloneUrls}
                 additionalGitServerUrls={repo.additionalGitServerUrls}
+                getContributor={(url) => getContributorPubkey(url, true)}
+                confirmedMaintainers={confirmedMaintainerSet}
+                selectedMaintainer={repo.selectedMaintainer}
               />
             </>
           )}
@@ -851,6 +949,7 @@ function FullVariant({
         <FullVariantActionBar
           announcements={repo.announcements}
           selectedMaintainer={repo.selectedMaintainer}
+          confirmedMaintainers={repo.confirmedMaintainers}
           leadMaintainer={maintainerLeadership.leadMaintainer}
           editPath={isMaintainer ? editPath : undefined}
           repoCoords={isMaintainer ? repo.allCoordinates : undefined}
@@ -930,9 +1029,15 @@ function NgitCloneField({ cloneUrl }: { cloneUrl: string }) {
 function CloneServerList({
   graspCloneUrls,
   additionalGitServerUrls,
+  getContributor,
+  confirmedMaintainers,
+  selectedMaintainer,
 }: {
   graspCloneUrls: string[];
   additionalGitServerUrls: string[];
+  getContributor?: (url: string) => string;
+  confirmedMaintainers?: ReadonlySet<string>;
+  selectedMaintainer?: string;
 }) {
   const hasGrasp = graspCloneUrls.length > 0;
   const hasAdditional = additionalGitServerUrls.length > 0;
@@ -949,7 +1054,17 @@ function CloneServerList({
           </div>
           <div className="space-y-1">
             {graspCloneUrls.map((url) => (
-              <CloneServerRow key={url} url={url} isGrasp />
+              <CloneServerRow
+                key={url}
+                url={url}
+                isGrasp
+                sourceLabel={cloneServerSourceLabel(
+                  url,
+                  getContributor,
+                  confirmedMaintainers,
+                  selectedMaintainer,
+                )}
+              />
             ))}
           </div>
         </div>
@@ -963,7 +1078,17 @@ function CloneServerList({
           </div>
           <div className="space-y-1">
             {additionalGitServerUrls.map((url) => (
-              <CloneServerRow key={url} url={url} isGrasp={false} />
+              <CloneServerRow
+                key={url}
+                url={url}
+                isGrasp={false}
+                sourceLabel={cloneServerSourceLabel(
+                  url,
+                  getContributor,
+                  confirmedMaintainers,
+                  selectedMaintainer,
+                )}
+              />
             ))}
           </div>
         </div>
@@ -972,7 +1097,28 @@ function CloneServerList({
   );
 }
 
-function CloneServerRow({ url, isGrasp }: { url: string; isGrasp: boolean }) {
+function cloneServerSourceLabel(
+  url: string,
+  getContributor?: (url: string) => string,
+  confirmedMaintainers?: ReadonlySet<string>,
+  selectedMaintainer?: string,
+): string | undefined {
+  const contributor = getContributor?.(url);
+  if (!contributor || contributor === selectedMaintainer) return undefined;
+  return confirmedMaintainers?.has(contributor)
+    ? "accepted co-maintainer"
+    : "invited repository";
+}
+
+function CloneServerRow({
+  url,
+  isGrasp,
+  sourceLabel,
+}: {
+  url: string;
+  isGrasp: boolean;
+  sourceLabel?: string;
+}) {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = useCallback(async () => {
@@ -1004,6 +1150,14 @@ function CloneServerRow({ url, isGrasp }: { url: string; isGrasp: boolean }) {
         >
           {displayUrl}
         </p>
+        {sourceLabel && (
+          <Badge
+            variant="outline"
+            className="h-4 shrink-0 px-1.5 font-sans text-[9px] font-normal text-muted-foreground"
+          >
+            {sourceLabel}
+          </Badge>
+        )}
         {isGrasp && (pubkey ?? npub) && (
           <span className="inline-flex items-center gap-1 rounded-full border border-border/60 bg-popover px-1.5 py-0.5 shadow-sm whitespace-nowrap font-sans leading-none shrink-0">
             {pubkey ? (
@@ -1045,14 +1199,17 @@ function CloneServerRow({ url, isGrasp }: { url: string; isGrasp: boolean }) {
 function AnnouncementEventRows({
   announcements,
   selectedMaintainer,
+  confirmedMaintainers,
   leadMaintainer,
 }: {
   announcements: NostrEvent[];
   selectedMaintainer: string;
+  confirmedMaintainers: string[];
   leadMaintainer?: string;
 }) {
   const [jsonEvent, setJsonEvent] = useState<NostrEvent | null>(null);
   const isMulti = announcements.length > 1;
+  const confirmed = new Set(confirmedMaintainers);
 
   // Sort freshest first
   const sorted = [...announcements].sort((a, b) => b.created_at - a.created_at);
@@ -1062,22 +1219,19 @@ function AnnouncementEventRows({
       <div className="space-y-2">
         {isMulti && (
           <p className="text-xs text-muted-foreground leading-relaxed">
-            In a multi-maintainer repository each maintainer publishes their own
-            announcement event. Some fields (relays, clone URLs, maintainers)
-            are{" "}
+            Repository data is combined across accepted maintainers and
+            directionally authorized invited repositories. Infrastructure and
+            metadata from invited repositories remain active inputs and are{" "}
             <span className="text-foreground font-medium">
-              unioned across all announcements
+              explicitly labelled below
             </span>
-            , while others (name, description) are taken from the{" "}
-            <span className="text-foreground font-medium">
-              most recently updated
-            </span>{" "}
-            announcement.
+            .
           </p>
         )}
 
         {sorted.map((ev) => {
           const isSelected = ev.pubkey === selectedMaintainer;
+          const isAccepted = confirmed.has(ev.pubkey);
           const isLead = ev.pubkey === leadMaintainer;
           const updatedAt = format(
             new Date(ev.created_at * 1000),
@@ -1106,6 +1260,21 @@ function AnnouncementEventRows({
                     className="text-[10px] px-1.5 py-0 h-4 shrink-0 text-pink-600 border-pink-500/40 dark:text-pink-400"
                   >
                     selected
+                  </Badge>
+                )}
+                {isMulti && !isSelected && (
+                  <Badge
+                    variant="outline"
+                    className={cn(
+                      "h-4 shrink-0 px-1.5 text-[10px]",
+                      isAccepted
+                        ? "text-pink-600 border-pink-500/40 dark:text-pink-400"
+                        : "text-amber-700 border-amber-500/40 dark:text-amber-300",
+                    )}
+                  >
+                    {isAccepted
+                      ? "accepted co-maintainer"
+                      : "invited repository"}
                   </Badge>
                 )}
                 {isMulti && isLead && (
@@ -1163,12 +1332,14 @@ function AnnouncementEventRows({
 function FullVariantActionBar({
   announcements,
   selectedMaintainer,
+  confirmedMaintainers,
   leadMaintainer,
   editPath,
   repoCoords,
 }: {
   announcements: NostrEvent[];
   selectedMaintainer: string;
+  confirmedMaintainers: string[];
   leadMaintainer?: string;
   editPath?: string;
   repoCoords?: string[];
@@ -1254,6 +1425,7 @@ function FullVariantActionBar({
           <AnnouncementEventRows
             announcements={announcements}
             selectedMaintainer={selectedMaintainer}
+            confirmedMaintainers={confirmedMaintainers}
             leadMaintainer={leadMaintainer}
           />
         </div>
@@ -1599,12 +1771,14 @@ function RawEventJsonDialog({
 function MultiAnnouncementsModal({
   announcements,
   selectedMaintainer,
+  confirmedMaintainers,
   leadMaintainer,
   open,
   onOpenChange,
 }: {
   announcements: NostrEvent[];
   selectedMaintainer: string;
+  confirmedMaintainers: string[];
   leadMaintainer?: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -1622,6 +1796,7 @@ function MultiAnnouncementsModal({
           <AnnouncementEventRows
             announcements={announcements}
             selectedMaintainer={selectedMaintainer}
+            confirmedMaintainers={confirmedMaintainers}
             leadMaintainer={leadMaintainer}
           />
         </div>
@@ -1830,30 +2005,35 @@ function CloneDropdown({
 }
 
 // ---------------------------------------------------------------------------
-// UnionRelayGroup — shows relays contributed only by co-maintainers
+// UnionRelayGroup — shows relays contributed by other reachable repositories
 // ---------------------------------------------------------------------------
 
 function UnionRelayGroup({
   relays,
   getContributor,
+  confirmedMaintainers,
 }: {
   relays: string[];
   getContributor: (url: string) => string;
+  confirmedMaintainers: ReadonlySet<string>;
 }) {
   return (
     <div className="mt-1.5 space-y-1">
       <p className="text-[10px] text-muted-foreground/60 uppercase tracking-wide flex items-center gap-1">
         <Users className="h-2.5 w-2.5" />
-        Via co-maintainers
+        Via recursive repository graph
       </p>
       <div className="flex flex-wrap gap-1.5">
         {relays.map((relay) => {
           const contributor = getContributor(relay);
+          const sourceLabel = confirmedMaintainers.has(contributor)
+            ? "accepted co-maintainer"
+            : "invited repository";
           return (
             <div
               key={relay}
               className="inline-flex items-center gap-1 rounded-full border border-border/40 bg-muted/30 pl-1.5 pr-2 py-0.5"
-              title={`${relay} — contributed by co-maintainer`}
+              title={`${relay} — contributed by ${sourceLabel}`}
             >
               <Link
                 to={`/relay/${relayUrlToSegment(relay)}`}
@@ -1861,6 +2041,12 @@ function UnionRelayGroup({
               >
                 {displayRelay(relay)}
               </Link>
+              <Badge
+                variant="outline"
+                className="h-4 px-1.5 text-[9px] font-normal text-muted-foreground"
+              >
+                {sourceLabel}
+              </Badge>
               {contributor && (
                 <span className="text-[9px] text-muted-foreground/50 flex items-center gap-0.5">
                   via{" "}
