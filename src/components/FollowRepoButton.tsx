@@ -2,12 +2,9 @@
  * FollowRepoButton — follow / unfollow a repository, with a followers popover.
  *
  * Manages the NIP-51 Git repositories follow list (kind:10018). When the user
- * follows, all accepted maintainer coordinates are added so the follow is
- * discoverable via any accepted maintainer's announcement. Unaccepted
- * invitations are deliberately excluded from both the action and count.
- *
- * The follower count is deduplicated across accepted maintainer announcements
- * so a user who followed multiple announcements is counted once.
+ * follows, the currently selected maintainer's announcement coordinate is
+ * added. The follow state and follower count are scoped to that same
+ * announcement.
  *
  * Clicking the count opens a popover listing all followers.
  *
@@ -34,22 +31,23 @@ import { UserLink } from "@/components/UserAvatar";
 
 interface FollowRepoButtonProps {
   /**
-   * All announcement coordinates for this repo (one per confirmed maintainer).
+   * The currently selected maintainer's announcement coordinate.
    * Format: "30617:<pubkey>:<dtag>"
    */
-  allCoords: string[] | undefined;
+  repoCoord: string | undefined;
   className?: string;
 }
 
 export function FollowRepoButton({
-  allCoords,
+  repoCoord,
   className,
 }: FollowRepoButtonProps) {
   const account = useActiveAccount();
   const { openAuthModal } = useAuthModal();
-  const isFollowing = useIsGitRepoFollowing(allCoords);
+  const repoCoords = repoCoord ? [repoCoord] : undefined;
+  const isFollowing = useIsGitRepoFollowing(repoCoords);
   const { followRepo, unfollowRepo, pending } = useRobustGitRepoFollowActions();
-  const { count, followers } = useRepoFollowers(allCoords);
+  const { count, followers } = useRepoFollowers(repoCoords);
   const { toast } = useToast();
   const [popoverOpen, setPopoverOpen] = useState(false);
 
@@ -59,13 +57,13 @@ export function FollowRepoButton({
       openAuthModal();
       return;
     }
-    if (!allCoords || allCoords.length === 0) return;
+    if (!repoCoord) return;
 
     try {
       if (isFollowing) {
-        await unfollowRepo(...allCoords);
+        await unfollowRepo(repoCoord);
       } else {
-        await followRepo(...allCoords);
+        await followRepo(repoCoord);
       }
     } catch (err) {
       toast({
@@ -80,7 +78,7 @@ export function FollowRepoButton({
   }, [
     account,
     openAuthModal,
-    allCoords,
+    repoCoord,
     pending,
     isFollowing,
     followRepo,
@@ -112,7 +110,7 @@ export function FollowRepoButton({
       <button
         type="button"
         onClick={handleClick}
-        disabled={(!allCoords || allCoords.length === 0) && !!account}
+        disabled={!repoCoord && !!account}
         title={
           isFollowing ? "Unfollow this repository" : "Follow this repository"
         }

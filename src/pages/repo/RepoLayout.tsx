@@ -298,6 +298,9 @@ function RepoLayoutResolved({
       ) ?? [],
     [repo],
   );
+  const selectedRepoCoordinate = repo
+    ? repoCoordinate(repo.selectedMaintainer, repo.dTag)
+    : undefined;
   const acceptedAnnouncements = useMemo(
     () =>
       repo?.announcements.filter((announcement) =>
@@ -579,7 +582,7 @@ function RepoLayoutResolved({
                     )}
                     repoCoords={acceptedRepoCoordinates}
                   />
-                  <FollowRepoButton allCoords={acceptedRepoCoordinates} />
+                  <FollowRepoButton repoCoord={selectedRepoCoordinate} />
                   <StarButton
                     targetAnnouncement={repo.announcements.find(
                       (a) => a.pubkey === repo.selectedMaintainer,

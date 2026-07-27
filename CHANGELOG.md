@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 - Add lead-maintainer coordination to repository settings, including explicit no-lead mode, graph-aware removal warnings, safe restoration of the current maintainer listing when changing modes, and routing each recursive maintainer through their own repository announcement before editing.
+- Fix repository follow state and follower counts to track only the selected maintainer's announcement.
 - Fix maintainership invitation acceptance by using a compact banner and modal for choosing GRASP servers and lead maintainers, preserving existing non-GRASP clone URLs, and allowing every safe state ordering. Only a newer owner state that would replace or remove the invitee's refs is deferred to ngit CLI until interactive ref combining is available.
 - Keep invitation delivery and GRASP Git syncing moving independently in the background across navigation. Retry incomplete relay delivery with bounded backoff, wait for the signed announcement to be received before caching it, and show acceptance as successful once the first selected Git endpoint has synchronized while the remaining endpoints continue.
 - Align recursive repository authorization with ngit and GRASP, add compact existing-repository links for invited maintainers, consolidate repository-join warnings, and separate work sent only to those repositories from accepted repository and social-proof counts.
