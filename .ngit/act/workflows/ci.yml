@@ -38,9 +38,11 @@ jobs:
         run: nix develop --command pnpm test:e2e
 
       # Deploy the exact files produced by the test command instead of
-      # rebuilding the application in the deployment job.
+      # rebuilding the application in either deployment job.
       - name: Upload tested web build
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: >-
+          github.event_name == 'pull_request' ||
+          (github.event_name == 'push' && github.ref == 'refs/heads/main')
         uses: actions/upload-artifact@v4
         with:
           name: web-dist
@@ -77,6 +79,97 @@ jobs:
       # Keep Android tooling outside the Nix job: this is the setup available
       # to regular GitHub Actions and the intentionally minimal act runner.
       - run: pnpm android:lint
+
+  deploy-nsite-preview:
+    runs-on: ubuntu-latest
+    needs: [test, android-lint]
+    if: github.event_name == 'pull_request'
+    outputs:
+      nsite_preview: ${{ steps.preview.outputs.url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      # nostr-tools is already pinned by the application lockfile. Installing
+      # without scripts is enough to generate this run's disposable identity.
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Download tested web build
+        uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: dist
+
+      - name: Prepare SPA fallback
+        run: cp dist/index.html dist/404.html
+
+      # This key has no authority beyond content published by this untrusted
+      # job. Mask it before act processes GITHUB_OUTPUT, then discard it with
+      # the job so each PR run receives a distinct nsite identity and URL.
+      - name: Generate ephemeral preview identity
+        id: identity
+        run: |
+          node --input-type=module <<'NODE'
+          import { appendFileSync } from "node:fs";
+          import {
+            generateSecretKey,
+            getPublicKey,
+            nip19,
+          } from "nostr-tools";
+
+          const secretKey = generateSecretKey();
+          const nsec = nip19.nsecEncode(secretKey);
+          const npub = nip19.npubEncode(getPublicKey(secretKey));
+          console.log(`::add-mask::${nsec}`);
+          appendFileSync(process.env.GITHUB_OUTPUT, `nsec=${nsec}\nnpub=${npub}\n`);
+          NODE
+
+      # The action and nsyte release are pinned. A raw nsec is appropriate
+      # here only because this identity is generated inside, and dies with,
+      # one untrusted preview job; persistent deployments must use a bunker.
+      # The tested bundle predates that key and has no maintainer secrets, so
+      # skip nsyte's heuristic scanner: application strings such as "token"
+      # and "password" otherwise produce false positives in the built JS.
+      - name: Publish nsite preview
+        uses: sandwichfarm/nsite-action@35466ff9509a5c063ca943d1f727f9b129a37970
+        with:
+          sec: ${{ steps.identity.outputs.nsec }}
+          directory: dist
+          version: v0.27.2
+          fallback: /index.html
+          publish_server_list: true
+          publish_relay_list: true
+          skip_secrets_scan: true
+          relays: |
+            wss://relay.nsite.lol
+            wss://relay.nosto.re
+            wss://nos.lol
+            wss://relay.primal.net
+            wss://nsite.run
+          servers: |
+            https://cdn.hzrd149.com
+            https://cdn.sovbit.host
+            https://nostr.download
+            https://nsite.run
+
+      # ngit-ci publishes this declared scalar on the signed Job Result. It is
+      # deliberately written only after nsyte reports a successful deploy.
+      - name: Expose preview URL
+        id: preview
+        env:
+          PREVIEW_NPUB: ${{ steps.identity.outputs.npub }}
+        run: |
+          set -eu
+          : "${PREVIEW_NPUB:?The ephemeral preview npub is missing.}"
+          printf 'url=https://%s.nsite.lol/\n' "$PREVIEW_NPUB" >> "$GITHUB_OUTPUT"
 
   deploy-netlify:
     runs-on: ubuntu-latest
