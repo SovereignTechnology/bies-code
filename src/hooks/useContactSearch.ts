@@ -3,6 +3,7 @@ import { use$ } from "@/hooks/use$";
 import { useEventStore } from "@/hooks/useEventStore";
 import { useProfilesForPubkeys } from "@/hooks/useProfilesForPubkeys";
 import { pool } from "@/services/nostr";
+import { cacheRequest } from "@/services/cache";
 import { resilientRequest } from "@/lib/resilientSubscription";
 import { mapEventsToStore } from "applesauce-core";
 import { onlyEvents } from "applesauce-relay";
@@ -141,6 +142,41 @@ export function useContactSearch(
     return out;
   }, [priorityPubkeys, gitFollowPubkeys, followPubkeys]);
 
+  // Hydrate every locally cached trusted profile into a reactive map when the
+  // picker opens. EventStore reads only cover the current in-memory session;
+  // this reaches profiles persisted in IndexedDB without fetching an entire
+  // follow list from relays.
+  const [cachedLocalProfileMap, setCachedLocalProfileMap] = useState<
+    Map<string, ProfileContent>
+  >(new Map());
+  useEffect(() => {
+    if (!enabled || localPubkeys.length === 0) {
+      setCachedLocalProfileMap(new Map());
+      return;
+    }
+
+    let cancelled = false;
+    void cacheRequest([{ kinds: [0], authors: localPubkeys }])
+      .then((events) => {
+        if (cancelled) return;
+
+        const profileMap = new Map<string, ProfileContent>();
+        for (const event of events) {
+          if (!isValidProfile(event)) continue;
+          const profile = getProfileContent(event);
+          if (profile) profileMap.set(event.pubkey, profile);
+        }
+        setCachedLocalProfileMap(profileMap);
+      })
+      .catch(() => {
+        if (!cancelled) setCachedLocalProfileMap(new Map());
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [enabled, localPubkeys]);
+
   // Keep the first visible trusted candidates reactively profiled while the
   // dropdown is open. They can appear without profiles for an empty "@" query,
   // but matching typed text requires their metadata. Limiting this to the
@@ -253,8 +289,11 @@ export function useContactSearch(
     for (const [pubkey, profile] of seededProfileMap) {
       profileMap.set(pubkey, profile);
     }
+    for (const [pubkey, profile] of cachedLocalProfileMap) {
+      profileMap.set(pubkey, profile);
+    }
     return profileMap;
-  }, [localPubkeys, seededProfileMap, store]);
+  }, [cachedLocalProfileMap, localPubkeys, seededProfileMap, store]);
 
   // ── 6. Assemble + filter + sort ───────────────────────────────────────────
   const results = useMemo<ContactSearchResult[]>(() => {
