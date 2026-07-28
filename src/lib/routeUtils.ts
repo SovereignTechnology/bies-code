@@ -335,15 +335,18 @@ export function parseRelayUrl(raw: string): string | undefined {
 
 /**
  * Encode a relay URL for use as a route segment.
- * Strips wss:// (the common case) so URLs stay readable.
+ * Strips wss:// (the common case) so host-only URLs stay readable, then
+ * percent-encodes the remainder so relay paths stay inside one route segment.
  * ws:// uses a slash-free `ws:` prefix so React Router's wildcard decoding
  * cannot turn its encoded slashes into extra route segments.
  */
 export function relayUrlToSegment(url: string): string {
   const normalized = normalizeUrl(url);
-  if (normalized.startsWith("wss://")) return normalized.slice(6);
-  // ws:// — encode only the colon. The resulting `ws:host` remains one
-  // segment after React Router decodes it.
+  if (normalized.startsWith("wss://")) {
+    return encodeURIComponent(normalized.slice(6));
+  }
+  // ws:// — use a slash-free `ws:` form before encoding so the scheme and any
+  // relay path survive as a single segment.
   return encodeURIComponent(`ws:${normalized.slice(5)}`);
 }
 

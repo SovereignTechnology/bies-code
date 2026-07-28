@@ -4,6 +4,8 @@
 
 ### Fixes
 
+- Preserve relay URL paths in repository links so issue and pull request notifications resolve the correct repository identifier.
+
 ### Features
 
 ### Changes
