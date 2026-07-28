@@ -333,7 +333,7 @@ function getInfoRefsFromState(
 ): InfoRefsUploadPackResponse | null {
   // Use the merged view once the winner is known — this unions refs from all
   // servers so GitHub-only refs appear alongside grasp-server refs.
-  const merged = pool.getMergedInfoRefs();
+  const merged = pool.getEffectiveInfoRefs();
   if (merged) return merged;
 
   // Fall back to any URL that has infoRefs — fires as soon as the first
@@ -509,11 +509,10 @@ export function useGitExplorer(
     // Fast path: if infoRefs + tree are already in the L1 memory cache we can
     // render immediately without a loading flash. Common case on remount.
     //
-    // Use getMergedInfoRefs() so that refs from all servers (e.g. GitHub-only
-    // branches not mirrored to the grasp server) are included in the ref list,
-    // consistent with the slow path which also uses the merged view.
+    // Use the pool's effective per-ref view so every explorer consumer shares
+    // the same authoritative/nostr/server selection.
     // -----------------------------------------------------------------------
-    const fastInfo = pool.getMergedInfoRefs();
+    const fastInfo = pool.getEffectiveInfoRefs();
 
     if (fastInfo) {
       const fastInfoWithState = includeStateRefs(fastInfo, stateRefs);
@@ -525,6 +524,7 @@ export function useGitExplorer(
       if (refAndPath) {
         const resolved = resolveRefAndPath(refAndPath, fastInfoWithState);
         if (resolved) {
+          void pool.resolveRef(resolved.refPath);
           fastCommitHash = resolved.hash;
           fastResolvedRef = shortRefName(resolved.refPath);
           fastResolvedPath = resolved.path;
@@ -802,7 +802,17 @@ export function useGitExplorer(
     let fallbackCommitHash: string | undefined;
 
     if (refAndPath) {
-      const resolved = resolveRefAndPath(refAndPath, infoWithState);
+      const initialResolved = resolveRefAndPath(refAndPath, infoWithState);
+      if (initialResolved) {
+        await pool.resolveRef(initialResolved.refPath);
+      }
+      const refreshedInfo = pool.getEffectiveInfoRefs();
+      const resolved = resolveRefAndPath(
+        refAndPath,
+        refreshedInfo
+          ? includeStateRefs(refreshedInfo, stateRefs)
+          : infoWithState,
+      );
       if (!resolved) {
         if (signal.aborted) return;
         setState((prev) => ({
@@ -1025,7 +1035,7 @@ export function useGitExplorer(
       loading: false,
       pathExists: false,
     }));
-  }, [pool, refAndPath, knownHeadCommit, stateRefs]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [pool, refAndPath, knownHeadCommit, stateRefs, poolState.effectiveRefs]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Re-run when the pool changes or when the pool emits infoRefs for the
   // first time (poolState.health transitions away from "idle"/"connecting").
@@ -1125,7 +1135,7 @@ export function useCommitHistory(
   const [state, setState] = useState<CommitHistoryState>(() => {
     // Fast path: check L1 cache synchronously on first render.
     if (ref && pool) {
-      const fastInfo = pool.getInfoRefs();
+      const fastInfo = pool.getEffectiveInfoRefs();
       if (fastInfo) {
         const rawHash = ref.startsWith("refs/")
           ? fastInfo.refs[ref]
@@ -1150,7 +1160,7 @@ export function useCommitHistory(
     return { loading: false, error: null, commits: [] };
   });
 
-  const hasInfoRefs = pool ? !!pool.getInfoRefs() : false;
+  const hasInfoRefs = pool ? !!pool.getEffectiveInfoRefs() : false;
 
   useEffect(() => {
     if (!pool || !ref) return;
@@ -1162,7 +1172,7 @@ export function useCommitHistory(
       if (!pool || !ref) return;
 
       // Wait for infoRefs if not yet available.
-      let info = pool.getInfoRefs();
+      let info = pool.getEffectiveInfoRefs();
       if (!info) {
         info = await new Promise<InfoRefsUploadPackResponse | null>(
           (resolve) => {
@@ -1177,7 +1187,7 @@ export function useCommitHistory(
                 return;
               }
               const available =
-                pool!.getInfoRefs() ??
+                pool!.getEffectiveInfoRefs() ??
                 Object.values(s.urls).find((u) => u.infoRefs)?.infoRefs ??
                 null;
               if (available) {
@@ -1320,7 +1330,7 @@ export function useInfiniteCommitHistory(
   // Track the ref+pool combination we last initialised for.
   const lastInitKeyRef = useRef<string>("");
 
-  const hasInfoRefs = pool ? !!pool.getInfoRefs() : false;
+  const hasInfoRefs = pool ? !!pool.getEffectiveInfoRefs() : false;
 
   // ── Initial load ──────────────────────────────────────────────────────────
   // Re-runs when the ref or pool changes (e.g. branch switch).
@@ -1343,7 +1353,7 @@ export function useInfiniteCommitHistory(
       if (!pool || !ref) return;
 
       // Wait for infoRefs if not yet available.
-      let info = pool.getInfoRefs();
+      let info = pool.getEffectiveInfoRefs();
       if (!info) {
         info = await new Promise<InfoRefsUploadPackResponse | null>(
           (resolve) => {
@@ -1358,7 +1368,7 @@ export function useInfiniteCommitHistory(
                 return;
               }
               const available =
-                pool!.getInfoRefs() ??
+                pool!.getEffectiveInfoRefs() ??
                 Object.values(s.urls).find((u) => u.infoRefs)?.infoRefs ??
                 null;
               if (available) {
@@ -1408,7 +1418,7 @@ export function useInfiniteCommitHistory(
         return;
       }
 
-      const initKey = `${commitHash}:${pool.getInfoRefs()?.refs["HEAD"] ?? ""}`;
+      const initKey = `${commitHash}:${pool.getEffectiveInfoRefs()?.refs["HEAD"] ?? ""}`;
       if (initKey === lastInitKeyRef.current) return;
       lastInitKeyRef.current = initKey;
 

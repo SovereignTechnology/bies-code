@@ -22,7 +22,6 @@ import {
   Copy,
   ChevronDown,
 } from "lucide-react";
-import { deriveEffectiveSource } from "@/lib/sourceUtils";
 import { useMobilePopoverFullWidth } from "@/hooks/useMobilePopoverFullWidth";
 import { nip19 } from "nostr-tools";
 import type { NostrEvent } from "nostr-tools";
@@ -1118,12 +1117,8 @@ export function SourceSelector({
 // ---------------------------------------------------------------------------
 
 export interface SourceSelectorDropdownProps extends SourceSelectorProps {
-  /**
-   * Pool's currently-winning git server URL. Required to resolve the
-   * "default" sentinel into a concrete effective source for the trigger
-   * label.
-   */
-  winnerUrl?: string | null;
+  /** Pool-resolved source used for the default-branch trigger label. */
+  effectiveSource: string;
   /** Popover content alignment (defaults to "end" — right-aligned). */
   contentAlign?: "start" | "end" | "center";
   className?: string;
@@ -1140,7 +1135,7 @@ export interface SourceSelectorDropdownProps extends SourceSelectorProps {
  * what's authoritative without opening the panel.
  */
 export function SourceSelectorDropdown({
-  winnerUrl,
+  effectiveSource,
   contentAlign = "end",
   className,
   ...selectorProps
@@ -1150,7 +1145,6 @@ export function SourceSelectorDropdown({
     repoState,
     repoRelayEose,
     stateBehindGit,
-    poolWarning,
     onSelectSource,
     onRefRevertToDefault,
   } = selectorProps;
@@ -1160,17 +1154,6 @@ export function SourceSelectorDropdown({
     useMobilePopoverFullWidth<HTMLButtonElement>({ open, align: contentAlign });
 
   const isLoading = repoState === undefined || !repoRelayEose;
-  const isNoState = repoRelayEose && repoState === null;
-
-  const aheadServerUrl =
-    poolWarning?.kind === "state-behind-git" ? poolWarning.gitServerUrl : null;
-  const effectiveSource = deriveEffectiveSource(
-    selectedSource,
-    stateBehindGit,
-    isNoState,
-    winnerUrl,
-    aheadServerUrl,
-  );
   const effectiveSourceIsGitServer = effectiveSource !== "nostr";
   const isManualGitSource =
     selectedSource !== "default" && selectedSource !== "nostr";
