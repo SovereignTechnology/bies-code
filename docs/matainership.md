@@ -167,11 +167,17 @@ This means every patch/PR/issue event contains `a` tags of the form:
 
 — one for each maintainer in the connected set.
 
+The selected maintainer's coordinate is emitted first, followed by other
+confirmed maintainers and then requested maintainers. This is a compatibility
+hint for clients that still inspect only the first `a` tag; it does not make
+that tag more authoritative. Correct clients must inspect every repository
+coordinate.
+
 ### Why This Matters for Clients
 
 A client querying for issues/PRs/patches for a repository should **filter by any of the maintainer coordinates**, not just the selected maintainer's coordinate. An issue tagged with Bob's coordinate is just as much a part of the repository as one tagged with Alice's coordinate, provided Alice and Bob are in the same maintainer chain.
 Practically: to fetch all issues for a repository, query for kind 1621 events that have an `a` tag matching `30617:<any-maintainer-pubkey>:<identifier>`.
-Also note: maintainer pubkeys are also added as `p` tags on patches/PRs (for notification routing), but the `a` tags are the authoritative repository reference.
+Also note: maintainer pubkeys are also added as `p` tags on issues, patches, and PRs (for notification routing), but the `a` tags are the authoritative repository reference.
 
 ### Confirming Item Attribution
 

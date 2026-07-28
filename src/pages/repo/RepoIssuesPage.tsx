@@ -207,8 +207,7 @@ export default function RepoIssuesPage() {
               </DialogDescription>
             </DialogHeader>
             <CreateIssueForm
-              repoCoord={repo.allCoordinates[0]}
-              ownerPubkey={repo.selectedMaintainer}
+              repoCoords={repo.allCoordinates}
               onSuccess={() => setNewIssueOpen(false)}
               onCancel={() => setNewIssueOpen(false)}
             />

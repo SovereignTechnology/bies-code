@@ -406,8 +406,7 @@ describeIfGrasp("e2e — lagging Grasp mirror merge fan-out", () => {
     );
 
     const oldIssue = await IssueFactory.create(
-      seededRepo.coordinate,
-      seededRepo.pubkey,
+      [seededRepo.coordinate],
       "Old catch-up issue",
       "A previously signed commit mentioned this issue.",
     ).sign(fixture.contributor);

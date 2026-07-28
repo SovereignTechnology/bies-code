@@ -43,7 +43,7 @@ import {
 } from "@/factories/InlineCommentFactory";
 import { CIManualTriggerFactory } from "@/factories/CIManualTriggerFactory";
 
-import type { IssueStatus } from "@/lib/nip34";
+import { pubkeyFromCoordinate, type IssueStatus } from "@/lib/nip34";
 import { outboxStore } from "@/services/outbox";
 import { eventStore } from "@/services/nostr";
 
@@ -96,19 +96,18 @@ export interface CreateCommentOptions {
 /**
  * Create a NIP-34 git issue (kind:1621).
  *
- * Publishes to: user outbox + repo relays + repo owner's inbox (deferred).
+ * Publishes to: user outbox + every repo coordinate's relays + every
+ * maintainer's inbox (deferred).
  */
 export function CreateIssue(
-  repoCoord: string,
-  ownerPubkey: string,
+  repoCoords: string[],
   subject: string,
   content: string,
   options?: IssueOptions,
 ): Action {
   return async ({ signer, self }) => {
     const signed = await IssueFactory.create(
-      repoCoord,
-      ownerPubkey,
+      repoCoords,
       subject,
       content,
       options,
@@ -118,11 +117,20 @@ export function CreateIssue(
     // waiting for a relay round-trip.
     eventStore.add(signed);
 
-    const notifyPubkeys = ownerPubkey !== self ? [ownerPubkey] : [];
+    const notifyPubkeys = [
+      ...new Set(
+        repoCoords
+          .map(pubkeyFromCoordinate)
+          .filter(
+            (pubkey): pubkey is string =>
+              pubkey !== undefined && pubkey !== self,
+          ),
+      ),
+    ];
     // Fire-and-forget: publishing to the outbox can continue in the background
     // after the event is signed and added to the local store.
     outboxStore
-      .publish(signed, buildGroupIds(self, [repoCoord], notifyPubkeys))
+      .publish(signed, buildGroupIds(self, repoCoords, notifyPubkeys))
       .catch(console.error);
   };
 }
