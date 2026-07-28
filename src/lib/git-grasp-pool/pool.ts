@@ -485,7 +485,10 @@ export class GitGraspPool {
     }
   }
 
-  private setState(updater: (prev: PoolState) => PoolState): void {
+  private setState(
+    updater: (prev: PoolState) => PoolState,
+    verifyHead = true,
+  ): void {
     const next = updater(this.state$.getValue());
     // Protocol truth and display preference are recomputed together on every
     // emission. The view layer can never feed back into authoritativeRefs.
@@ -495,8 +498,10 @@ export class GitGraspPool {
     this.state$.next(next);
     this.notify();
 
-    const headRef = this.getHeadRef(next);
-    if (headRef) void this.ensureRefVerification(headRef);
+    if (verifyHead) {
+      const headRef = this.getHeadRef(next);
+      if (headRef) void this.ensureRefVerification(headRef);
+    }
   }
 
   // -----------------------------------------------------------------------
@@ -628,7 +633,7 @@ export class GitGraspPool {
     if (
       withVerification.some(
         ({ verification }) =>
-          !verification || verification.descendsFromState === undefined,
+          !!verification && verification.descendsFromState === undefined,
       )
     ) {
       return null;
@@ -750,7 +755,11 @@ export class GitGraspPool {
     const stateEvent = this.stateManager.currentState;
     if (next.viewSource === "nostr") {
       for (const ref of stateEvent?.refs ?? []) {
-        effective[ref.name] = { commitId: ref.commitId, source: "state" };
+        const groups = this.groupServerRefCandidates(ref.name);
+        effective[ref.name] = {
+          commitId: this.getStateRefAnchor(ref.commitId, groups),
+          source: "state",
+        };
       }
       return effective;
     }
@@ -788,15 +797,28 @@ export class GitGraspPool {
     const differing = groups.filter(
       (group) => !commitsMatch(group.commitId, stateAnchor),
     );
+    const unsettled = differing.filter((group) => {
+      const verification = this.ancestryVerifications.get(
+        this.verificationKey(refName, stateAnchor, group.commitId),
+      );
+      return !verification || verification.descendsFromState === undefined;
+    });
+    if (unsettled.length === 0) return Promise.resolve();
+
     return Promise.all(
-      differing.map((group) =>
+      unsettled.map((group) =>
         this.ensureCandidateVerification(
           refName,
           stateAnchor,
           this.pickGroupSource(group),
         ),
       ),
-    ).then(() => undefined);
+    ).then(() => {
+      // Re-derive only after every candidate in this batch has settled. This
+      // prevents a fast mirror from temporarily winning before a slower
+      // mirror proves that it contains an incomparable fork.
+      if (!this.isDisposed) this.setState((prev) => ({ ...prev }), false);
+    });
   }
 
   private ensureCandidateVerification(
@@ -840,7 +862,6 @@ export class GitGraspPool {
         verification.descendsFromState = history.some((commit) =>
           commitsMatch(commit.hash, stateCommit),
         );
-        this.setState((prev) => ({ ...prev }));
       })
       .catch(() => {
         // Transport/parser failures are not ancestry evidence. Remove only
@@ -2492,6 +2513,18 @@ export class GitGraspPool {
     const refs = { ...merged.refs };
     for (const [refName, resolved] of Object.entries(state.effectiveRefs)) {
       if (refs[`${refName}^{}`]) {
+        const stateRef = this.stateManager.currentState?.refs.find(
+          (ref) => ref.name === refName,
+        );
+        if (
+          resolved.source === "state" &&
+          stateRef &&
+          !commitsMatch(stateRef.commitId, resolved.commitId)
+        ) {
+          // Legacy signed state used the annotated-tag object ID. Preserve
+          // that signed raw ref while placing its normalized commit in ^{}.
+          refs[refName] = stateRef.commitId;
+        }
         refs[`${refName}^{}`] = resolved.commitId;
       } else {
         refs[refName] = resolved.commitId;
