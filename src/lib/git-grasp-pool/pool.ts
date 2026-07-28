@@ -180,6 +180,7 @@ interface ServerRefCandidateGroup {
 interface RefAncestryVerification {
   stateCommit: string;
   gitCommit: string;
+  status: "pending" | "complete" | "unavailable";
   descendsFromState: boolean | undefined;
   history: string[] | undefined;
   promise: Promise<void>;
@@ -633,7 +634,7 @@ export class GitGraspPool {
     if (
       withVerification.some(
         ({ verification }) =>
-          !!verification && verification.descendsFromState === undefined,
+          !verification || verification.status === "pending",
       )
     ) {
       return null;
@@ -801,7 +802,7 @@ export class GitGraspPool {
       const verification = this.ancestryVerifications.get(
         this.verificationKey(refName, stateAnchor, group.commitId),
       );
-      return !verification || verification.descendsFromState === undefined;
+      return !verification || verification.status !== "complete";
     });
     if (unsettled.length === 0) return Promise.resolve();
 
@@ -828,13 +829,14 @@ export class GitGraspPool {
   ): Promise<void> {
     const key = this.verificationKey(refName, stateCommit, candidate.commitId);
     const existing = this.ancestryVerifications.get(key);
-    if (existing) {
+    if (existing && existing.status !== "unavailable") {
       return existing.promise;
     }
 
     const verification: RefAncestryVerification = {
       stateCommit,
       gitCommit: candidate.commitId,
+      status: "pending",
       descendsFromState: undefined as boolean | undefined,
       history: undefined,
       promise: Promise.resolve(),
@@ -855,19 +857,21 @@ export class GitGraspPool {
           return;
         }
         if (!history || history.length === 0) {
-          this.ancestryVerifications.delete(key);
+          verification.status = "unavailable";
           return;
         }
         verification.history = history.map((commit) => commit.hash);
         verification.descendsFromState = history.some((commit) =>
           commitsMatch(commit.hash, stateCommit),
         );
+        verification.status = "complete";
       })
       .catch(() => {
-        // Transport/parser failures are not ancestry evidence. Remove only
-        // this exact in-flight entry so a later resolve can retry the pair.
+        // Transport/parser failures are not ancestry evidence. Keep a
+        // distinct unavailable result so ref derivation can distinguish it
+        // from a newly discovered candidate whose check has not started.
         if (this.ancestryVerifications.get(key) === verification) {
-          this.ancestryVerifications.delete(key);
+          verification.status = "unavailable";
         }
       });
     this.ancestryVerifications.set(key, verification);
