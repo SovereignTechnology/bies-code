@@ -315,8 +315,6 @@ function firstLine(message: string | undefined): string {
 
 interface BaseRefRowProps {
   refWithStatus: RefWithStatus;
-  /** Resolved source — "nostr" or a concrete clone URL, never "default". */
-  effectiveSource: string;
   pool?: GitGraspPool | null;
   urlStates?: Record<string, UrlState>;
   /** All clone URLs — used to compute which servers have a ref. */
@@ -379,12 +377,12 @@ function CompactRefRow({
   refWithStatus,
   isSelected,
   onSelect,
-  effectiveSource,
   pool,
   urlStates,
   cloneUrls,
 }: CompactRefRowProps) {
   const sourceHash = refWithStatus.hash;
+  const effectiveSource = refWithStatus.effectiveSource;
   const commit = useLazyCommit(pool, sourceHash);
   const commitTs = commitTimestamp(commit);
 
@@ -487,7 +485,6 @@ function CompactRefRow({
 
 function ExpandedRefRow({
   refWithStatus,
-  effectiveSource,
   pool,
   urlStates,
   cloneUrls,
@@ -496,6 +493,7 @@ function ExpandedRefRow({
   onSelect,
 }: ExpandedRefRowProps) {
   const sourceHash = refWithStatus.hash;
+  const effectiveSource = refWithStatus.effectiveSource;
 
   // Skip the lazy fetch when the caller already supplies a commit via
   // `divergence.latestCommit` — that's the common case on the branches page

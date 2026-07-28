@@ -42,6 +42,8 @@ export type RefStatus =
 
 export interface RefWithStatus extends GitRef {
   status: RefStatus;
+  /** Resolved display source for this ref: "nostr" or a concrete clone URL. */
+  effectiveSource: string;
   /** Commit declared by winning state event (if different) */
   stateCommit?: string;
   /**

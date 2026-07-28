@@ -220,7 +220,6 @@ export default function RepoTagsPage() {
                 <RefRow
                   density="expanded"
                   refWithStatus={tag}
-                  effectiveSource={effectiveSource}
                   pool={pool}
                   urlStates={poolState.urls}
                   cloneUrls={cloneUrls}

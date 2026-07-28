@@ -53,9 +53,9 @@ export interface UseRefsWithStatusInput {
 }
 
 export interface UseRefsWithStatusResult {
-  /** Resolved source — always "nostr" or a concrete clone URL, never "default". */
+  /** Resolved source for the active/default ref, used by the source selector. */
   effectiveSource: string;
-  /** Every ref decorated with status against `effectiveSource`. */
+  /** Every ref decorated with status and its own resolved display source. */
   refsWithStatus: RefWithStatus[];
   /** Branches only (preserves merged order from `refs`). */
   branches: RefWithStatus[];
@@ -170,8 +170,13 @@ export function useRefsWithStatus({
       return refsIncludingState.map((ref) => {
         const fullRefName = `${ref.isBranch ? "refs/heads/" : "refs/tags/"}${ref.name}`;
         const effective = effectiveRefs[fullRefName];
+        const refEffectiveSource =
+          effective?.source === "git"
+            ? (effective.sourceUrl ?? winnerUrl ?? "nostr")
+            : "nostr";
         return {
           ...ref,
+          effectiveSource: refEffectiveSource,
           ...getRefStatus(
             ref,
             repoState,
@@ -191,6 +196,7 @@ export function useRefsWithStatus({
       // so refs are compared against the state even when the server is ahead.
       return refsIncludingState.map((ref) => ({
         ...ref,
+        effectiveSource: "nostr",
         ...getRefStatus(
           ref,
           repoState,
@@ -207,6 +213,7 @@ export function useRefsWithStatus({
       // Server not ready — fall back to nostr-state comparison
       return refsIncludingState.map((ref) => ({
         ...ref,
+        effectiveSource: viewSource,
         ...getRefStatus(
           ref,
           repoState,
@@ -219,6 +226,7 @@ export function useRefsWithStatus({
     }
     return refsIncludingState.map((ref) => ({
       ...ref,
+      effectiveSource: viewSource,
       ...getRefStatusForServer(
         ref,
         serverUrlState,
@@ -235,6 +243,7 @@ export function useRefsWithStatus({
     urlStates,
     cloneUrls,
     effectiveRefs,
+    winnerUrl,
     viewSource,
     relayStateMap,
   ]);

@@ -317,7 +317,6 @@ export default function RepoBranchesPage() {
                 <RefRow
                   density="expanded"
                   refWithStatus={branch}
-                  effectiveSource={effectiveSource}
                   pool={pool}
                   urlStates={poolState.urls}
                   cloneUrls={cloneUrls}

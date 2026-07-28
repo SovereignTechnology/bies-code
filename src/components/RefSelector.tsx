@@ -1400,7 +1400,6 @@ export function RefSelector({
                       refWithStatus={branch}
                       isSelected={branch.name === currentRef}
                       onSelect={() => handleSelect(branch.name)}
-                      effectiveSource={effectiveSource}
                       pool={pool}
                       urlStates={urlStates}
                       cloneUrls={cloneUrls}
@@ -1431,7 +1430,6 @@ export function RefSelector({
                       refWithStatus={tag}
                       isSelected={tag.name === currentRef}
                       onSelect={() => handleSelect(tag.name)}
-                      effectiveSource={effectiveSource}
                       pool={pool}
                       urlStates={urlStates}
                       cloneUrls={cloneUrls}
