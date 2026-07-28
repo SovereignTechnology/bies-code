@@ -1,12 +1,18 @@
 import { useState, useEffect, useMemo } from "react";
 import { use$ } from "@/hooks/use$";
-import { useMyUser } from "@/hooks/useUser";
 import { useEventStore } from "@/hooks/useEventStore";
+import { useProfilesForPubkeys } from "@/hooks/useProfilesForPubkeys";
 import { pool } from "@/services/nostr";
 import { resilientRequest } from "@/lib/resilientSubscription";
 import { mapEventsToStore } from "applesauce-core";
 import { onlyEvents } from "applesauce-relay";
-import { getProfileContent, isValidProfile } from "applesauce-core/helpers";
+import { PublicContactsModel } from "applesauce-core/models";
+import { useActiveAccount } from "applesauce-react/hooks";
+import {
+  getProfileContent,
+  getPublicContacts,
+  isValidProfile,
+} from "applesauce-core/helpers";
 import type { Filter } from "applesauce-core/helpers";
 import type { ProfileContent } from "applesauce-core/helpers";
 import { map } from "rxjs/operators";
@@ -15,13 +21,38 @@ import { map } from "rxjs/operators";
 const NIP50_RELAY = "wss://relay.ditto.pub";
 const NIP50_DEBOUNCE_MS = 300;
 const MAX_RESULTS = 8;
+const NIP50_RESULT_LIMIT = 20;
+const AUTHORS_PER_SEARCH_FILTER = 256;
+const EMPTY_PUBKEYS: string[] = [];
 
 /** kind:10017 — NIP-51 Git authors follow list */
 const GIT_AUTHORS_KIND = 10017;
 
+function getNip50SearchQuery(query: string): string {
+  const trimmed = query.trim();
+  const words = trimmed.split(/\s+/);
+
+  // Ditto can return no matches while a new word is only one character long
+  // (for example, "Derek R"), even though both "Derek" and "Derek Ro" match.
+  // Search the completed words during that brief state, then apply the full
+  // query to profile metadata locally below.
+  if (words.length > 1 && words[words.length - 1]?.length === 1) {
+    return words.slice(0, -1).join(" ");
+  }
+
+  return trimmed;
+}
+
 export interface ContactSearchResult {
   pubkey: string;
   profile: ProfileContent | undefined;
+  isGitFollow: boolean;
+  isSocialFollow: boolean;
+}
+
+export interface ContactSearchState {
+  results: ContactSearchResult[];
+  isSearching: boolean;
 }
 
 /**
@@ -47,30 +78,33 @@ interface ScoredResult {
  *
  * - Profile names are loaded reactively from the EventStore (Applesauce-native).
  * - NIP-50 search is debounced 300ms and fires against relay.ditto.pub.
+ * - Priority users and follows are searched in author-constrained filters so
+ *   they cannot be crowded out by the global NIP-50 result limit.
  * - When query is empty, shows priority pubkeys + git follows + social follows (up to MAX_RESULTS).
  * - Returns [] when no results are available yet.
  *
  * @param query           - The text typed after "@"
  * @param priorityPubkeys - Pubkeys to surface first (maintainers, participants)
+ * @param excludePubkeys  - Pubkeys hidden by the owning autocomplete
+ * @param enabled         - Whether the autocomplete is currently open
  */
 export function useContactSearch(
   query: string,
-  priorityPubkeys: string[] = [],
-): ContactSearchResult[] {
-  const myUser = useMyUser();
+  priorityPubkeys: string[] = EMPTY_PUBKEYS,
+  excludePubkeys: string[] = EMPTY_PUBKEYS,
+  enabled = true,
+): ContactSearchState {
+  const account = useActiveAccount();
   const store = useEventStore();
 
   // ── 1. Git follows (kind:10017) ───────────────────────────────────────────
-  const myPubkey = myUser?.pubkey;
+  const myPubkey = account?.pubkey;
   const rawGitFollowPubkeys = use$(() => {
     if (!myPubkey) return undefined;
     return store.replaceable(GIT_AUTHORS_KIND, myPubkey).pipe(
       map((event) => {
         if (!event) return [] as string[];
-        return event.tags
-          .filter(([t]) => t === "p")
-          .map(([, v]) => v)
-          .filter((v): v is string => !!v);
+        return getPublicContacts(event).map((contact) => contact.pubkey);
       }),
     );
   }, [myPubkey, store]);
@@ -80,9 +114,12 @@ export function useContactSearch(
   );
 
   // ── 2. Social follows (kind:3) ────────────────────────────────────────────
-  const contacts = use$(() => myUser?.contacts$, [myUser?.pubkey]);
+  const contacts = use$(() => {
+    if (!myPubkey) return undefined;
+    return store.model(PublicContactsModel, myPubkey);
+  }, [myPubkey, store]);
   const followPubkeys = useMemo<string[]>(
-    () => contacts?.map((u) => u.pubkey) ?? [],
+    () => contacts?.map((contact) => contact.pubkey) ?? [],
     [contacts],
   );
 
@@ -104,39 +141,83 @@ export function useContactSearch(
     return out;
   }, [priorityPubkeys, gitFollowPubkeys, followPubkeys]);
 
+  // Keep the first visible trusted candidates reactively profiled while the
+  // dropdown is open. They can appear without profiles for an empty "@" query,
+  // but matching typed text requires their metadata. Limiting this to the
+  // visible result count avoids loading every follow.
+  const seededProfilePubkeys = useMemo(() => {
+    if (!enabled) return EMPTY_PUBKEYS;
+    const excluded = new Set(excludePubkeys);
+    return localPubkeys
+      .filter((pubkey) => !excluded.has(pubkey))
+      .slice(0, MAX_RESULTS);
+  }, [enabled, excludePubkeys, localPubkeys]);
+  const seededProfileMap = useProfilesForPubkeys(seededProfilePubkeys);
+
   // ── 4. NIP-50 search (debounced) ─────────────────────────────────────────
   const [nip50Pubkeys, setNip50Pubkeys] = useState<string[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
 
   useEffect(() => {
     const trimmed = query.trim();
     if (!trimmed) {
       setNip50Pubkeys([]);
+      setIsSearching(false);
       return;
     }
 
     let sub: { unsubscribe(): void } | undefined;
+    let cancelled = false;
+    const nip50Query = getNip50SearchQuery(trimmed);
+    setIsSearching(true);
 
     const timer = setTimeout(() => {
       setNip50Pubkeys([]); // clear stale results before new search
-      const filter = { kinds: [0], search: trimmed, limit: 10 } as Filter;
+      const trustedFilters: Filter[] = [];
+      for (
+        let start = 0;
+        start < localPubkeys.length;
+        start += AUTHORS_PER_SEARCH_FILTER
+      ) {
+        trustedFilters.push({
+          kinds: [0],
+          authors: localPubkeys.slice(start, start + AUTHORS_PER_SEARCH_FILTER),
+          search: nip50Query,
+          limit: NIP50_RESULT_LIMIT,
+        } as Filter);
+      }
+      const filters: Filter[] = [
+        ...trustedFilters,
+        {
+          kinds: [0],
+          search: nip50Query,
+          limit: NIP50_RESULT_LIMIT,
+        } as Filter,
+      ];
       // Stream results as they arrive — each event triggers a state update so
       // the dropdown populates progressively rather than waiting for EOSE.
-      sub = resilientRequest(pool, [NIP50_RELAY], [filter])
+      sub = resilientRequest(pool, [NIP50_RELAY], filters)
         .pipe(onlyEvents(), mapEventsToStore(store))
         .subscribe({
           next: (ev) =>
             setNip50Pubkeys((prev) =>
               prev.includes(ev.pubkey) ? prev : [...prev, ev.pubkey],
             ),
-          error: () => {},
+          error: () => {
+            if (!cancelled) setIsSearching(false);
+          },
+          complete: () => {
+            if (!cancelled) setIsSearching(false);
+          },
         });
     }, NIP50_DEBOUNCE_MS);
 
     return () => {
+      cancelled = true;
       clearTimeout(timer);
       sub?.unsubscribe();
     };
-  }, [query, store]);
+  }, [query, localPubkeys, store]);
 
   // ── 7. Profiles for NIP-50 results ───────────────────────────────────────
   // NIP-50 events are already synchronously in the store (mapEventsToStore
@@ -169,11 +250,14 @@ export function useContactSearch(
         if (content) profileMap.set(pubkey, content);
       }
     }
+    for (const [pubkey, profile] of seededProfileMap) {
+      profileMap.set(pubkey, profile);
+    }
     return profileMap;
-  }, [localPubkeys, store]);
+  }, [localPubkeys, seededProfileMap, store]);
 
   // ── 6. Assemble + filter + sort ───────────────────────────────────────────
-  return useMemo<ContactSearchResult[]>(() => {
+  const results = useMemo<ContactSearchResult[]>(() => {
     const lowerQuery = query.trim().toLowerCase();
     const prioritySet = new Set(priorityPubkeys);
     const gitFollowSet = new Set(gitFollowPubkeys);
@@ -284,6 +368,8 @@ export function useContactSearch(
     return candidates.slice(0, MAX_RESULTS).map(({ pubkey, profile }) => ({
       pubkey,
       profile,
+      isGitFollow: gitFollowSet.has(pubkey),
+      isSocialFollow: followSet.has(pubkey),
     }));
   }, [
     query,
@@ -295,4 +381,6 @@ export function useContactSearch(
     nip50ProfileMap,
     store,
   ]);
+
+  return { results, isSearching };
 }

@@ -9,12 +9,16 @@ import {
 import { createPortal } from "react-dom";
 import { nip19 } from "nostr-tools";
 
-import { UserAvatar } from "@/components/UserAvatar";
+import { AvatarWithBadges, UserAvatar } from "@/components/UserAvatar";
 import { useContactSearch } from "@/hooks/useContactSearch";
+import { useIsFollowing } from "@/hooks/useIsFollowing";
+import { useIsGitAuthorFollowing } from "@/hooks/useIsGitAuthorFollowing";
 import { useProfile } from "@/hooks/useProfile";
 import { useProfilesForPubkeys } from "@/hooks/useProfilesForPubkeys";
 import { useUserDisplayName } from "@/hooks/useUserDisplayName";
 import { cn } from "@/lib/utils";
+
+const EMPTY_PUBKEYS: string[] = [];
 
 export interface UserAutocompleteDropdownProps {
   query: string;
@@ -32,6 +36,8 @@ export interface UserAutocompleteDropdownProps {
   listboxId?: string;
   /** Receives the active option id for aria-activedescendant on the owning input */
   onActiveDescendantChange?: (id: string | undefined) => void;
+  /** Reports whether the debounced relay search is still in progress */
+  onLoadingChange?: (isLoading: boolean) => void;
 }
 
 function getOptionId(listboxId: string, pubkey: string): string {
@@ -45,17 +51,23 @@ export function UserAutocompleteDropdown({
   onSelectPubkey,
   onClose,
   keyboardTargetRef,
-  priorityPubkeys = [],
-  excludePubkeys = [],
+  priorityPubkeys = EMPTY_PUBKEYS,
+  excludePubkeys = EMPTY_PUBKEYS,
   listboxId: providedListboxId,
   onActiveDescendantChange,
+  onLoadingChange,
 }: UserAutocompleteDropdownProps) {
   const generatedListboxId = useId();
   const listboxId = providedListboxId ?? generatedListboxId;
   const [selectedIndex, setSelectedIndex] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
 
-  const contacts = useContactSearch(isOpen ? query : "", priorityPubkeys);
+  const { results: contacts, isSearching } = useContactSearch(
+    isOpen ? query : "",
+    priorityPubkeys,
+    excludePubkeys,
+    isOpen,
+  );
   const excludeSet = useMemo(() => new Set(excludePubkeys), [excludePubkeys]);
   const filteredContacts = useMemo(
     () => contacts.filter((contact) => !excludeSet.has(contact.pubkey)),
@@ -71,6 +83,10 @@ export function UserAutocompleteDropdown({
     [filteredContacts],
   );
   useProfilesForPubkeys(renderedPubkeys);
+
+  useEffect(() => {
+    onLoadingChange?.(isOpen && isSearching);
+  }, [isOpen, isSearching, onLoadingChange]);
 
   useEffect(() => {
     setSelectedIndex(0);
@@ -197,13 +213,15 @@ export function UserAutocompleteDropdown({
           scrollbarColor: "hsl(var(--border)) transparent",
         }}
       >
-        {filteredContacts.map(({ pubkey }, index) => (
+        {filteredContacts.map((contact, index) => (
           <UserAutocompleteItem
-            key={pubkey}
-            id={getOptionId(listboxId, pubkey)}
-            pubkey={pubkey}
+            key={contact.pubkey}
+            id={getOptionId(listboxId, contact.pubkey)}
+            pubkey={contact.pubkey}
+            isGitFollow={contact.isGitFollow}
+            isSocialFollow={contact.isSocialFollow}
             isSelected={index === selectedIndex}
-            onClick={() => selectContact(pubkey)}
+            onClick={() => selectContact(contact.pubkey)}
           />
         ))}
       </div>
@@ -215,11 +233,15 @@ export function UserAutocompleteDropdown({
 function UserAutocompleteItem({
   id,
   pubkey,
+  isGitFollow,
+  isSocialFollow,
   isSelected,
   onClick,
 }: {
   id: string;
   pubkey: string;
+  isGitFollow: boolean;
+  isSocialFollow: boolean;
   isSelected: boolean;
   onClick: () => void;
 }) {
@@ -229,6 +251,10 @@ function UserAutocompleteItem({
   const nip05 = profile?.nip05;
   const npub = nip19.npubEncode(pubkey);
   const identifier = nip05 ?? `${npub.slice(0, 12)}…`;
+  const reactiveIsGitFollow = useIsGitAuthorFollowing(pubkey);
+  const reactiveIsSocialFollow = useIsFollowing(pubkey);
+  const showGitFollow = isGitFollow || reactiveIsGitFollow === true;
+  const showSocialFollow = isSocialFollow || reactiveIsSocialFollow === true;
 
   return (
     <button
@@ -246,7 +272,19 @@ function UserAutocompleteItem({
       onClick={onClick}
       onMouseDown={(e) => e.preventDefault()}
     >
-      <UserAvatar pubkey={pubkey} size="md" className="shrink-0" />
+      <AvatarWithBadges
+        avatarEl={
+          <UserAvatar
+            pubkey={pubkey}
+            size="md"
+            className="shrink-0"
+            showFollowIndicator={false}
+          />
+        }
+        size="md"
+        showGit={showGitFollow}
+        showSocial={showSocialFollow}
+      />
 
       <div className="flex-1 min-w-0">
         <div
@@ -257,8 +295,20 @@ function UserAutocompleteItem({
         >
           {displayName}
         </div>
-        <div className="text-xs text-muted-foreground truncate font-mono">
-          {identifier}
+        <div className="flex min-w-0 items-center gap-1.5">
+          <span className="min-w-0 truncate font-mono text-xs text-muted-foreground">
+            {identifier}
+          </span>
+          {showSocialFollow && (
+            <span className="shrink-0 rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 dark:text-emerald-300">
+              Social follow
+            </span>
+          )}
+          {showGitFollow && (
+            <span className="shrink-0 rounded-full bg-pink-500/15 px-1.5 py-0.5 text-[10px] font-medium text-pink-700 dark:text-pink-300">
+              Git follow
+            </span>
+          )}
         </div>
       </div>
     </button>

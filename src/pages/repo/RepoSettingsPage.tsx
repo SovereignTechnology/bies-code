@@ -1843,7 +1843,7 @@ function RepoSettingsForm({
                 <div className="space-y-1.5">
                   <div className="flex gap-2">
                     <MaintainerUserInput
-                      placeholder="@name, npub1…, or hex pubkey"
+                      placeholder="Name, npub1…, or hex pubkey"
                       value={maintainerInput}
                       onValueChange={(value) => {
                         setMaintainerInput(value);
@@ -2417,6 +2417,7 @@ function MaintainerUserInput({
   const listboxId = useId();
   const inputRef = useRef<HTMLInputElement>(null);
   const [isFocused, setIsFocused] = useState(false);
+  const [isSearching, setIsSearching] = useState(false);
   const [activeDescendantId, setActiveDescendantId] = useState<
     string | undefined
   >();
@@ -2491,8 +2492,21 @@ function MaintainerUserInput({
         aria-activedescendant={
           shouldSearch && activeDescendantId ? activeDescendantId : undefined
         }
-        className={className}
+        className={cn(className, isSearching && "pr-8")}
       />
+      {isSearching && (
+        <>
+          <span className="pointer-events-none absolute inset-y-0 right-2 flex items-center">
+            <Loader2
+              className="h-4 w-4 animate-spin text-muted-foreground"
+              aria-hidden="true"
+            />
+          </span>
+          <span className="sr-only" role="status" aria-live="polite">
+            Searching users
+          </span>
+        </>
+      )}
       <UserAutocompleteDropdown
         query={searchQuery}
         isOpen={shouldSearch}
@@ -2504,6 +2518,7 @@ function MaintainerUserInput({
         excludePubkeys={excludePubkeys}
         listboxId={listboxId}
         onActiveDescendantChange={setActiveDescendantId}
+        onLoadingChange={setIsSearching}
       />
     </div>
   );
