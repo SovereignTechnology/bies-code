@@ -1,0 +1,47 @@
+diff --git a/dist/signers/android-native-signer.d.ts b/dist/signers/android-native-signer.d.ts
+index 5c48bd33ffb0554abb1005a0d90a9c1d2f5fadcd..8d4c45467606af7faa6f8966eb2cfd9a270eca83 100644
+--- a/dist/signers/android-native-signer.d.ts
++++ b/dist/signers/android-native-signer.d.ts
+@@ -15,7 +15,7 @@ export declare class AndroidNativeSigner implements ISigner {
+         encrypt: (pubkey: string, plaintext: string) => Promise<string>;
+         decrypt: (pubkey: string, ciphertext: string) => Promise<string>;
+     };
+-    constructor(packageName: string);
++    constructor(packageName: string, pubkey?: string);
+     static getSignerApps(): Promise<import("nostr-signer-capacitor-plugin").AppInfo[]>;
+     setup(): Promise<void>;
+     getPublicKey(): Promise<string>;
+diff --git a/dist/signers/android-native-signer.js b/dist/signers/android-native-signer.js
+index 2bc3fff824a82c6f55f85515bb46c324b58d7775..4cd644afff704e787dc29126fa646d71c0c88a80 100644
+--- a/dist/signers/android-native-signer.js
++++ b/dist/signers/android-native-signer.js
+@@ -9,8 +9,9 @@ export class AndroidNativeSigner {
+     verifyEvent = verifyEvent;
+     nip04;
+     nip44;
+-    constructor(packageName) {
++    constructor(packageName, pubkey) {
+         this.packageName = packageName;
++        this.pubkey = pubkey ?? null;
+         this.nip04 = {
+             encrypt: this.nip04Encrypt.bind(this),
+             decrypt: this.nip04Decrypt.bind(this),
+@@ -27,11 +28,13 @@ export class AndroidNativeSigner {
+         if (this.connected)
+             return;
+         await NostrSignerPlugin.setPackageName(this.packageName);
+-        const result = await NostrSignerPlugin.getPublicKey(this.packageName, this.permissions);
+-        const pubkey = normalizeToPubkey(result.npub);
+-        if (!pubkey)
+-            throw new Error("Invalid public key");
+-        this.pubkey = pubkey;
++        if (!this.pubkey) {
++            const result = await NostrSignerPlugin.getPublicKey(this.packageName, this.permissions);
++            const pubkey = normalizeToPubkey(result.npub);
++            if (!pubkey)
++                throw new Error("Invalid public key");
++            this.pubkey = pubkey;
++        }
+         this.connected = true;
+     }
+     async getPublicKey() {

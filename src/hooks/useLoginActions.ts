@@ -3,8 +3,13 @@ import { accounts } from "@/services/accounts";
 import { pool } from "@/services/nostr";
 import { defaultNostrConnectRelays } from "@/services/settings";
 import { signerWithNudge } from "@/lib/signerWithNudge";
+import { Capacitor } from "@capacitor/core";
 import { Accounts } from "applesauce-accounts";
-import { NostrConnectAccount } from "applesauce-accounts/accounts";
+import {
+  AmberClipboardAccount,
+  NostrConnectAccount,
+} from "applesauce-accounts/accounts";
+import { AndroidNativeAccount } from "applesauce-accounts/accounts/android-native-account";
 import type { IAccount } from "applesauce-accounts";
 import {
   AmberClipboardSigner,
@@ -15,6 +20,8 @@ import {
 import { nip19 } from "nostr-tools";
 
 // NOTE: This file should not be edited except for adding new login methods.
+
+const AMBER_ANDROID_PACKAGE = "com.greenart7c3.nostrsigner";
 
 /**
  * Wraps the signer on an account with {@link signerWithNudge} so that slow or
@@ -61,15 +68,11 @@ export function applySignerNudge<T extends IAccount>(account: T): T {
     // Extension signers benefit from the nudge (the user may dismiss or ignore
     // the browser popup) but have no relay connectivity to check.
     account.signer = signerWithNudge(account.signer) as typeof account.signer;
-  } else if (account instanceof Accounts.AmberClipboardAccount) {
-    // Amber responds through the original Android intent when the app resumes.
-    // It needs the delayed nudge, but not NIP-46's resume retry, which would
-    // incorrectly issue a second intent.
-    account.signer = signerWithNudge(account.signer, undefined, {
-      retryOnAndroidResume: false,
-    }) as typeof account.signer;
   }
-  // PrivateKeyAccount: local signing is synchronous — no nudge needed.
+  // Do not wrap AmberClipboardAccount: its signer opens the complete NIP-55
+  // request, while the generic Android nudge can only reopen a bare
+  // `nostrsigner:` URI that Amber correctly rejects as malformed.
+  // PrivateKey and direct Android signer accounts do not need a nudge either.
   return account;
 }
 
@@ -274,34 +277,52 @@ export function useLoginActions() {
       }
     },
 
-    /**
-     * Login with Amber through Android's NIP-55 signer intents.
-     * Amber returns the selected public key via the system clipboard when the
-     * app resumes, so this must be initiated directly from a user action.
-     */
+    /** Login with Amber through Android's NIP-55 signer integration. */
     async amber(): Promise<void> {
       try {
+        if (Capacitor.getPlatform() === "android") {
+          const amberApp = (await AndroidNativeAccount.getSignerApps()).find(
+            (app) => app.packageName === AMBER_ANDROID_PACKAGE,
+          );
+          if (!amberApp) {
+            throw new Error("Amber is not installed on this device.");
+          }
+
+          const account = await AndroidNativeAccount.fromApp(amberApp);
+          const existing = accounts
+            .getAccountsForPubkey(account.pubkey)
+            .find(
+              (candidate) =>
+                candidate instanceof AndroidNativeAccount &&
+                candidate.signer.packageName === AMBER_ANDROID_PACKAGE,
+            );
+          if (existing) {
+            accounts.setActive(existing);
+            return;
+          }
+
+          accounts.addAccount(account);
+          accounts.setActive(account);
+          return;
+        }
+
+        // Android browsers cannot use the Capacitor bridge. Keep the web
+        // clipboard flow there, where intent: URLs are handled by the browser.
         const signer = new AmberClipboardSigner();
-        // The first NIP-55 request is also subject to the regular signer nudge
-        // so users are prompted to return to Amber if it does not respond.
-        const pubkey = await signerWithNudge(signer, undefined, {
-          retryOnAndroidResume: false,
-        }).getPublicKey();
+        const pubkey = await signer.getPublicKey();
 
         // Only skip adding if this exact signer type is already present for
         // the selected public key; users can keep other signer types too.
         const existing = accounts
           .getAccountsForPubkey(pubkey)
-          .find((a) => a instanceof Accounts.AmberClipboardAccount);
+          .find((a) => a instanceof AmberClipboardAccount);
         if (existing) {
           accounts.setActive(existing);
           signer.destroy();
           return;
         }
 
-        const account = applySignerNudge(
-          new Accounts.AmberClipboardAccount(pubkey, signer),
-        );
+        const account = new AmberClipboardAccount(pubkey, signer);
         accounts.addAccount(account);
         accounts.setActive(account);
       } catch (error) {

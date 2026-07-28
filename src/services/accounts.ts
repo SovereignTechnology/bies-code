@@ -1,8 +1,9 @@
 import { AccountManager } from "applesauce-accounts";
 import {
+  AmberClipboardAccount,
   NostrConnectAccount,
-  registerCommonAccountTypes,
 } from "applesauce-accounts/accounts";
+import { registerAndroidAccounts } from "applesauce-accounts/accounts/android-native-account";
 import { applySignerNudge } from "@/hooks/useLoginActions";
 import { switchMap, distinctUntilChanged, map } from "rxjs/operators";
 import { of } from "rxjs";
@@ -21,8 +22,9 @@ import { MailboxesModel } from "applesauce-core/models";
  */
 export const accounts = new AccountManager();
 
-// Register common account types (Extension, PrivateKey, NostrConnect, etc.)
-registerCommonAccountTypes(accounts);
+// Register the common web accounts plus persisted native Android signers.
+registerAndroidAccounts(accounts);
+accounts.registerType(AmberClipboardAccount);
 
 // Suppresses local localStorage writes during a cross-tab sync so the
 // persistence subscriptions below do not echo the incoming state back to
