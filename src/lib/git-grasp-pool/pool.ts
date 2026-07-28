@@ -832,16 +832,22 @@ export class GitGraspPool {
         ) {
           return;
         }
-        verification.history = history?.map((commit) => commit.hash);
-        verification.descendsFromState = !!history?.some((commit) =>
+        if (!history || history.length === 0) {
+          this.ancestryVerifications.delete(key);
+          return;
+        }
+        verification.history = history.map((commit) => commit.hash);
+        verification.descendsFromState = history.some((commit) =>
           commitsMatch(commit.hash, stateCommit),
         );
         this.setState((prev) => ({ ...prev }));
       })
       .catch(() => {
-        // Walk failed — leave descendsFromState undefined so the signed
-        // state head stays authoritative; a later warning re-triggers the
-        // check only if the ref pair changes.
+        // Transport/parser failures are not ancestry evidence. Remove only
+        // this exact in-flight entry so a later resolve can retry the pair.
+        if (this.ancestryVerifications.get(key) === verification) {
+          this.ancestryVerifications.delete(key);
+        }
       });
     this.ancestryVerifications.set(key, verification);
     return verification.promise;
