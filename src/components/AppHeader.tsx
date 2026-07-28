@@ -155,7 +155,16 @@ export function AppHeader() {
           to="/"
           className="group transition-opacity hover:opacity-80 shrink-0"
         >
-          <img src="/icons/icon.svg" alt="BIES Code" className="h-8 w-8" />
+          <img
+            src="/icons/icon.svg?v=2"
+            alt="BIES Code"
+            className="h-8 w-8 dark:hidden"
+          />
+          <img
+            src="/icons/icon-dark.svg?v=2"
+            alt="BIES Code"
+            className="h-8 w-8 hidden dark:block"
+          />
         </Link>
 
         <div className="flex items-center gap-2 ml-auto">

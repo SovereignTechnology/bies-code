@@ -62,9 +62,14 @@ export function AppFooter() {
               className="flex items-center gap-2 hover:opacity-80 transition-opacity w-fit"
             >
               <img
-                src="/icons/icon.svg"
+                src="/icons/icon.svg?v=2"
                 alt="BIES Code"
-                className="h-6 w-6"
+                className="h-6 w-6 dark:hidden"
+              />
+              <img
+                src="/icons/icon-dark.svg?v=2"
+                alt="BIES Code"
+                className="h-6 w-6 hidden dark:block"
               />
               <span className="font-semibold text-sm">
                 git.buildinelsalvador.com

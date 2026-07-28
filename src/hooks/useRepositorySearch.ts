@@ -40,7 +40,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { BehaviorSubject, Subject } from "rxjs";
-import { isFromRelay } from "applesauce-core/helpers";
+import { isFromRelay, normalizeRelayUrl } from "applesauce-core/helpers";
 import type { Filter } from "applesauce-core/helpers";
 import type { NostrEvent } from "nostr-tools";
 import { pool, eventStore } from "@/services/nostr";
@@ -206,7 +206,7 @@ export function useRepositorySearch(
         const scoped =
           relayOverride && relayOverride.length > 0
             ? events.filter((ev) =>
-                relayOverride.some((r) => isFromRelay(ev, r)),
+                relayOverride.some((r) => isFromRelay(ev, normalizeRelayUrl(r))),
               )
             : events;
         return groupIntoResolvedRepos(scoped);
