@@ -114,7 +114,7 @@ function RepoListItem({
           <span className="text-xs text-muted-foreground/40 shrink-0">/</span>
         </>
       )}
-      <span className="text-sm font-medium truncate min-w-0 flex-1 group-hover:text-pink-600 dark:group-hover:text-pink-400 transition-colors">
+      <span className="text-sm font-medium truncate min-w-0 flex-1 group-hover:text-primary transition-colors">
         {name}
       </span>
     </Link>
@@ -187,7 +187,7 @@ function MyRepositoriesPanel({ pubkey }: { pubkey: string }) {
           <h3 className="text-base font-semibold">
             <Link
               to={`${userPath}?tab=repositories`}
-              className="hover:text-pink-600 dark:hover:text-pink-400 transition-colors"
+              className="hover:text-primary transition-colors"
             >
               My repositories
             </Link>
@@ -211,7 +211,7 @@ function MyRepositoriesPanel({ pubkey }: { pubkey: string }) {
             placeholder="Filter repositories..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="h-8 pl-8 text-sm bg-background/60 focus-visible:ring-pink-500/30"
+            className="h-8 pl-8 text-sm bg-background/60 focus-visible:ring-primary/30"
           />
         </div>
       )}
@@ -330,7 +330,7 @@ function FollowedReposPanel({ pubkey }: { pubkey: string }) {
           <Eye className="h-4 w-4 text-muted-foreground" />
           <Link
             to={`${userPath}?tab=followed`}
-            className="hover:text-pink-600 dark:hover:text-pink-400 transition-colors"
+            className="hover:text-primary transition-colors"
           >
             Followed repositories
           </Link>
@@ -344,7 +344,7 @@ function FollowedReposPanel({ pubkey }: { pubkey: string }) {
             placeholder="Filter repositories..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="h-8 pl-8 text-sm bg-background/60 focus-visible:ring-pink-500/30"
+            className="h-8 pl-8 text-sm bg-background/60 focus-visible:ring-primary/30"
           />
         </div>
       )}
@@ -436,7 +436,7 @@ function NotificationsPanel() {
             {unreadCount > 0 && (
               <Badge
                 variant="secondary"
-                className="h-5 min-w-[20px] px-1.5 text-xs bg-pink-500/15 text-pink-600 dark:text-pink-400 border-0"
+                className="h-5 min-w-[20px] px-1.5 text-xs bg-primary/15 text-primary border-0"
               >
                 {unreadCount}
               </Badge>

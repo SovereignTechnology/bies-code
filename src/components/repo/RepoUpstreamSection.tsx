@@ -49,7 +49,7 @@ export function RepoUpstreamSection({
               {repoPath && parsed ? (
                 <Link
                   to={repoPath}
-                  className="text-xs text-pink-600 dark:text-pink-400 hover:underline font-mono break-all"
+                  className="text-xs text-primary hover:underline font-mono break-all"
                   title={upstream.repository}
                 >
                   {compact ? parsed.identifier : upstream.repository}

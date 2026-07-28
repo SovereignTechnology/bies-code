@@ -10,9 +10,9 @@ export default function RepoAboutPage() {
   const repoOwnerProfile = useProfile(pubkey);
 
   useSeoMeta({
-    title: repo ? `${repo.name} - about - ngit` : "About - ngit",
+    title: repo ? `${repo.name} - about - BIES Code` : "About - BIES Code",
     description: repo?.description ?? "Repository details",
-    ogImage: repoOwnerProfile?.picture ?? "/og-image.svg",
+    ogImage: repoOwnerProfile?.picture ?? "/og-image.png",
     ogImageAlt: repo?.name,
     twitterCard: repoOwnerProfile?.picture ? "summary" : "summary_large_image",
   });

@@ -122,8 +122,8 @@ export function EventCardActions({ event, className }: EventCardActionsProps) {
           </DialogHeader>
           <div className="space-y-2 pt-1">
             <CopyRow
-              label="gitworkshop.dev"
-              value={`https://gitworkshop.dev/${nip19Id}`}
+              label="git.buildinelsalvador.com"
+              value={`https://git.buildinelsalvador.com/${nip19Id}`}
             />
             <CopyRow label="event id" value={nip19Id} />
             <CopyRow label="ditto.pub" value={`https://ditto.pub/${nip19Id}`} />

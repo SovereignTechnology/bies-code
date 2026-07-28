@@ -174,10 +174,10 @@ export default function RepoPRsPage() {
   };
 
   useSeoMeta({
-    title: repo ? `PRs - ${repo.name} - ngit` : "Pull Requests - ngit",
+    title: repo ? `PRs - ${repo.name} - BIES Code` : "Pull Requests - BIES Code",
     description:
       repo?.description ?? "Browse pull requests for this repository",
-    ogImage: repoOwnerProfile?.picture ?? "/og-image.svg",
+    ogImage: repoOwnerProfile?.picture ?? "/og-image.png",
     ogImageAlt: repo?.name ?? repoId,
     twitterCard: repoOwnerProfile?.picture ? "summary" : "summary_large_image",
   });
@@ -373,7 +373,7 @@ function PRRow({
         {/* Title + metadata */}
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="font-medium text-foreground group-hover:text-pink-600 dark:group-hover:text-pink-400 transition-colors line-clamp-1">
+            <span className="font-medium text-foreground group-hover:text-primary transition-colors line-clamp-1">
               {pr.currentSubject}
             </span>
             {ci?.status && (

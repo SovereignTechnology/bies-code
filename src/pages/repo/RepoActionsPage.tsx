@@ -100,7 +100,7 @@ export default function RepoActionsPage() {
   );
 
   useSeoMeta({
-    title: repo ? `Actions - ${repo.name} - ngit` : "Actions - ngit",
+    title: repo ? `Actions - ${repo.name} - BIES Code` : "Actions - BIES Code",
     description: "CI workflow runs for this repository",
   });
 

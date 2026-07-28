@@ -185,11 +185,11 @@ export default function RepoCommitsPage() {
   useSeoMeta({
     title: repo
       ? resolvedRef
-        ? `Commits on ${resolvedRef} - ${repo.name} - ngit`
-        : `Commits - ${repo.name} - ngit`
-      : "Commits - ngit",
+        ? `Commits on ${resolvedRef} - ${repo.name} - BIES Code`
+        : `Commits - ${repo.name} - BIES Code`
+      : "Commits - BIES Code",
     description: repo?.description ?? "Browse commit history",
-    ogImage: repoOwnerProfile?.picture ?? "/og-image.svg",
+    ogImage: repoOwnerProfile?.picture ?? "/og-image.png",
     ogImageAlt: repo?.name,
     twitterCard: repoOwnerProfile?.picture ? "summary" : "summary_large_image",
   });
@@ -279,7 +279,7 @@ export default function RepoCommitsPage() {
         ) : activeExplorer.loading ? (
           <Skeleton className="h-8 w-28" />
         ) : resolvedRef ? (
-          <code className="font-mono text-pink-600 dark:text-pink-400 text-sm">
+          <code className="font-mono text-primary text-sm">
             {resolvedRef}
           </code>
         ) : null}

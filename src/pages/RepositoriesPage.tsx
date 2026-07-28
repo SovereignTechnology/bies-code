@@ -24,12 +24,15 @@ interface RepositoriesPageProps {
   relayLabel?: string;
   /** Optional banner rendered below the hero description (e.g. relay status). */
   relayStatusBanner?: React.ReactNode;
+  /** When set, overrides the page <title> in the SEO meta tags. */
+  seoTitle?: string;
 }
 
 export default function RepositoriesPage({
   relayOverride,
   relayLabel,
   relayStatusBanner,
+  seoTitle,
 }: RepositoriesPageProps) {
   const [searchParams, setSearchParams] = useSearchParams();
 
@@ -83,16 +86,18 @@ export default function RepositoriesPage({
     relayStatuses,
   } = useRepositorySearch(committedQuery, relayOverride);
 
-  const title = relayLabel
-    ? `Repositories on ${relayLabel} - ngit`
-    : "Repositories - ngit";
+  const title =
+    seoTitle ??
+    (relayLabel
+      ? `Repositories on ${relayLabel} - BIES Code`
+      : "Repositories - BIES Code");
 
   useSeoMeta({
     title,
     description: relayLabel
       ? `Browse git repositories on ${relayLabel}`
       : "Browse git repositories on Nostr",
-    ogImage: "/og-image.svg",
+    ogImage: "/og-image.png",
     ogImageWidth: 1200,
     ogImageHeight: 630,
     twitterCard: "summary_large_image",
@@ -166,7 +171,7 @@ export default function RepositoriesPage({
                 value={inputValue}
                 onChange={handleInputChange}
                 onKeyDown={handleKeyDown}
-                className="pl-10 bg-background/60 backdrop-blur-sm border-border/60 focus-visible:ring-pink-500/30"
+                className="pl-10 bg-background/60 backdrop-blur-sm border-border/60 focus-visible:ring-primary/30"
                 autoFocus
               />
             </div>
@@ -174,7 +179,7 @@ export default function RepositoriesPage({
             {/* Loading indicator — only shown during active fetches */}
             {isLoading && repos !== undefined && repos.length > 0 && (
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <Loader2 className="h-4 w-4 animate-spin text-pink-500" />
+                <Loader2 className="h-4 w-4 animate-spin text-primary" />
                 <span>Loading…</span>
               </div>
             )}
@@ -264,15 +269,15 @@ function RepoCard({ repo, isUserMatch }: RepoCardProps) {
 
   return (
     <Link to={repoPath} className="group block">
-      <Card className="transition-all duration-200 hover:shadow-md hover:shadow-pink-500/5 hover:border-pink-500/20 group-hover:-translate-y-0.5">
+      <Card className="transition-all duration-200 hover:shadow-md hover:shadow-primary/5 hover:border-primary/20 group-hover:-translate-y-0.5">
         <CardContent className="p-5">
           <div className="flex items-start justify-between gap-4">
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2.5 mb-2">
-                <div className="p-1.5 rounded-md bg-gradient-to-br from-pink-500/10 to-pink-500/10">
-                  <GitBranch className="h-4 w-4 text-pink-500" />
+                <div className="p-1.5 rounded-md bg-gradient-to-br from-primary/10 to-primary/10">
+                  <GitBranch className="h-4 w-4 text-primary" />
                 </div>
-                <h3 className="font-semibold text-base truncate group-hover:text-pink-600 dark:group-hover:text-pink-400 transition-colors">
+                <h3 className="font-semibold text-base truncate group-hover:text-primary transition-colors">
                   {repo.name}
                 </h3>
                 {isUserMatch && (
@@ -331,7 +336,7 @@ function RepoCard({ repo, isUserMatch }: RepoCardProps) {
             </div>
 
             {repo.webUrls.length > 0 && (
-              <ExternalLink className="h-4 w-4 text-muted-foreground/40 group-hover:text-pink-500 transition-colors shrink-0 mt-1" />
+              <ExternalLink className="h-4 w-4 text-muted-foreground/40 group-hover:text-primary transition-colors shrink-0 mt-1" />
             )}
           </div>
         </CardContent>

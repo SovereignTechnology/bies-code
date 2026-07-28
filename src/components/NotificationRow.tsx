@@ -147,9 +147,9 @@ function RootTypeIcon({
     case "issue":
       return <CircleDot className={cn(size, "text-emerald-500")} />;
     case "pr":
-      return <GitPullRequest className={cn(size, "text-pink-500")} />;
+      return <GitPullRequest className={cn(size, "text-primary")} />;
     case "patch":
-      return <GitCommitHorizontal className={cn(size, "text-pink-500")} />;
+      return <GitCommitHorizontal className={cn(size, "text-primary")} />;
     default:
       return <MessageCircle className={cn(size, "text-muted-foreground")} />;
   }
@@ -170,7 +170,7 @@ function UnreadSummaryBadge({
 }) {
   const Icon = hasMerge ? GitMerge : hasClosed ? XCircle : MessageCircle;
   const iconColor = hasMerge
-    ? "text-pink-500"
+    ? "text-primary"
     : hasClosed
       ? "text-red-500"
       : "text-muted-foreground";
@@ -198,7 +198,7 @@ function RootPurposeBadge({
       variant={isUnread ? "default" : "secondary"}
       className={cn(
         "h-5 px-1.5 text-[11px] font-semibold capitalize",
-        isUnread && "bg-pink-600 hover:bg-pink-600",
+        isUnread && "bg-primary hover:bg-primary/90",
       )}
     >
       {purpose}
@@ -307,7 +307,7 @@ function ThreadNotificationRow({
       className={cn(
         "group transition-colors",
         item.unread
-          ? "bg-accent/30 hover:bg-accent/50 border-l-2 border-l-pink-500"
+          ? "bg-accent/30 hover:bg-accent/50 border-l-2 border-l-primary"
           : "hover:bg-accent/20 border-l-2 border-l-transparent",
       )}
     >
@@ -320,7 +320,7 @@ function ThreadNotificationRow({
           {/* Unread dot */}
           <div className="w-2 pt-1.5 shrink-0">
             {item.unread ? (
-              <div className="h-2 w-2 rounded-full bg-pink-500 shrink-0" />
+              <div className="h-2 w-2 rounded-full bg-primary shrink-0" />
             ) : (
               <div className="h-2 w-2 shrink-0" />
             )}
@@ -488,7 +488,7 @@ function SocialNotificationRow({
       className={cn(
         "group transition-colors",
         item.unread
-          ? "bg-accent/30 hover:bg-accent/50 border-l-2 border-l-pink-500"
+          ? "bg-accent/30 hover:bg-accent/50 border-l-2 border-l-primary"
           : "hover:bg-accent/20 border-l-2 border-l-transparent",
       )}
     >
@@ -501,7 +501,7 @@ function SocialNotificationRow({
           {/* Unread dot */}
           <div className="w-2 pt-1.5 shrink-0">
             {item.unread ? (
-              <div className="h-2 w-2 rounded-full bg-pink-500 shrink-0" />
+              <div className="h-2 w-2 rounded-full bg-primary shrink-0" />
             ) : (
               <div className="h-2 w-2 shrink-0" />
             )}
@@ -634,7 +634,7 @@ function RepoZapNotificationRow({
       className={cn(
         "group transition-colors",
         item.unread
-          ? "bg-accent/30 hover:bg-accent/50 border-l-2 border-l-pink-500"
+          ? "bg-accent/30 hover:bg-accent/50 border-l-2 border-l-primary"
           : "hover:bg-accent/20 border-l-2 border-l-transparent",
       )}
     >
@@ -648,7 +648,7 @@ function RepoZapNotificationRow({
           {/* Unread dot */}
           <div className="w-2 pt-1.5 shrink-0">
             {item.unread ? (
-              <div className="h-2 w-2 rounded-full bg-pink-500 shrink-0" />
+              <div className="h-2 w-2 rounded-full bg-primary shrink-0" />
             ) : (
               <div className="h-2 w-2 shrink-0" />
             )}
@@ -833,7 +833,7 @@ export function NotificationActivityRow({
       className={cn(
         "group transition-colors",
         isUnread
-          ? "border-l-2 border-l-pink-500 bg-accent/30 hover:bg-accent/50"
+          ? "border-l-2 border-l-primary bg-accent/30 hover:bg-accent/50"
           : "border-l-2 border-l-transparent hover:bg-accent/20",
       )}
     >
@@ -844,7 +844,7 @@ export function NotificationActivityRow({
           onClick={() => isUnread && actions.markEventAsRead(event.id)}
         >
           <div className="w-2 shrink-0 pt-2.5">
-            {isUnread && <div className="h-2 w-2 rounded-full bg-pink-500" />}
+            {isUnread && <div className="h-2 w-2 rounded-full bg-primary" />}
           </div>
           <UserAvatar pubkey={event.pubkey} size="md" noHoverCard />
           <div className="min-w-0 flex-1">

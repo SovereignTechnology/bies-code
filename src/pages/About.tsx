@@ -32,21 +32,21 @@ function FeedbackAlert() {
         <p className="mb-1">
           via an{" "}
           <Link
-            className="text-pink-500 hover:underline"
+            className="text-primary hover:underline"
             to="/naddr1qqzxuemfwsqs6amnwvaz7tmwdaejumr0dspzpgqgmmc409hm4xsdd74sf68a2uyf9pwel4g9mfdg8l5244t6x4jdqvzqqqrhnym0k2qj"
           >
             ngit issue
           </Link>
           , a{" "}
           <Link
-            className="text-pink-500 hover:underline"
+            className="text-primary hover:underline"
             to="/naddr1qq9kw6t5wahhy6mndphhqqgkwaehxw309aex2mrp0yhxummnw3ezucnpdejqyg9qpr00z4uklw56p4h6kp8gl4ts3y59m874qhd94ql732k40g6kf5psgqqqw7vs2nfsd9"
           >
             gitworkshop.dev issue
           </Link>{" "}
           or directly to{" "}
           <Link
-            className="text-pink-500 hover:underline"
+            className="text-primary hover:underline"
             to="/nprofile1qy88wumn8ghj7mn0wvhxcmmv9uq3vamnwvaz7tmsw4e8qmr9wfjkccte9e3k7mf0qqs2qzx779ted7af5rt04vzw3l2hpzfgtk0a2pw6t2plaz4d2734vng80y96x"
           >
             DanConwayDev
@@ -64,7 +64,7 @@ export default function About() {
     title: "About — ngit",
     description:
       "About the ngit ecosystem: NIP-34, GRASP, and decentralized git collaboration over Nostr.",
-    ogImage: "/og-image.svg",
+    ogImage: "/og-image.png",
     ogImageWidth: 1200,
     ogImageHeight: 630,
     twitterCard: "summary_large_image",
@@ -78,60 +78,60 @@ export default function About() {
           There is an ecosystem of tools to enable git code collaboration over
           nostr using{" "}
           <a
-            className="text-pink-500 hover:underline"
+            className="text-primary hover:underline"
             href="https://nips.nostr.com/34"
           >
             NIP-34
           </a>{" "}
           and{" "}
           <a
-            className="text-pink-500 hover:underline"
+            className="text-primary hover:underline"
             href="https://ngit.dev/grasp"
           >
             GRASP
           </a>
           . gitworkshop.dev,{" "}
-          <Link className="text-pink-500 hover:underline" to="/ngit">
+          <Link className="text-primary hover:underline" to="/ngit">
             ngit
           </Link>{" "}
           and{" "}
           <a
-            className="text-pink-500 hover:underline"
+            className="text-primary hover:underline"
             href="https://ngit.dev/relay"
           >
             ngit-relay
           </a>{" "}
           are tightly coupled examples maintained by{" "}
           <Link
-            className="text-pink-500 hover:underline"
+            className="text-primary hover:underline"
             to="/nprofile1qy88wumn8ghj7mn0wvhxcmmv9uq3vamnwvaz7tmsw4e8qmr9wfjkccte9e3k7mf0qqs2qzx779ted7af5rt04vzw3l2hpzfgtk0a2pw6t2plaz4d2734vng80y96x"
           >
             DanConwayDev
           </Link>{" "}
           and there are others such as{" "}
           <Link
-            className="text-pink-500 hover:underline"
+            className="text-primary hover:underline"
             to="/npub1qqqqqq2stely3ynsgm5mh2nj3v0nk5gjyl3zqrzh34hxhvx806usxmln03/nostr.4rs.nl/n34"
           >
             n34
           </Link>
           ,{" "}
           <a
-            className="text-pink-500 hover:underline"
+            className="text-primary hover:underline"
             href="https://budabit.club"
           >
             budabit
           </a>
           ,{" "}
           <Link
-            className="text-pink-500 hover:underline"
+            className="text-primary hover:underline"
             to="/npub1useke4f9maul5nf67dj0m9sq6jcsmnjzzk4ycvldwl4qss35fvgqjdk5ks/gitplaza"
           >
             gitplaza
           </Link>
           , and{" "}
           <a
-            className="text-pink-500 hover:underline"
+            className="text-primary hover:underline"
             href="https://shakespeare.diy"
           >
             shakespeare
@@ -309,14 +309,14 @@ export default function About() {
         <p>
           learn more at{" "}
           <a
-            className="text-pink-500 hover:underline"
+            className="text-primary hover:underline"
             href="https://ngit.dev/grasp"
           >
             ngit.dev/grasp
           </a>{" "}
           and see the reference implementation{" "}
           <a
-            className="text-pink-500 hover:underline"
+            className="text-primary hover:underline"
             href="https://ngit.dev/relay"
           >
             ngit-relay
@@ -431,7 +431,7 @@ export default function About() {
 
             <p>
               <Link
-                className="text-pink-500 hover:underline"
+                className="text-primary hover:underline"
                 to="/npub1hw6amg8p24ne08c9gdq8hhpqx0t0pwanpae9z25crn7m9uy7yarse465gr"
               >
                 arjen
@@ -439,14 +439,14 @@ export default function About() {
               has been working on a runner that uses GitHub Actions YAML syntax
               (using act) for the{" "}
               <Link
-                className="text-pink-500 hover:underline"
+                className="text-primary hover:underline"
                 to="/arjen@swissdash.site/dvm-cicd-runner"
               >
                 dvm-cicd-runner
               </Link>{" "}
               and takes Cashu payment. you can see{" "}
               <Link
-                className="text-pink-500 hover:underline"
+                className="text-primary hover:underline"
                 to="/arjen@swissdash.site/dvm-cicd-runner/actions"
               >
                 example runs on gitworkshop
@@ -468,7 +468,7 @@ export default function About() {
               git repository to Vercel menu: take heart, they made it easy.
               there is a Vercel CLI that can be easily{" "}
               <a
-                className="text-pink-500 hover:underline"
+                className="text-primary hover:underline"
                 href="https://vercel.com/docs/cli#using-in-a-ci/cd-environment"
               >
                 called in CI/CD jobs to kick off deployments

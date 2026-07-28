@@ -193,7 +193,7 @@ function InstallNgit() {
                           href="https://www.rust-lang.org/tools/install"
                           target="_blank"
                           rel="noreferrer"
-                          className="text-pink-500 hover:underline"
+                          className="text-primary hover:underline"
                         >
                           Install Rust and Cargo
                         </a>
@@ -204,7 +204,7 @@ function InstallNgit() {
                           href="https://github.com/DanConwayDev/ngit-cli"
                           target="_blank"
                           rel="noreferrer"
-                          className="text-pink-500 hover:underline"
+                          className="text-primary hover:underline"
                         >
                           the ngit-cli repository
                         </a>
@@ -246,7 +246,7 @@ function InstallNgit() {
                           href="https://www.rust-lang.org/tools/install"
                           target="_blank"
                           rel="noreferrer"
-                          className="text-pink-500 hover:underline"
+                          className="text-primary hover:underline"
                         >
                           Install Rust and Cargo
                         </a>
@@ -333,7 +333,7 @@ function InstallNgit() {
                             size="sm"
                             className={
                               platform.primary
-                                ? "bg-pink-500 hover:bg-pink-600 text-white flex-shrink-0"
+                                ? "bg-primary hover:bg-primary/90 text-primary-foreground flex-shrink-0"
                                 : "flex-shrink-0"
                             }
                           >
@@ -386,7 +386,7 @@ export default function NgitPage() {
     title: "Install ngit — Decentralized Git CLI",
     description:
       "Install the ngit CLI to collaborate on git repositories over Nostr. Works with any Nostr-compatible relay.",
-    ogImage: "/og-image.svg",
+    ogImage: "/og-image.png",
     ogImageWidth: 1200,
     ogImageHeight: 630,
     twitterCard: "summary_large_image",
@@ -434,8 +434,8 @@ export default function NgitPage() {
                     <h4 className="font-medium mb-1">1. Find a repository</h4>
                     <ul className="list-disc list-inside text-muted-foreground space-y-1 ml-2">
                       <li>
-                        <Link to="/" className="text-pink-500 hover:underline">
-                          Search gitworkshop.dev
+                        <Link to="/" className="text-primary hover:underline">
+                          Search git.buildinelsalvador.com
                         </Link>{" "}
                         for the repository
                       </li>
@@ -556,8 +556,8 @@ export default function NgitPage() {
                     </h4>
                     <p className="text-muted-foreground mb-3">
                       You can browse and merge PRs from{" "}
-                      <Link to="/" className="text-pink-500 hover:underline">
-                        gitworkshop.dev
+                      <Link to="/" className="text-primary hover:underline">
+                        git.buildinelsalvador.com
                       </Link>
                       , or manage them locally with git and ngit.
                     </p>

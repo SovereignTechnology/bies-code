@@ -536,9 +536,9 @@ export function ThreadComment({
         isInline ? "" : "border-t border-border/40"
       } ${
         effectiveHighlight === "strong"
-          ? "bg-pink-500/10"
+          ? "bg-primary/10"
           : effectiveHighlight === "subtle"
-            ? "bg-pink-500/5"
+            ? "bg-primary/5"
             : ""
       }`}
     >

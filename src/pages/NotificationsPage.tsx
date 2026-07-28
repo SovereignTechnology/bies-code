@@ -48,10 +48,10 @@ export default function NotificationsPage() {
   useSeoMeta({
     title:
       unreadCount > 0
-        ? `(${unreadCount}) Notifications - ngit`
-        : "Notifications - ngit",
+        ? `(${unreadCount}) Notifications - BIES Code`
+        : "Notifications - BIES Code",
     description: "Your notification inbox",
-    ogImage: "/og-image.svg",
+    ogImage: "/og-image.png",
     ogImageWidth: 1200,
     ogImageHeight: 630,
     twitterCard: "summary_large_image",

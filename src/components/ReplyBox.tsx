@@ -233,7 +233,7 @@ export function ReplyBox({
         {profile?.picture && (
           <AvatarImage src={profile.picture} alt={displayName} />
         )}
-        <AvatarFallback className="bg-gradient-to-br from-pink-500/20 to-pink-500/20 text-foreground font-medium text-xs">
+        <AvatarFallback className="bg-gradient-to-br from-primary/20 to-primary/20 text-foreground font-medium text-xs">
           {initials}
         </AvatarFallback>
       </Avatar>
@@ -326,7 +326,7 @@ export function ReplyBox({
                 size="sm"
                 disabled={submitDisabled}
                 className={cn(
-                  "gap-1.5 bg-pink-600 hover:bg-pink-700 text-white",
+                  "gap-1.5 bg-primary hover:bg-primary/90 text-primary-foreground",
                   statusActions && "rounded-r-none",
                 )}
               >
@@ -348,7 +348,7 @@ export function ReplyBox({
                       size="sm"
                       disabled={submitDisabled}
                       aria-label="More comment actions"
-                      className="rounded-l-none border-l border-pink-500 px-2 bg-pink-600 hover:bg-pink-700 text-white"
+                      className="rounded-l-none border-l border-primary px-2 bg-primary hover:bg-primary/90 text-primary-foreground"
                     >
                       <ChevronDown className="h-3.5 w-3.5" />
                     </Button>

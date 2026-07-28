@@ -681,8 +681,8 @@ export function PRUpdatePushEvent({
         className={cn(
           "relative flex gap-3 py-2 pl-1 rounded-md scroll-mt-20 transition-all duration-700",
           highlight === "strong" &&
-            "ring-2 ring-pink-500/60 bg-pink-500/5 shadow-sm shadow-pink-500/15",
-          highlight === "subtle" && "ring-1 ring-pink-500/25 bg-pink-500/5",
+            "ring-2 ring-primary/60 bg-primary/5 shadow-sm shadow-primary/15",
+          highlight === "subtle" && "ring-1 ring-primary/25 bg-primary/5",
         )}
       >
         {/* Icon column */}

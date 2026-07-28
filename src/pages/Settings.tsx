@@ -112,20 +112,20 @@ function RelayCurationSection() {
                 onClick={() => relayCurationMode.next(opt.value)}
                 className={cn(
                   "relative flex flex-col gap-2 rounded-lg border p-4 text-left transition-all duration-150",
-                  "hover:border-pink-500/50 hover:bg-pink-500/5",
-                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-pink-500",
+                  "hover:border-primary/50 hover:bg-primary/5",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
                   selected
-                    ? "border-pink-500 bg-pink-500/5 shadow-sm shadow-pink-500/10"
+                    ? "border-primary bg-primary/5 shadow-sm shadow-primary/10"
                     : "border-border bg-background",
                 )}
               >
                 {selected && (
-                  <span className="absolute top-3 right-3 h-2 w-2 rounded-full bg-pink-500" />
+                  <span className="absolute top-3 right-3 h-2 w-2 rounded-full bg-primary" />
                 )}
                 <span
                   className={cn(
                     "transition-colors",
-                    selected ? "text-pink-500" : "text-muted-foreground",
+                    selected ? "text-primary" : "text-muted-foreground",
                   )}
                 >
                   {opt.icon}
@@ -1051,9 +1051,9 @@ function LightningWalletSection() {
 
 export default function Settings() {
   useSeoMeta({
-    title: "Settings - ngit",
+    title: "Settings - BIES Code",
     description: "Manage relay configurations and application settings.",
-    ogImage: "/og-image.svg",
+    ogImage: "/og-image.png",
     ogImageWidth: 1200,
     ogImageHeight: 630,
     twitterCard: "summary_large_image",

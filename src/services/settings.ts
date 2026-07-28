@@ -163,7 +163,7 @@ export const lookupRelaysCustomised$ = isCustomised$(
  * network. Used for discovering repositories published via ngit.
  */
 export const DEFAULT_GIT_INDEX_RELAYS = normalizeRelayList([
-  "wss://index.ngit.dev",
+  "wss://git.buildinelsalvador.com",
 ]);
 
 export const gitIndexRelays = new BehaviorSubject<string[]>(
@@ -259,9 +259,7 @@ export const nostrConnectRelaysCustomised$ = isCustomised$(
  * git HTTP URL is `https://<domain>/<npub>/<repo-id>.git`.
  */
 export const DEFAULT_GRASP_SERVERS: readonly string[] = [
-  "relay.ngit.dev",
-  "gitnostr.com",
-  "ngit.danconwaydev.com",
+  "git.buildinelsalvador.com",
 ];
 
 // ---------------------------------------------------------------------------

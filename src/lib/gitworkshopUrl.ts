@@ -1,4 +1,4 @@
-const GITWORKSHOP_HOSTS = new Set(["gitworkshop.dev", "www.gitworkshop.dev"]);
+const GITWORKSHOP_HOSTS = new Set(["git.buildinelsalvador.com"]);
 
 /**
  * Returns an in-app React Router target for an approved public GitWorkshop URL.

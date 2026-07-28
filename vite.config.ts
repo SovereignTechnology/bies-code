@@ -41,13 +41,14 @@ function manifestPlugin(): Plugin {
   const virtualId = "/manifest.webmanifest";
   const manifest = JSON.stringify(
     {
-      name: "GitWorkshop.dev",
-      short_name: "GitWorkshop",
-      description: "Decentralized GitHub alternative over Nostr",
+      name: "BIES Code",
+      short_name: "BIES Code",
+      description:
+        "Decentralized git hosting over Nostr — a Build in El Salvador node",
       start_url: "/",
       display: "standalone",
-      background_color: "#16171e",
-      theme_color: "#16171e",
+      background_color: "#0A192F",
+      theme_color: "#1E293B",
       categories: ["development", "productivity", "utilities"],
       icons: [
         {
@@ -105,7 +106,7 @@ function manifestPlugin(): Plugin {
 // https://vitejs.dev/config/
 export default defineConfig(() => ({
   define: {
-    __APP_NAME__: JSON.stringify(name),
+    __APP_NAME__: JSON.stringify("BIES Code"),
     __APP_RELEASE_VERSION__: JSON.stringify(
       process.env.APP_RELEASE_VERSION ?? null,
     ),

@@ -1,27 +1,41 @@
-import { useSeoMeta } from "@unhead/react";
 import { useActiveAccount } from "applesauce-react/hooks";
-import { LandingPage } from "./LandingPage";
+import { Link } from "react-router-dom";
 import { Dashboard } from "./Dashboard";
+import RepositoriesPage from "./RepositoriesPage";
+import { RelayStatusBanner } from "./RelayPage";
+
+const NODE_RELAY_URL = "wss://git.buildinelsalvador.com";
+const NODE_RELAY_LABEL = "git.buildinelsalvador.com";
 
 const Index = () => {
   const account = useActiveAccount();
-
-  useSeoMeta({
-    title: "ngit — Decentralized Git over Nostr",
-    description:
-      "Distributed code collaboration with Nostr. Browse repositories, track issues, and contribute — without a central server.",
-    ogImage: "/og-image.svg",
-    ogImageWidth: 1200,
-    ogImageHeight: 630,
-    ogImageAlt: "ngit — Decentralized Git over Nostr",
-    twitterCard: "summary_large_image",
-  });
 
   if (account) {
     return <Dashboard />;
   }
 
-  return <LandingPage />;
+  return (
+    <div className="min-h-full">
+      <div className="container max-w-screen-xl px-4 md:px-8 pt-10 pb-6 space-y-2">
+        <h1 className="text-3xl font-bold tracking-tight">BIES Code</h1>
+        <p className="text-muted-foreground">
+          Decentralized git hosting — a Build in El Salvador node
+        </p>
+        <Link
+          to="/landing"
+          className="inline-block text-sm text-primary hover:underline"
+        >
+          What is this?
+        </Link>
+      </div>
+      <RepositoriesPage
+        relayOverride={[NODE_RELAY_URL]}
+        relayLabel={NODE_RELAY_LABEL}
+        relayStatusBanner={<RelayStatusBanner relayUrl={NODE_RELAY_URL} />}
+        seoTitle="BIES Code - Decentralized Git"
+      />
+    </div>
+  );
 };
 
 export default Index;

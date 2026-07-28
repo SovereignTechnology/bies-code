@@ -237,14 +237,14 @@ export default function RepoCodePage() {
   // explorer is displaying so the search results stay consistent with the view.
   const fullFileTree = useFullFileTree(pool, activeExplorer.commitHash);
 
-  // Page title: "<repo>/<path> at <ref> - ngit" or "<repo> - ngit" at root
+  // Page title: "<repo>/<path> at <ref> - BIES Code" or "<repo> - BIES Code" at root
   const seoTitle = useMemo(() => {
     const name = repo?.name ?? repoId;
     const ref = activeExplorer.resolvedRef;
     const path = activeExplorer.resolvedPath;
-    if (ref && path) return `${name}/${path} at ${ref} - ngit`;
-    if (ref) return `${name} at ${ref} - ngit`;
-    return `${name} - ngit`;
+    if (ref && path) return `${name}/${path} at ${ref} - BIES Code`;
+    if (ref) return `${name} at ${ref} - BIES Code`;
+    return `${name} - BIES Code`;
   }, [
     repo?.name,
     repoId,
@@ -258,7 +258,7 @@ export default function RepoCodePage() {
     title: seoTitle,
     description:
       repo?.description ?? `Browse the source code of ${repo?.name ?? repoId}`,
-    ogImage: repoOwnerProfile?.picture ?? "/og-image.svg",
+    ogImage: repoOwnerProfile?.picture ?? "/og-image.png",
     ogImageAlt: repo?.name ?? repoId,
     twitterCard: repoOwnerProfile?.picture ? "summary" : "summary_large_image",
   });
@@ -853,7 +853,7 @@ function CollapsibleBreadcrumb({
     >
       <Link
         to={treeUrl(currentRef)}
-        className="text-pink-600 dark:text-pink-400 hover:underline font-medium shrink-0"
+        className="text-primary hover:underline font-medium shrink-0"
         title={repoId}
       >
         {repoId}
@@ -867,7 +867,7 @@ function CollapsibleBreadcrumb({
             <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
             <Link
               to={treeUrl(currentRef, segPath)}
-              className="text-pink-600 dark:text-pink-400 hover:underline"
+              className="text-primary hover:underline"
             >
               {seg}
             </Link>
@@ -1589,7 +1589,7 @@ function FileTreeRow({
         <FileText
           className={cn(
             "h-4 w-4 shrink-0",
-            isActive ? "text-pink-500" : "text-muted-foreground",
+            isActive ? "text-primary" : "text-muted-foreground",
           )}
         />
       )}
@@ -1778,7 +1778,7 @@ function FileContentViewer({
                   className={cn(
                     "flex items-center gap-1 px-2 py-1 rounded text-xs font-medium transition-colors",
                     viewMode === "rendered"
-                      ? "bg-pink-100 text-pink-700 dark:bg-pink-900/40 dark:text-pink-300"
+                      ? "bg-primary/10 text-primary dark:bg-primary/20"
                       : "text-muted-foreground hover:text-foreground",
                   )}
                 >
@@ -1790,7 +1790,7 @@ function FileContentViewer({
                   className={cn(
                     "flex items-center gap-1 px-2 py-1 rounded text-xs font-medium transition-colors",
                     viewMode === "text"
-                      ? "bg-pink-100 text-pink-700 dark:bg-pink-900/40 dark:text-pink-300"
+                      ? "bg-primary/10 text-primary dark:bg-primary/20"
                       : "text-muted-foreground hover:text-foreground",
                   )}
                 >

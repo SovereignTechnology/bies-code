@@ -18,7 +18,7 @@ function LogoIcon({ size = 64 }: { size?: number }) {
         width="64"
         height="64"
         rx={Math.round((16 / 64) * size)}
-        fill="#9333EA"
+        fill="#0047AB"
       />
       <path
         fill="#fff"
@@ -55,7 +55,7 @@ function OgImage() {
       style={{
         width: 1200,
         height: 630,
-        background: "#13141c",
+        background: "#0A192F",
         position: "relative",
         overflow: "hidden",
         fontFamily: FONT,
@@ -69,7 +69,7 @@ function OgImage() {
           top: 0,
           width: 6,
           height: "100%",
-          background: "linear-gradient(180deg, #9333ea 0%, #ff79c6 100%)",
+          background: "linear-gradient(180deg, #0047AB 0%, #FF5B00 100%)",
         }}
       />
 
@@ -89,12 +89,12 @@ function OgImage() {
             <circle cx="1" cy="1" r="1" fill="white" fillOpacity="0.06" />
           </pattern>
           <radialGradient id="rg5" cx="70%" cy="40%" r="55%">
-            <stop offset="0%" stopColor="#ff79c6" stopOpacity="0.1" />
-            <stop offset="100%" stopColor="#ff79c6" stopOpacity="0" />
+            <stop offset="0%" stopColor="#FF5B00" stopOpacity="0.1" />
+            <stop offset="100%" stopColor="#FF5B00" stopOpacity="0" />
           </radialGradient>
           <radialGradient id="rg5b" cx="20%" cy="70%" r="45%">
-            <stop offset="0%" stopColor="#9333ea" stopOpacity="0.15" />
-            <stop offset="100%" stopColor="#9333ea" stopOpacity="0" />
+            <stop offset="0%" stopColor="#0047AB" stopOpacity="0.15" />
+            <stop offset="100%" stopColor="#0047AB" stopOpacity="0" />
           </radialGradient>
         </defs>
         <rect width="1200" height="630" fill="url(#dots5)" />
@@ -114,14 +114,14 @@ function OgImage() {
           fontWeight: 900,
           letterSpacing: "-4px",
           lineHeight: 1.15,
-          color: "#ede9f6",
+          color: "#F8FAFC",
         }}
       >
         git collaboration
         <br />
         <span
           style={{
-            background: "linear-gradient(90deg, #9333ea 0%, #ff79c6 60%)",
+            background: "linear-gradient(90deg, #0047AB 0%, #FF5B00 60%)",
             WebkitBackgroundClip: "text",
             WebkitTextFillColor: "transparent",
           }}
@@ -153,8 +153,8 @@ function OgImage() {
               lineHeight: 1,
             }}
           >
-            <span style={{ color: "#ede9f6" }}>Git</span>
-            <span style={{ color: "#ff79c6" }}>Workshop</span>
+            <span style={{ color: "#F8FAFC" }}>BIES</span>
+            <span style={{ color: "#FF5B00" }}>&nbsp;Code</span>
           </div>
         </div>
 
@@ -162,7 +162,7 @@ function OgImage() {
           style={{
             fontSize: 22,
             fontWeight: 400,
-            color: "#6b6880",
+            color: "#94A3B8",
             letterSpacing: "0.2px",
             display: "flex",
             alignItems: "center",
@@ -170,9 +170,9 @@ function OgImage() {
           }}
         >
           powered by
-          <span style={{ color: "#9b8fb0", fontWeight: 600 }}>Git</span>
-          <span style={{ color: "#4a4560" }}>&amp;</span>
-          <span style={{ color: "#c084fc", fontWeight: 600 }}>Nostr</span>
+          <span style={{ color: "#E2E8F0", fontWeight: 600 }}>Git</span>
+          <span style={{ color: "#64748B" }}>&amp;</span>
+          <span style={{ color: "#5B9CF6", fontWeight: 600 }}>Nostr</span>
         </div>
       </div>
     </div>
@@ -183,7 +183,7 @@ export default function OgImagePreview() {
   return (
     <div
       style={{
-        background: "#0a0a0f",
+        background: "#0A192F",
         minHeight: "100vh",
         display: "flex",
         alignItems: "center",
@@ -196,7 +196,7 @@ export default function OgImagePreview() {
         style={{
           width: 1200,
           height: 630,
-          outline: "2px solid rgba(147,51,234,0.3)",
+          outline: "2px solid rgba(0,71,171,0.3)",
           borderRadius: 4,
           overflow: "hidden",
         }}

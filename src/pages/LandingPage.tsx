@@ -44,13 +44,13 @@ function FeaturedRepoCard({ repo }: { repo: ResolvedRepo }) {
 
   return (
     <Link to={repoPath} className="group block h-full">
-      <Card className="h-full transition-all duration-200 hover:shadow-md hover:shadow-pink-500/5 hover:border-pink-500/20 group-hover:-translate-y-0.5">
+      <Card className="h-full transition-all duration-200 hover:shadow-md hover:shadow-primary/5 hover:border-primary/20 group-hover:-translate-y-0.5">
         <CardContent className="p-4 flex flex-col h-full">
           <div className="flex items-center gap-2 mb-2">
-            <div className="p-1 rounded bg-gradient-to-br from-pink-500/10 to-pink-500/5 shrink-0">
-              <GitBranch className="h-3.5 w-3.5 text-pink-500" />
+            <div className="p-1 rounded bg-gradient-to-br from-primary/10 to-primary/5 shrink-0">
+              <GitBranch className="h-3.5 w-3.5 text-primary" />
             </div>
-            <h3 className="font-semibold text-sm truncate group-hover:text-pink-600 dark:group-hover:text-pink-400 transition-colors">
+            <h3 className="font-semibold text-sm truncate group-hover:text-primary transition-colors">
               {repo.name}
             </h3>
           </div>
@@ -208,7 +208,7 @@ function HowItWorks() {
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-8 relative">
           {/* Connector lines on desktop */}
-          <div className="hidden md:block absolute top-8 left-1/3 right-1/3 h-px bg-gradient-to-r from-pink-500/20 via-pink-500/40 to-pink-500/20" />
+          <div className="hidden md:block absolute top-8 left-1/3 right-1/3 h-px bg-gradient-to-r from-primary/20 via-primary/40 to-primary/20" />
 
           {HOW_IT_WORKS_STEPS.map((step) => {
             const Icon = step.icon;
@@ -216,10 +216,10 @@ function HowItWorks() {
               <div key={step.number} className="relative flex flex-col gap-4">
                 <div className="flex items-center gap-4">
                   <div className="relative">
-                    <div className="flex items-center justify-center h-14 w-14 rounded-2xl bg-gradient-to-br from-pink-500/15 to-pink-500/5 border border-pink-500/20">
-                      <Icon className="h-6 w-6 text-pink-500" />
+                    <div className="flex items-center justify-center h-14 w-14 rounded-2xl bg-gradient-to-br from-primary/15 to-primary/5 border border-primary/20">
+                      <Icon className="h-6 w-6 text-primary" />
                     </div>
-                    <span className="absolute -top-2 -right-2 text-[10px] font-bold text-pink-500/60 font-mono">
+                    <span className="absolute -top-2 -right-2 text-[10px] font-bold text-primary/60 font-mono">
                       {step.number}
                     </span>
                   </div>
@@ -233,7 +233,7 @@ function HowItWorks() {
                     variant="outline"
                     size="sm"
                     asChild
-                    className="self-start mt-auto border-pink-500/30 hover:border-pink-500/60 hover:bg-pink-500/5"
+                    className="self-start mt-auto border-primary/30 hover:border-primary/60 hover:bg-primary/5"
                   >
                     <Link to={step.cta.to}>
                       {step.cta.label}
@@ -271,13 +271,13 @@ const FEATURES = [
     icon: Key,
     title: "Your identity travels with you",
     description:
-      "A Nostr keypair is your identity. Use it across gitworkshop.dev, ngit CLI, and any other Nostr git client.",
+      "A Nostr keypair is your identity. Use it across git.buildinelsalvador.com, ngit CLI, and any other Nostr git client.",
   },
   {
     icon: Globe,
     title: "Open ecosystem",
     description:
-      "Compatible with gitworkshop.dev and any client that speaks NIP-34. Your repos are readable by the whole network.",
+      "Compatible with git.buildinelsalvador.com and any client that speaks NIP-34. Your repos are readable by the whole network.",
   },
   {
     icon: Zap,
@@ -310,11 +310,11 @@ function FeatureHighlights() {
             return (
               <div
                 key={feature.title}
-                className="flex gap-4 p-4 rounded-xl border border-border/40 bg-card/50 hover:border-pink-500/20 hover:bg-card transition-colors"
+                className="flex gap-4 p-4 rounded-xl border border-border/40 bg-card/50 hover:border-primary/20 hover:bg-card transition-colors"
               >
                 <div className="shrink-0 mt-0.5">
-                  <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-gradient-to-br from-pink-500/15 to-pink-500/5 border border-pink-500/20">
-                    <Icon className="h-4 w-4 text-pink-500" />
+                  <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-gradient-to-br from-primary/15 to-primary/5 border border-primary/20">
+                    <Icon className="h-4 w-4 text-primary" />
                   </div>
                 </div>
                 <div>
@@ -342,13 +342,13 @@ function FooterCTA() {
   return (
     <section className="py-20 border-t border-border/40">
       <div className="container max-w-screen-xl px-4 md:px-8">
-        <div className="relative rounded-2xl overflow-hidden border border-pink-500/20 bg-gradient-to-br from-pink-500/5 via-background to-background p-10 md:p-16 text-center isolate">
+        <div className="relative rounded-2xl overflow-hidden border border-primary/20 bg-gradient-to-br from-primary/5 via-background to-background p-10 md:p-16 text-center isolate">
           {/* Decorative glow */}
-          <div className="absolute inset-0 -z-10 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-pink-500/10 via-transparent to-transparent" />
+          <div className="absolute inset-0 -z-10 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-primary/10 via-transparent to-transparent" />
 
           <Badge
             variant="secondary"
-            className="mb-4 border-pink-500/30 bg-pink-500/10 text-pink-600 dark:text-pink-400"
+            className="mb-4 border-primary/30 bg-primary/10 text-primary"
           >
             Open source · MIT licensed
           </Badge>
@@ -365,7 +365,7 @@ function FooterCTA() {
             <Button
               size="lg"
               asChild
-              className="bg-pink-500 hover:bg-pink-600 text-white shadow-lg shadow-pink-500/20"
+              className="bg-primary hover:bg-primary/90 text-primary-foreground shadow-lg shadow-primary/20"
             >
               <Link to="/ngit">
                 <Terminal className="h-5 w-5 mr-2" />
@@ -396,14 +396,14 @@ export function LandingPage() {
       <section className="relative py-20 md:py-28 overflow-hidden isolate">
         {/* Background decoration */}
         <div className="absolute inset-0 -z-10">
-          <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[600px] h-[400px] bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-pink-500/12 via-pink-500/4 to-transparent" />
+          <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[600px] h-[400px] bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-primary/12 via-primary/4 to-transparent" />
         </div>
 
         <div className="container max-w-screen-xl px-4 md:px-8">
           <div className="max-w-2xl mx-auto text-center">
             {/* Logo mark */}
             <div className="flex justify-center mb-6">
-              <div className="p-2 rounded-2xl bg-gradient-to-br from-pink-500/15 to-pink-500/5 border border-pink-500/20 shadow-lg shadow-pink-500/10">
+              <div className="p-2 rounded-2xl bg-gradient-to-br from-primary/15 to-primary/5 border border-primary/20 shadow-lg shadow-primary/10">
                 <svg
                   xmlns="http://www.w3.org/2000/svg"
                   viewBox="0 0 64 64"
@@ -420,8 +420,8 @@ export function LandingPage() {
                       y2="64"
                       gradientUnits="userSpaceOnUse"
                     >
-                      <stop offset="0%" stopColor="rgb(236,72,153)" />
-                      <stop offset="100%" stopColor="rgb(244,63,94)" />
+                      <stop offset="0%" stopColor="#0047AB" />
+                      <stop offset="100%" stopColor="#FF5B00" />
                     </linearGradient>
                   </defs>
                   {/* Left tine */}
@@ -470,9 +470,9 @@ export function LandingPage() {
               </div>
             </div>
 
-            <h1 className="text-4xl md:text-5xl lg:text-6xl font-bold tracking-tight mb-4">
+            <h1 className="text-4xl md:text-5xl lg:text-6xl font-bold font-display tracking-tight mb-4">
               Git collaboration,{" "}
-              <span className="bg-gradient-to-r from-pink-600 via-pink-500 to-rose-500 dark:from-pink-400 dark:via-pink-400 dark:to-rose-400 bg-clip-text text-transparent">
+              <span className="bg-gradient-to-r from-blue-600 to-orange-500 bg-clip-text text-transparent">
                 without the platform
               </span>
             </h1>
@@ -483,7 +483,7 @@ export function LandingPage() {
                 href="https://gitgrasp.com"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-foreground underline underline-offset-2 decoration-pink-500/50 hover:decoration-pink-500 transition-colors"
+                className="text-foreground underline underline-offset-2 decoration-primary/50 hover:decoration-primary transition-colors"
               >
                 GRASP
               </a>
@@ -495,7 +495,7 @@ export function LandingPage() {
               <Button
                 size="lg"
                 asChild
-                className="bg-pink-500 hover:bg-pink-600 text-white shadow-lg shadow-pink-500/20 text-base"
+                className="bg-primary hover:bg-primary/90 text-primary-foreground shadow-lg shadow-primary/20 text-base"
               >
                 <Link to="/search">
                   <Search className="h-5 w-5 mr-2" />

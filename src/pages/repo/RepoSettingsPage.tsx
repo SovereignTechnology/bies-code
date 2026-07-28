@@ -214,7 +214,7 @@ function LeadBadge() {
       <PopoverTrigger asChild>
         <button
           type="button"
-          className="inline-flex h-4 items-center rounded-full border border-pink-500/40 px-1.5 py-0 text-[10px] font-semibold text-pink-600 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 dark:text-pink-400"
+          className="inline-flex h-4 items-center rounded-full border border-primary/40 px-1.5 py-0 text-[10px] font-semibold text-primary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 dark:text-primary"
           aria-label="How lead maintainers are chosen"
           onMouseEnter={() => setOpen(true)}
           onMouseLeave={() => setOpen(false)}
@@ -286,7 +286,7 @@ export default function RepoSettingsPage() {
     return (
       <div className="container max-w-screen-xl px-4 py-8 md:px-8">
         <div className="max-w-md">
-          <div className="mb-4 flex items-center gap-2 text-pink-600 dark:text-pink-400">
+          <div className="mb-4 flex items-center gap-2 text-primary">
             <Users className="h-5 w-5" />
             <p className="font-medium">Accept the invitation first</p>
           </div>
@@ -1680,7 +1680,7 @@ function RepoSettingsForm({
               <div className="space-y-3">
                 <div>
                   <Label className="flex items-center gap-1.5">
-                    <Crown className="h-3.5 w-3.5 text-pink-500" />
+                    <Crown className="h-3.5 w-3.5 text-primary" />
                     Maintainer coordination
                   </Label>
                   <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
@@ -1709,7 +1709,7 @@ function RepoSettingsForm({
                             "flex cursor-pointer items-center gap-2 rounded-md border px-2.5 py-2 transition-colors",
                             "focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2",
                             selected
-                              ? "border-pink-500/50 bg-pink-500/5"
+                              ? "border-primary/50 bg-primary/5"
                               : "border-border/60 hover:bg-muted/30",
                           )}
                         >
@@ -1744,7 +1744,7 @@ function RepoSettingsForm({
                               "flex cursor-pointer items-center gap-2 rounded-md border px-2.5 py-2 transition-colors",
                               "focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2",
                               selectedLead === NO_LEAD
-                                ? "border-pink-500/50 bg-pink-500/5"
+                                ? "border-primary/50 bg-primary/5"
                                 : "border-border/60 hover:bg-muted/30",
                             )}
                           >
@@ -2013,7 +2013,7 @@ function RepoSettingsForm({
             {/* Grasp servers — always visible, primary path */}
             <div className="space-y-3">
               <div className="flex items-center gap-1.5 px-1">
-                <GraspLogo className="h-3.5 w-3.5 text-pink-500" />
+                <GraspLogo className="h-3.5 w-3.5 text-primary" />
                 <span className="text-sm font-medium">GRASP servers</span>
               </div>
 
@@ -2370,7 +2370,7 @@ function RepoSettingsForm({
             <Button
               onClick={() => void handleSave()}
               disabled={!canSave}
-              className="bg-pink-600 hover:bg-pink-700 text-white"
+              className="bg-primary hover:bg-primary/90 text-primary-foreground"
             >
               {isSaving ? (
                 <>

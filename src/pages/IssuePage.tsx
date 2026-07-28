@@ -159,10 +159,10 @@ export default function IssuePage() {
 
   useSeoMeta({
     title: issue
-      ? `${issue.currentSubject || issue.originalSubject} - ngit`
-      : "Issue - ngit",
+      ? `${issue.currentSubject || issue.originalSubject} - BIES Code`
+      : "Issue - BIES Code",
     description: issue?.body.slice(0, 160) ?? "Loading issue...",
-    ogImage: repoOwnerProfile?.picture ?? "/og-image.svg",
+    ogImage: repoOwnerProfile?.picture ?? "/og-image.png",
     ogImageAlt: repo?.name ?? repoId,
     twitterCard: repoOwnerProfile?.picture ? "summary" : "summary_large_image",
   });
@@ -293,7 +293,7 @@ export default function IssuePage() {
         {!issue ? (
           <div className="min-h-[40vh] flex items-center justify-center">
             <div className="text-center space-y-3">
-              <div className="h-8 w-8 border-2 border-pink-500 border-t-transparent rounded-full animate-spin mx-auto" />
+              <div className="h-8 w-8 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto" />
               <p className="text-sm text-muted-foreground">Fetching issue…</p>
             </div>
           </div>

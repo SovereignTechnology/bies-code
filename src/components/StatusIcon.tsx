@@ -27,7 +27,7 @@ const issueIconConfig: Record<
   },
   resolved: {
     icon: CheckCircle2,
-    className: "text-pink-500",
+    className: "text-primary",
     title: "Resolved",
   },
   closed: {

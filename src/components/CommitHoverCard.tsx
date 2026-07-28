@@ -92,8 +92,8 @@ function CommitHoverCardBody({ hash, pool }: CommitHoverCardBodyProps) {
     <div className="p-4 space-y-3">
       {/* Hash badge + copy */}
       <div className="flex items-center gap-1.5">
-        <GitCommit className="h-3.5 w-3.5 text-pink-500 shrink-0" />
-        <code className="text-xs font-mono text-pink-600 dark:text-pink-400 bg-pink-500/10 px-1.5 py-0.5 rounded">
+        <GitCommit className="h-3.5 w-3.5 text-primary shrink-0" />
+        <code className="text-xs font-mono text-primary bg-primary/10 px-1.5 py-0.5 rounded">
           {shortHash}
         </code>
         <button

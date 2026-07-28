@@ -125,7 +125,7 @@ export function GraspServerSelector({
               {isCurrent ? (
                 <Badge
                   variant="outline"
-                  className="h-4 px-1.5 py-0 text-[10px] text-pink-500"
+                  className="h-4 px-1.5 py-0 text-[10px] text-primary"
                 >
                   current
                 </Badge>

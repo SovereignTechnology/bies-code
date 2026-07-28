@@ -22,10 +22,10 @@ export default function RepoCommitPage() {
 
   useSeoMeta({
     title: repo
-      ? `${commitId?.slice(0, 8) ?? "Commit"} - ${repo.name} - ngit`
-      : "Commit - ngit",
+      ? `${commitId?.slice(0, 8) ?? "Commit"} - ${repo.name} - BIES Code`
+      : "Commit - BIES Code",
     description: `View commit details${repo ? ` for ${repo.name}` : ""}`,
-    ogImage: repoOwnerProfile?.picture ?? "/og-image.svg",
+    ogImage: repoOwnerProfile?.picture ?? "/og-image.png",
     ogImageAlt: repo?.name,
     twitterCard: repoOwnerProfile?.picture ? "summary" : "summary_large_image",
   });

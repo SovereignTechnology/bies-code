@@ -385,7 +385,7 @@ export function CodeUnavailable({
       <div className="space-y-1">
         <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/70">
           {isGrasp ? (
-            <GraspLogo className="h-3 w-3 text-pink-500" />
+            <GraspLogo className="h-3 w-3 text-primary" />
           ) : (
             <Server className="h-3 w-3" />
           )}

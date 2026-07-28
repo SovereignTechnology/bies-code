@@ -61,7 +61,7 @@ export default function RelayPage() {
 }
 
 /** Inline banner showing connection status and repo count for a relay. */
-function RelayStatusBanner({ relayUrl }: { relayUrl: string }) {
+export function RelayStatusBanner({ relayUrl }: { relayUrl: string }) {
   const relayInst = useMemo(() => pool.relay(relayUrl), [relayUrl]);
 
   // Reactive connection state
@@ -112,7 +112,7 @@ function RelayStatusBanner({ relayUrl }: { relayUrl: string }) {
       {repoCount !== undefined && (
         <Badge
           variant="secondary"
-          className="bg-pink-500/10 text-pink-600 dark:text-pink-400 border-pink-500/20"
+          className="bg-primary/10 text-primary border-primary/20"
         >
           <GitBranch className="h-3 w-3 mr-1.5" />
           {repoCount.toLocaleString()} repositor

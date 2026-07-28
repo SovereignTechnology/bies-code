@@ -63,13 +63,15 @@ export function AppFooter() {
             >
               <img
                 src="/icons/icon.svg"
-                alt="GitWorkshop"
+                alt="BIES Code"
                 className="h-6 w-6"
               />
-              <span className="font-semibold text-sm">gitworkshop.dev</span>
+              <span className="font-semibold text-sm">
+                git.buildinelsalvador.com
+              </span>
             </Link>
             <p className="text-xs text-muted-foreground max-w-[18rem] leading-relaxed">
-              Git collaboration, without the platform.
+              A Build in El Salvador node.
             </p>
           </div>
 

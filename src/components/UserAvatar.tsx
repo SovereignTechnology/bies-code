@@ -138,7 +138,7 @@ export function AvatarWithBadges({
         <span
           className={cn(
             "absolute flex items-center justify-center rounded-full",
-            "bg-pink-500 ring-1 ring-background",
+            "bg-primary ring-1 ring-background",
             badgeSizeClasses[size],
             gitBadgePosClasses[size],
             "z-20",
@@ -184,7 +184,7 @@ export function UserAvatar({
       {profile?.picture && (
         <AvatarImage src={profile.picture} alt={profile?.name ?? npub} />
       )}
-      <AvatarFallback className="bg-gradient-to-br from-pink-500/20 to-pink-500/20 text-foreground font-medium">
+      <AvatarFallback className="bg-gradient-to-br from-primary/20 to-primary/20 text-foreground font-medium">
         {initials}
       </AvatarFallback>
     </Avatar>

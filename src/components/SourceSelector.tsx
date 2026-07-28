@@ -1022,7 +1022,7 @@ export function SourceSelector({
             <Separator />
             <div className="py-1">
               <div className="flex items-center gap-1.5 px-4 pt-2 pb-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">
-                <GraspLogo className="h-3 w-3 text-pink-500" />
+                <GraspLogo className="h-3 w-3 text-primary" />
                 Grasp Servers
               </div>
               {graspUrls.map((url) => (

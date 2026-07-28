@@ -204,7 +204,7 @@ function InlineComposer({
           {profile?.picture && (
             <AvatarImage src={profile.picture} alt={displayName} />
           )}
-          <AvatarFallback className="bg-gradient-to-br from-pink-500/20 to-pink-500/20 text-foreground font-medium text-[10px]">
+          <AvatarFallback className="bg-gradient-to-br from-primary/20 to-primary/20 text-foreground font-medium text-[10px]">
             {initials}
           </AvatarFallback>
         </Avatar>
@@ -260,7 +260,7 @@ function InlineComposer({
                 type="submit"
                 size="sm"
                 disabled={isPending || !body.trim() || composerHasNsec(body)}
-                className="h-7 text-xs bg-pink-600 hover:bg-pink-700 text-white"
+                className="h-7 text-xs bg-primary hover:bg-primary/90 text-primary-foreground"
               >
                 {isPending ? (
                   <>

@@ -222,7 +222,8 @@ export function SubordinateForkField({
                 Also accepts <code className="font-mono">naddr1…</code>,{" "}
                 <code className="font-mono">nostr://npub1…/repo</code>,{" "}
                 <code className="font-mono">nostr://nip05/relay/repo</code>,{" "}
-                <code className="font-mono">gitworkshop.dev</code> repo URLs,{" "}
+                <code className="font-mono">git.buildinelsalvador.com</code>{" "}
+                repo URLs,{" "}
                 <code className="font-mono">npub1…/repo</code>, and repository
                 coordinates. The checkbox checks itself when a valid reference
                 is detected.

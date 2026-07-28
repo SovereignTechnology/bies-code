@@ -1,11 +1,11 @@
 {
-  "name": "GitWorkshop.dev",
-  "short_name": "GitWorkshop",
-  "description": "Decentralized GitHub alternative over Nostr",
+  "name": "BIES Code",
+  "short_name": "BIES Code",
+  "description": "Decentralized git hosting over Nostr — a Build in El Salvador node",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#16171e",
-  "theme_color": "#16171e",
+  "background_color": "#0A192F",
+  "theme_color": "#1E293B",
   "categories": ["development", "productivity", "utilities"],
   "icons": [
     {

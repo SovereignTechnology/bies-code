@@ -3,9 +3,9 @@ import { OutboxPanel } from "@/components/OutboxPanel";
 
 export default function OutboxPage() {
   useSeoMeta({
-    title: "Outbox - ngit",
+    title: "Outbox - BIES Code",
     description: "View the status of published events and relay delivery.",
-    ogImage: "/og-image.svg",
+    ogImage: "/og-image.png",
     ogImageWidth: 1200,
     ogImageHeight: 630,
     twitterCard: "summary_large_image",

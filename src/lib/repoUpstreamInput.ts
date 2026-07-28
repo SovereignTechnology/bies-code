@@ -103,16 +103,14 @@ function parseNostrCloneUpstream(input: string): ParsedRepoLink | undefined {
 
 function isGitworkshopHost(hostname: string): boolean {
   const lower = hostname.toLowerCase();
-  return lower === "gitworkshop.dev" || lower === "www.gitworkshop.dev";
+  return lower === "git.buildinelsalvador.com";
 }
 
 function normalizeGitworkshopRepoPath(path: string): string {
   const segments = path.split("/").filter(Boolean);
   const first = segments[0]?.toLowerCase();
   const withoutHost =
-    first === "gitworkshop.dev" || first === "www.gitworkshop.dev"
-      ? segments.slice(1)
-      : segments;
+    first === "git.buildinelsalvador.com" ? segments.slice(1) : segments;
   const prefix = withoutHost[0];
 
   if (prefix === "r" || prefix === "p") return withoutHost.slice(1).join("/");

@@ -564,7 +564,7 @@ function RepoLayoutResolved({
       <div className="min-h-full">
         {/* Repo header */}
         <div className="relative isolate border-b border-border/40">
-          <div className="absolute inset-0 -z-10 bg-gradient-to-br from-pink-500/5 via-transparent to-pink-500/5" />
+          <div className="absolute inset-0 -z-10 bg-gradient-to-br from-primary/5 via-transparent to-primary/5" />
 
           <div className="container max-w-screen-xl px-4 md:px-8 pt-6 pb-0">
             {repo ? (
@@ -658,7 +658,7 @@ function RepoLayoutResolved({
                       className={cn(
                         "inline-flex items-center gap-1.5 px-3 py-2.5 text-sm font-medium border-b-2 transition-colors",
                         isAboutTab || isSettingsTab || isActionsTab
-                          ? "border-pink-500 text-foreground"
+                          ? "border-primary text-foreground"
                           : "border-transparent text-muted-foreground hover:text-foreground hover:border-border",
                       )}
                     >
@@ -908,11 +908,11 @@ function MaintainerInvitationBanner({
   if (!isRequested && !acceptanceJob) return null;
 
   return (
-    <div className="border-b border-pink-500/20 bg-gradient-to-r from-pink-500/10 via-background to-violet-500/10">
+    <div className="border-b border-primary/20 bg-gradient-to-r from-primary/10 via-background to-secondary/10">
       <div className="container max-w-screen-xl px-4 py-4 md:px-8">
-        <div className="flex flex-col gap-4 rounded-xl border border-pink-500/30 bg-background/80 p-4 shadow-sm backdrop-blur sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-col gap-4 rounded-xl border border-primary/30 bg-background/80 p-4 shadow-sm backdrop-blur sm:flex-row sm:items-center sm:justify-between">
           <div className="flex min-w-0 gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-pink-500/15 text-pink-600 dark:text-pink-400">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary">
               <UserPlus className="h-5 w-5" />
             </div>
             <div className="min-w-0 space-y-1">
@@ -1041,7 +1041,7 @@ function MaintainerAcceptanceProgress({
       {synced ? (
         <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />
       ) : (
-        <Loader2 className="h-4 w-4 shrink-0 animate-spin text-pink-500" />
+        <Loader2 className="h-4 w-4 shrink-0 animate-spin text-primary" />
       )}
       <span className="font-medium">
         {synced
@@ -1227,7 +1227,7 @@ function MaintainerAcceptanceControls({
       <Button
         type="button"
         onClick={() => setDialogOpen(true)}
-        className="w-full shrink-0 bg-pink-600 text-white hover:bg-pink-700 sm:w-auto"
+        className="w-full shrink-0 bg-primary text-primary-foreground hover:bg-primary/90 sm:w-auto"
       >
         <CheckCircle2 className="mr-2 h-4 w-4" />
         Accept invitation
@@ -1298,7 +1298,7 @@ function MaintainerAcceptanceControls({
                       {pubkey === leadMaintainer && (
                         <Badge
                           variant="outline"
-                          className="h-4 px-1.5 text-[10px] text-pink-600 dark:text-pink-400"
+                          className="h-4 px-1.5 text-[10px] text-primary"
                         >
                           lead
                         </Badge>
@@ -1327,7 +1327,7 @@ function MaintainerAcceptanceControls({
                 selectedMaintainers.length === 0 ||
                 selectedDomains.length === 0
               }
-              className="bg-pink-600 text-white hover:bg-pink-700"
+              className="bg-primary text-primary-foreground hover:bg-primary/90"
             >
               {publishing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               {publishing ? "Accepting…" : "Accept invitation"}
@@ -1355,8 +1355,8 @@ function Nip05LoadingState({ nip05 }: { nip05: string }) {
     >
       <div className="text-center space-y-4 max-w-md px-4">
         <div className="flex justify-center">
-          <div className="p-4 rounded-full bg-pink-500/10">
-            <Loader2 className="h-8 w-8 text-pink-500 animate-spin" />
+          <div className="p-4 rounded-full bg-primary/10">
+            <Loader2 className="h-8 w-8 text-primary animate-spin" />
           </div>
         </div>
         <h2 className="text-xl font-semibold">Resolving identity</h2>
@@ -1513,7 +1513,7 @@ function RepoBreadcrumb({
       <span className="text-muted-foreground font-normal flex-shrink-0">/</span>
       <Link
         to={basePath}
-        className="text-base font-semibold text-foreground hover:text-pink-500 transition-colors truncate min-w-0 shrink"
+        className="text-base font-semibold text-foreground hover:text-primary transition-colors truncate min-w-0 shrink"
       >
         {repoName}
       </Link>
@@ -1544,7 +1544,7 @@ function TabLink({
       className={cn(
         "inline-flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors",
         active
-          ? "border-pink-500 text-foreground"
+          ? "border-primary text-foreground"
           : "border-transparent text-muted-foreground hover:text-foreground hover:border-border",
       )}
     >

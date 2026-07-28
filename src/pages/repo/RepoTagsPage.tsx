@@ -105,9 +105,9 @@ export default function RepoTagsPage() {
   );
 
   useSeoMeta({
-    title: repo ? `Tags - ${repo.name} - ngit` : "Tags - ngit",
+    title: repo ? `Tags - ${repo.name} - BIES Code` : "Tags - BIES Code",
     description: repo?.description ?? "Browse repository tags",
-    ogImage: repoOwnerProfile?.picture ?? "/og-image.svg",
+    ogImage: repoOwnerProfile?.picture ?? "/og-image.png",
     ogImageAlt: repo?.name,
     twitterCard: repoOwnerProfile?.picture ? "summary" : "summary_large_image",
   });

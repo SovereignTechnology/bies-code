@@ -108,7 +108,7 @@ export function IncompatibleProtocolError({
                   href="https://hashtree.cc/#/dev"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="inline-flex items-center gap-0.5 text-pink-600 dark:text-pink-400 hover:underline"
+                  className="inline-flex items-center gap-0.5 text-primary hover:underline"
                 >
                   hashtree
                   <ExternalLink className="h-3 w-3" />
@@ -150,7 +150,7 @@ export function IncompatibleProtocolError({
                   href={irisUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="inline-flex items-center gap-0.5 text-pink-600 dark:text-pink-400 hover:underline"
+                  className="inline-flex items-center gap-0.5 text-primary hover:underline"
                 >
                   git.iris.to
                   <ExternalLink className="h-3 w-3" />
@@ -213,10 +213,10 @@ export function IncompatibleProtocolError({
             To view this repo on the web, the maintainer needs to add an
             HTTPS-accessible mirror (e.g. on GitHub, Gitea, or a Grasp server).{" "}
             <a
-              href="https://gitworkshop.dev"
+              href="https://git.buildinelsalvador.com"
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-0.5 text-pink-600 dark:text-pink-400 hover:underline"
+              className="inline-flex items-center gap-0.5 text-primary hover:underline"
             >
               Learn more
               <ExternalLink className="h-3 w-3" />

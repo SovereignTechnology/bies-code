@@ -765,7 +765,7 @@ function CIArtifactRow({
           href={url}
           target="_blank"
           rel="noreferrer"
-          className="flex min-w-0 items-center gap-1.5 text-[13px] font-medium text-pink-600 underline-offset-2 hover:text-pink-700 hover:underline dark:text-pink-400 dark:hover:text-pink-300"
+          className="flex min-w-0 items-center gap-1.5 text-[13px] font-medium text-primary underline-offset-2 hover:underline"
           title={`Download ${filename ?? "artifact"}`}
         >
           <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />

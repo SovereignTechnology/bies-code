@@ -1209,7 +1209,7 @@ const FileDiffCard = memo(function FileDiffCard({
       className={cn(
         "rounded-lg border scroll-mt-20 transition-colors",
         isActive
-          ? "border-pink-500/60 ring-1 ring-pink-500/30"
+          ? "border-primary/60 ring-1 ring-primary/30"
           : "border-border/60",
       )}
     >

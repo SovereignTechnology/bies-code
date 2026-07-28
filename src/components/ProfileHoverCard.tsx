@@ -80,7 +80,7 @@ function ProfileHoverCardBody({ pubkey }: { pubkey: string }) {
                   {profile?.picture && (
                     <AvatarImage src={profile.picture} alt={displayName} />
                   )}
-                  <AvatarFallback className="bg-gradient-to-br from-pink-500/20 to-pink-500/20 text-foreground font-medium text-lg">
+                  <AvatarFallback className="bg-gradient-to-br from-primary/20 to-primary/20 text-foreground font-medium text-lg">
                     {initials}
                   </AvatarFallback>
                 </Avatar>

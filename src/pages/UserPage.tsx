@@ -168,9 +168,9 @@ export default function UserPage({ pubkey }: UserPageProps) {
     profile?.displayName ?? profile?.name ?? npub.slice(0, 16) + "...";
 
   useSeoMeta({
-    title: profile ? `${displayName} - ngit` : "User Profile - ngit",
+    title: profile ? `${displayName} - BIES Code` : "User Profile - BIES Code",
     description: profile?.about ?? "Nostr user profile",
-    ogImage: profile?.picture ?? "/og-image.svg",
+    ogImage: profile?.picture ?? "/og-image.png",
     ogImageAlt: displayName,
     twitterCard: profile?.picture ? "summary" : "summary_large_image",
   });
@@ -190,7 +190,7 @@ export default function UserPage({ pubkey }: UserPageProps) {
             <div className="absolute inset-0 bg-gradient-to-b from-background/60 via-background/80 to-background" />
           </div>
         ) : (
-          <div className="absolute inset-0 -z-10 bg-gradient-to-br from-pink-500/5 via-transparent to-pink-500/5" />
+          <div className="absolute inset-0 -z-10 bg-gradient-to-br from-primary/5 via-transparent to-primary/5" />
         )}
 
         <div className="container max-w-screen-xl px-4 md:px-8 py-8">
@@ -240,7 +240,7 @@ export default function UserPage({ pubkey }: UserPageProps) {
 
                   <div className="flex items-center gap-4 flex-wrap">
                     {profile.nip05 && (
-                      <span className="text-sm text-pink-600 dark:text-pink-400 font-medium">
+                      <span className="text-sm text-primary font-medium">
                         {profile.nip05}
                       </span>
                     )}
@@ -521,7 +521,7 @@ function TabsNav({ activeTab, setTab, counts }: TabsNavProps) {
               className={cn(
                 "inline-flex items-center gap-1.5 px-3 py-2.5 text-sm font-medium border-b-2 transition-colors",
                 secondaryIsActive
-                  ? "border-pink-500 text-pink-600 dark:text-pink-400"
+                  ? "border-primary text-primary"
                   : "border-transparent text-muted-foreground hover:text-foreground hover:border-border",
               )}
             >
@@ -581,7 +581,7 @@ function TabButton({
         "inline-flex items-center gap-2 border-b-2 transition-colors text-sm font-medium",
         iconOnly ? "px-3 py-3" : "px-4 py-3",
         isActive
-          ? "border-pink-500 text-pink-600 dark:text-pink-400"
+          ? "border-primary text-primary"
           : "border-transparent text-muted-foreground hover:text-foreground hover:border-border",
       )}
     >
@@ -593,7 +593,7 @@ function TabButton({
           className={cn(
             "text-[10px] px-1.5 py-0 h-4 min-w-4",
             isActive &&
-              "bg-pink-500/20 text-pink-600 dark:text-pink-400 border-0",
+              "bg-primary/20 text-primary border-0",
           )}
         >
           {count}
@@ -910,7 +910,7 @@ function PinnedReposSection({
   return (
     <div>
       <div className="flex items-center gap-2 mb-4">
-        <Pin className="h-3.5 w-3.5 text-pink-500" />
+        <Pin className="h-3.5 w-3.5 text-primary" />
         <h2 className="text-sm font-semibold text-foreground/80 uppercase tracking-wider">
           Pinned
         </h2>
@@ -950,9 +950,9 @@ function PinnedReposSection({
           </SortableContext>
         </DndContext>
       ) : isOwnProfile ? (
-        <Card className="border-dashed border-pink-500/20 bg-pink-500/[0.02]">
+        <Card className="border-dashed border-primary/20 bg-primary/[0.02]">
           <CardContent className="py-8 px-6 text-center">
-            <Pin className="h-8 w-8 mx-auto text-pink-500/30 mb-2" />
+            <Pin className="h-8 w-8 mx-auto text-primary/30 mb-2" />
             <p className="text-sm text-muted-foreground">
               No pinned repositories yet.
             </p>
@@ -1117,8 +1117,8 @@ function PinnedRepoCard({
         className={cn(
           "transition-all duration-200 h-full",
           isDragging
-            ? "shadow-lg shadow-pink-500/10 border-pink-500/30 ring-1 ring-pink-500/20"
-            : "hover:shadow-md hover:shadow-pink-500/5 hover:border-pink-500/20 group-hover:-translate-y-0.5",
+            ? "shadow-lg shadow-primary/10 border-primary/30 ring-1 ring-primary/20"
+            : "hover:shadow-md hover:shadow-primary/5 hover:border-primary/20 group-hover:-translate-y-0.5",
         )}
       >
         <CardContent className="p-5 flex flex-col h-full gap-3">
@@ -1137,10 +1137,10 @@ function PinnedRepoCard({
             )}
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 mb-1">
-                <div className="p-1.5 rounded-md bg-gradient-to-br from-pink-500/15 to-pink-500/5 shrink-0">
-                  <GitBranch className="h-4 w-4 text-pink-500" />
+                <div className="p-1.5 rounded-md bg-gradient-to-br from-primary/15 to-primary/5 shrink-0">
+                  <GitBranch className="h-4 w-4 text-primary" />
                 </div>
-                <h3 className="font-semibold text-base truncate group-hover:text-pink-600 dark:group-hover:text-pink-400 transition-colors">
+                <h3 className="font-semibold text-base truncate group-hover:text-primary transition-colors">
                   {repo.name}
                 </h3>
               </div>
@@ -1152,7 +1152,7 @@ function PinnedRepoCard({
                   onClick={handleUnpin}
                   disabled={pending}
                   title="Unpin repository"
-                  className="p-1 rounded text-muted-foreground/40 hover:text-pink-500 transition-colors"
+                  className="p-1 rounded text-muted-foreground/40 hover:text-primary transition-colors"
                 >
                   {pending ? (
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -1166,7 +1166,7 @@ function PinnedRepoCard({
                   href={repo.webUrls[0]}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="p-1 text-muted-foreground/30 hover:text-pink-500 opacity-0 group-hover:opacity-100 transition-all"
+                  className="p-1 text-muted-foreground/30 hover:text-primary opacity-0 group-hover:opacity-100 transition-all"
                   onClick={(e) => e.stopPropagation()}
                 >
                   <ExternalLink className="h-3.5 w-3.5" />
@@ -1261,7 +1261,7 @@ function UserRepoCard({
           <GitBranch className="h-3.5 w-3.5 text-muted-foreground/50 shrink-0 mt-0.5 self-start" />
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 min-w-0">
-              <span className="text-sm font-medium truncate group-hover:text-pink-600 dark:group-hover:text-pink-400 transition-colors">
+              <span className="text-sm font-medium truncate group-hover:text-primary transition-colors">
                 {repo.name}
               </span>
             </div>
@@ -1291,7 +1291,7 @@ function UserRepoCard({
                 href={repo.webUrls[0]}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-muted-foreground/30 hover:text-pink-500 opacity-0 group-hover:opacity-100 transition-all"
+                className="text-muted-foreground/30 hover:text-primary opacity-0 group-hover:opacity-100 transition-all"
                 onClick={(e) => e.stopPropagation()}
               >
                 <ExternalLink className="h-3.5 w-3.5" />
@@ -1308,20 +1308,20 @@ function UserRepoCard({
       className="group block cursor-pointer"
       onClick={() => navigate(repoPath)}
     >
-      <Card className="transition-all duration-200 hover:shadow-md hover:shadow-pink-500/5 hover:border-pink-500/20 group-hover:-translate-y-0.5">
+      <Card className="transition-all duration-200 hover:shadow-md hover:shadow-primary/5 hover:border-primary/20 group-hover:-translate-y-0.5">
         <CardContent className="p-5">
           <div className="flex items-start justify-between gap-4">
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2.5 mb-2">
-                <div className="p-1.5 rounded-md bg-gradient-to-br from-pink-500/10 to-pink-500/10">
-                  <GitBranch className="h-4 w-4 text-pink-500" />
+                <div className="p-1.5 rounded-md bg-gradient-to-br from-primary/10 to-primary/10">
+                  <GitBranch className="h-4 w-4 text-primary" />
                 </div>
-                <h3 className="font-semibold text-base truncate group-hover:text-pink-600 dark:group-hover:text-pink-400 transition-colors">
+                <h3 className="font-semibold text-base truncate group-hover:text-primary transition-colors">
                   {repo.name}
                 </h3>
                 {isPinned && (
                   <Pin
-                    className="h-3.5 w-3.5 text-pink-500 shrink-0"
+                    className="h-3.5 w-3.5 text-primary shrink-0"
                     aria-label="Pinned"
                   />
                 )}
@@ -1379,7 +1379,7 @@ function UserRepoCard({
                   href={repo.webUrls[0]}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-muted-foreground/40 group-hover:text-pink-500 transition-colors"
+                  className="text-muted-foreground/40 group-hover:text-primary transition-colors"
                   onClick={(e) => e.stopPropagation()}
                 >
                   <ExternalLink className="h-4 w-4" />
@@ -1429,8 +1429,8 @@ function PinButton({ coord, isPinned }: { coord: string; isPinned: boolean }) {
       className={cn(
         "p-1 rounded transition-colors",
         isPinned
-          ? "text-pink-500 hover:text-pink-600 dark:hover:text-pink-400"
-          : "text-muted-foreground/40 hover:text-pink-500",
+          ? "text-primary hover:text-primary"
+          : "text-muted-foreground/40 hover:text-primary",
       )}
     >
       {pending ? (
@@ -1658,7 +1658,7 @@ function GitAuthorFollowButton({ pubkey }: { pubkey: string }) {
       className={cn(
         "h-7 text-xs gap-1.5",
         isGitAuthorFollowing &&
-          "border-pink-500/40 text-pink-600 dark:text-pink-400 hover:bg-pink-500/10 hover:text-pink-600 dark:hover:text-pink-400",
+          "border-primary/40 text-primary hover:bg-primary/10 hover:text-primary",
       )}
       onClick={handleClick}
       disabled={pending}
@@ -1730,14 +1730,14 @@ function GitAuthorCard({ pubkey }: { pubkey: string }) {
       className="group block cursor-pointer"
       onClick={() => navigate(`/${npub}`)}
     >
-      <Card className="transition-all duration-200 hover:shadow-md hover:shadow-pink-500/5 hover:border-pink-500/20 group-hover:-translate-y-0.5">
+      <Card className="transition-all duration-200 hover:shadow-md hover:shadow-primary/5 hover:border-primary/20 group-hover:-translate-y-0.5">
         <CardContent className="p-4">
           <div className="flex items-center gap-3">
             <UserAvatar pubkey={pubkey} size="md" className="shrink-0" />
             <div className="flex-1 min-w-0">
               <UserName
                 pubkey={pubkey}
-                className="text-sm font-medium group-hover:text-pink-600 dark:group-hover:text-pink-400 transition-colors truncate block"
+                className="text-sm font-medium group-hover:text-primary transition-colors truncate block"
               />
               <p className="text-xs text-muted-foreground font-mono truncate mt-0.5">
                 {npub.slice(0, 16)}...

@@ -21,7 +21,7 @@ export const statusConfig: Record<
   resolved: {
     label: "Resolved",
     className:
-      "bg-pink-500/10 text-pink-600 dark:text-pink-400 border-pink-500/20 hover:bg-pink-500/20",
+      "bg-primary/10 dark:bg-primary/20 text-primary border-primary/20 hover:bg-primary/20",
     icon: CheckCircle2,
   },
   closed: {

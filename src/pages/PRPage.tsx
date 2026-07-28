@@ -849,10 +849,10 @@ export default function PRPage() {
   // ── SEO ───────────────────────────────────────────────────────────────
   useSeoMeta({
     title: pr
-      ? `${pr.currentSubject || pr.originalSubject} - ngit`
-      : "PR - ngit",
+      ? `${pr.currentSubject || pr.originalSubject} - BIES Code`
+      : "PR - BIES Code",
     description: pr?.body.slice(0, 160) || "Loading PR...",
-    ogImage: repoOwnerProfile?.picture ?? "/og-image.svg",
+    ogImage: repoOwnerProfile?.picture ?? "/og-image.png",
     ogImageAlt: repo?.name ?? repoId,
     twitterCard: repoOwnerProfile?.picture ? "summary" : "summary_large_image",
   });
@@ -1263,7 +1263,7 @@ export default function PRPage() {
         ) : !pr ? (
           <div className="min-h-[40vh] flex items-center justify-center">
             <div className="text-center space-y-3">
-              <div className="h-8 w-8 border-2 border-pink-500 border-t-transparent rounded-full animate-spin mx-auto" />
+              <div className="h-8 w-8 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto" />
               <p className="text-sm text-muted-foreground">Fetching PR…</p>
             </div>
           </div>

@@ -41,11 +41,9 @@ const issueStatusConfig: Record<IssueStatus, StatusTabConfig> = {
   resolved: {
     label: "Resolved",
     icon: CheckCircle2,
-    activeClass: "text-pink-600 dark:text-pink-400",
-    activeBgClass:
-      "bg-pink-50 dark:bg-pink-950/30 border-pink-400 dark:border-pink-600",
-    activeCountClass:
-      "bg-pink-100 dark:bg-pink-900/50 text-pink-700 dark:text-pink-400",
+    activeClass: "text-primary",
+    activeBgClass: "bg-primary/5 dark:bg-primary/10 border-primary",
+    activeCountClass: "bg-primary/10 dark:bg-primary/20 text-primary",
   },
   closed: {
     label: "Closed",

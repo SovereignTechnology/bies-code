@@ -600,7 +600,7 @@ export function getStateHeadCommit(ev: NostrEvent): string | undefined {
  * this is just the well-known default used to seed the user-configurable
  * gitIndexRelays setting.
  */
-export const DEFAULT_GIT_INDEX_RELAY = "wss://index.ngit.dev";
+export const DEFAULT_GIT_INDEX_RELAY = "wss://git.buildinelsalvador.com";
 
 /**
  * Options controlling which relays are queried for repo-specific events

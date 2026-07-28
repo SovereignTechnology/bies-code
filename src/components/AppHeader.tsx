@@ -51,7 +51,7 @@ function HeaderSearchBar() {
         value={value}
         onChange={(e) => setValue(e.target.value)}
         placeholder="Search repositories…"
-        className="h-8 pl-8 pr-3 text-sm bg-muted/50 border-border/50 focus-visible:ring-pink-500/30"
+        className="h-8 pl-8 pr-3 text-sm bg-muted/50 border-border/50 focus-visible:ring-primary/30"
         aria-label="Search repositories"
       />
     </form>
@@ -101,7 +101,7 @@ function HeaderSearchIcon() {
             value={value}
             onChange={(e) => setValue(e.target.value)}
             placeholder="Search…"
-            className="h-8 w-44 pl-8 pr-3 text-sm bg-muted/50 border-border/50 focus-visible:ring-pink-500/30"
+            className="h-8 w-44 pl-8 pr-3 text-sm bg-muted/50 border-border/50 focus-visible:ring-primary/30"
             aria-label="Search repositories"
           />
         </div>
@@ -155,7 +155,7 @@ export function AppHeader() {
           to="/"
           className="group transition-opacity hover:opacity-80 shrink-0"
         >
-          <img src="/icons/icon.svg" alt="GitWorkshop" className="h-8 w-8" />
+          <img src="/icons/icon.svg" alt="BIES Code" className="h-8 w-8" />
         </Link>
 
         <div className="flex items-center gap-2 ml-auto">

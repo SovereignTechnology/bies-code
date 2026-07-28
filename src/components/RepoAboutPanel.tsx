@@ -446,7 +446,7 @@ function SidebarVariant({
                   href={url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="flex items-center gap-2 text-sm text-pink-600 dark:text-pink-400 hover:underline min-w-0"
+                  className="flex items-center gap-2 text-sm text-primary hover:underline min-w-0"
                   title={url}
                 >
                   <Globe className="h-3.5 w-3.5 shrink-0" />
@@ -473,7 +473,7 @@ function SidebarVariant({
                     repo.confirmedMaintainers.length > 1 && (
                       <Badge
                         variant="outline"
-                        className="text-[10px] px-1.5 py-0 h-4 text-pink-600 border-pink-500/40 dark:text-pink-400"
+                        className="text-[10px] px-1.5 py-0 h-4 text-primary border-primary/40"
                       >
                         selected
                       </Badge>
@@ -481,7 +481,7 @@ function SidebarVariant({
                   {pk === maintainerLeadership.leadMaintainer && (
                     <Badge
                       variant="outline"
-                      className="text-[10px] px-1.5 py-0 h-4 text-pink-600 border-pink-500/40 dark:text-pink-400"
+                      className="text-[10px] px-1.5 py-0 h-4 text-primary border-primary/40"
                     >
                       lead
                     </Badge>
@@ -514,7 +514,7 @@ function SidebarVariant({
           ) && (
             <div className="space-y-2">
               <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
-                <GraspLogo className="h-3 w-3 text-pink-500" />
+                <GraspLogo className="h-3 w-3 text-primary" />
                 Grasp Servers
               </p>
               <div className="flex flex-wrap gap-1">
@@ -525,7 +525,7 @@ function SidebarVariant({
                       key={relay}
                       to={`/relay/${relayUrlToSegment(relay)}`}
                       title={relay}
-                      className="text-[11px] font-mono px-1.5 py-0.5 rounded bg-pink-500/10 text-pink-600 dark:text-pink-400 hover:bg-pink-500/20 transition-colors"
+                      className="text-[11px] font-mono px-1.5 py-0.5 rounded bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
                     >
                       {displayRelay(relay)}
                     </Link>
@@ -734,7 +734,7 @@ function FullVariant({
                 target="_blank"
                 rel="noopener noreferrer"
                 title={url}
-                className="flex items-center gap-2 text-sm text-pink-600 dark:text-pink-400 hover:underline min-w-0"
+                className="flex items-center gap-2 text-sm text-primary hover:underline min-w-0"
               >
                 <ExternalLink className="h-3.5 w-3.5 shrink-0" />
                 <span className="truncate">{shortenNip19InUrl(url)}</span>
@@ -758,7 +758,7 @@ function FullVariant({
                 repo.confirmedMaintainers.length > 1 && (
                   <Badge
                     variant="outline"
-                    className="text-[10px] px-1.5 py-0 h-4 text-pink-600 border-pink-500/40 dark:text-pink-400"
+                    className="text-[10px] px-1.5 py-0 h-4 text-primary border-primary/40"
                   >
                     selected
                   </Badge>
@@ -766,7 +766,7 @@ function FullVariant({
               {pk === maintainerLeadership.leadMaintainer && (
                 <Badge
                   variant="outline"
-                  className="text-[10px] px-1.5 py-0 h-4 text-pink-600 border-pink-500/40 dark:text-pink-400"
+                  className="text-[10px] px-1.5 py-0 h-4 text-primary border-primary/40"
                 >
                   lead
                 </Badge>
@@ -786,7 +786,7 @@ function FullVariant({
       {repo.relays.some((r) => isGraspRelay(r, repo.graspServerDomains)) && (
         <section className="space-y-2">
           <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
-            <GraspLogo className="h-3.5 w-3.5 text-pink-500" />
+            <GraspLogo className="h-3.5 w-3.5 text-primary" />
             Grasp Servers
           </h3>
           {/* Own announcement's Grasp relays */}
@@ -987,7 +987,7 @@ function NgitCloneField({ cloneUrl }: { cloneUrl: string }) {
           href="https://ngit.dev/install"
           target="_blank"
           rel="noopener noreferrer"
-          className="text-xs text-pink-600 dark:text-pink-400 hover:underline flex items-center gap-1"
+          className="text-xs text-primary hover:underline flex items-center gap-1"
         >
           Install ngit
           <ExternalLink className="h-3 w-3" />
@@ -1049,7 +1049,7 @@ function CloneServerList({
       {hasGrasp && (
         <div className="space-y-1">
           <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">
-            <GraspLogo className="h-3 w-3 text-pink-500" />
+            <GraspLogo className="h-3 w-3 text-primary" />
             Grasp Servers
           </div>
           <div className="space-y-1">
@@ -1257,7 +1257,7 @@ function AnnouncementEventRows({
                 {isMulti && isSelected && (
                   <Badge
                     variant="outline"
-                    className="text-[10px] px-1.5 py-0 h-4 shrink-0 text-pink-600 border-pink-500/40 dark:text-pink-400"
+                    className="text-[10px] px-1.5 py-0 h-4 shrink-0 text-primary border-primary/40"
                   >
                     selected
                   </Badge>
@@ -1268,7 +1268,7 @@ function AnnouncementEventRows({
                     className={cn(
                       "h-4 shrink-0 px-1.5 text-[10px]",
                       isAccepted
-                        ? "text-pink-600 border-pink-500/40 dark:text-pink-400"
+                        ? "text-primary border-primary/40"
                         : "text-amber-700 border-amber-500/40 dark:text-amber-300",
                     )}
                   >
@@ -1280,7 +1280,7 @@ function AnnouncementEventRows({
                 {isMulti && isLead && (
                   <Badge
                     variant="outline"
-                    className="text-[10px] px-1.5 py-0 h-4 shrink-0 text-pink-600 border-pink-500/40 dark:text-pink-400"
+                    className="text-[10px] px-1.5 py-0 h-4 shrink-0 text-primary border-primary/40"
                   >
                     lead
                   </Badge>
@@ -1439,8 +1439,8 @@ function FullVariantActionBar({
           </DialogHeader>
           <div className="space-y-2 pt-1">
             <CopyRow
-              label="gitworkshop.dev"
-              value={`https://gitworkshop.dev/${nip19Id}`}
+              label="git.buildinelsalvador.com"
+              value={`https://git.buildinelsalvador.com/${nip19Id}`}
             />
             <CopyRow label="event id" value={nip19Id} />
             <CopyRow label="ditto.pub" value={`https://ditto.pub/${nip19Id}`} />
@@ -1709,8 +1709,8 @@ function AnnouncementEventActions({ event }: { event: NostrEvent }) {
           </DialogHeader>
           <div className="space-y-2 pt-1">
             <CopyRow
-              label="gitworkshop.dev"
-              value={`https://gitworkshop.dev/${nip19Id}`}
+              label="git.buildinelsalvador.com"
+              value={`https://git.buildinelsalvador.com/${nip19Id}`}
             />
             <CopyRow label="event id" value={nip19Id} />
             <CopyRow label="ditto.pub" value={`https://ditto.pub/${nip19Id}`} />
@@ -1889,7 +1889,7 @@ function CloneDropdown({
         <Button
           variant="default"
           size="sm"
-          className="w-full justify-between gap-2 bg-pink-600 hover:bg-pink-700 text-white border-0"
+          className="w-full justify-between gap-2 bg-primary hover:bg-primary/90 text-primary-foreground border-0"
         >
           <div className="flex items-center gap-2">
             <GitBranch className="h-4 w-4 shrink-0" />
@@ -1920,7 +1920,7 @@ function CloneDropdown({
                 href="https://ngit.dev/install"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-xs text-pink-600 dark:text-pink-400 hover:underline flex items-center gap-1"
+                className="text-xs text-primary hover:underline flex items-center gap-1"
               >
                 Install ngit
                 <ExternalLink className="h-3 w-3" />
