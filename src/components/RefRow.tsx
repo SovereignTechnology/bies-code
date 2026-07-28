@@ -261,32 +261,6 @@ export function StatusTooltipText({
 // ---------------------------------------------------------------------------
 
 /**
- * Resolve the commit hash for a ref under the currently-selected source.
- * When a concrete git-server URL is selected we use that server's commit
- * (from `urlStates[…].refCommits`) so the timestamp/message reflect what
- * that server has, rather than the pool winner's commit.
- */
-function useSourceHash(
-  refWithStatus: RefWithStatus,
-  effectiveSource: string,
-  urlStates?: Record<string, UrlState>,
-): string {
-  const fullRefName = `${refWithStatus.isBranch ? "refs/heads/" : "refs/tags/"}${refWithStatus.name}`;
-  return useMemo(() => {
-    if (effectiveSource !== "nostr" && urlStates) {
-      const us = urlStates[effectiveSource];
-      // Prefer peeled commit (annotated tags), fall back to raw ref
-      return (
-        us?.refCommits[`${fullRefName}^{}`] ??
-        us?.refCommits[fullRefName] ??
-        refWithStatus.hash
-      );
-    }
-    return refWithStatus.hash;
-  }, [effectiveSource, urlStates, fullRefName, refWithStatus.hash]);
-}
-
-/**
  * Lazily fetch the full commit for a hash via the pool. Aborts on hash change
  * and on unmount. Returns null while loading or if the fetch fails.
  *
@@ -410,7 +384,7 @@ function CompactRefRow({
   urlStates,
   cloneUrls,
 }: CompactRefRowProps) {
-  const sourceHash = useSourceHash(refWithStatus, effectiveSource, urlStates);
+  const sourceHash = refWithStatus.hash;
   const commit = useLazyCommit(pool, sourceHash);
   const commitTs = commitTimestamp(commit);
 
@@ -521,7 +495,7 @@ function ExpandedRefRow({
   annotated,
   onSelect,
 }: ExpandedRefRowProps) {
-  const sourceHash = useSourceHash(refWithStatus, effectiveSource, urlStates);
+  const sourceHash = refWithStatus.hash;
 
   // Skip the lazy fetch when the caller already supplies a commit via
   // `divergence.latestCommit` — that's the common case on the branches page
