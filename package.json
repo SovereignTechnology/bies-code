@@ -81,6 +81,7 @@
     "highlight.js": "^11.11.1",
     "input-otp": "^1.4.2",
     "lucide-react": "^0.462.0",
+    "nostr-signer-capacitor-plugin": "https://codeload.github.com/chebizarro/nostr-signer-capacitor-plugin/tar.gz/68e3a285d3108025163d1125d50af74edc6a0da8",
     "nostr-tools": "^2.23.3",
     "parse-diff": "^0.11.1",
     "qrcode": "^1.5.4",
@@ -135,5 +136,17 @@
     "vite": "^6.4.1",
     "vitest": "^3.2.4",
     "vitest-websocket-mock": "0.5.0"
+  },
+  "overrides": {
+    "nostr-signer-capacitor-plugin": "$nostr-signer-capacitor-plugin"
+  },
+  "pnpm": {
+    "overrides": {
+      "nostr-signer-capacitor-plugin": "https://codeload.github.com/chebizarro/nostr-signer-capacitor-plugin/tar.gz/68e3a285d3108025163d1125d50af74edc6a0da8"
+    },
+    "patchedDependencies": {
+      "applesauce-accounts@6.2.0": "patches/applesauce-accounts@6.2.0.patch",
+      "applesauce-signers@6.2.2": "patches/applesauce-signers@6.2.2.patch"
+    }
   }
 }
