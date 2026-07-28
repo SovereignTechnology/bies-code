@@ -4,6 +4,7 @@
 
 ### Fixes
 
+- Tag new issues with every recursive maintainer coordinate, keeping the selected maintainer first for compatibility, and defer notification until every referenced maintainer's relays resolve.
 - Preserve relay URL paths in repository links so issue and pull request notifications resolve the correct repository identifier.
 
 ### Features

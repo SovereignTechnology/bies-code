@@ -4,47 +4,14 @@ import { useEventStore } from "./useEventStore";
 import type { RelayGroup } from "applesauce-relay";
 import {
   coordsCacheKey,
-  pubkeyFromCoordinate,
-  resolveChain,
   type ResolvedPRLite,
   type RepoQueryOptions,
 } from "@/lib/nip34";
 import { PRListModel } from "@/models/PRListModel";
-import { getTagValue } from "applesauce-core/helpers";
-import type { NostrEvent } from "nostr-tools";
 import type { Observable } from "rxjs";
 import { EMPTY } from "rxjs";
 import { catchError } from "rxjs/operators";
 import { nip34RepoLoader } from "@/services/nostr";
-
-// ---------------------------------------------------------------------------
-// Maintainer resolution (used by the maintainer fallback path)
-// ---------------------------------------------------------------------------
-
-/**
- * Derive the effective maintainer set for a PR/patch from its first #a tag.
- * Pure function — no hooks, no subscriptions.
- */
-export function resolveMaintainersFromPR(
-  prEvent: NostrEvent,
-  announcementEvents: NostrEvent[],
-): Set<string> {
-  const coord = getTagValue(prEvent, "a");
-  if (!coord) return new Set();
-
-  const coordPubkey = pubkeyFromCoordinate(coord);
-  if (!coordPubkey) return new Set();
-
-  const maintainers = new Set<string>([coordPubkey]);
-
-  const dTag = coord.split(":").slice(2).join(":");
-  const resolved = resolveChain(announcementEvents, coordPubkey, dTag);
-  if (resolved) {
-    for (const pk of resolved.maintainerSet) maintainers.add(pk);
-  }
-
-  return maintainers;
-}
 
 // ---------------------------------------------------------------------------
 // Bulk hook (repo PR list)

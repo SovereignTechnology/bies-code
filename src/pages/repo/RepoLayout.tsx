@@ -298,9 +298,7 @@ function RepoLayoutResolved({
       ) ?? [],
     [repo],
   );
-  const selectedRepoCoordinate = repo
-    ? repoCoordinate(repo.selectedMaintainer, repo.dTag)
-    : undefined;
+  const selectedRepoCoordinate = repo?.selectedCoordinate;
   const acceptedAnnouncements = useMemo(
     () =>
       repo?.announcements.filter((announcement) =>

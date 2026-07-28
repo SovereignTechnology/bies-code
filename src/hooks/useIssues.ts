@@ -4,62 +4,14 @@ import { useEventStore } from "./useEventStore";
 import type { RelayGroup } from "applesauce-relay";
 import {
   coordsCacheKey,
-  pubkeyFromCoordinate,
-  resolveChain,
   type ResolvedIssueLite,
   type RepoQueryOptions,
 } from "@/lib/nip34";
 import { IssueListModel } from "@/models/IssueListModel";
-import { getTagValue } from "applesauce-core/helpers";
-import type { NostrEvent } from "nostr-tools";
 import type { Observable } from "rxjs";
 import { EMPTY } from "rxjs";
 import { catchError } from "rxjs/operators";
 import { nip34RepoLoader } from "@/services/nostr";
-
-// ---------------------------------------------------------------------------
-// Maintainer resolution (used by the maintainer fallback path)
-// ---------------------------------------------------------------------------
-
-/**
- * Derive the effective maintainer set for an issue from its first #a tag.
- *
- * Uses the first coordinate only — multiple tagged repos are a genuine edge
- * case and a single anchor keeps the trust model simple and consistent with
- * the URL-context case (which also has one selected maintainer).
- *
- * The pubkey is always extractable from the coordinate string itself
- * (`30617:<pubkey>:<dTag>`), so at least one maintainer is known before any
- * 30617 announcement events have been received. BFS resolution via
- * `resolveChain` adds co-maintainers once their announcements are in the store.
- *
- * This is a pure function — no hooks, no subscriptions.
- *
- * @param issue              - The raw issue event
- * @param announcementEvents - All kind:30617 events currently in the store
- */
-export function resolveMaintainersFromIssue(
-  issue: NostrEvent,
-  announcementEvents: NostrEvent[],
-): Set<string> {
-  const coord = getTagValue(issue, "a");
-  if (!coord) return new Set();
-
-  const coordPubkey = pubkeyFromCoordinate(coord);
-  if (!coordPubkey) return new Set();
-
-  // Always include the pubkey from the coordinate — known before announcements.
-  const maintainers = new Set<string>([coordPubkey]);
-
-  // BFS to include co-maintainers declared in announcements.
-  const dTag = coord.split(":").slice(2).join(":");
-  const resolved = resolveChain(announcementEvents, coordPubkey, dTag);
-  if (resolved) {
-    for (const pk of resolved.maintainerSet) maintainers.add(pk);
-  }
-
-  return maintainers;
-}
 
 // ---------------------------------------------------------------------------
 // Bulk hook (repo issue list)

@@ -75,10 +75,8 @@ function LockedLabelBadge({
 }
 
 interface CreateIssueFormProps {
-  /** Repository coordinate: "30617:<pubkey>:<d-tag>" */
-  repoCoord: string;
-  /** Hex pubkey of the repository owner */
-  ownerPubkey: string;
+  /** Ordered repository coordinates, selected maintainer first */
+  repoCoords: string[];
   /** Called after the issue is successfully published */
   onSuccess?: () => void;
   /** Called when the user cancels */
@@ -86,8 +84,7 @@ interface CreateIssueFormProps {
 }
 
 export function CreateIssueForm({
-  repoCoord,
-  ownerPubkey,
+  repoCoords,
   onSuccess,
   onCancel,
 }: CreateIssueFormProps) {
@@ -195,8 +192,7 @@ export function CreateIssueForm({
       try {
         await activeRunner.run(
           CreateIssue,
-          repoCoord,
-          ownerPubkey,
+          repoCoords,
           trimmedSubject,
           trimmedContent,
           {
@@ -225,7 +221,7 @@ export function CreateIssueForm({
         setIsPending(false);
       }
     },
-    [repoCoord, ownerPubkey, toast, onSuccess, isLoggedIn, uploadedTagGroups],
+    [repoCoords, toast, onSuccess, isLoggedIn, uploadedTagGroups],
   );
 
   const handleSubmit = useCallback(

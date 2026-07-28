@@ -1,7 +1,7 @@
 import type { NostrEvent } from "nostr-tools";
 import { describe, expect, it } from "vitest";
 
-import { resolveChain } from "@/lib/nip34";
+import { repoCoordinate, resolveChain } from "@/lib/nip34";
 
 const owner = "a".repeat(64);
 const invitee = "b".repeat(64);
@@ -38,6 +38,11 @@ describe("directional maintainer authorization", () => {
     expect(resolved?.maintainerSet).toEqual([owner, invitee]);
     expect(resolved?.confirmedMaintainers).toEqual([owner]);
     expect(resolved?.requestedMaintainers).toEqual([invitee]);
+    expect(resolved?.selectedCoordinate).toBe(repoCoordinate(owner, repoId));
+    expect(resolved?.allCoordinates).toEqual([
+      repoCoordinate(owner, repoId),
+      repoCoordinate(invitee, repoId),
+    ]);
   });
 
   it("marks the invitee confirmed only after their reciprocal announcement", () => {
@@ -67,5 +72,24 @@ describe("directional maintainer authorization", () => {
     expect(new Set(resolved?.requestedMaintainers)).toEqual(
       new Set([invitee, recursiveInvitee]),
     );
+  });
+
+  it("orders the selected coordinate before confirmed and requested peers", () => {
+    const confirmed = "d".repeat(64);
+    const requested = "e".repeat(64);
+    const resolved = resolveChain(
+      [
+        announcement(owner, [requested, confirmed]),
+        announcement(confirmed, [owner], 2),
+      ],
+      owner,
+      repoId,
+    );
+
+    expect(resolved?.allCoordinates).toEqual([
+      repoCoordinate(owner, repoId),
+      repoCoordinate(confirmed, repoId),
+      repoCoordinate(requested, repoId),
+    ]);
   });
 });

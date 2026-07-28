@@ -773,6 +773,8 @@ export interface ResolvedRepo {
   // --- Identity ---
   /** The pubkey used as the starting point for resolution (route anchor) */
   selectedMaintainer: string;
+  /** The selected maintainer's repository coordinate (canonical route anchor) */
+  selectedCoordinate: string;
   /** The d-tag identifier shared by all announcements in this repo */
   dTag: string;
 
@@ -811,7 +813,9 @@ export interface ResolvedRepo {
   confirmedMaintainers: string[];
   /**
    * "30617:<pubkey>:<dTag>" for every recursively authorized maintainer — used
-   * for #a tag queries on issues, PRs, and patches.
+   * for #a tag queries and publishing. The selected coordinate is always first,
+   * followed by other confirmed coordinates, then requested coordinates. This
+   * order is a compatibility hint only; consumers must inspect every value.
    */
   allCoordinates: string[];
   /**
@@ -2483,6 +2487,13 @@ export function resolveChain(
 
   const maintainerSet = Array.from(reachable);
   const confirmedMaintainers = Array.from(confirmed);
+  const requestedMaintainers = Array.from(new Set(pending));
+  const orderedMaintainers = [
+    selectedMaintainer,
+    ...confirmedMaintainers.filter((pk) => pk !== selectedMaintainer),
+    ...maintainerSet.filter((pk) => !confirmed.has(pk)),
+  ];
+  const selectedCoordinate = repoCoordinate(selectedMaintainer, dTag);
 
   const allCloneUrls = cloneUrlProvenance.map((p) => p.value);
   const graspCloneUrls = allCloneUrls.filter(isGraspCloneUrl);
@@ -2499,6 +2510,7 @@ export function resolveChain(
 
   return {
     selectedMaintainer,
+    selectedCoordinate,
     dTag,
     name: nameSource.value || dTag,
     description: descriptionSource.value,
@@ -2511,8 +2523,8 @@ export function resolveChain(
     relays: relayProvenance.map((p) => p.value),
     maintainerSet,
     confirmedMaintainers,
-    allCoordinates: maintainerSet.map((pk) => repoCoordinate(pk, dTag)),
-    requestedMaintainers: Array.from(new Set(pending)),
+    allCoordinates: orderedMaintainers.map((pk) => repoCoordinate(pk, dTag)),
+    requestedMaintainers,
     labels,
     announcements,
     maintainerEdges: edges,

@@ -483,7 +483,7 @@ class OutboxStore {
     const item: OutboxItem = {
       id: event.id,
       event,
-      broadlySent: this.computeBroadlySent(relays),
+      broadlySent: this.computeBroadlySent(relays, uniqueGroupIds),
       relays,
       createdAt: Math.floor(Date.now() / 1000),
       relayGroupDefs: uniqueGroupIds,
@@ -621,7 +621,7 @@ class OutboxStore {
     const updatedItem: OutboxItem = {
       ...item,
       relays: updatedRelays,
-      broadlySent: this.computeBroadlySent(updatedRelays),
+      broadlySent: this.computeBroadlySent(updatedRelays, item.relayGroupDefs),
     };
 
     await this.upsert(updatedItem);
@@ -671,7 +671,7 @@ class OutboxStore {
     const updatedItem: OutboxItem = {
       ...item,
       relays: updatedRelays,
-      broadlySent: this.computeBroadlySent(updatedRelays),
+      broadlySent: this.computeBroadlySent(updatedRelays, item.relayGroupDefs),
     };
     await this.upsert(updatedItem);
 
@@ -887,7 +887,7 @@ class OutboxStore {
     const updatedItem: OutboxItem = {
       ...item,
       relays: updatedRelays,
-      broadlySent: this.computeBroadlySent(updatedRelays),
+      broadlySent: this.computeBroadlySent(updatedRelays, item.relayGroupDefs),
     };
 
     await this.upsert(updatedItem);
@@ -956,12 +956,41 @@ class OutboxStore {
   }
 
   /**
-   * An item is "broadly sent" when every distinct relay group has at least
-   * one relay that succeeded.
+   * An item is "broadly sent" when every declared relay group has at least one
+   * relay that succeeded. Unresolved groups therefore keep the item pending so
+   * reResolveRelayGroups() can retry them when relay metadata arrives.
+   *
+   * When an outbox group and "fallback-relays" are both declared, they form
+   * one alternative delivery target: a success in either group is sufficient.
+   * Other groups (repository relays, inboxes, indexes, etc.) remain required.
    */
-  private computeBroadlySent(relays: OutboxRelayEntry[]): boolean {
-    const groups = new Set(relays.flatMap((r) => r.groups));
-    for (const group of groups) {
+  private computeBroadlySent(
+    relays: OutboxRelayEntry[],
+    relayGroupDefs: string[],
+  ): boolean {
+    const fallbackGroup = "fallback-relays";
+    const outboxGroups = relayGroupDefs.filter((group) =>
+      group.startsWith("outbox:"),
+    );
+    const hasFallbackAlternative =
+      relayGroupDefs.includes(fallbackGroup) && outboxGroups.length > 0;
+    const alternativeGroups = new Set([fallbackGroup, ...outboxGroups]);
+
+    if (
+      hasFallbackAlternative &&
+      !relays.some(
+        (relay) =>
+          relay.status === "success" &&
+          relay.groups.some((group) => alternativeGroups.has(group)),
+      )
+    ) {
+      return false;
+    }
+
+    const requiredGroups = hasFallbackAlternative
+      ? relayGroupDefs.filter((group) => !alternativeGroups.has(group))
+      : relayGroupDefs;
+    for (const group of requiredGroups) {
       const groupRelays = relays.filter((r) => r.groups.includes(group));
       if (!groupRelays.some((r) => r.status === "success")) return false;
     }
