@@ -4,6 +4,14 @@
 
 ### Fixes
 
+### Features
+
+### Changes
+
+## [3.1.1]
+
+### Fixes
+
 - Prioritize repository participants, Git follows, and social follows in user autocomplete, including cached trusted profiles, explicit relationship badges, and loading feedback.
 - Open Amber through Android's native NIP-55 bridge in the APK so login and signing requests are delivered as valid signer intents.
 - Tag new issues with every recursive maintainer coordinate, keeping the selected maintainer first for compatibility, and defer notification until every referenced maintainer's relays resolve.
