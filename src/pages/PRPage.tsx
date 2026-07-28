@@ -965,7 +965,7 @@ export default function PRPage() {
 
   // ── Tab bar (Link-based so it works from any sub-path) ────────────────
   const tabBar = (
-    <div className="flex gap-0">
+    <div className="flex w-full gap-0 sm:w-auto">
       <TabBarLink
         to={prBasePath ?? ""}
         active={activeTab === "conversation"}
@@ -1240,7 +1240,9 @@ export default function PRPage() {
               </div>
 
               {/* Right: tabs */}
-              <div className="shrink-0">{tabBar}</div>
+              <div className="w-full min-w-0 sm:w-auto sm:shrink-0">
+                {tabBar}
+              </div>
             </div>
           ) : null}
         </div>
@@ -1933,16 +1935,16 @@ function TabBarLink({
     <Link
       to={to}
       className={cn(
-        "inline-flex items-center gap-1.5 text-sm rounded-none px-3 pb-2 pt-1 border-b-2 transition-colors",
+        "flex min-w-0 flex-1 items-center justify-center gap-1 rounded-none border-b-2 px-1 pb-2 pt-1 text-xs transition-colors sm:inline-flex sm:flex-none sm:gap-1.5 sm:px-3 sm:text-sm",
         active
           ? "border-foreground text-foreground"
           : "border-transparent text-muted-foreground hover:text-foreground",
       )}
     >
-      {icon}
-      {label}
+      <span className="hidden shrink-0 sm:inline-flex">{icon}</span>
+      <span className="truncate">{label}</span>
       {badge !== undefined && (
-        <span className="ml-1 rounded-full bg-muted-foreground/20 px-1.5 py-0.5 text-xs font-medium leading-none">
+        <span className="hidden shrink-0 rounded-full bg-muted-foreground/20 px-1.5 py-0.5 text-xs font-medium leading-none sm:ml-1 sm:inline-flex">
           {badge}
         </span>
       )}
