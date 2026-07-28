@@ -58,10 +58,6 @@ import {
 import { getFileMediaType, toDataUri } from "@/lib/fileMediaType";
 import { cn, safeFormatDistanceToNow } from "@/lib/utils";
 import { useIsMobile } from "@/hooks/useIsMobile";
-import {
-  deriveEffectiveHeadCommit,
-  deriveEffectiveSource,
-} from "@/lib/sourceUtils";
 import { isNonHttpUrl } from "@/lib/git-grasp-pool";
 import { IncompatibleProtocolError } from "@/components/IncompatibleProtocolError";
 import { useCIForCommit } from "@/hooks/useCI";
@@ -102,30 +98,9 @@ export default function RepoCodePage() {
   const allUrlsIncompatible =
     cloneUrls.length > 0 && cloneUrls.every(isNonHttpUrl);
 
-  // "source" query param drives which server's data the explorer shows.
-  // No param = "default" (pool-decided). "nostr" or a clone URL are explicit.
-  const selectedSource = searchParams.get("source") ?? "default";
-
-  const handleSourceChange = useCallback(
-    (src: string) => {
-      setSearchParams(
-        (prev) => {
-          const next = new URLSearchParams(prev);
-          if (src === "default") {
-            next.delete("source");
-          } else {
-            next.set("source", src);
-          }
-          return next;
-        },
-        { replace: false },
-      );
-    },
-    [setSearchParams],
-  );
-
   // Single pool subscription — drives everything on this page.
   const { pool, poolState } = useGitPool(cloneUrls, {
+    headRef: repoState?.headRef,
     knownHeadCommit: repoState?.headCommitId,
     stateRefs: repoState?.refs,
     stateCreatedAt: repoState ? repoState.event.created_at : undefined,
@@ -146,93 +121,39 @@ export default function RepoCodePage() {
   const stateBehindGit =
     !gitPulling && poolState.warning?.kind === "state-behind-git";
 
-  // Run the explorer first with the Nostr/default commit so we get refs and
-  // resolvedRef populated. We then derive the effective commit from the
-  // selected source using the resolved ref, and re-run if it differs.
-  //
-  // Bootstrap pass: use the standard Nostr/default logic.
-  // When the user explicitly chose "nostr" as source, honour the Nostr commit
-  // even when stateBehindGit is true — the user wants to see the signed state.
+  const sourceParam = searchParams.get("source");
+  const selectedSource =
+    sourceParam ??
+    (poolState.viewSource === "authoritative"
+      ? "default"
+      : poolState.viewSource);
   const userChoseNostr = selectedSource === "nostr";
-  const bootstrapHeadCommit = useMemo(() => {
-    if (stateBehindGit && !userChoseNostr) return undefined;
-    return repoState?.headCommitId;
-  }, [stateBehindGit, userChoseNostr, repoState?.headCommitId]);
+
+  useEffect(() => {
+    if (pool && sourceParam) pool.setViewSource(sourceParam);
+  }, [pool, sourceParam]);
+
+  const handleSourceChange = useCallback(
+    (src: string) => {
+      pool?.setViewSource(src);
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          if (src === "default") next.delete("source");
+          else next.set("source", src);
+          return next;
+        },
+        { replace: false },
+      );
+    },
+    [pool, setSearchParams],
+  );
 
   const explorer = useGitExplorer(pool, poolState, {
     refAndPath: treeRefAndPath,
-    knownHeadCommit: bootstrapHeadCommit,
     stateRefs: repoState?.refs,
   });
-
-  // Once the explorer has resolved the ref, derive the effective HEAD commit
-  // from the selected source. This is what actually drives the displayed tree.
-  const resolvedRef = explorer.resolvedRef;
-  const resolvedRefIsBranch =
-    explorer.refs.find((r) => r.name === resolvedRef)?.isBranch ?? true;
-
-  // Resolve "default" → "nostr" or a concrete git server URL so all downstream
-  // logic works with a real source value rather than re-deriving it everywhere.
-  const isNoState = repoRelayEose && repoState === null;
-  const aheadServerUrl =
-    poolState.warning?.kind === "state-behind-git"
-      ? poolState.warning.gitServerUrl
-      : null;
-  const effectiveSource = useMemo(
-    () =>
-      deriveEffectiveSource(
-        selectedSource,
-        stateBehindGit,
-        isNoState,
-        poolState.winnerUrl,
-        aheadServerUrl,
-      ),
-    [
-      selectedSource,
-      stateBehindGit,
-      isNoState,
-      poolState.winnerUrl,
-      aheadServerUrl,
-    ],
-  );
-
-  const effectiveHeadCommit = useMemo(() => {
-    return deriveEffectiveHeadCommit(
-      effectiveSource,
-      poolState.urls,
-      repoState ?? null,
-      // When the user explicitly chose "nostr", treat stateBehindGit as false
-      // so the explorer uses the Nostr state commit rather than the git server's.
-      stateBehindGit && selectedSource !== "nostr",
-      resolvedRef,
-      resolvedRefIsBranch,
-    );
-  }, [
-    effectiveSource,
-    poolState.urls,
-    repoState,
-    stateBehindGit,
-    selectedSource,
-    resolvedRef,
-    resolvedRefIsBranch,
-  ]);
-
-  // Re-run the explorer with the effective commit when source changes.
-  // We use a second explorer instance keyed on effectiveHeadCommit so that
-  // the bootstrap explorer's cached state is not discarded on every render.
-  const explorerForSource = useGitExplorer(pool, poolState, {
-    refAndPath: treeRefAndPath,
-    knownHeadCommit: effectiveHeadCommit,
-    stateRefs: repoState?.refs,
-  });
-
-  // Use the source-aware explorer when the effective source is a git server
-  // and its commit differs from the bootstrap; otherwise use the bootstrap
-  // explorer (avoids a redundant fetch when source resolves to nostr).
-  const useSourceExplorer =
-    effectiveSource !== "nostr" && effectiveHeadCommit !== bootstrapHeadCommit;
-  const activeExplorer = useSourceExplorer ? explorerForSource : explorer;
-
+  const activeExplorer = explorer;
   // Full file tree for go-to-file search. Uses the same commitHash the active
   // explorer is displaying so the search results stay consistent with the view.
   const fullFileTree = useFullFileTree(pool, activeExplorer.commitHash);
@@ -275,15 +196,14 @@ export default function RepoCodePage() {
   // switching branches doesn't silently revert to the default source.
   const handleRefChange = useCallback(
     (newRef: string) => {
-      const source = searchParams.get("source");
       const base = `${basePath}/tree/${newRef}`;
-      if (source) {
-        navigate(`${base}?source=${encodeURIComponent(source)}`);
+      if (selectedSource !== "default") {
+        navigate(`${base}?source=${encodeURIComponent(selectedSource)}`);
       } else {
         navigate(base);
       }
     },
-    [navigate, searchParams, basePath],
+    [navigate, selectedSource, basePath],
   );
 
   // Atomic handler: navigate to a new ref while simultaneously applying a
@@ -318,6 +238,15 @@ export default function RepoCodePage() {
       ? `refs/heads/${currentRef}`
       : `refs/tags/${currentRef}`
     : "";
+  const currentEffectiveRef = poolState.effectiveRefs[currentRefFull];
+  const effectiveSource =
+    poolState.viewSource === "nostr"
+      ? "nostr"
+      : poolState.viewSource !== "authoritative"
+        ? poolState.viewSource
+        : currentEffectiveRef?.source === "git"
+          ? (currentEffectiveRef.sourceUrl ?? poolState.winnerUrl ?? "nostr")
+          : "nostr";
 
   // The commit bar and warning banner must always show the same commit — the
   // one the explorer is actually displaying. Use the explorer's own commitHash
@@ -389,6 +318,8 @@ export default function RepoCodePage() {
             poolWarning={poolState.warning}
             pool={pool}
             winnerUrl={poolState.winnerUrl}
+            viewSource={poolState.viewSource}
+            effectiveRefs={poolState.effectiveRefs}
             fullFileTree={fullFileTree}
           />
 
@@ -1237,6 +1168,8 @@ function CodeBar({
   poolWarning,
   pool,
   winnerUrl,
+  viewSource,
+  effectiveRefs,
   fullFileTree,
 }: {
   loading: boolean;
@@ -1267,16 +1200,17 @@ function CodeBar({
   poolWarning: PoolWarning | null;
   pool: import("@/lib/git-grasp-pool").GitGraspPool | null;
   winnerUrl: string | null;
+  viewSource: import("@/lib/git-grasp-pool").ViewSource;
+  effectiveRefs: import("@/lib/git-grasp-pool").ResolvedRefMap;
   fullFileTree: FullFileTreeState & { triggerFetch: () => void };
 }) {
   // Preserve the active `?source=` selection on cross-page nav links so the
   // commit history / branches / tags views stay on the same source the user
   // is browsing here.
-  const [searchParams] = useSearchParams();
-  const sourceParam = searchParams.get("source");
-  const sourceQs = sourceParam
-    ? `?source=${encodeURIComponent(sourceParam)}`
-    : "";
+  const sourceQs =
+    selectedSource !== "default"
+      ? `?source=${encodeURIComponent(selectedSource)}`
+      : "";
 
   // On mobile, the Commits / Branches / Tags trio collapses to icon-only so
   // the commit summary row can fit alongside the commit message + hash.
@@ -1344,6 +1278,8 @@ function CodeBar({
             stateBehindGit={stateBehindGit}
             poolWarning={poolWarning}
             winnerUrl={winnerUrl}
+            viewSource={viewSource}
+            effectiveRefs={effectiveRefs}
             stateCreatedAt={repoState?.event.created_at}
             urlStates={urlStates}
             cloneUrls={cloneUrls}

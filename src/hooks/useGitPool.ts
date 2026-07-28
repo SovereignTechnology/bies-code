@@ -32,6 +32,8 @@ import type { RepoStateRef } from "@/lib/nip34";
 // ---------------------------------------------------------------------------
 
 export interface UseGitPoolOptions {
+  /** Full ref name that the state event declares as HEAD. */
+  headRef?: string;
   /**
    * HEAD commit declared by the Nostr state event (kind:30618).
    * undefined = still loading from relays; omit when no state event exists.
@@ -64,7 +66,10 @@ function makeInitialState(hasUrls: boolean): PoolState {
     readmeFilename: null,
     defaultBranch: null,
     warning: null,
+    authoritativeRefs: {},
     authoritativeHead: null,
+    viewSource: "authoritative",
+    effectiveRefs: {},
     error: null,
     lastCheckedAt: null,
     crossRefDiscrepancies: [],
@@ -99,6 +104,7 @@ export function useGitPool(
 ): UseGitPoolResult {
   const {
     knownHeadCommit,
+    headRef,
     stateRefs,
     stateCreatedAt,
     expectRepositoryProvisioning,
@@ -123,12 +129,13 @@ export function useGitPool(
     const refs = stateRefs ?? [];
     if (refs.length === 0) return undefined;
     return {
+      headRef,
       headCommitId: knownHeadCommit,
       refs: refs.map((r) => ({ name: r.name, commitId: r.commitId })),
       createdAt: stateCreatedAt ?? 0,
     } satisfies StateEvent;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [knownHeadCommit, refsKey, stateCreatedAt]);
+  }, [knownHeadCommit, headRef, refsKey, stateCreatedAt]);
 
   // The BehaviorSubject lives for the lifetime of the subscription (tied to
   // urlsKey). We push new state event values into it whenever they change.
@@ -136,9 +143,10 @@ export function useGitPool(
 
   // Push state event updates synchronously (before effects run) so the pool
   // sees the latest value as soon as it changes.
-  const prevRefsKey = useRef<string>("");
-  if (refsKey !== prevRefsKey.current) {
-    prevRefsKey.current = refsKey;
+  const stateEventKey = `${headRef ?? ""}|${knownHeadCommit ?? ""}|${refsKey}|${stateCreatedAt ?? ""}`;
+  const prevStateEventKey = useRef<string>("");
+  if (stateEventKey !== prevStateEventKey.current) {
+    prevStateEventKey.current = stateEventKey;
     stateSubjectRef.current?.next(currentStateEvent);
   }
 

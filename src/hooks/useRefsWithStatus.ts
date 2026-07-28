@@ -1,8 +1,8 @@
 /**
  * useRefsWithStatus — decorate the raw ref list from `useGitExplorer` with
  * per-ref status against the Nostr-signed state and the pool's per-URL
- * `refStatus` view, resolving the user's selected source ("default" / "nostr"
- * / clone URL) to a concrete effective source in the process.
+ * `refStatus` view. Ref commits and the effective source come from the pool's
+ * shared `effectiveRefs` / `viewSource` layer.
  *
  * Extracted from `RefSelector.tsx` so the same decoration logic can be reused
  * by the full-page `/branches` and `/tags` views.
@@ -12,8 +12,11 @@ import { useMemo } from "react";
 import type { NostrEvent } from "nostr-tools";
 import type { GitRef } from "@/hooks/useGitExplorer";
 import type { RepositoryState } from "@/casts/RepositoryState";
-import type { PoolWarning, UrlState } from "@/lib/git-grasp-pool/types";
-import { deriveEffectiveSource } from "@/lib/sourceUtils";
+import type {
+  ResolvedRefMap,
+  UrlState,
+  ViewSource,
+} from "@/lib/git-grasp-pool/types";
 import {
   type RefWithStatus,
   getRefStatus,
@@ -24,12 +27,6 @@ import {
 export interface UseRefsWithStatusInput {
   /** All refs the explorer knows about (merged across servers). */
   refs: GitRef[];
-  /**
-   * The raw selected source: "default" | "nostr" | clone URL.  The hook
-   * resolves "default" via `deriveEffectiveSource` and returns the result as
-   * `effectiveSource` (never "default").
-   */
-  selectedSource: string;
   /** Winning Nostr state event, null if none found, undefined while loading. */
   repoState: RepositoryState | null | undefined;
   /** True once the relay EOSE has been received for the state query. */
@@ -41,8 +38,12 @@ export interface UseRefsWithStatusInput {
    * Comes from `poolState.warning?.kind === "state-behind-git"`.
    */
   stateBehindGit: boolean;
-  /** The pool warning (used to identify the ahead server). */
-  poolWarning?: PoolWarning | null;
+  /** Pool-owned view preference. */
+  viewSource: ViewSource;
+  /** Pool-resolved display values for every known ref. */
+  effectiveRefs: ResolvedRefMap;
+  /** Full ref currently being viewed; defaults to the repository HEAD ref. */
+  currentRefFullName?: string;
   /** Pool's winning git server clone URL. */
   winnerUrl?: string | null;
   /** Per-URL state from the pool. */
@@ -102,31 +103,30 @@ function countRefsByPrefix(
 
 export function useRefsWithStatus({
   refs,
-  selectedSource,
   repoState,
   repoRelayEose,
   relayStateMap,
   stateBehindGit,
-  poolWarning,
+  viewSource,
+  effectiveRefs,
+  currentRefFullName,
   winnerUrl,
   urlStates,
   cloneUrls,
 }: UseRefsWithStatusInput): UseRefsWithStatusResult {
-  const isNoState = repoRelayEose && repoState === null;
-  const aheadServerUrl =
-    poolWarning?.kind === "state-behind-git" ? poolWarning.gitServerUrl : null;
+  const effectiveSource = useMemo(() => {
+    if (viewSource === "nostr") return "nostr";
+    if (viewSource !== "authoritative") return viewSource;
 
-  const effectiveSource = useMemo(
-    () =>
-      deriveEffectiveSource(
-        selectedSource,
-        stateBehindGit,
-        isNoState,
-        winnerUrl ?? null,
-        aheadServerUrl,
-      ),
-    [selectedSource, stateBehindGit, isNoState, winnerUrl, aheadServerUrl],
-  );
+    const defaultRef = refs.find((ref) => ref.isDefault && ref.isBranch);
+    const fullRefName =
+      currentRefFullName ??
+      (defaultRef ? `refs/heads/${defaultRef.name}` : undefined);
+    const resolved = fullRefName ? effectiveRefs[fullRefName] : undefined;
+    return resolved?.source === "git"
+      ? (resolved.sourceUrl ?? winnerUrl ?? "nostr")
+      : "nostr";
+  }, [viewSource, refs, effectiveRefs, winnerUrl, currentRefFullName]);
 
   // The git pool's info-refs are a useful cross-server view, but they can lag
   // behind a newly received signed state event. Include state-only refs so the
@@ -156,32 +156,53 @@ export function useRefsWithStatus({
       });
     }
 
-    return [...refs, ...stateOnlyRefs];
-  }, [refs, repoState]);
+    return [...refs, ...stateOnlyRefs].map((ref) => {
+      const fullRefName = `${ref.isBranch ? "refs/heads/" : "refs/tags/"}${ref.name}`;
+      const effective = effectiveRefs[fullRefName];
+      return effective ? { ...ref, hash: effective.commitId } : ref;
+    });
+  }, [refs, repoState, effectiveRefs]);
 
   // Compute status for each ref — against effectiveSource.
   // effectiveSource is always "nostr" or a concrete clone URL (never "default").
   const refsWithStatus: RefWithStatus[] = useMemo(() => {
-    if (effectiveSource === "nostr") {
+    if (viewSource === "authoritative") {
+      return refsIncludingState.map((ref) => {
+        const fullRefName = `${ref.isBranch ? "refs/heads/" : "refs/tags/"}${ref.name}`;
+        const effective = effectiveRefs[fullRefName];
+        return {
+          ...ref,
+          ...getRefStatus(
+            ref,
+            repoState,
+            repoRelayEose,
+            effective?.source === "git",
+            urlStates,
+            cloneUrls,
+          ),
+        };
+      });
+    }
+
+    if (viewSource === "nostr") {
       // "nostr" (whether explicit or resolved from "default") compares directly
       // against the signed Nostr state. When the user explicitly selected
       // "nostr" (overriding a git-ahead situation), pass stateBehindGit=false
       // so refs are compared against the state even when the server is ahead.
-      const behindGit = selectedSource === "nostr" ? false : stateBehindGit;
       return refsIncludingState.map((ref) => ({
         ...ref,
         ...getRefStatus(
           ref,
           repoState,
           repoRelayEose,
-          behindGit,
+          false,
           urlStates,
           cloneUrls,
         ),
       }));
     }
     // A specific git server URL (explicit selection or resolved from "default")
-    const serverUrlState = urlStates[effectiveSource];
+    const serverUrlState = urlStates[viewSource];
     if (!serverUrlState?.infoRefs) {
       // Server not ready — fall back to nostr-state comparison
       return refsIncludingState.map((ref) => ({
@@ -213,8 +234,8 @@ export function useRefsWithStatus({
     stateBehindGit,
     urlStates,
     cloneUrls,
-    effectiveSource,
-    selectedSource,
+    effectiveRefs,
+    viewSource,
     relayStateMap,
   ]);
 

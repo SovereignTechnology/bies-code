@@ -24,7 +24,10 @@ import type {
   PoolOptions,
   PoolSubscriber,
   PoolWarning,
+  AuthoritativeRef,
   AuthoritativeHead,
+  ResolvedRefMap,
+  ViewSource,
   RefDiscrepancy,
   UrlRefStatus,
   StateEventInput,
@@ -79,7 +82,10 @@ function makeInitialState(): PoolState {
     readmeFilename: null,
     defaultBranch: null,
     warning: null,
+    authoritativeRefs: {},
     authoritativeHead: null,
+    viewSource: "authoritative",
+    effectiveRefs: {},
     error: null,
     lastCheckedAt: null,
     crossRefDiscrepancies: [],
@@ -158,6 +164,25 @@ function estimateDeepenDepth(
  */
 function commitsMatch(a: string, b: string): boolean {
   return a === b || a.startsWith(b) || b.startsWith(a);
+}
+
+interface ServerRefCandidate {
+  commitId: string;
+  sourceUrl: string;
+  rawTagOid?: string;
+}
+
+interface ServerRefCandidateGroup {
+  commitId: string;
+  members: ServerRefCandidate[];
+}
+
+interface RefAncestryVerification {
+  stateCommit: string;
+  gitCommit: string;
+  descendsFromState: boolean | undefined;
+  history: string[] | undefined;
+  promise: Promise<void>;
 }
 
 /**
@@ -343,17 +368,13 @@ export class GitGraspPool {
   // --- Winner tracking ---
   private winnerUrl: string | null = null;
 
-  // --- Authoritative head ancestry verification ---
+  // --- Per-ref ancestry verification ---
   /**
-   * Cached result of the "is the git-ahead head a descendant of the state
-   * head?" check, keyed by the exact (stateHead, gitHead) pair. `undefined`
-   * result = check in flight. Cleared implicitly when either head changes.
+   * Cached "is the server commit a descendant of the state commit?" results,
+   * keyed by full ref name and guarded by the exact commit pair. `undefined`
+   * means the check is in flight.
    */
-  private ancestryVerification: {
-    stateHead: string;
-    gitHead: string;
-    descendsFromState: boolean | undefined;
-  } | null = null;
+  private ancestryVerifications = new Map<string, RefAncestryVerification>();
 
   constructor(options: PoolOptions) {
     this.evictionGraceMs =
@@ -466,110 +487,377 @@ export class GitGraspPool {
 
   private setState(updater: (prev: PoolState) => PoolState): void {
     const next = updater(this.state$.getValue());
-    // Every emission carries a consistent authoritative head, whatever code
-    // path produced it — and any unverified git-ahead claim kicks off the
-    // (idempotent, cache-first) ancestry check that may upgrade it later.
+    // Protocol truth and display preference are recomputed together on every
+    // emission. The view layer can never feed back into authoritativeRefs.
+    next.authoritativeRefs = this.deriveAuthoritativeRefs();
     next.authoritativeHead = this.deriveAuthoritativeHead(next);
-    this.ensureAncestryVerification(next.warning);
+    next.effectiveRefs = this.deriveEffectiveRefs(next);
     this.state$.next(next);
     this.notify();
+
+    const headRef = this.getHeadRef(next);
+    if (headRef) void this.ensureRefVerification(headRef);
   }
 
   // -----------------------------------------------------------------------
-  // Authoritative head resolution
+  // Authoritative ref resolution
   // -----------------------------------------------------------------------
 
+  private getHeadRef(next: PoolState): string | undefined {
+    const stateEvent = this.stateManager.currentState;
+    if (stateEvent?.headRef) return stateEvent.headRef;
+    const winnerInfo = this.getInfoRefs();
+    const gitHeadRef = winnerInfo?.symrefs["HEAD"];
+    if (gitHeadRef) return gitHeadRef;
+    return next.defaultBranch ? `refs/heads/${next.defaultBranch}` : undefined;
+  }
+
+  private getServerRefCandidates(refName: string): ServerRefCandidate[] {
+    const peeledName = `${refName}^{}`;
+    const candidates: ServerRefCandidate[] = [];
+
+    for (const tracker of this.urlManager.getAll()) {
+      if (tracker.status !== "ok" || !tracker.state.infoRefs) continue;
+      const refs = tracker.state.infoRefs.refs;
+      const rawTagOid = refs[refName];
+      const commitId = refs[peeledName] ?? rawTagOid;
+      if (commitId) {
+        candidates.push({
+          commitId,
+          sourceUrl: tracker.url,
+          rawTagOid:
+            refs[peeledName] && rawTagOid !== commitId ? rawTagOid : undefined,
+        });
+      }
+    }
+
+    return candidates;
+  }
+
+  private groupServerRefCandidates(refName: string): ServerRefCandidateGroup[] {
+    const groups: ServerRefCandidateGroup[] = [];
+    for (const candidate of this.getServerRefCandidates(refName)) {
+      const group = groups.find((entry) =>
+        commitsMatch(entry.commitId, candidate.commitId),
+      );
+      if (group) group.members.push(candidate);
+      else groups.push({ commitId: candidate.commitId, members: [candidate] });
+    }
+    return groups;
+  }
+
+  private pickGroupSource(group: ServerRefCandidateGroup): ServerRefCandidate {
+    return (
+      group.members.find((member) => member.sourceUrl === this.winnerUrl) ??
+      group.members[0]
+    );
+  }
+
   /**
-   * Resolve the authoritative default-branch tip for this emission — see
-   * {@link AuthoritativeHead} for the semantics.
-   *
-   * The signed state head wins whenever a state event exists. A git server
-   * head reported ahead of it (the `state-behind-git` warning) only takes
-   * over once the ancestry check has confirmed the state head is reachable
-   * from it: the warning is committer-date based, so without the check a
-   * rewritten/divergent server head — or a stale cached warning emitted by
-   * the fast-path right after a merge push — could hijack the merge target.
+   * Pick the server value for a ref that has no signed state entry. Majority
+   * wins; ties prefer the pool winner, then stable URL-manager order.
+   */
+  private selectServerRefCandidate(refName: string): ServerRefCandidate | null {
+    const groups = this.groupServerRefCandidates(refName);
+    if (groups.length === 0) return null;
+    groups.sort((a, b) => {
+      if (a.members.length !== b.members.length) {
+        return b.members.length - a.members.length;
+      }
+      const aHasWinner = a.members.some(
+        (member) => member.sourceUrl === this.winnerUrl,
+      );
+      const bHasWinner = b.members.some(
+        (member) => member.sourceUrl === this.winnerUrl,
+      );
+      return Number(bHasWinner) - Number(aHasWinner);
+    });
+
+    const selected = groups[0];
+    return this.pickGroupSource(selected);
+  }
+
+  private verificationKey(
+    refName: string,
+    stateCommit: string,
+    gitCommit: string,
+  ): string {
+    return `${refName}\u0000${stateCommit}\u0000${gitCommit}`;
+  }
+
+  /**
+   * Resolve the commit that acts as the signed ancestry anchor. Old ngit
+   * state events stored annotated-tag object IDs; when a server supplies the
+   * corresponding peeled commit, use that commit for ancestry and tree reads.
+   */
+  private getStateRefAnchor(
+    stateCommit: string,
+    groups: ServerRefCandidateGroup[],
+  ): string {
+    for (const group of groups) {
+      const matchingMember = group.members.find(
+        (member) =>
+          commitsMatch(member.commitId, stateCommit) ||
+          (!!member.rawTagOid && commitsMatch(member.rawTagOid, stateCommit)),
+      );
+      if (matchingMember) return matchingMember.commitId;
+    }
+    return stateCommit;
+  }
+
+  /**
+   * Choose among server commits already verified to descend from signed
+   * state. A single candidate wins even when most mirrors remain at state.
+   * With multiple candidates, only a tip containing every other candidate is
+   * safe; incomparable descendants leave the signed state authoritative.
+   */
+  private selectVerifiedDescendant(
+    refName: string,
+    stateCommit: string,
+    groups: ServerRefCandidateGroup[],
+  ): ServerRefCandidate | null {
+    const differing = groups.filter(
+      (group) => !commitsMatch(group.commitId, stateCommit),
+    );
+    const withVerification = differing.map((group) => ({
+      group,
+      verification: this.ancestryVerifications.get(
+        this.verificationKey(refName, stateCommit, group.commitId),
+      ),
+    }));
+    if (
+      withVerification.some(
+        ({ verification }) =>
+          !verification || verification.descendsFromState === undefined,
+      )
+    ) {
+      return null;
+    }
+
+    const verified = withVerification
+      .filter(({ verification }) => verification?.descendsFromState === true)
+      .map(({ group }) => group);
+    if (verified.length === 0) return null;
+
+    const containingTips = verified.filter((group) => {
+      const verification = this.ancestryVerifications.get(
+        this.verificationKey(refName, stateCommit, group.commitId),
+      );
+      return verified.every(
+        (other) =>
+          commitsMatch(group.commitId, other.commitId) ||
+          verification?.history?.some((hash) =>
+            commitsMatch(hash, other.commitId),
+          ),
+      );
+    });
+    if (containingTips.length === 0) return null;
+
+    containingTips.sort((a, b) => {
+      if (a.members.length !== b.members.length) {
+        return b.members.length - a.members.length;
+      }
+      const aHasWinner = a.members.some(
+        (member) => member.sourceUrl === this.winnerUrl,
+      );
+      const bHasWinner = b.members.some(
+        (member) => member.sourceUrl === this.winnerUrl,
+      );
+      return Number(bHasWinner) - Number(aHasWinner);
+    });
+    return this.pickGroupSource(containingTips[0]);
+  }
+
+  private deriveAuthoritativeRefs(): ResolvedRefMap {
+    const refNames = new Set<string>();
+    const stateEvent = this.stateManager.currentState;
+    if (stateEvent) {
+      for (const ref of stateEvent.refs) refNames.add(ref.name);
+    }
+    for (const tracker of this.urlManager.getAll()) {
+      if (tracker.status !== "ok" || !tracker.state.infoRefs) continue;
+      for (const refName of Object.keys(tracker.state.infoRefs.refs)) {
+        if (!refName.endsWith("^{}")) refNames.add(refName);
+      }
+    }
+
+    const resolved: ResolvedRefMap = {};
+    for (const refName of refNames) {
+      const stateRef = stateEvent?.refs.find((ref) => ref.name === refName);
+      if (!stateRef) {
+        const server = this.selectServerRefCandidate(refName);
+        if (server) {
+          resolved[refName] = {
+            commitId: server.commitId,
+            source: "git",
+            sourceUrl: server.sourceUrl,
+          };
+        }
+        continue;
+      }
+
+      const groups = this.groupServerRefCandidates(refName);
+      const stateAnchor = this.getStateRefAnchor(stateRef.commitId, groups);
+      const verified = this.selectVerifiedDescendant(
+        refName,
+        stateAnchor,
+        groups,
+      );
+      if (verified) {
+        resolved[refName] = {
+          commitId: verified.commitId,
+          source: "git",
+          sourceUrl: verified.sourceUrl,
+        };
+      } else {
+        resolved[refName] = {
+          commitId: stateAnchor,
+          source: "state",
+        };
+      }
+    }
+
+    return resolved;
+  }
+
+  /**
+   * Backward-compatible default-branch alias over authoritativeRefs.
    */
   private deriveAuthoritativeHead(next: PoolState): AuthoritativeHead | null {
     const stateEvent = this.stateManager.currentState;
-    const stateHead = stateEvent ? stateEvent.headCommitId : undefined;
-
-    if (stateHead) {
-      const verification = this.ancestryVerification;
-      if (
-        next.warning?.kind === "state-behind-git" &&
-        next.warning.stateCommitId === stateHead &&
-        verification &&
-        verification.stateHead === stateHead &&
-        verification.gitHead === next.warning.gitCommitId &&
-        verification.descendsFromState === true
-      ) {
-        return { commitId: next.warning.gitCommitId, source: "git" };
-      }
-      return { commitId: stateHead, source: "state" };
+    const headRef = this.getHeadRef(next);
+    if (headRef && next.authoritativeRefs[headRef]) {
+      return next.authoritativeRefs[headRef];
     }
-
-    // No state event (still loading or confirmed absent) — the git servers
-    // are all we have.
+    if (stateEvent?.headCommitId) {
+      return { commitId: stateEvent.headCommitId, source: "state" };
+    }
     return next.latestCommit
-      ? { commitId: next.latestCommit.hash, source: "git" }
+      ? {
+          commitId: next.latestCommit.hash,
+          source: "git",
+          sourceUrl: next.winnerUrl ?? undefined,
+        }
       : null;
   }
 
-  /**
-   * Start (once per (stateHead, gitHead) pair) the ancestry walk that decides
-   * whether a `state-behind-git` git head really extends the signed state.
-   * Cache-first and fire-and-forget; on a positive result the state is
-   * re-emitted so `authoritativeHead` upgrades to the git head.
-   */
-  private ensureAncestryVerification(warning: PoolWarning | null): void {
-    if (warning?.kind !== "state-behind-git") return;
-    const stateEvent = this.stateManager.currentState;
-    const stateHead = stateEvent ? stateEvent.headCommitId : undefined;
-    if (!stateHead || warning.stateCommitId !== stateHead) return;
-
-    const gitHead = warning.gitCommitId;
-    const existing = this.ancestryVerification;
-    if (
-      existing &&
-      existing.stateHead === stateHead &&
-      existing.gitHead === gitHead
-    ) {
-      return; // already checked or in flight
+  private deriveEffectiveRefs(next: PoolState): ResolvedRefMap {
+    if (next.viewSource === "authoritative") {
+      return { ...next.authoritativeRefs };
     }
 
-    const verification = {
-      stateHead,
-      gitHead,
-      descendsFromState: undefined as boolean | undefined,
-    };
-    this.ancestryVerification = verification;
+    const effective: ResolvedRefMap = { ...next.authoritativeRefs };
+    const stateEvent = this.stateManager.currentState;
+    if (next.viewSource === "nostr") {
+      for (const ref of stateEvent?.refs ?? []) {
+        effective[ref.name] = { commitId: ref.commitId, source: "state" };
+      }
+      return effective;
+    }
 
+    const selectedUrl = next.viewSource;
+    const tracker = this.urlManager.get(selectedUrl);
+    if (!tracker?.state.infoRefs) return effective;
+    for (const refName of Object.keys(tracker.state.infoRefs.refs)) {
+      if (refName.endsWith("^{}")) continue;
+      const commitId =
+        tracker.state.infoRefs.refs[`${refName}^{}`] ??
+        tracker.state.infoRefs.refs[refName];
+      if (commitId) {
+        effective[refName] = {
+          commitId,
+          source: "git",
+          sourceUrl: selectedUrl,
+        };
+      }
+    }
+    return effective;
+  }
+
+  /**
+   * Lazily verify a ref's differing server value. The default branch calls
+   * this eagerly; other refs are checked on first resolveRef() use.
+   */
+  private ensureRefVerification(refName: string): Promise<void> {
+    const stateEvent = this.stateManager.currentState;
+    const stateRef = stateEvent?.refs.find((ref) => ref.name === refName);
+    if (!stateRef) return Promise.resolve();
+
+    const groups = this.groupServerRefCandidates(refName);
+    const stateAnchor = this.getStateRefAnchor(stateRef.commitId, groups);
+    const differing = groups.filter(
+      (group) => !commitsMatch(group.commitId, stateAnchor),
+    );
+    return Promise.all(
+      differing.map((group) =>
+        this.ensureCandidateVerification(
+          refName,
+          stateAnchor,
+          this.pickGroupSource(group),
+        ),
+      ),
+    ).then(() => undefined);
+  }
+
+  private ensureCandidateVerification(
+    refName: string,
+    stateCommit: string,
+    candidate: ServerRefCandidate,
+  ): Promise<void> {
+    const key = this.verificationKey(refName, stateCommit, candidate.commitId);
+    const existing = this.ancestryVerifications.get(key);
+    if (existing) {
+      return existing.promise;
+    }
+
+    const verification: RefAncestryVerification = {
+      stateCommit,
+      gitCommit: candidate.commitId,
+      descendsFromState: undefined as boolean | undefined,
+      history: undefined,
+      promise: Promise.resolve(),
+    };
     const abort = new AbortController();
-    this.getCommitHistory(
-      gitHead,
+    verification.promise = this.getCommitHistory(
+      candidate.commitId,
       ANCESTRY_VERIFICATION_MAX_DEPTH,
       abort.signal,
-      undefined,
-      stateHead,
+      [candidate.sourceUrl],
+      stateCommit,
     )
       .then((history) => {
-        if (this.isDisposed || this.ancestryVerification !== verification) {
+        if (
+          this.isDisposed ||
+          this.ancestryVerifications.get(key) !== verification
+        ) {
           return;
         }
-        verification.descendsFromState = !!history?.some(
-          (commit) => commit.hash === stateHead,
+        verification.history = history?.map((commit) => commit.hash);
+        verification.descendsFromState = !!history?.some((commit) =>
+          commitsMatch(commit.hash, stateCommit),
         );
-        if (verification.descendsFromState) {
-          // Re-emit so deriveAuthoritativeHead picks up the verified head.
-          this.setState((prev) => ({ ...prev }));
-        }
+        this.setState((prev) => ({ ...prev }));
       })
       .catch(() => {
         // Walk failed — leave descendsFromState undefined so the signed
         // state head stays authoritative; a later warning re-triggers the
-        // check only if the head pair changes.
+        // check only if the ref pair changes.
       });
+    this.ancestryVerifications.set(key, verification);
+    return verification.promise;
+  }
+
+  /** Resolve protocol truth for a ref, lazily ancestry-verifying if needed. */
+  async resolveRef(refName: string): Promise<AuthoritativeRef | null> {
+    await this.ensureRefVerification(refName);
+    return this.state$.getValue().authoritativeRefs[refName] ?? null;
+  }
+
+  /** Change the shared display preference without affecting protocol truth. */
+  setViewSource(source: ViewSource | "default"): void {
+    const viewSource = source === "default" ? "authoritative" : source;
+    if (this.state$.getValue().viewSource === viewSource) return;
+    this.setState((prev) => ({ ...prev, viewSource }));
   }
 
   // -----------------------------------------------------------------------
@@ -1941,20 +2229,21 @@ export class GitGraspPool {
    *
    * @param batchSize - Commits per fetch (default 200, matches findMergeBase).
    * @param maxTotal  - Hard cap on total commits walked (default 5000).
+   * @param tipCommitId - Explicit effective default-branch tip. When omitted,
+   *   the pool resolves HEAD from its effective ref view.
    */
   async countCommitsBehind(
     mergeBase: string,
     signal: AbortSignal,
     batchSize = 200,
     maxTotal = 5000,
+    tipCommitId?: string,
   ): Promise<number | null> {
-    const info = this.getInfoRefs();
-    if (!info) return null;
-
-    const headRef = info.symrefs["HEAD"];
-    const defaultBranchCommit = headRef
-      ? info.refs[headRef]
-      : Object.values(info.refs)[0];
+    const info = tipCommitId ? null : this.getEffectiveInfoRefs();
+    const headRef = info?.symrefs["HEAD"];
+    const defaultBranchCommit =
+      tipCommitId ??
+      (headRef ? info?.refs[headRef] : info && Object.values(info.refs)[0]);
     if (!defaultBranchCommit) return null;
 
     if (defaultBranchCommit === mergeBase) return 0;
@@ -2149,8 +2438,8 @@ export class GitGraspPool {
    * take precedence; refs from all servers are merged so that refs only
    * present on some servers (e.g. GitHub-only branches) are visible.
    *
-   * Winner refs take precedence over other servers for the same ref name,
-   * so the displayed commit hash is always from the authoritative source.
+   * Winner refs take precedence in this raw union. Display consumers should
+   * use getEffectiveInfoRefs(), which overlays the pool's per-ref resolution.
    */
   getMergedInfoRefs(): InfoRefsUploadPackResponse | null {
     const winner = this.getInfoRefs();
@@ -2182,6 +2471,38 @@ export class GitGraspPool {
       ...base,
       refs: mergedRefs,
     };
+  }
+
+  /**
+   * Return the merged ref advertisement with the shared display preference
+   * applied per ref. Annotated tag object IDs are preserved while their
+   * peeled commit entries receive the effective commit.
+   */
+  getEffectiveInfoRefs(): InfoRefsUploadPackResponse | null {
+    const merged = this.getMergedInfoRefs();
+    if (!merged) return null;
+
+    const state = this.state$.getValue();
+    const refs = { ...merged.refs };
+    for (const [refName, resolved] of Object.entries(state.effectiveRefs)) {
+      if (refs[`${refName}^{}`]) {
+        refs[`${refName}^{}`] = resolved.commitId;
+      } else {
+        refs[refName] = resolved.commitId;
+      }
+    }
+
+    let symrefs = merged.symrefs;
+    if (state.viewSource !== "authoritative" && state.viewSource !== "nostr") {
+      symrefs =
+        this.urlManager.get(state.viewSource)?.state.infoRefs?.symrefs ??
+        symrefs;
+    } else {
+      const headRef = this.stateManager.currentState?.headRef;
+      if (headRef) symrefs = { ...symrefs, HEAD: headRef };
+    }
+
+    return { ...merged, refs, symrefs };
   }
 
   /**
@@ -2274,8 +2595,21 @@ export class GitGraspPool {
     const all = this.urlManager.getAll();
     const result: string[] = [];
 
+    // A concrete view override is a read-routing preference only. It never
+    // changes authoritativeRefs or a write target, and normal fallbacks still
+    // apply when the selected server lacks an object.
+    const viewSource = this.state$.getValue().viewSource;
+    const preferredViewUrl =
+      viewSource !== "authoritative" && viewSource !== "nostr"
+        ? viewSource
+        : null;
+    if (preferredViewUrl) {
+      const preferred = this.urlManager.get(preferredViewUrl);
+      if (preferred?.isUsable) result.push(preferredViewUrl);
+    }
+
     // Winner first
-    if (this.winnerUrl) {
+    if (this.winnerUrl && this.winnerUrl !== preferredViewUrl) {
       const winner = this.urlManager.get(this.winnerUrl);
       if (winner && winner.isUsable) {
         result.push(this.winnerUrl);
@@ -2284,7 +2618,12 @@ export class GitGraspPool {
 
     // Other ok URLs sorted by latency
     const okUrls = all
-      .filter((t) => t.status === "ok" && t.url !== this.winnerUrl)
+      .filter(
+        (t) =>
+          t.status === "ok" &&
+          t.url !== this.winnerUrl &&
+          t.url !== preferredViewUrl,
+      )
       .sort((a, b) => a.avgLatency - b.avgLatency);
     for (const t of okUrls) {
       result.push(t.url);
@@ -2292,7 +2631,10 @@ export class GitGraspPool {
 
     // Untested URLs
     const untested = all.filter(
-      (t) => t.status === "untested" && t.url !== this.winnerUrl,
+      (t) =>
+        t.status === "untested" &&
+        t.url !== this.winnerUrl &&
+        t.url !== preferredViewUrl,
     );
     for (const t of untested) {
       result.push(t.url);

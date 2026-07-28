@@ -11,6 +11,8 @@
 
 ### Changes
 
+- Centralize authoritative and user-selected Git ref resolution in the shared Git pool so code, commits, branches, tags, and ref selectors use one per-ref source decision.
+
 ## [3.1.0]
 
 ### Fixes

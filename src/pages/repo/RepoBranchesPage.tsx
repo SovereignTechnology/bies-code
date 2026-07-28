@@ -14,7 +14,7 @@
  * title — the same affordance as the popover ref selector's source row,
  * just promoted to a standalone trigger.
  */
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useSeoMeta } from "@unhead/react";
 import { useRepoContext } from "./RepoContext";
@@ -101,28 +101,8 @@ export default function RepoBranchesPage() {
   const repo = resolved?.repo;
   const repoOwnerProfile = useProfile(pubkey);
 
-  // "source" query param drives which server's branches/status are shown.
-  const selectedSource = searchParams.get("source") ?? "default";
-
-  const handleSourceChange = useCallback(
-    (src: string) => {
-      setSearchParams(
-        (prev) => {
-          const next = new URLSearchParams(prev);
-          if (src === "default") {
-            next.delete("source");
-          } else {
-            next.set("source", src);
-          }
-          return next;
-        },
-        { replace: false },
-      );
-    },
-    [setSearchParams],
-  );
-
   const { pool, poolState } = useGitPool(cloneUrls, {
+    headRef: repoState?.headRef,
     knownHeadCommit: repoState?.headCommitId,
     stateRefs: repoState?.refs,
     stateCreatedAt: repoState ? repoState.event.created_at : undefined,
@@ -133,26 +113,45 @@ export default function RepoBranchesPage() {
     !poolState.pulling &&
     poolState.warning?.kind === "state-behind-git";
 
-  // Use the same bootstrap-head-commit derivation as RepoCodePage so the
-  // explorer reports the merged ref view from `getMergedInfoRefs()` even
-  // when the Nostr state is ahead of the chosen server.
-  const userChoseNostr = selectedSource === "nostr";
-  const bootstrapHeadCommit =
-    stateBehindGit && !userChoseNostr ? undefined : repoState?.headCommitId;
+  const sourceParam = searchParams.get("source");
+  const selectedSource =
+    sourceParam ??
+    (poolState.viewSource === "authoritative"
+      ? "default"
+      : poolState.viewSource);
+
+  useEffect(() => {
+    if (pool && sourceParam) pool.setViewSource(sourceParam);
+  }, [pool, sourceParam]);
+
+  const handleSourceChange = useCallback(
+    (src: string) => {
+      pool?.setViewSource(src);
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          if (src === "default") next.delete("source");
+          else next.set("source", src);
+          return next;
+        },
+        { replace: false },
+      );
+    },
+    [pool, setSearchParams],
+  );
 
   const explorer = useGitExplorer(pool, poolState, {
-    knownHeadCommit: bootstrapHeadCommit,
     stateRefs: repoState?.refs,
   });
 
   const { branches, mismatchCount, effectiveSource } = useRefsWithStatus({
     refs: explorer.refs,
-    selectedSource,
     repoState,
     repoRelayEose,
     relayStateMap,
     stateBehindGit,
-    poolWarning: poolState.warning,
+    viewSource: poolState.viewSource,
+    effectiveRefs: poolState.effectiveRefs,
     winnerUrl: poolState.winnerUrl,
     urlStates: poolState.urls,
     cloneUrls,
@@ -186,11 +185,12 @@ export default function RepoBranchesPage() {
   // navigating into a branch keeps the user on the same server.
   const branchHref = useCallback(
     (name: string) => {
-      const source = searchParams.get("source");
       const base = `${basePath}/tree/${name}`;
-      return source ? `${base}?source=${encodeURIComponent(source)}` : base;
+      return selectedSource !== "default"
+        ? `${base}?source=${encodeURIComponent(selectedSource)}`
+        : base;
     },
-    [searchParams, basePath],
+    [selectedSource, basePath],
   );
 
   // -------------------------------------------------------------------------
@@ -264,7 +264,7 @@ export default function RepoBranchesPage() {
             poolWarning={poolState.warning}
             pool={pool}
             relayStateMap={relayStateMap}
-            winnerUrl={poolState.winnerUrl}
+            effectiveSource={effectiveSource}
           />
         </div>
       </div>

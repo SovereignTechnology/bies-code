@@ -11,7 +11,7 @@
  * Tags are sorted newest-version-first via `compareTagsNewestFirst`. There is
  * no ahead/behind computation — that's specific to branches.
  */
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useSeoMeta } from "@unhead/react";
 import { useRepoContext } from "./RepoContext";
@@ -44,27 +44,8 @@ export default function RepoTagsPage() {
   const repo = resolved?.repo;
   const repoOwnerProfile = useProfile(pubkey);
 
-  const selectedSource = searchParams.get("source") ?? "default";
-
-  const handleSourceChange = useCallback(
-    (src: string) => {
-      setSearchParams(
-        (prev) => {
-          const next = new URLSearchParams(prev);
-          if (src === "default") {
-            next.delete("source");
-          } else {
-            next.set("source", src);
-          }
-          return next;
-        },
-        { replace: false },
-      );
-    },
-    [setSearchParams],
-  );
-
   const { pool, poolState } = useGitPool(cloneUrls, {
+    headRef: repoState?.headRef,
     knownHeadCommit: repoState?.headCommitId,
     stateRefs: repoState?.refs,
     stateCreatedAt: repoState ? repoState.event.created_at : undefined,
@@ -75,25 +56,45 @@ export default function RepoTagsPage() {
     !poolState.pulling &&
     poolState.warning?.kind === "state-behind-git";
 
-  // Mirror RepoCodePage's bootstrap-head-commit logic so the merged ref view
-  // is consistent with the /code page even when the Nostr state is ahead.
-  const userChoseNostr = selectedSource === "nostr";
-  const bootstrapHeadCommit =
-    stateBehindGit && !userChoseNostr ? undefined : repoState?.headCommitId;
+  const sourceParam = searchParams.get("source");
+  const selectedSource =
+    sourceParam ??
+    (poolState.viewSource === "authoritative"
+      ? "default"
+      : poolState.viewSource);
+
+  useEffect(() => {
+    if (pool && sourceParam) pool.setViewSource(sourceParam);
+  }, [pool, sourceParam]);
+
+  const handleSourceChange = useCallback(
+    (src: string) => {
+      pool?.setViewSource(src);
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          if (src === "default") next.delete("source");
+          else next.set("source", src);
+          return next;
+        },
+        { replace: false },
+      );
+    },
+    [pool, setSearchParams],
+  );
 
   const explorer = useGitExplorer(pool, poolState, {
-    knownHeadCommit: bootstrapHeadCommit,
     stateRefs: repoState?.refs,
   });
 
   const { tags, mismatchCount, effectiveSource } = useRefsWithStatus({
     refs: explorer.refs,
-    selectedSource,
     repoState,
     repoRelayEose,
     relayStateMap,
     stateBehindGit,
-    poolWarning: poolState.warning,
+    viewSource: poolState.viewSource,
+    effectiveRefs: poolState.effectiveRefs,
     winnerUrl: poolState.winnerUrl,
     urlStates: poolState.urls,
     cloneUrls,
@@ -116,11 +117,12 @@ export default function RepoTagsPage() {
   // the same server the user is viewing.
   const tagHref = useCallback(
     (name: string) => {
-      const source = searchParams.get("source");
       const base = `${basePath}/tree/${name}`;
-      return source ? `${base}?source=${encodeURIComponent(source)}` : base;
+      return selectedSource !== "default"
+        ? `${base}?source=${encodeURIComponent(selectedSource)}`
+        : base;
     },
-    [searchParams, basePath],
+    [selectedSource, basePath],
   );
 
   // -------------------------------------------------------------------------
@@ -192,7 +194,7 @@ export default function RepoTagsPage() {
             poolWarning={poolState.warning}
             pool={pool}
             relayStateMap={relayStateMap}
-            winnerUrl={poolState.winnerUrl}
+            effectiveSource={effectiveSource}
           />
         </div>
       </div>
