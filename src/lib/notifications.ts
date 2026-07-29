@@ -87,6 +87,23 @@ export const REPO_STARS_PREFIX = "stars:";
 /** Prefix for repo-zap notification rootIds */
 export const REPO_ZAPS_PREFIX = "zaps:";
 
+/** Return the person responsible for a notification event. */
+export function getNotificationActorPubkey(event: NostrEvent): string {
+  // Zap receipts are published by a lightning service. The embedded zap
+  // request identifies the person who actually sent the zap.
+  return event.kind === ZAP_RECEIPT_KIND
+    ? (getZapSender(event) ?? event.pubkey)
+    : event.pubkey;
+}
+
+/** Check self-authorship using the notification actor rather than publisher. */
+export function isNotificationEventFromSelf(
+  event: NostrEvent,
+  selfPubkey: string,
+): boolean {
+  return getNotificationActorPubkey(event) === selfPubkey;
+}
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -191,6 +208,12 @@ export type NotificationItem =
   | ThreadNotificationItem
   | SocialNotificationItem
   | RepoZapNotificationItem;
+
+/** Unread event IDs that are still visible in the inbox (not archived). */
+export function getUnreadInboxEventIds(item: NotificationItem): string[] {
+  const archivedIds = new Set(item.archivedEventIds);
+  return item.unreadEventIds.filter((id) => !archivedIds.has(id));
+}
 
 // ---------------------------------------------------------------------------
 // Default state
@@ -589,7 +612,7 @@ export function groupNotifications(
   >();
 
   for (const ev of events) {
-    if (ev.pubkey === selfPubkey) continue;
+    if (isNotificationEventFromSelf(ev, selfPubkey)) continue;
 
     // Skip events pending async root-kind resolution (ambiguous zap receipts
     // with no #k tag). They are held back until confirmed as git-related.
@@ -673,7 +696,7 @@ export function groupSocialNotifications(
   // Build coord → events map in a single O(n) pass
   const byCoord = new Map<string, NostrEvent[]>();
   for (const ev of repoStarEvents) {
-    if (ev.pubkey === selfPubkey) continue;
+    if (isNotificationEventFromSelf(ev, selfPubkey)) continue;
     for (const [t, v] of ev.tags) {
       if (t === "a" && coordSet.has(v)) {
         const bucket = byCoord.get(v);
@@ -754,8 +777,7 @@ export function groupRepoZapNotifications(
   for (const ev of repoZapEvents) {
     // Zap receipts are published by a lightning service; their sender is the
     // author of the embedded zap request.
-    const senderPubkey = getZapSender(ev) ?? ev.pubkey;
-    if (senderPubkey === selfPubkey) continue;
+    if (isNotificationEventFromSelf(ev, selfPubkey)) continue;
 
     for (const [t, v] of ev.tags) {
       if (t === "a" && coordSet.has(v)) {
@@ -835,7 +857,7 @@ export function advanceReadCutoff(
   // Find oldest unread event (excluding self)
   let oldestUnreadAt = Infinity;
   for (const ev of events) {
-    if (ev.pubkey === selfPubkey) continue;
+    if (isNotificationEventFromSelf(ev, selfPubkey)) continue;
     if (!isEventRead(ev, state, readIdSet)) {
       if (ev.created_at < oldestUnreadAt) {
         oldestUnreadAt = ev.created_at;
@@ -878,7 +900,7 @@ export function advanceArchivedCutoff(
 
   let oldestUnarchivedAt = Infinity;
   for (const ev of events) {
-    if (ev.pubkey === selfPubkey) continue;
+    if (isNotificationEventFromSelf(ev, selfPubkey)) continue;
     if (!isEventArchived(ev, state, archivedIdSet)) {
       if (ev.created_at < oldestUnarchivedAt) {
         oldestUnarchivedAt = ev.created_at;

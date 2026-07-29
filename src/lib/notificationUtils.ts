@@ -4,7 +4,7 @@
  */
 
 import type { NostrEvent } from "nostr-tools";
-import { getZapAmount, getZapSender } from "applesauce-common/helpers";
+import { getZapAmount } from "applesauce-common/helpers";
 import type {
   NotificationItem,
   SocialNotificationItem,
@@ -22,7 +22,10 @@ import {
   PR_UPDATE_KIND,
   extractPatchSubject,
 } from "@/lib/nip34";
-import { ZAP_RECEIPT_KIND } from "@/lib/notifications";
+import {
+  getNotificationActorPubkey,
+  ZAP_RECEIPT_KIND,
+} from "@/lib/notifications";
 import { compactNumber } from "@/lib/utils";
 
 // ---------------------------------------------------------------------------
@@ -248,18 +251,9 @@ export function buildNotificationLink(
 export function getCommenters(item: NotificationItem): string[] {
   const pubkeys = new Set<string>();
   for (const ev of item.events) {
-    pubkeys.add(notificationActorPubkey(ev));
+    pubkeys.add(getNotificationActorPubkey(ev));
   }
   return Array.from(pubkeys);
-}
-
-/** Return the person responsible for a notification event. */
-function notificationActorPubkey(event: NostrEvent): string {
-  // Zap receipts are published by a lightning service. The embedded zap
-  // request identifies the person who actually sent the zap.
-  return event.kind === ZAP_RECEIPT_KIND
-    ? (getZapSender(event) ?? event.pubkey)
-    : event.pubkey;
 }
 
 export function getActorPubkeys(
@@ -268,7 +262,7 @@ export function getActorPubkeys(
   const seen = new Set<string>();
   const result: string[] = [];
   for (const ev of item.events) {
-    const actorPubkey = notificationActorPubkey(ev);
+    const actorPubkey = getNotificationActorPubkey(ev);
     if (!seen.has(actorPubkey)) {
       seen.add(actorPubkey);
       result.push(actorPubkey);

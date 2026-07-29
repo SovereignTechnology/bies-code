@@ -83,6 +83,11 @@ export interface ManualTimelineLoader {
    */
   historyReachedArchive$: BehaviorSubject<boolean>;
   /**
+   * Re-evaluate whether relay history has reached the current archive cutoff.
+   * Call after an unarchive action moves the cutoff backwards.
+   */
+  recheckArchiveCutoff: () => void;
+  /**
    * Fetch the next block of historical events going backwards.
    * Ignored if a block is already in-flight.
    * @param limit - events to request per relay this block
@@ -155,6 +160,9 @@ export function createManualTimelineLoader(
 
   function checkReachedArchive(): void {
     if (!opts.getArchiveCutoff) return;
+    // A partial block cannot establish relay exhaustion. The settle callback
+    // clears inFlight before checking again with the complete block counts.
+    if (inFlight) return;
     // Already reached — no need to re-evaluate
     if (historyReachedArchive$.getValue()) return;
 
@@ -271,6 +279,10 @@ export function createManualTimelineLoader(
     historyLoading$,
     historyHasMore$,
     historyReachedArchive$,
+    recheckArchiveCutoff: () => {
+      historyReachedArchive$.next(false);
+      checkReachedArchive();
+    },
     loadMore: (limit: number) => {
       if (inFlight) return;
       inFlight = true;

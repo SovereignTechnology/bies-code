@@ -6,6 +6,8 @@
 
 ### Features
 
+- Group notifications by user with expandable activity, bulk read/archive actions for each actor, and a dedicated unread inbox filter.
+
 ### Changes
 
 ## [3.1.1]
