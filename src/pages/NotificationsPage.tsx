@@ -1,17 +1,18 @@
-import { useState, useCallback, useEffect, useMemo } from "react";
+import { useState, useCallback, useEffect, useId, useMemo } from "react";
 import { useActiveAccount } from "applesauce-react/hooks";
 import { useSeoMeta } from "@unhead/react";
 import { useNotifications } from "@/hooks/useNotifications";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import { UserLink } from "@/components/UserAvatar";
+import { UserAvatar, UserName } from "@/components/UserAvatar";
 import { cn } from "@/lib/utils";
 import {
   Bell,
   Archive,
   ArchiveRestore,
   Inbox,
+  MailOpen,
   List,
   Check,
   ChevronLeft,
@@ -21,6 +22,7 @@ import {
   Loader2,
   Eye,
   EyeOff,
+  ChevronDown,
 } from "lucide-react";
 import {
   NotificationRow,
@@ -29,7 +31,10 @@ import {
   type ViewTab,
 } from "@/components/NotificationRow";
 import { useNotificationPageEssentials } from "@/hooks/useNotificationPageEssentials";
-import { getNotificationActorPubkey } from "@/lib/notifications";
+import {
+  getNotificationActorPubkey,
+  getUnreadInboxEventIds,
+} from "@/lib/notifications";
 import type {
   NotificationItem,
   ThreadNotificationItem,
@@ -39,6 +44,7 @@ import { getZapAmount } from "applesauce-common/helpers";
 import { useRelativeTime } from "@/hooks/useRelativeTime";
 
 const ITEMS_PER_PAGE = 10;
+const USER_ACTIVITY_PAGE_SIZE = 10;
 
 type GroupingMode = "root" | "user" | "activity";
 
@@ -48,6 +54,7 @@ interface UserNotificationGroup {
   unreadEventIds: string[];
   rootCount: number;
   latestActivity: number;
+  activities: Array<{ item: NotificationItem; event: NostrEvent }>;
 }
 
 type ActivityDisplayEntry =
@@ -80,14 +87,26 @@ export default function NotificationsPage() {
   // Filter items by current view
   const filteredItems = useMemo(() => {
     if (!items) return undefined;
-    switch (currentView) {
-      case "inbox":
-        return items.filter((item) => !item.archived);
-      case "archived":
-        return items.filter((item) => item.archived);
-      case "all":
-        return items;
-    }
+    if (currentView === "all") return items;
+
+    return items.flatMap((item) => {
+      const archivedIds = new Set(item.archivedEventIds);
+      const unreadInboxIds = new Set(getUnreadInboxEventIds(item));
+      const visibleEvents = item.events.filter((event) => {
+        switch (currentView) {
+          case "inbox":
+            return !archivedIds.has(event.id);
+          case "unread":
+            return unreadInboxIds.has(event.id);
+          case "archived":
+            return archivedIds.has(event.id);
+        }
+      });
+
+      return visibleEvents.length > 0
+        ? [notificationItemWithEvents(item, visibleEvents)]
+        : [];
+    });
   }, [items, currentView]);
 
   const displayEntries = useMemo<NotificationDisplayEntry[] | undefined>(() => {
@@ -104,6 +123,10 @@ export default function NotificationsPage() {
           unreadEventIds: Set<string>;
           rootIds: Set<string>;
           latestActivity: number;
+          activities: Map<
+            string,
+            { item: NotificationItem; event: NostrEvent }
+          >;
         }
       >();
 
@@ -116,6 +139,9 @@ export default function NotificationsPage() {
           const isVisible =
             currentView === "all" ||
             (currentView === "inbox" && !isArchived) ||
+            (currentView === "unread" &&
+              !isArchived &&
+              unreadIds.has(event.id)) ||
             (currentView === "archived" && isArchived);
           if (!isVisible) continue;
 
@@ -125,10 +151,12 @@ export default function NotificationsPage() {
             unreadEventIds: new Set<string>(),
             rootIds: new Set<string>(),
             latestActivity: 0,
+            activities: new Map(),
           };
           group.eventIds.add(event.id);
           if (unreadIds.has(event.id)) group.unreadEventIds.add(event.id);
           group.rootIds.add(item.rootId);
+          group.activities.set(event.id, { item, event });
           group.latestActivity = Math.max(
             group.latestActivity,
             event.created_at,
@@ -146,45 +174,45 @@ export default function NotificationsPage() {
             unreadEventIds: [...group.unreadEventIds],
             rootCount: group.rootIds.size,
             latestActivity: group.latestActivity,
+            activities: [...group.activities.values()].sort(
+              (a, b) => b.event.created_at - a.event.created_at,
+            ),
           },
         }))
         .sort((a, b) => b.group.latestActivity - a.group.latestActivity);
     }
 
     const entries = items.flatMap<ActivityDisplayEntry>((item) => {
-      // Repository stars remain repository-level notifications. Individual
-      // zaps, however, need to be visible as their own activity when grouping
-      // by root item is disabled.
-      if (item.kind === "repo-star") {
-        return filteredItems.includes(item) ? [{ type: "item", item }] : [];
-      }
-
       const archivedIds = new Set(item.archivedEventIds);
       const events = item.events.filter((event) => {
         const isArchived = archivedIds.has(event.id);
         return currentView === "inbox"
           ? !isArchived
-          : currentView === "archived"
-            ? isArchived
-            : true;
+          : currentView === "unread"
+            ? !isArchived && item.unreadEventIds.includes(event.id)
+            : currentView === "archived"
+              ? isArchived
+              : true;
       });
+
+      // Repository stars remain repository-level notifications, but only the
+      // events belonging to the active inbox filter are shown in that row.
+      if (item.kind === "repo-star") {
+        return events.length > 0
+          ? [
+              {
+                type: "item",
+                item: notificationItemWithEvents(item, events),
+              },
+            ]
+          : [];
+      }
 
       if (item.kind === "repo-zap") {
         return events.map((event) => ({
           type: "item",
           key: event.id,
-          item: {
-            ...item,
-            events: [event],
-            unread: item.unreadEventIds.includes(event.id),
-            archived: archivedIds.has(event.id),
-            archivedEventIds: archivedIds.has(event.id) ? [event.id] : [],
-            latestActivity: event.created_at,
-            unreadEventIds: item.unreadEventIds.includes(event.id)
-              ? [event.id]
-              : [],
-            totalSats: Math.floor((getZapAmount(event) ?? 0) / 1000),
-          },
+          item: singleEventItem(item, event),
         }));
       }
 
@@ -221,6 +249,14 @@ export default function NotificationsPage() {
     ) ?? [],
   );
 
+  const unreadInboxEventIds = useMemo(
+    () =>
+      items?.flatMap((item) => {
+        return getUnreadInboxEventIds(item);
+      }) ?? [],
+    [items],
+  );
+
   // Reset page when switching tabs
   const handleTabChange = useCallback((tab: ViewTab) => {
     setCurrentView(tab);
@@ -248,16 +284,22 @@ export default function NotificationsPage() {
   return (
     <div className="container max-w-screen-xl px-4 md:px-8 py-6">
       {/* Header */}
-      <div className="flex items-center justify-between mb-4">
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <h1 className="text-xl font-semibold tracking-tight">Notifications</h1>
 
         {/* Tabs */}
-        <div className="flex items-center gap-1 rounded-lg border border-border/60 bg-muted/30 p-0.5">
+        <div className="grid grid-cols-4 items-center gap-1 rounded-lg border border-border/60 bg-muted/30 p-0.5">
           <TabButton
             active={currentView === "inbox"}
             onClick={() => handleTabChange("inbox")}
             icon={Inbox}
             label="Inbox"
+          />
+          <TabButton
+            active={currentView === "unread"}
+            onClick={() => handleTabChange("unread")}
+            icon={MailOpen}
+            label="Unread"
             badge={unreadCount > 0 ? unreadCount : undefined}
           />
           <TabButton
@@ -313,7 +355,7 @@ export default function NotificationsPage() {
             </ToggleGroupItem>
           </ToggleGroup>
         </div>
-        {currentView === "inbox" &&
+        {(currentView === "inbox" || currentView === "unread") &&
           displayEntries &&
           displayEntries.length > 0 && (
             <div className="ml-auto flex items-center gap-2">
@@ -321,7 +363,11 @@ export default function NotificationsPage() {
                 variant="ghost"
                 size="sm"
                 className="h-7 text-xs text-muted-foreground hover:text-foreground"
-                onClick={actions.markAllAsRead}
+                onClick={
+                  currentView === "unread"
+                    ? () => actions.markEventsAsRead(unreadInboxEventIds)
+                    : actions.markAllAsRead
+                }
               >
                 <Check className="h-3 w-3 mr-1" />
                 Mark all read
@@ -330,7 +376,11 @@ export default function NotificationsPage() {
                 variant="ghost"
                 size="sm"
                 className="h-7 text-xs text-muted-foreground hover:text-foreground"
-                onClick={actions.markAllAsArchived}
+                onClick={
+                  currentView === "unread"
+                    ? () => actions.markEventsAsArchived(unreadInboxEventIds)
+                    : actions.markAllAsArchived
+                }
               >
                 <Archive className="h-3 w-3 mr-1" />
                 Archive all
@@ -359,6 +409,13 @@ export default function NotificationsPage() {
                   <p className="text-muted-foreground text-sm">
                     Your inbox is empty. Notifications appear when someone
                     interacts with your repositories.
+                  </p>
+                </>
+              ) : currentView === "unread" ? (
+                <>
+                  <MailOpen className="h-10 w-10 mx-auto text-muted-foreground/30" />
+                  <p className="text-muted-foreground text-sm">
+                    You have no unread notifications.
                   </p>
                 </>
               ) : currentView === "archived" ? (
@@ -395,6 +452,7 @@ export default function NotificationsPage() {
                   actions={actions}
                   currentView={currentView}
                   resolvedMap={resolvedMap}
+                  eventScoped={currentView !== "all"}
                 />
               ) : (
                 <NotificationActivityRow
@@ -412,12 +470,15 @@ export default function NotificationsPage() {
       </div>
 
       {/* History load-more / spinner */}
-      {/* On the inbox tab, hide load more once we've fetched all non-archived
-          events (reachedArchive). On archived/all tabs always show it so the
-          user can page through archived history. */}
+      {/* On the inbox/unread tabs, hide load more once we've fetched all
+          non-archived events (reachedArchive). On archived/all tabs always
+          show it so the user can page through archived history. */}
       {(history.loading ||
         (history.hasMore &&
-          !(currentView === "inbox" && history.reachedArchive))) && (
+          !(
+            (currentView === "inbox" || currentView === "unread") &&
+            history.reachedArchive
+          ))) && (
         <div className="flex justify-center mt-3">
           {history.loading ? (
             <div className="flex items-center gap-2 text-sm text-muted-foreground py-2">
@@ -511,6 +572,27 @@ function NotificationUserGroupRow({
   actions: ReturnType<typeof useNotifications>["actions"];
   currentView: ViewTab;
 }) {
+  const [expanded, setExpanded] = useState(false);
+  const [visibleActivityCount, setVisibleActivityCount] = useState(
+    USER_ACTIVITY_PAGE_SIZE,
+  );
+  const activityListId = useId();
+  const visibleActivities = useMemo(
+    () => group.activities.slice(0, visibleActivityCount),
+    [group.activities, visibleActivityCount],
+  );
+  const activityItems = useMemo(
+    () =>
+      expanded
+        ? [
+            ...new Map(
+              visibleActivities.map(({ item }) => [item.rootId, item]),
+            ).values(),
+          ]
+        : [],
+    [expanded, visibleActivities],
+  );
+  const resolvedMap = useNotificationPageEssentials(activityItems);
   const lastActive = useRelativeTime(group.latestActivity);
   const isUnread = group.unreadEventIds.length > 0;
   const notificationLabel =
@@ -520,76 +602,191 @@ function NotificationUserGroupRow({
   return (
     <li
       className={cn(
-        "flex min-w-0 items-center gap-3 border-l-2 px-3 py-3 transition-colors",
+        "min-w-0 border-l-2 transition-colors",
         isUnread ? "border-l-pink-500 bg-accent/30" : "border-l-transparent",
       )}
     >
-      <div className="min-w-0 flex-1">
-        <UserLink
-          pubkey={group.pubkey}
-          avatarSize="md"
-          className="min-w-0"
-          nameClassName="truncate text-sm"
-        />
-        <p className="mt-1 pl-10 text-xs text-muted-foreground">
-          {group.eventIds.length} {notificationLabel} across {group.rootCount}{" "}
-          {itemLabel} · active {lastActive}
-        </p>
+      <div className="flex min-w-0 items-center gap-2 px-2 py-2">
+        <button
+          type="button"
+          className="flex min-w-0 flex-1 items-center gap-2 rounded-md p-1 text-left transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          aria-expanded={expanded}
+          aria-controls={activityListId}
+          onClick={() => {
+            setExpanded((value) => !value);
+            if (expanded) setVisibleActivityCount(USER_ACTIVITY_PAGE_SIZE);
+          }}
+        >
+          {expanded ? (
+            <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+          ) : (
+            <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+          )}
+          <UserAvatar pubkey={group.pubkey} size="md" noHoverCard />
+          <span className="min-w-0 flex-1">
+            <UserName
+              pubkey={group.pubkey}
+              className="block truncate text-sm"
+              noHoverCard
+            />
+            <span className="mt-0.5 block text-xs text-muted-foreground">
+              {group.eventIds.length} {notificationLabel} across{" "}
+              {group.rootCount} {itemLabel} · active {lastActive}
+            </span>
+          </span>
+        </button>
+
+        <div className="flex shrink-0 items-center gap-1">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-8 px-2 text-xs"
+            onClick={() =>
+              isUnread
+                ? actions.markEventsAsRead(group.eventIds)
+                : actions.markEventsAsUnread(group.eventIds)
+            }
+            title={isUnread ? "Mark group as read" : "Mark group as unread"}
+          >
+            {isUnread ? (
+              <Eye className="h-3.5 w-3.5 sm:mr-1" />
+            ) : (
+              <EyeOff className="h-3.5 w-3.5 sm:mr-1" />
+            )}
+            <span className="hidden sm:inline">
+              {isUnread ? "Read" : "Unread"}
+            </span>
+            <span className="sr-only sm:hidden">
+              {isUnread ? "Mark group as read" : "Mark group as unread"}
+            </span>
+          </Button>
+          {(currentView === "inbox" || currentView === "unread") && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-8 px-2 text-xs"
+              onClick={() => actions.markEventsAsArchived(group.eventIds)}
+              title="Archive group"
+            >
+              <Archive className="h-3.5 w-3.5 sm:mr-1" />
+              <span className="hidden sm:inline">Archive</span>
+              <span className="sr-only sm:hidden">Archive group</span>
+            </Button>
+          )}
+          {currentView === "archived" && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-8 px-2 text-xs"
+              onClick={() => actions.markEventsAsUnarchived(group.eventIds)}
+              title="Move group to inbox"
+            >
+              <ArchiveRestore className="h-3.5 w-3.5 sm:mr-1" />
+              <span className="hidden sm:inline">Inbox</span>
+              <span className="sr-only sm:hidden">Move group to inbox</span>
+            </Button>
+          )}
+        </div>
       </div>
 
-      <div className="flex shrink-0 items-center gap-1">
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-8 px-2 text-xs"
-          onClick={() =>
-            isUnread
-              ? actions.markEventsAsRead(group.eventIds)
-              : actions.markEventsAsUnread(group.eventIds)
-          }
-          title={isUnread ? "Mark group as read" : "Mark group as unread"}
+      {expanded && (
+        <ul
+          id={activityListId}
+          className="divide-y divide-border/40 border-t border-border/40 bg-background/40 pl-3 sm:pl-6"
         >
-          {isUnread ? (
-            <Eye className="h-3.5 w-3.5 sm:mr-1" />
-          ) : (
-            <EyeOff className="h-3.5 w-3.5 sm:mr-1" />
+          {visibleActivities.map(({ item, event }) =>
+            item.kind === "thread" ? (
+              <NotificationActivityRow
+                key={event.id}
+                item={item}
+                event={event}
+                actions={actions}
+                currentView={currentView}
+                resolvedMap={resolvedMap}
+              />
+            ) : (
+              <NotificationRow
+                key={event.id}
+                item={singleEventItem(item, event)}
+                actions={actions}
+                currentView={currentView}
+                resolvedMap={resolvedMap}
+                compact
+              />
+            ),
           )}
-          <span className="hidden sm:inline">
-            {isUnread ? "Read" : "Unread"}
-          </span>
-          <span className="sr-only sm:hidden">
-            {isUnread ? "Mark group as read" : "Mark group as unread"}
-          </span>
-        </Button>
-        {currentView === "inbox" && (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-8 px-2 text-xs"
-            onClick={() => actions.markEventsAsArchived(group.eventIds)}
-            title="Archive group"
-          >
-            <Archive className="h-3.5 w-3.5 sm:mr-1" />
-            <span className="hidden sm:inline">Archive</span>
-            <span className="sr-only sm:hidden">Archive group</span>
-          </Button>
-        )}
-        {currentView === "archived" && (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-8 px-2 text-xs"
-            onClick={() => actions.markEventsAsUnarchived(group.eventIds)}
-            title="Move group to inbox"
-          >
-            <ArchiveRestore className="h-3.5 w-3.5 sm:mr-1" />
-            <span className="hidden sm:inline">Inbox</span>
-            <span className="sr-only sm:hidden">Move group to inbox</span>
-          </Button>
-        )}
-      </div>
+          {visibleActivityCount < group.activities.length && (
+            <li className="flex justify-center px-3 py-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 text-xs text-muted-foreground"
+                onClick={() =>
+                  setVisibleActivityCount((count) =>
+                    Math.min(
+                      group.activities.length,
+                      count + USER_ACTIVITY_PAGE_SIZE,
+                    ),
+                  )
+                }
+              >
+                Show{" "}
+                {Math.min(
+                  USER_ACTIVITY_PAGE_SIZE,
+                  group.activities.length - visibleActivityCount,
+                )}{" "}
+                more
+              </Button>
+            </li>
+          )}
+        </ul>
+      )}
     </li>
   );
+}
+
+function singleEventItem(
+  item: NotificationItem,
+  event: NostrEvent,
+): NotificationItem {
+  return notificationItemWithEvents(item, [event]);
+}
+
+function notificationItemWithEvents(
+  item: NotificationItem,
+  events: NostrEvent[],
+): NotificationItem {
+  const eventIds = new Set(events.map((event) => event.id));
+  const unreadEventIds = item.unreadEventIds.filter((id) => eventIds.has(id));
+  const archivedEventIds = item.archivedEventIds.filter((id) =>
+    eventIds.has(id),
+  );
+  const latestActivity = Math.max(...events.map((event) => event.created_at));
+  const state = {
+    events,
+    unread: unreadEventIds.length > 0,
+    archived: archivedEventIds.length === events.length,
+    archivedEventIds,
+    latestActivity,
+    unreadEventIds,
+  };
+
+  switch (item.kind) {
+    case "thread":
+      return { ...item, ...state };
+    case "repo-star":
+      return { ...item, ...state };
+    case "repo-zap":
+      return {
+        ...item,
+        ...state,
+        totalSats: events.reduce(
+          (total, event) =>
+            total + Math.floor((getZapAmount(event) ?? 0) / 1000),
+          0,
+        ),
+      };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -611,9 +808,11 @@ function TabButton({
 }) {
   return (
     <button
+      type="button"
       onClick={onClick}
+      aria-current={active ? "page" : undefined}
       className={cn(
-        "flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium transition-colors",
+        "flex items-center justify-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium transition-colors sm:px-3",
         active
           ? "bg-background text-foreground shadow-sm"
           : "text-muted-foreground hover:text-foreground",

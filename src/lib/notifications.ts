@@ -209,6 +209,12 @@ export type NotificationItem =
   | SocialNotificationItem
   | RepoZapNotificationItem;
 
+/** Unread event IDs that are still visible in the inbox (not archived). */
+export function getUnreadInboxEventIds(item: NotificationItem): string[] {
+  const archivedIds = new Set(item.archivedEventIds);
+  return item.unreadEventIds.filter((id) => !archivedIds.has(id));
+}
+
 // ---------------------------------------------------------------------------
 // Default state
 // ---------------------------------------------------------------------------

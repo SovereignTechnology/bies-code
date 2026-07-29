@@ -6,7 +6,7 @@
 
 ### Features
 
-- Group notifications by user with bulk read, unread, archive, and restore actions for each notification actor.
+- Group notifications by user with expandable activity, bulk read/archive actions for each actor, and a dedicated unread inbox filter.
 
 ### Changes
 

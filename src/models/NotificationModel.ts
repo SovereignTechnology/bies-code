@@ -31,6 +31,7 @@ import {
   groupNotifications,
   groupSocialNotifications,
   groupRepoZapNotifications,
+  getUnreadInboxEventIds,
   ZAP_RECEIPT_KIND,
   type NotificationItem,
   type NotificationReadState,
@@ -200,9 +201,9 @@ export function NotificationModel(
           ];
           allItems.sort((a, b) => b.latestActivity - a.latestActivity);
 
-          // Unread count = number of unread items that are NOT archived
+          // Count items with at least one unread event still in the inbox.
           const unreadCount = allItems.filter(
-            (item) => item.unread && !item.archived,
+            (item) => getUnreadInboxEventIds(item).length > 0,
           ).length;
 
           return { items: allItems, unreadCount };
