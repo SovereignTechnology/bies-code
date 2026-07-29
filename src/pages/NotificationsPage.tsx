@@ -4,11 +4,13 @@ import { useSeoMeta } from "@unhead/react";
 import { useNotifications } from "@/hooks/useNotifications";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Checkbox } from "@/components/ui/checkbox";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { UserLink } from "@/components/UserAvatar";
 import { cn } from "@/lib/utils";
 import {
   Bell,
   Archive,
+  ArchiveRestore,
   Inbox,
   List,
   Check,
@@ -17,6 +19,8 @@ import {
   ChevronsLeft,
   ChevronsRight,
   Loader2,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import {
   NotificationRow,
@@ -25,25 +29,41 @@ import {
   type ViewTab,
 } from "@/components/NotificationRow";
 import { useNotificationPageEssentials } from "@/hooks/useNotificationPageEssentials";
+import { getNotificationActorPubkey } from "@/lib/notifications";
 import type {
   NotificationItem,
   ThreadNotificationItem,
 } from "@/lib/notifications";
 import type { NostrEvent } from "nostr-tools";
 import { getZapAmount } from "applesauce-common/helpers";
+import { useRelativeTime } from "@/hooks/useRelativeTime";
 
 const ITEMS_PER_PAGE = 10;
 
-type NotificationDisplayEntry =
+type GroupingMode = "root" | "user" | "activity";
+
+interface UserNotificationGroup {
+  pubkey: string;
+  eventIds: string[];
+  unreadEventIds: string[];
+  rootCount: number;
+  latestActivity: number;
+}
+
+type ActivityDisplayEntry =
   | { type: "item"; item: NotificationItem; key?: string }
   | { type: "activity"; item: ThreadNotificationItem; event: NostrEvent };
+
+type NotificationDisplayEntry =
+  | ActivityDisplayEntry
+  | { type: "user"; group: UserNotificationGroup };
 
 export default function NotificationsPage() {
   const activeAccount = useActiveAccount();
   const { items, unreadCount, actions, history } = useNotifications();
   const [currentView, setCurrentView] = useState<ViewTab>("inbox");
   const [currentPage, setCurrentPage] = useState(1);
-  const [groupByRootItem, setGroupByRootItem] = useState(true);
+  const [groupingMode, setGroupingMode] = useState<GroupingMode>("root");
 
   useSeoMeta({
     title:
@@ -72,11 +92,66 @@ export default function NotificationsPage() {
 
   const displayEntries = useMemo<NotificationDisplayEntry[] | undefined>(() => {
     if (!items || !filteredItems) return undefined;
-    if (groupByRootItem) {
+    if (groupingMode === "root") {
       return filteredItems.map((item) => ({ type: "item", item }));
     }
 
-    const entries = items.flatMap<NotificationDisplayEntry>((item) => {
+    if (groupingMode === "user") {
+      const groups = new Map<
+        string,
+        {
+          eventIds: Set<string>;
+          unreadEventIds: Set<string>;
+          rootIds: Set<string>;
+          latestActivity: number;
+        }
+      >();
+
+      for (const item of items) {
+        const archivedIds = new Set(item.archivedEventIds);
+        const unreadIds = new Set(item.unreadEventIds);
+
+        for (const event of item.events) {
+          const isArchived = archivedIds.has(event.id);
+          const isVisible =
+            currentView === "all" ||
+            (currentView === "inbox" && !isArchived) ||
+            (currentView === "archived" && isArchived);
+          if (!isVisible) continue;
+
+          const actorPubkey = getNotificationActorPubkey(event);
+          const group = groups.get(actorPubkey) ?? {
+            eventIds: new Set<string>(),
+            unreadEventIds: new Set<string>(),
+            rootIds: new Set<string>(),
+            latestActivity: 0,
+          };
+          group.eventIds.add(event.id);
+          if (unreadIds.has(event.id)) group.unreadEventIds.add(event.id);
+          group.rootIds.add(item.rootId);
+          group.latestActivity = Math.max(
+            group.latestActivity,
+            event.created_at,
+          );
+          groups.set(actorPubkey, group);
+        }
+      }
+
+      return [...groups.entries()]
+        .map(([pubkey, group]) => ({
+          type: "user" as const,
+          group: {
+            pubkey,
+            eventIds: [...group.eventIds],
+            unreadEventIds: [...group.unreadEventIds],
+            rootCount: group.rootIds.size,
+            latestActivity: group.latestActivity,
+          },
+        }))
+        .sort((a, b) => b.group.latestActivity - a.group.latestActivity);
+    }
+
+    const entries = items.flatMap<ActivityDisplayEntry>((item) => {
       // Repository stars remain repository-level notifications. Individual
       // zaps, however, need to be visible as their own activity when grouping
       // by root item is disabled.
@@ -125,7 +200,7 @@ export default function NotificationsPage() {
         b.type === "activity" ? b.event.created_at : b.item.latestActivity;
       return bTime - aTime;
     });
-  }, [currentView, filteredItems, groupByRootItem, items]);
+  }, [currentView, filteredItems, groupingMode, items]);
 
   // Pagination — reset currentPage when the list shrinks past it (#10)
   const totalPages = displayEntries
@@ -141,7 +216,9 @@ export default function NotificationsPage() {
   );
 
   const resolvedMap = useNotificationPageEssentials(
-    pageEntries?.map((entry) => entry.item) ?? [],
+    pageEntries?.flatMap((entry) =>
+      entry.type === "user" ? [] : [entry.item],
+    ) ?? [],
   );
 
   // Reset page when switching tabs
@@ -150,8 +227,8 @@ export default function NotificationsPage() {
     setCurrentPage(1);
   }, []);
 
-  const handleGroupByRootItemChange = useCallback((checked: boolean) => {
-    setGroupByRootItem(checked);
+  const handleGroupingModeChange = useCallback((mode: GroupingMode) => {
+    setGroupingMode(mode);
     setCurrentPage(1);
   }, []);
 
@@ -199,18 +276,43 @@ export default function NotificationsPage() {
       </div>
 
       {/* View and bulk actions bar */}
-      <div className="mb-2 flex min-h-[32px] items-center justify-between gap-3">
-        <label
-          htmlFor="group-by-root-item"
-          className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground"
-        >
-          <Checkbox
-            id="group-by-root-item"
-            checked={groupByRootItem}
-            onCheckedChange={handleGroupByRootItemChange}
-          />
-          Group by root item
-        </label>
+      <div className="mb-2 flex min-h-9 flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-muted-foreground">Group by</span>
+          <ToggleGroup
+            type="single"
+            value={groupingMode}
+            onValueChange={(value) => {
+              if (value) handleGroupingModeChange(value as GroupingMode);
+            }}
+            variant="outline"
+            size="sm"
+            aria-label="Notification grouping"
+            className="gap-0"
+          >
+            <ToggleGroupItem
+              value="root"
+              aria-label="Group notifications by root item"
+              className="h-7 rounded-r-none px-2 text-xs"
+            >
+              Item
+            </ToggleGroupItem>
+            <ToggleGroupItem
+              value="user"
+              aria-label="Group notifications by user"
+              className="-ml-px h-7 rounded-none px-2 text-xs"
+            >
+              User
+            </ToggleGroupItem>
+            <ToggleGroupItem
+              value="activity"
+              aria-label="Show individual notification activity"
+              className="-ml-px h-7 rounded-l-none px-2 text-xs"
+            >
+              Activity
+            </ToggleGroupItem>
+          </ToggleGroup>
+        </div>
         {currentView === "inbox" &&
           displayEntries &&
           displayEntries.length > 0 && (
@@ -279,7 +381,14 @@ export default function NotificationsPage() {
         ) : (
           <ul className="divide-y divide-border/40">
             {pageEntries?.map((entry) =>
-              entry.type === "item" ? (
+              entry.type === "user" ? (
+                <NotificationUserGroupRow
+                  key={entry.group.pubkey}
+                  group={entry.group}
+                  actions={actions}
+                  currentView={currentView}
+                />
+              ) : entry.type === "item" ? (
                 <NotificationRow
                   key={entry.key ?? entry.item.rootId}
                   item={entry.item}
@@ -390,6 +499,96 @@ export default function NotificationsPage() {
         </div>
       )}
     </div>
+  );
+}
+
+function NotificationUserGroupRow({
+  group,
+  actions,
+  currentView,
+}: {
+  group: UserNotificationGroup;
+  actions: ReturnType<typeof useNotifications>["actions"];
+  currentView: ViewTab;
+}) {
+  const lastActive = useRelativeTime(group.latestActivity);
+  const isUnread = group.unreadEventIds.length > 0;
+  const notificationLabel =
+    group.eventIds.length === 1 ? "notification" : "notifications";
+  const itemLabel = group.rootCount === 1 ? "item" : "items";
+
+  return (
+    <li
+      className={cn(
+        "flex min-w-0 items-center gap-3 border-l-2 px-3 py-3 transition-colors",
+        isUnread ? "border-l-pink-500 bg-accent/30" : "border-l-transparent",
+      )}
+    >
+      <div className="min-w-0 flex-1">
+        <UserLink
+          pubkey={group.pubkey}
+          avatarSize="md"
+          className="min-w-0"
+          nameClassName="truncate text-sm"
+        />
+        <p className="mt-1 pl-10 text-xs text-muted-foreground">
+          {group.eventIds.length} {notificationLabel} across {group.rootCount}{" "}
+          {itemLabel} · active {lastActive}
+        </p>
+      </div>
+
+      <div className="flex shrink-0 items-center gap-1">
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-8 px-2 text-xs"
+          onClick={() =>
+            isUnread
+              ? actions.markEventsAsRead(group.eventIds)
+              : actions.markEventsAsUnread(group.eventIds)
+          }
+          title={isUnread ? "Mark group as read" : "Mark group as unread"}
+        >
+          {isUnread ? (
+            <Eye className="h-3.5 w-3.5 sm:mr-1" />
+          ) : (
+            <EyeOff className="h-3.5 w-3.5 sm:mr-1" />
+          )}
+          <span className="hidden sm:inline">
+            {isUnread ? "Read" : "Unread"}
+          </span>
+          <span className="sr-only sm:hidden">
+            {isUnread ? "Mark group as read" : "Mark group as unread"}
+          </span>
+        </Button>
+        {currentView === "inbox" && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-8 px-2 text-xs"
+            onClick={() => actions.markEventsAsArchived(group.eventIds)}
+            title="Archive group"
+          >
+            <Archive className="h-3.5 w-3.5 sm:mr-1" />
+            <span className="hidden sm:inline">Archive</span>
+            <span className="sr-only sm:hidden">Archive group</span>
+          </Button>
+        )}
+        {currentView === "archived" && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-8 px-2 text-xs"
+            onClick={() => actions.markEventsAsUnarchived(group.eventIds)}
+            title="Move group to inbox"
+          >
+            <ArchiveRestore className="h-3.5 w-3.5 sm:mr-1" />
+            <span className="hidden sm:inline">Inbox</span>
+            <span className="sr-only sm:hidden">Move group to inbox</span>
+          </Button>
+        )}
+      </div>
+    </li>
   );
 }
 

@@ -6,6 +6,8 @@
 
 ### Features
 
+- Group notifications by user with bulk read, unread, archive, and restore actions for each notification actor.
+
 ### Changes
 
 ## [3.1.1]
