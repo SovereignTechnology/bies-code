@@ -288,7 +288,7 @@ export default function NotificationsPage() {
         <h1 className="text-xl font-semibold tracking-tight">Notifications</h1>
 
         {/* Tabs */}
-        <div className="grid grid-cols-4 items-center gap-1 rounded-lg border border-border/60 bg-muted/30 p-0.5">
+        <div className="flex w-fit max-w-full items-center gap-1 rounded-lg border border-border/60 bg-muted/30 p-0.5">
           <TabButton
             active={currentView === "inbox"}
             onClick={() => handleTabChange("inbox")}

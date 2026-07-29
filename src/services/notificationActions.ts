@@ -120,17 +120,53 @@ function filterEventsForRootId(
   );
 }
 
-function filterEventsById(
-  allEvents: NostrEvent[],
+/**
+ * Resolve event-scoped actions by ID rather than assuming every displayed
+ * event is still matched by the broader notification filters. User and
+ * activity views can contain events loaded directly by ID, so intersecting
+ * only with getAllNotificationEvents() makes their buttons silently no-op.
+ *
+ * Merge selected events into allEvents so cutoff advancement can retain their
+ * explicit state IDs.
+ */
+function getEventActionContext(
+  entry: NotificationStoreEntry,
   eventIds: string[],
-  selfPubkey: string,
-): NostrEvent[] {
+  state: NotificationReadState,
+): { allEvents: NostrEvent[]; selectedEvents: NostrEvent[] } {
   const eventIdSet = new Set(eventIds);
-  return allEvents.filter(
+  const contextEventIds = new Set([...eventIdSet, ...state.ri, ...state.ai]);
+  const directlyLoadedEvents =
+    contextEventIds.size > 0
+      ? (
+          eventStore.getByFilters([
+            {
+              ids: [...contextEventIds],
+            },
+          ]) as NostrEvent[]
+        ).filter((event) => contextEventIds.has(event.id))
+      : [];
+  const selectedEvents = directlyLoadedEvents.filter(
     (event) =>
-      !isNotificationEventFromSelf(event, selfPubkey) &&
-      eventIdSet.has(event.id),
+      eventIdSet.has(event.id) &&
+      !isNotificationEventFromSelf(event, entry.pubkey),
   );
+  const allEventsById = new Map(
+    getAllNotificationEvents(entry).map((event) => [event.id, event]),
+  );
+  for (const event of directlyLoadedEvents) allEventsById.set(event.id, event);
+
+  return {
+    allEvents: [...allEventsById.values()],
+    selectedEvents,
+  };
+}
+
+function findSelectedEvent(
+  selectedEvents: NostrEvent[],
+  eventId: string,
+): NostrEvent | undefined {
+  return selectedEvents.find((event) => event.id === eventId);
 }
 
 export function actionMarkAsRead(
@@ -159,8 +195,11 @@ export function actionMarkEventsAsRead(
   eventIds: string[],
 ): void {
   updateReadState(entry, (prev) => {
-    const allEvents = getAllNotificationEvents(entry);
-    const selectedEvents = filterEventsById(allEvents, eventIds, entry.pubkey);
+    const { allEvents, selectedEvents } = getEventActionContext(
+      entry,
+      eventIds,
+      prev,
+    );
     const readIdSet = new Set(prev.ri);
     const newlyReadIds = selectedEvents
       .filter((event) => !isEventRead(event, prev, readIdSet))
@@ -183,12 +222,12 @@ export function actionMarkEventAsRead(
   eventId: string,
 ): void {
   updateReadState(entry, (prev) => {
-    const allEvents = getAllNotificationEvents(entry);
-    const event = allEvents.find(
-      (candidate) =>
-        candidate.id === eventId &&
-        !isNotificationEventFromSelf(candidate, entry.pubkey),
+    const { allEvents, selectedEvents } = getEventActionContext(
+      entry,
+      [eventId],
+      prev,
     );
+    const event = findSelectedEvent(selectedEvents, eventId);
     if (!event || isEventRead(event, prev, new Set(prev.ri))) return prev;
 
     const updated = { ...prev, ri: [...prev.ri, eventId] };
@@ -239,8 +278,11 @@ export function actionMarkEventsAsUnread(
   eventIds: string[],
 ): void {
   updateReadState(entry, (prev) => {
-    const allEvents = getAllNotificationEvents(entry);
-    const selectedEvents = filterEventsById(allEvents, eventIds, entry.pubkey);
+    const { allEvents, selectedEvents } = getEventActionContext(
+      entry,
+      eventIds,
+      prev,
+    );
     if (selectedEvents.length === 0) return prev;
 
     const selectedIds = new Set(selectedEvents.map((event) => event.id));
@@ -284,15 +326,15 @@ export function actionMarkAsArchived(
       .filter((ev) => !isEventArchived(ev, prev, archivedIdSet))
       .map((ev) => ev.id);
 
-    if (newlyArchivedIds.length === 0) return prev;
-
     let updated = { ...prev, ai: [...prev.ai, ...newlyArchivedIds] };
-    const archivedCutoff = advanceArchivedCutoff(
-      allEvents,
-      updated,
-      entry.pubkey,
-    );
-    updated = { ...updated, ...archivedCutoff };
+    if (newlyArchivedIds.length > 0) {
+      const archivedCutoff = advanceArchivedCutoff(
+        allEvents,
+        updated,
+        entry.pubkey,
+      );
+      updated = { ...updated, ...archivedCutoff };
+    }
 
     // Archived items are always read too
     const readIdSet = new Set(updated.ri);
@@ -305,7 +347,9 @@ export function actionMarkAsArchived(
       updated = { ...updated, ...readCutoff };
     }
 
-    return updated;
+    return newlyArchivedIds.length > 0 || newlyReadIds.length > 0
+      ? updated
+      : prev;
   });
 }
 
@@ -315,23 +359,28 @@ export function actionMarkEventsAsArchived(
   eventIds: string[],
 ): void {
   updateReadState(entry, (prev) => {
-    const allEvents = getAllNotificationEvents(entry);
-    const selectedEvents = filterEventsById(allEvents, eventIds, entry.pubkey);
+    const { allEvents, selectedEvents } = getEventActionContext(
+      entry,
+      eventIds,
+      prev,
+    );
+    if (selectedEvents.length === 0) return prev;
+
     const archivedIdSet = new Set(prev.ai);
     const newlyArchivedIds = selectedEvents
       .filter((event) => !isEventArchived(event, prev, archivedIdSet))
       .map((event) => event.id);
 
-    if (newlyArchivedIds.length === 0) return prev;
-
     let updated = {
       ...prev,
       ai: [...new Set([...prev.ai, ...newlyArchivedIds])],
     };
-    updated = {
-      ...updated,
-      ...advanceArchivedCutoff(allEvents, updated, entry.pubkey),
-    };
+    if (newlyArchivedIds.length > 0) {
+      updated = {
+        ...updated,
+        ...advanceArchivedCutoff(allEvents, updated, entry.pubkey),
+      };
+    }
 
     const readIdSet = new Set(updated.ri);
     const newlyReadIds = selectedEvents
@@ -348,7 +397,9 @@ export function actionMarkEventsAsArchived(
       };
     }
 
-    return updated;
+    return newlyArchivedIds.length > 0 || newlyReadIds.length > 0
+      ? updated
+      : prev;
   });
 }
 
@@ -358,23 +409,31 @@ export function actionMarkEventAsArchived(
   eventId: string,
 ): void {
   updateReadState(entry, (prev) => {
-    const allEvents = getAllNotificationEvents(entry);
-    const event = allEvents.find(
-      (candidate) =>
-        candidate.id === eventId &&
-        !isNotificationEventFromSelf(candidate, entry.pubkey),
+    const { allEvents, selectedEvents } = getEventActionContext(
+      entry,
+      [eventId],
+      prev,
     );
-    if (!event || isEventArchived(event, prev, new Set(prev.ai))) return prev;
+    const event = findSelectedEvent(selectedEvents, eventId);
+    if (!event) return prev;
 
-    let updated = { ...prev, ai: [...prev.ai, eventId] };
-    const archivedCutoff = advanceArchivedCutoff(
-      allEvents,
-      updated,
-      entry.pubkey,
-    );
-    updated = { ...updated, ...archivedCutoff };
+    const alreadyArchived = isEventArchived(event, prev, new Set(prev.ai));
+    const alreadyRead = isEventRead(event, prev, new Set(prev.ri));
+    if (alreadyArchived && alreadyRead) return prev;
 
-    if (!isEventRead(event, updated, new Set(updated.ri))) {
+    let updated = alreadyArchived
+      ? prev
+      : { ...prev, ai: [...prev.ai, eventId] };
+    if (!alreadyArchived) {
+      const archivedCutoff = advanceArchivedCutoff(
+        allEvents,
+        updated,
+        entry.pubkey,
+      );
+      updated = { ...updated, ...archivedCutoff };
+    }
+
+    if (!alreadyRead) {
       updated = { ...updated, ri: [...updated.ri, eventId] };
       const readCutoff = advanceReadCutoff(allEvents, updated, entry.pubkey);
       updated = { ...updated, ...readCutoff };
@@ -391,12 +450,12 @@ export function actionMarkEventAsUnarchived(
 ): void {
   let archiveCutoffLowered = false;
   updateReadState(entry, (prev) => {
-    const allEvents = getAllNotificationEvents(entry);
-    const event = allEvents.find(
-      (candidate) =>
-        candidate.id === eventId &&
-        !isNotificationEventFromSelf(candidate, entry.pubkey),
+    const { allEvents, selectedEvents } = getEventActionContext(
+      entry,
+      [eventId],
+      prev,
     );
+    const event = findSelectedEvent(selectedEvents, eventId);
     if (!event || !isEventArchived(event, prev, new Set(prev.ai))) return prev;
 
     let newAi = prev.ai.filter((id) => id !== eventId);
@@ -471,8 +530,11 @@ export function actionMarkEventsAsUnarchived(
 ): void {
   let archiveCutoffLowered = false;
   updateReadState(entry, (prev) => {
-    const allEvents = getAllNotificationEvents(entry);
-    const selectedEvents = filterEventsById(allEvents, eventIds, entry.pubkey);
+    const { allEvents, selectedEvents } = getEventActionContext(
+      entry,
+      eventIds,
+      prev,
+    );
     const archivedIdSet = new Set(prev.ai);
     const archivedEvents = selectedEvents.filter((event) =>
       isEventArchived(event, prev, archivedIdSet),
