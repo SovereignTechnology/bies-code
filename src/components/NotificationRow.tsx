@@ -9,7 +9,6 @@
 
 import { useMemo, type ReactNode } from "react";
 import { Link } from "react-router-dom";
-import { nip19 } from "nostr-tools";
 import { useActiveAccount } from "applesauce-react/hooks";
 import {
   CircleDot,
@@ -42,6 +41,7 @@ import {
   buildNotificationLink,
 } from "@/lib/notificationUtils";
 import { eventIdToNevent } from "@/lib/routeUtils";
+import { useDefaultRepoCoordPath } from "@/hooks/useRepoPath";
 import {
   COMMENT_KIND,
   ISSUE_KIND,
@@ -49,7 +49,6 @@ import {
   PATCH_KIND,
   PR_KIND,
   PR_UPDATE_KIND,
-  REPO_KIND,
 } from "@/lib/nip34";
 import { StatusIcon } from "@/components/StatusIcon";
 import { useRelativeTime } from "@/hooks/useRelativeTime";
@@ -66,25 +65,6 @@ import type {
 } from "@/lib/notifications";
 import type { ResolvedIssueLite } from "@/lib/nip34";
 import type { NostrEvent } from "nostr-tools";
-
-function repoCoordToNaddrPath(coord: string): string | undefined {
-  const [kind, pubkey, ...identifierParts] = coord.split(":");
-  const identifier = identifierParts.join(":");
-
-  if (
-    kind !== String(REPO_KIND) ||
-    !/^[0-9a-f]{64}$/.test(pubkey) ||
-    !identifier
-  ) {
-    return undefined;
-  }
-
-  return `/${nip19.naddrEncode({
-    kind: REPO_KIND,
-    pubkey,
-    identifier,
-  })}`;
-}
 
 function RepoNotificationLink({
   to,
@@ -536,7 +516,7 @@ function SocialNotificationRow({
     });
   }, [item]);
   const lastActive = useRelativeTime(item.latestActivity);
-  const linkPath = repoCoordToNaddrPath(item.repoCoord);
+  const linkPath = useDefaultRepoCoordPath(item.repoCoord);
   const singleEventId =
     item.events.length === 1 ? item.events[0]?.id : undefined;
   const scopedEventIds = eventScoped
@@ -727,7 +707,7 @@ function RepoZapNotificationRow({
 }) {
   const actorPubkeys = useMemo(() => getActorPubkeys(item), [item]);
   const lastActive = useRelativeTime(item.latestActivity);
-  const linkPath = repoCoordToNaddrPath(item.repoCoord);
+  const linkPath = useDefaultRepoCoordPath(item.repoCoord);
   const singleEventId =
     item.events.length === 1 ? item.events[0]?.id : undefined;
   const scopedEventIds = eventScoped

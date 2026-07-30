@@ -1,5 +1,9 @@
 import type { Observable } from "rxjs";
-import { computeMaintainerLeadership, type ResolvedRepo } from "@/lib/nip34";
+import {
+  computeMaintainerLeadership,
+  parseRepoCoordinate,
+  type ResolvedRepo,
+} from "@/lib/nip34";
 import { repoToPath } from "@/lib/routeUtils";
 import { RepositoryModel } from "@/models/RepositoryModel";
 import { use$ } from "./use$";
@@ -54,5 +58,45 @@ export function useDefaultRepoPath(repo: ResolvedRepo): string {
     leadMaintainer ?? routeRepo.selectedMaintainer,
     routeRepo.dTag,
     routeRepo.relays,
+  );
+}
+
+/**
+ * Build the default path for a raw repository coordinate.
+ *
+ * Used when a discovery surface has an `a` tag but not a ResolvedRepo. The
+ * shared RepositoryModel hydrates the graph, so repeated coordinates reuse the
+ * cached model and missing announcements are loaded through the batched store
+ * loader.
+ */
+export function useDefaultRepoCoordPath(
+  coordinate: string,
+): string | undefined {
+  const store = useEventStore();
+  const parsed = parseRepoCoordinate(coordinate);
+  const resolvedRepo = use$(() => {
+    if (!parsed) return undefined;
+    return store.model(
+      RepositoryModel,
+      parsed.pubkey,
+      parsed.identifier,
+    ) as unknown as Observable<ResolvedRepo | undefined>;
+  }, [store, parsed?.pubkey, parsed?.identifier]);
+  const leadMaintainer = resolvedRepo
+    ? computeMaintainerLeadership(
+        resolvedRepo.confirmedMaintainers,
+        resolvedRepo.maintainerEdges,
+      ).leadMaintainer
+    : undefined;
+  const routePubkey = leadMaintainer ?? parsed?.pubkey ?? "";
+  const verifiedNip05 = useVerifiedNip05(routePubkey);
+
+  if (!parsed) return undefined;
+
+  return repoToPath(
+    routePubkey,
+    parsed.identifier,
+    resolvedRepo?.relays ?? [],
+    verifiedNip05,
   );
 }
