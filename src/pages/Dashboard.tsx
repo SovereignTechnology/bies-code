@@ -10,7 +10,6 @@
  */
 
 import { Link } from "react-router-dom";
-import { nip19 } from "nostr-tools";
 import {
   Bell,
   Plus,
@@ -41,6 +40,7 @@ import { useUserProfileSubscription } from "@/hooks/useUserProfileSubscription";
 import { useUserPath } from "@/hooks/useUserPath";
 import { useActiveAccount } from "applesauce-react/hooks";
 import { useProfile } from "@/hooks/useProfile";
+import { useDefaultRepoPath } from "@/hooks/useRepoPath";
 
 import { useState, useMemo } from "react";
 import type { ResolvedRepo } from "@/lib/nip34";
@@ -88,8 +88,7 @@ function RepoListItem({
   isPinned?: boolean;
   hideAuthor?: boolean;
 }) {
-  const npub = nip19.npubEncode(repo.selectedMaintainer);
-  const repoPath = `/${npub}/${repo.dTag}`;
+  const repoPath = useDefaultRepoPath(repo);
   const name = repo.name || repo.dTag;
 
   return (

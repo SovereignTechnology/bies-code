@@ -27,7 +27,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { useRepositorySearch } from "@/hooks/useRepositorySearch";
-import { useRepoPath } from "@/hooks/useRepoPath";
+import { useDefaultRepoPath } from "@/hooks/useRepoPath";
 import { UserLink } from "@/components/UserAvatar";
 import { formatDistanceToNow } from "date-fns";
 import type { ResolvedRepo } from "@/lib/nip34";
@@ -37,7 +37,7 @@ import type { ResolvedRepo } from "@/lib/nip34";
 // ---------------------------------------------------------------------------
 
 function FeaturedRepoCard({ repo }: { repo: ResolvedRepo }) {
-  const repoPath = useRepoPath(repo.selectedMaintainer, repo.dTag, repo.relays);
+  const repoPath = useDefaultRepoPath(repo);
   const timeAgo = formatDistanceToNow(new Date(repo.updatedAt * 1000), {
     addSuffix: true,
   });

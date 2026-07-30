@@ -13,7 +13,7 @@ import { useUserGitAuthorFollows } from "@/hooks/useUserGitAuthorFollows";
 import { useUserStarredRepos } from "@/hooks/useUserStarredRepos";
 import { useUserActivity } from "@/hooks/useUserActivity";
 import { usePrefetchNip05 } from "@/hooks/usePrefetchNip05";
-import { useRepoPath } from "@/hooks/useRepoPath";
+import { useDefaultRepoPath } from "@/hooks/useRepoPath";
 import { ActivityFeed } from "@/components/ActivityFeed";
 import { useIsFollowing } from "@/hooks/useIsFollowing";
 import { useIsGitAuthorFollowing } from "@/hooks/useIsGitAuthorFollowing";
@@ -1079,7 +1079,7 @@ function PinnedRepoCard({
   isDragging,
   dragHandleProps,
 }: PinnedRepoCardProps) {
-  const repoPath = useRepoPath(repo.selectedMaintainer, repo.dTag, repo.relays);
+  const repoPath = useDefaultRepoPath(repo);
   const navigate = useNavigate();
   const { pinRepo, unpinRepo, pending } = useRobustPinnedRepoActions();
   const { toast } = useToast();
@@ -1242,7 +1242,7 @@ function UserRepoCard({
   showPinControl = false,
   compact = false,
 }: UserRepoCardProps) {
-  const repoPath = useRepoPath(repo.selectedMaintainer, repo.dTag, repo.relays);
+  const repoPath = useDefaultRepoPath(repo);
   const navigate = useNavigate();
   const timeAgo = formatDistanceToNow(new Date(repo.updatedAt * 1000), {
     addSuffix: true,

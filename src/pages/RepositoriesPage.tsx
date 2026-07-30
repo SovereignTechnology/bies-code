@@ -4,7 +4,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { useSeoMeta } from "@unhead/react";
 import { useRepositorySearch } from "@/hooks/useRepositorySearch";
 import type { RelayQueryStatus } from "@/hooks/useRepositorySearch";
-import { useRepoPath } from "@/hooks/useRepoPath";
+import { useDefaultRepoPath } from "@/hooks/useRepoPath";
 import { usePrefetchNip05 } from "@/hooks/usePrefetchNip05";
 import { UserLink } from "@/components/UserAvatar";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -262,7 +262,7 @@ function getVisibleMaintainers(repo: ResolvedRepo): string[] {
 }
 
 function RepoCard({ repo, isUserMatch }: RepoCardProps) {
-  const repoPath = useRepoPath(repo.selectedMaintainer, repo.dTag, repo.relays);
+  const repoPath = useDefaultRepoPath(repo);
   const visibleMaintainers = getVisibleMaintainers(repo);
   const timeAgo = formatDistanceToNow(new Date(repo.updatedAt * 1000), {
     addSuffix: true,

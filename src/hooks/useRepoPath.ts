@@ -1,4 +1,9 @@
+import type { Observable } from "rxjs";
+import { computeMaintainerLeadership, type ResolvedRepo } from "@/lib/nip34";
 import { repoToPath } from "@/lib/routeUtils";
+import { RepositoryModel } from "@/models/RepositoryModel";
+import { use$ } from "./use$";
+import { useEventStore } from "./useEventStore";
 import { useVerifiedNip05 } from "./useVerifiedNip05";
 
 /**
@@ -21,4 +26,33 @@ export function useRepoPath(
 ): string {
   const verifiedNip05 = useVerifiedNip05(pubkey);
   return repoToPath(pubkey, repoId, relays, verifiedNip05);
+}
+
+/**
+ * Build the default path for a discovered repository.
+ *
+ * Discovery links prefer the unique lead maintainer once the recursive graph
+ * is available. Explicit maintainer routes continue to use useRepoPath
+ * directly so navigating to a specific maintainer's coordinate is preserved.
+ */
+export function useDefaultRepoPath(repo: ResolvedRepo): string {
+  const store = useEventStore();
+  const resolvedRepo = use$(() => {
+    return store.model(
+      RepositoryModel,
+      repo.selectedMaintainer,
+      repo.dTag,
+    ) as unknown as Observable<ResolvedRepo | undefined>;
+  }, [store, repo.selectedMaintainer, repo.dTag]);
+  const routeRepo = resolvedRepo ?? repo;
+  const leadMaintainer = computeMaintainerLeadership(
+    routeRepo.confirmedMaintainers,
+    routeRepo.maintainerEdges,
+  ).leadMaintainer;
+
+  return useRepoPath(
+    leadMaintainer ?? routeRepo.selectedMaintainer,
+    routeRepo.dTag,
+    routeRepo.relays,
+  );
 }
