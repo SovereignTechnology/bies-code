@@ -10,11 +10,14 @@ import { useEffect, useMemo, useState } from "react";
 import { catchError, filter, map, of, startWith, tap } from "rxjs";
 import { eventStore, pool } from "../services/nostr";
 import {
+  computeMaintainerLeadership,
   REPO_KIND,
   ISSUE_KIND,
   PATCH_KIND,
   PR_KIND,
   PR_UPDATE_KIND,
+  repoCoordinate,
+  resolveChain,
 } from "../lib/nip34";
 import {
   eventIdToNevent,
@@ -138,6 +141,30 @@ function firstCoordWithAnnouncement(
   return coords.find((coord) => announced.has(coord));
 }
 
+function preferredRepoCoord(
+  coords: string[],
+  announcements: NostrEvent[],
+): string | undefined {
+  const fallbackCoord = firstCoordWithAnnouncement(coords, announcements);
+  if (!fallbackCoord) return undefined;
+
+  const fallback = parseRepoCoord(fallbackCoord);
+  if (!fallback) return fallbackCoord;
+
+  const repo = resolveChain(announcements, fallback.pubkey, fallback.dTag);
+  if (!repo) return fallbackCoord;
+
+  const leadMaintainer = computeMaintainerLeadership(
+    repo.confirmedMaintainers,
+    repo.maintainerEdges,
+  ).leadMaintainer;
+
+  if (!leadMaintainer) return fallbackCoord;
+
+  const leadCoordinate = repoCoordinate(leadMaintainer, fallback.dTag);
+  return coords.includes(leadCoordinate) ? leadCoordinate : fallbackCoord;
+}
+
 /**
  * Redirect component that resolves a repo coordinate to a path (with NIP-05
  * preference) and navigates to the target sub-path.
@@ -236,7 +263,7 @@ function RepoCoordsRedirect({
       .timeline(filters)
       .pipe(
         map((events) =>
-          firstCoordWithAnnouncement(
+          preferredRepoCoord(
             candidateCoords,
             events as unknown as NostrEvent[],
           ),
@@ -244,9 +271,7 @@ function RepoCoordsRedirect({
       ) as Observable<string | undefined>;
   }, [coordsKey]);
 
-  const primaryCoord = candidateCoords[0];
-  const canRedirect =
-    bestCoord && (bestCoord === primaryCoord || lookupComplete);
+  const canRedirect = bestCoord && lookupComplete;
 
   if (canRedirect) {
     return (
