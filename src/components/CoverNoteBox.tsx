@@ -74,7 +74,8 @@ export function CoverNoteBox({
   const { name: displayName } = useUserDisplayName(account?.pubkey ?? "");
   const initials = displayName.slice(0, 2).toUpperCase() || "?";
 
-  const showToggle = focused || hasPreviewableContent(body);
+  const showToggle =
+    activeTab === "preview" || focused || hasPreviewableContent(body);
 
   const handleUploadedTags = useCallback((tags: Nip94Tags) => {
     setUploadedTagGroups((prev) => [...prev, tags]);
@@ -172,7 +173,7 @@ export function CoverNoteBox({
           />
 
           <div className="flex items-center gap-2">
-            {/* Attach + Write/Preview — visible on focus or when there is content */}
+            {/* Keep Write available whenever Preview is active so the editor cannot get stranded */}
             {showToggle && (
               <>
                 <button

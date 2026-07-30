@@ -315,7 +315,7 @@ export function CreateIssueForm({
             )}
           </button>
 
-          {hasPreviewableContent(content) && (
+          {(activeTab === "preview" || hasPreviewableContent(content)) && (
             <div className="flex items-center gap-0.5">
               {(["write", "preview"] as const).map((tab) => (
                 <button

@@ -141,7 +141,7 @@ function InlineComposer({
   const { name: displayName } = useUserDisplayName(account?.pubkey ?? "");
   const initials = displayName.slice(0, 2).toUpperCase() || "?";
 
-  const showToggle = hasPreviewableContent(body);
+  const showToggle = activeTab === "preview" || hasPreviewableContent(body);
 
   const submitComment = useCallback(async () => {
     const trimmed = body.trim();
@@ -225,7 +225,7 @@ function InlineComposer({
           />
 
           <div className="flex items-center gap-2">
-            {/* Write / Preview toggle — only when there's previewable content */}
+            {/* Keep Write available whenever Preview is active so the editor cannot get stranded */}
             {showToggle && (
               <div className="flex items-center gap-0.5">
                 {(["write", "preview"] as const).map((tab) => (

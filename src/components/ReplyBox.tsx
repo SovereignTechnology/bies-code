@@ -106,7 +106,8 @@ export function ReplyBox({
 
   const initials = displayName.slice(0, 2).toUpperCase() || "?";
 
-  const showToggle = focused || hasPreviewableContent(body);
+  const showToggle =
+    activeTab === "preview" || focused || hasPreviewableContent(body);
 
   // The applesauce CommentBlueprint takes the immediate parent event.
   // For a top-level comment that's the root; for a reply it's the comment.
@@ -264,7 +265,7 @@ export function ReplyBox({
         />
 
         <div className="flex flex-wrap items-center gap-2">
-          {/* Attach + Write/Preview — visible on focus or when there is content */}
+          {/* Keep Write available whenever Preview is active so the editor cannot get stranded */}
           {showToggle && (
             <>
               <button
