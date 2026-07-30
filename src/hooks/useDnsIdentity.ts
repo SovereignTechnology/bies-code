@@ -5,6 +5,26 @@ import { dnsIdentityLoader, nip05WarmupReady } from "@/services/nostr";
 
 const RESOLVE_TIMEOUT_MS = 5_000;
 
+/**
+ * Namecoin `.bit` NIP-05 opt-in.
+ *
+ * A NIP-05 domain that ends in `.bit` is a Namecoin identifier, not
+ * a DNS one — there is no DNS root that answers for `.bit`. We check
+ * this cheaply with an inline substring test (no import cost) and,
+ * on a hit, route the lookup through the lazy Namecoin resolver.
+ *
+ * This is one of the two integration points the gitworkshop review
+ * asked for: a URL / identifier ending in `.bit` counts as an
+ * explicit opt-in, so `resolveNamecoinLazily` is only ever pulled in
+ * on demand. Everything else in this hook still uses the standard
+ * DNS resolver.
+ */
+function isDotBitNip05(nip05: string): boolean {
+  const atIdx = nip05.indexOf("@");
+  const domain = atIdx === -1 ? nip05 : nip05.slice(atIdx + 1);
+  return domain.toLowerCase().endsWith(".bit");
+}
+
 export type DnsIdentityState =
   | { status: "loading" }
   | { status: "found"; pubkey: string; relays: string[] }
@@ -57,6 +77,9 @@ export function useDnsIdentity(nip05: string | undefined): DnsIdentityState {
     if (!nip05) return { status: "loading" };
     const parsed = parseNip05(nip05);
     if (!parsed) return { status: "loading" };
+    // `.bit` names never hit the DNS loader; keep the initial state as
+    // `loading` and let the effect below route to Namecoin resolution.
+    if (isDotBitNip05(nip05)) return { status: "loading" };
     const cached = dnsIdentityLoader.getIdentity(parsed.name, parsed.domain);
     return cached ? cachedIdentityToState(cached) : { status: "loading" };
   });
@@ -76,6 +99,61 @@ export function useDnsIdentity(nip05: string | undefined): DnsIdentityState {
     const { name, domain } = parsed;
 
     let cancelled = false;
+
+    // ------------------------------------------------------------
+    // Namecoin `.bit` short-circuit — opt-in path.
+    //
+    // The identifier itself carries the opt-in signal (`.bit` TLD),
+    // so lazy-load the Namecoin resolver and skip the DNS path
+    // entirely. Matches the gitworkshop review bullet: "same
+    // client-side resolver for both search and direct repository URLs".
+    // ------------------------------------------------------------
+    if (domain.toLowerCase().endsWith(".bit")) {
+      // Namecoin `.bit` records use the same `_` root convention as
+      // NIP-05 to mean "the record for the bare domain". Rebuild the
+      // identifier in the form the resolver accepts.
+      const bareDomain = domain.slice(0, -".bit".length);
+      const identifier =
+        name === "_" ? `${bareDomain}.bit` : `${name}@${bareDomain}.bit`;
+      void import(
+        /* webpackChunkName: "namecoin-resolver" */ "@/lib/namecoin/lazy"
+      )
+        .then(({ resolveNamecoinLazily }) => resolveNamecoinLazily(identifier))
+        .then((outcome) => {
+          if (cancelled) return;
+          if (outcome.status === "resolved") {
+            setState({
+              status: "found",
+              pubkey: outcome.result.pubkey,
+              relays: outcome.result.relays ?? [],
+            });
+          } else if (outcome.status === "not-found") {
+            setState({ status: "not-found" });
+          } else {
+            // `unavailable` — map onto the existing `error/network`
+            // shape so downstream Nip05ResolveError renders a
+            // "resolver offline" style message rather than the
+            // more definitive not-found page.
+            setState({
+              status: "error",
+              reason: "network",
+              message:
+                "Namecoin resolver unavailable — could not reach any ElectrumX server.",
+            });
+          }
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setState({
+            status: "error",
+            reason: "network",
+            message: "Namecoin resolver unavailable (module load failed).",
+          });
+        });
+      return () => {
+        cancelled = true;
+      };
+    }
 
     // Await the IDB warmup before checking the in-memory cache. On a fresh
     // page load the warmup is async; if the user navigates to a NIP-05 repo

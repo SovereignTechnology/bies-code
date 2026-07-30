@@ -63,6 +63,10 @@ import {
   resilientRequest,
 } from "@/lib/resilientSubscription";
 import { decodePubkeyIdentifier } from "@/lib/routeUtils";
+import {
+  useNamecoinSearchResolution,
+  type NamecoinSearchResolution,
+} from "./useNamecoinSearchResolution";
 import { rankProfileSearchCandidates } from "@/lib/profileSearchRanking";
 import { RepositoryModel } from "@/models/RepositoryModel";
 
@@ -131,6 +135,27 @@ export interface UseRepositorySearchResult {
    * Empty outside non-empty text searches.
    */
   profileRelayStatuses: Record<string, RelayQueryStatus>;
+  /**
+   * Namecoin `.bit` / `d/` / `id/` resolution state.
+   *
+   * The whole Namecoin resolver is behind a dynamic `import()`, so the
+   * heavy `src/lib/namecoin/` module (ElectrumX transport, script
+   * builders, ifa-0001 import walker) only lands in the browser when a
+   * user actually types a `.bit` / `d/` / `id/` query. Non-Namecoin
+   * searches never fetch the chunk.
+   *
+   * Status semantics:
+   * - `idle`        — query is not a Namecoin identifier.
+   * - `resolving`   — ElectrumX lookup in flight.
+   * - `resolved`    — pubkey is set, repos have been fanned out.
+   * - `not-found`   — name definitively does not resolve to a Nostr
+   *                   pubkey (missing / expired / no `nostr` field).
+   * - `unavailable` — every ElectrumX server was unreachable; the
+   *                   answer is transient and the user should be told
+   *                   the resolver is offline rather than the name is
+   *                   bad. Explicit request from the gitworkshop review.
+   */
+  namecoin: NamecoinSearchResolution;
 }
 
 /**
@@ -178,6 +203,17 @@ export function useRepositorySearch(
   const pubkeyHexFromQuery = isSearchMode
     ? decodePubkeyIdentifier(trimmedQuery)
     : undefined;
+
+  // Namecoin `.bit` / `d/` / `id/` resolution.
+  //
+  // The identifier itself is the opt-in signal (per the gitworkshop
+  // review), so this hook is the single site where Namecoin search
+  // resolution enters the search pipeline. `isNamecoinIdentifier` is a
+  // tiny synchronous string check (no bundle cost); the heavy resolver
+  // is dynamically imported inside the hook only when the check hits.
+  const namecoin = useNamecoinSearchResolution(trimmedQuery);
+  const namecoinResolvedPubkey =
+    namecoin.status === "resolved" ? namecoin.pubkey : undefined;
 
   // ── Shared state ───────────────────────────────────────────────────────────
 
@@ -710,6 +746,50 @@ export function useRepositorySearch(
           },
         });
       startUserRepoFetch([pubkeyHexFromQuery]);
+    } else if (namecoin.isNamecoinQuery) {
+      // Namecoin `.bit` / `d/` / `id/` short-circuit.
+      //
+      // NIP-50 `search:` cannot match a Namecoin identifier for the
+      // same reason it cannot match a pubkey — the resolved pubkey
+      // lives on the Namecoin blockchain, not in any kind:0 content
+      // blob. The profile-relay path is therefore skipped entirely;
+      // instead we wait for the lazy resolver (kicked off by
+      // `useNamecoinSearchResolution` at the top of the hook), then
+      // fan out repos and profile fetches for the resolved author.
+      //
+      // The direct repo NIP-50 REQ above still runs so a coincidental
+      // `.bit` string sitting in a repo's content can still surface.
+      profileStatusTrackingFinished = true;
+      if (namecoinResolvedPubkey) {
+        dispatchedAuthors.add(namecoinResolvedPubkey);
+        setMatchedUserPubkeys(new Set([namecoinResolvedPubkey]));
+        const profileRelays = Array.from(
+          new Set([...PROFILE_SEARCH_RELAYS, ...relays]),
+        );
+        userSub = resilientRequest(pool, profileRelays, [
+          { kinds: [0], authors: [namecoinResolvedPubkey] } as Filter,
+        ])
+          .pipe(takeUntil(timer(PROFILE_SEARCH_TIMEOUT_MS)))
+          .subscribe({
+            next: (msg) => {
+              if (msg === "EOSE") return;
+              eventStore.add(msg as NostrEvent);
+            },
+          });
+        startUserRepoFetch([namecoinResolvedPubkey]);
+      } else if (
+        namecoin.status === "not-found" ||
+        namecoin.status === "unavailable"
+      ) {
+        // Terminal without a pubkey. Nothing more to fan out; the
+        // direct-repo REQ still drives clearInitialLoading().
+        finishUserPath();
+      }
+      // While `namecoin.status === "resolving"` we intentionally hold
+      // the user-path pending. The effect re-runs when the status
+      // transitions (via the dep on `namecoinResolvedPubkey` and
+      // `namecoin.status`), so the resolved branch above will fire
+      // on the next pass.
     } else {
       const initialProfileStatuses = Object.fromEntries(
         PROFILE_SEARCH_RELAYS.map((relay) => [
@@ -775,6 +855,12 @@ export function useRepositorySearch(
     relayKey,
     isSearchMode,
     pubkeyHexFromQuery,
+    // Namecoin resolution runs asynchronously off the query string.
+    // Both the resolved pubkey and the terminal status matter here —
+    // the effect must re-fan out once resolution completes.
+    namecoin.isNamecoinQuery,
+    namecoin.status,
+    namecoinResolvedPubkey,
     accountPubkey,
     gitFollowKey,
     socialFollowKey,
@@ -815,6 +901,7 @@ export function useRepositorySearch(
       matchedUserPubkeys,
       relayStatuses,
       profileRelayStatuses,
+      namecoin,
     };
   }
 
@@ -826,5 +913,6 @@ export function useRepositorySearch(
     matchedUserPubkeys: new Set(),
     relayStatuses,
     profileRelayStatuses: {},
+    namecoin: { isNamecoinQuery: false, status: "idle" },
   };
 }
