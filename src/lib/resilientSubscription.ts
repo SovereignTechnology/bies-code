@@ -150,6 +150,11 @@ export interface ResilientSubscriptionOptions {
    */
   onRelaySettle?: (relay: string) => void;
   /**
+   * Called only when an actual EOSE message is received from a relay.
+   * Unlike onRelaySettle, this is not called for cooldowns or graceful closes.
+   */
+  onRelayEose?: (relay: string) => void;
+  /**
    * Called when a relay fails permanently (auth-required or permanent CLOSED).
    * Useful when the caller manages its own settle signal and passes
    * settle: false.
@@ -295,6 +300,7 @@ function processRelay(
   > & {
     manualPaginate$: Observable<void> | undefined;
     onRelaySettle: ((relay: string) => void) | undefined;
+    onRelayEose: ((relay: string) => void) | undefined;
     onRelayError: ((relay: string) => void) | undefined;
   },
   signal: SettleSignal,
@@ -694,6 +700,7 @@ function processRelay(
             eoseSeen = true;
             everReceivedEose = true;
             reconnectAttempts = 0;
+            opts.onRelayEose?.(relay);
             if (opts.paginate || opts.manualPaginate$) {
               if (opts.manualPaginate$) {
                 // Manual mode: always start pagination so the Subject has a
@@ -839,6 +846,7 @@ function resilientSubscriptionStatic(
   const retryDelay = opts.retryDelay ?? defaultRetryDelay;
   const manualPaginate$ = opts.manualPaginate$;
   const onRelaySettle = opts.onRelaySettle;
+  const onRelayEose = opts.onRelayEose;
   const onRelayError = opts.onRelayError;
 
   if (relays.length === 0) return EMPTY;
@@ -854,6 +862,7 @@ function resilientSubscriptionStatic(
     retryDelay,
     manualPaginate$,
     onRelaySettle,
+    onRelayEose,
     onRelayError,
   };
 
@@ -919,6 +928,7 @@ function resilientSubscriptionReactive(
   const retryDelay = opts.retryDelay ?? defaultRetryDelay;
   const manualPaginate$ = opts.manualPaginate$;
   const onRelaySettle = opts.onRelaySettle;
+  const onRelayEose = opts.onRelayEose;
   const onRelayError = opts.onRelayError;
 
   const resolvedOpts = {
@@ -932,6 +942,7 @@ function resilientSubscriptionReactive(
     retryDelay,
     manualPaginate$,
     onRelaySettle,
+    onRelayEose,
     onRelayError,
   };
 

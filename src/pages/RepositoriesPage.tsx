@@ -81,6 +81,7 @@ export default function RepositoriesPage({
     loadMore,
     matchedUserPubkeys,
     relayStatuses,
+    profileRelayStatuses,
   } = useRepositorySearch(committedQuery, relayOverride);
 
   const title = relayLabel
@@ -181,10 +182,19 @@ export default function RepositoriesPage({
           </div>
 
           {/* Relay pills — show which relays are being searched */}
-          <RelayPillsRow
-            relayOverride={relayOverride}
-            relayStatuses={relayStatuses}
-          />
+          <div className="space-y-1.5">
+            <RelayPillsRow
+              relayOverride={relayOverride}
+              relayStatuses={relayStatuses}
+            />
+            {Object.keys(profileRelayStatuses).length > 0 && (
+              <RelayStatusPillsRow
+                label="User Profile Search:"
+                relays={Object.keys(profileRelayStatuses)}
+                relayStatuses={profileRelayStatuses}
+              />
+            )}
+          </div>
         </div>
       </div>
 
@@ -398,10 +408,26 @@ function RelayPillsRow({
   );
 
   return (
+    <RelayStatusPillsRow
+      label={isSearching ? "Searching:" : "Searched:"}
+      relays={relays}
+      relayStatuses={relayStatuses}
+    />
+  );
+}
+
+function RelayStatusPillsRow({
+  label,
+  relays,
+  relayStatuses,
+}: {
+  label: string;
+  relays: string[];
+  relayStatuses: Record<string, RelayQueryStatus>;
+}) {
+  return (
     <div className="flex flex-wrap items-center gap-1.5">
-      <span className="text-xs text-muted-foreground/60 mr-0.5">
-        {isSearching ? "Searching:" : "Searched:"}
-      </span>
+      <span className="text-xs text-muted-foreground/60 mr-0.5">{label}</span>
       {relays.map((url) => (
         <RelayPill
           key={url}

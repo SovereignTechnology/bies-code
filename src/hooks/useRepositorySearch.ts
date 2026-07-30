@@ -14,8 +14,9 @@
  * Mode 2 — Search (non-empty committedQuery):
  *   Opens a resilientSubscription with manualPaginate$ for NIP-50
  *   { kinds: [30617], search: query } against gitIndexRelays. Simultaneously
- *   fires a resilientRequest for NIP-50 { kinds: [0], search: query } against
- *   relay.ditto.pub for user resolution, then fetches repos for matched users.
+ *   searches four NIP-50 profile relays for kind:0 candidates, validates and
+ *   ranks their current EventStore winners, then fetches repositories for the
+ *   newly matched authors in bounded, relay-settled requests.
  *   Results are pushed into a per-session BehaviorSubject so the UI always
  *   updates even when eventStore.add() is a no-op (dedup case).
  *
@@ -25,12 +26,8 @@
  *   kind:0 NIP-50 search entirely, treat the decoded pubkey as the matched
  *   user, and immediately fan out `{ kinds: [REPO_KIND], authors: [hex] }`
  *   against the gitIndexRelays. We still fire a fire-and-forget
- *   `{ kinds: [0], authors: [hex] }` against the user-search relay and the
+ *   `{ kinds: [0], authors: [hex] }` against the profile-search relays and the
  *   gitIndex relays so the matched-user badge has profile metadata to render.
- *
- *   Query cache: completed sessions are stored in a Map keyed by
- *   "trimmedQuery|relayKey". On a cache hit the previous BehaviorSubject
- *   (already populated) is reused immediately — no relay request is made.
  *
  * RelayPage fix:
  *   When relayOverride is set, the displayed list is scoped to events that
@@ -39,9 +36,16 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { BehaviorSubject, Subject } from "rxjs";
-import { isFromRelay } from "applesauce-core/helpers";
+import { BehaviorSubject, Subject, timer } from "rxjs";
+import {
+  getProfileContent,
+  getPublicContacts,
+  getTagValue,
+  isFromRelay,
+  isValidProfile,
+} from "applesauce-core/helpers";
 import type { Filter } from "applesauce-core/helpers";
+import { useActiveAccount } from "applesauce-react/hooks";
 import type { NostrEvent } from "nostr-tools";
 import { pool, eventStore } from "@/services/nostr";
 import { gitIndexRelays } from "@/services/settings";
@@ -52,18 +56,32 @@ import {
 } from "@/lib/nip34";
 import { use$ } from "./use$";
 import { useEventStore } from "./useEventStore";
-import { map } from "rxjs/operators";
+import { map, takeUntil } from "rxjs/operators";
 import type { Observable } from "rxjs";
 import {
   resilientSubscription,
   resilientRequest,
 } from "@/lib/resilientSubscription";
 import { decodePubkeyIdentifier } from "@/lib/routeUtils";
+import { rankProfileSearchCandidates } from "@/lib/profileSearchRanking";
 
-// NIP-50 user resolution relay — supports kind:0 search
-const USER_SEARCH_RELAY = "wss://relay.ditto.pub";
+const PROFILE_SEARCH_RELAYS = [
+  "wss://relay.ditto.pub",
+  "wss://relay.nostr.band",
+  "wss://nostr.wine",
+  "wss://search.nos.today",
+];
 
 const PAGE_SIZE = 20;
+const PROFILE_CANDIDATE_LIMIT = 50;
+const PROFILE_SEARCH_TIMEOUT_MS = 10_000;
+const PROFILE_INTEGRATION_SETTLE_MS = 200;
+// Each non-paginated author request is bounded per relay.
+const USER_REPO_RESULT_LIMIT = 200;
+const USER_REPO_TIMEOUT_MS = 10_000;
+const GIT_AUTHORS_KIND = 10017;
+const SOCIAL_FOLLOWS_KIND = 3;
+const EMPTY_PUBKEYS: string[] = [];
 // How long to wait after the last event in a pagination page before concluding
 // the page is done. Covers both the normal case (events arrive then stop) and
 // the zero-events case (relay exhausted — timer fires with count=0).
@@ -77,6 +95,13 @@ const PAGE_SETTLE_MS = 600;
  * - "error"     — transport failure, permanent CLOSED, or retries exhausted
  */
 export type RelayQueryStatus = "searching" | "success" | "error";
+
+function getFollowPubkeys(event: NostrEvent | undefined): string[] {
+  if (!event) return [];
+  return [
+    ...new Set(getPublicContacts(event).map((contact) => contact.pubkey)),
+  ].sort();
+}
 
 export interface UseRepositorySearchResult {
   /** Resolved repos to display. undefined = initial loading. */
@@ -100,29 +125,12 @@ export interface UseRepositorySearchResult {
    * Resets to all-"searching" whenever the relay list or query changes.
    */
   relayStatuses: Record<string, RelayQueryStatus>;
-}
-
-// ── Search result cache ───────────────────────────────────────────────────────
-
-interface SearchCacheEntry {
-  /** Live results subject — already populated with the last known results. */
-  subject: BehaviorSubject<ResolvedRepo[] | undefined>;
-  /** Whether there are more pages available for this query. */
-  hasMore: boolean;
-  /** Pubkeys that matched the NIP-50 user search for this query. */
-  matchedUserPubkeys: Set<string>;
   /**
-   * Pagination subject for this session — still live if the subscription is
-   * open, null if the subscription has been torn down (e.g. relay changed).
+   * Per-relay status for the kind:0 candidate search.
+   * Empty outside non-empty text searches.
    */
-  paginate$: Subject<void> | null;
-  /** Final per-relay query statuses — restored on cache hit. */
-  relayStatuses: Record<string, RelayQueryStatus>;
+  profileRelayStatuses: Record<string, RelayQueryStatus>;
 }
-
-// Module-level cache so it survives re-renders and component remounts.
-// Keyed by "trimmedQuery|relayKey".
-const searchCache = new Map<string, SearchCacheEntry>();
 
 /**
  * Core hook for repository discovery and search.
@@ -135,6 +143,24 @@ export function useRepositorySearch(
   relayOverride?: string[],
 ): UseRepositorySearchResult {
   const store = useEventStore();
+  const account = useActiveAccount();
+  const accountPubkey = account?.pubkey;
+  const gitFollowPubkeys =
+    use$(() => {
+      if (!accountPubkey) return undefined;
+      return store
+        .replaceable(GIT_AUTHORS_KIND, accountPubkey)
+        .pipe(map(getFollowPubkeys));
+    }, [accountPubkey, store]) ?? EMPTY_PUBKEYS;
+  const socialFollowPubkeys =
+    use$(() => {
+      if (!accountPubkey) return undefined;
+      return store
+        .replaceable(SOCIAL_FOLLOWS_KIND, accountPubkey)
+        .pipe(map(getFollowPubkeys));
+    }, [accountPubkey, store]) ?? EMPTY_PUBKEYS;
+  const gitFollowKey = gitFollowPubkeys.join(",");
+  const socialFollowKey = socialFollowPubkeys.join(",");
 
   // Subscribe to gitIndexRelays reactively so relay changes re-trigger
   const liveGitIndexRelays =
@@ -162,8 +188,11 @@ export function useRepositorySearch(
   const [browseDisplayLimit, setBrowseDisplayLimit] = useState(PAGE_SIZE);
 
   // Per-relay query status — initialised to all-"searching" when a subscription
-  // opens, then flipped to "success" or "error" via onRelaySettle/onRelayError.
+  // opens, then flipped to "success" on actual EOSE or "error" on failure.
   const [relayStatuses, setRelayStatuses] = useState<
+    Record<string, RelayQueryStatus>
+  >({});
+  const [profileRelayStatuses, setProfileRelayStatuses] = useState<
     Record<string, RelayQueryStatus>
   >({});
 
@@ -226,6 +255,7 @@ export function useRepositorySearch(
 
     setIsLoading(true);
     setHasMore(true);
+    setProfileRelayStatuses({});
     setBrowseDisplayLimit(PAGE_SIZE);
     paginatingRef.current = false;
 
@@ -245,7 +275,7 @@ export function useRepositorySearch(
       {
         manualPaginate$: paginate$,
         limit: PAGE_SIZE,
-        onRelaySettle: (relay) =>
+        onRelayEose: (relay) =>
           setRelayStatuses((prev) => ({ ...prev, [relay]: "success" })),
         onRelayError: (relay) =>
           setRelayStatuses((prev) => ({ ...prev, [relay]: "error" })),
@@ -307,12 +337,12 @@ export function useRepositorySearch(
     BehaviorSubject<ResolvedRepo[] | undefined>
   >(new BehaviorSubject<ResolvedRepo[] | undefined>(undefined));
   // Bumped each time a new search session starts so that use$ re-subscribes
-  // to the freshly-created (or cache-restored) BehaviorSubject.
+  // to the freshly-created BehaviorSubject.
   const [searchSessionKey, setSearchSessionKey] = useState(0);
 
   // Reactive read of search results — driven by the subject above.
   // searchSessionKey in deps ensures use$ re-subscribes to the new subject
-  // instance created for each query (including cache hits).
+  // instance created for each query.
   const searchRepos = use$(() => {
     if (!isSearchMode) return undefined;
     return searchReposSubjectRef.current;
@@ -321,30 +351,14 @@ export function useRepositorySearch(
   useEffect(() => {
     if (!isSearchMode) {
       setMatchedUserPubkeys(new Set());
+      setProfileRelayStatuses({});
       setIsLoading(false);
       return;
     }
 
-    const cacheKey = `${trimmedQuery}|${relayKey}`;
-    const cached = searchCache.get(cacheKey);
-
-    if (cached) {
-      // Cache hit — restore state immediately, no relay request needed.
-      searchReposSubjectRef.current = cached.subject;
-      paginateSubRef.current = cached.paginate$;
-      setSearchSessionKey((k) => k + 1);
-      setHasMore(cached.hasMore);
-      setMatchedUserPubkeys(cached.matchedUserPubkeys);
-      setIsLoading(false);
-      paginatingRef.current = false;
-      clearPageSettleTimer();
-      // Restore the final relay statuses from the completed session.
-      setRelayStatuses(cached.relayStatuses);
-      return;
-    }
-
-    // Cache miss — start a fresh search session.
+    // Start a fresh search session.
     setMatchedUserPubkeys(new Set());
+    setProfileRelayStatuses({});
     setHasMore(true);
     paginatingRef.current = false;
     clearPageSettleTimer();
@@ -354,60 +368,109 @@ export function useRepositorySearch(
 
     let repoSub: { unsubscribe(): void } | null = null;
     let userSub: { unsubscribe(): void } | null = null;
-    let userRepoSub: { unsubscribe(): void } | null = null;
+    const userRepoSubs: { unsubscribe(): void }[] = [];
 
     setIsLoading(true);
 
-    // Fresh session: new ID set + new subject.
-    const sessionIds = new Set<string>();
+    // Track direct and user-derived coordinates independently. Rebuilding the
+    // result list resolves each coordinate through the EventStore so a stale
+    // relay response can never displace the current addressable winner.
+    const directRepoCoordinates = new Map<
+      string,
+      { pubkey: string; dTag: string }
+    >();
+    const userRepoCoordinates = new Map<
+      string,
+      { pubkey: string; dTag: string }
+    >();
     const subject = new BehaviorSubject<ResolvedRepo[] | undefined>(undefined);
     searchReposSubjectRef.current = subject;
     // Bump the session key so use$ re-subscribes to this new subject instance.
     setSearchSessionKey((k) => k + 1);
 
-    // Build the cache entry upfront so pagination callbacks can update it.
-    const cacheEntry: SearchCacheEntry = {
-      subject,
-      hasMore: true,
-      matchedUserPubkeys: new Set(),
-      paginate$: null,
-      relayStatuses: Object.fromEntries(
-        relays.map((r) => [r, "searching" as RelayQueryStatus]),
-      ),
-    };
-    searchCache.set(cacheKey, cacheEntry);
-
     // Helper: rebuild and push the current resolved repo list into the subject.
     // Called on every incoming event (new or duplicate-in-store) so the UI
     // always updates even when eventStore.add() is a no-op (dedup case).
+    const rememberRepoCoordinate = (
+      event: NostrEvent,
+      coordinates: Map<string, { pubkey: string; dTag: string }>,
+    ) => {
+      const dTag = getTagValue(event, "d");
+      if (!dTag) return;
+      coordinates.set(`${event.pubkey}:${dTag}`, {
+        pubkey: event.pubkey,
+        dTag,
+      });
+    };
+
     const pushResults = () => {
-      const events = eventStore.getTimeline([{ kinds: [REPO_KIND] } as Filter]);
-      subject.next(
-        groupIntoResolvedRepos(events.filter((ev) => sessionIds.has(ev.id))),
+      const activeCoordinates = new Set<string>();
+      const activeDTags = new Set<string>();
+      for (const { pubkey, dTag } of [
+        ...directRepoCoordinates.values(),
+        ...userRepoCoordinates.values(),
+      ]) {
+        activeCoordinates.add(`${pubkey}:${dTag}`);
+        activeDTags.add(dTag);
+      }
+      if (activeDTags.size === 0) {
+        subject.next([]);
+        return;
+      }
+
+      // Resolve each active coordinate with every current same-d announcement
+      // in the store so reciprocal maintainer chains and merged metadata remain
+      // intact. Filter the resolved components back to one with a confirmed
+      // coordinate received by this session; same-d repositories in unrelated
+      // components must not leak into the results.
+      const currentAnnouncements = eventStore.getByFilters([
+        {
+          kinds: [REPO_KIND],
+          "#d": [...activeDTags],
+        } as Filter,
+      ]);
+      const resolved = groupIntoResolvedRepos(currentAnnouncements).filter(
+        (repo) =>
+          repo.confirmedMaintainers.some((pubkey) =>
+            activeCoordinates.has(`${pubkey}:${repo.dTag}`),
+          ),
       );
+      subject.next(resolved);
     };
 
     const paginate$ = new Subject<void>();
     paginateSubRef.current = paginate$;
-    cacheEntry.paginate$ = paginate$;
 
-    // One-shot guard: clears isLoading after the initial EOSE from either
-    // search. Pagination loading is managed separately via the settle timer.
+    // Initial loading ends after both independent search paths have produced
+    // their first settled response: direct repository search, and profile
+    // resolution followed by its first author-scoped repository request.
+    // Slower relays keep streaming results and updating statuses afterward.
     let initialLoadingCleared = false;
+    let directInitialDone = false;
+    let userPathDone = false;
     let initialPageCount = 0;
 
-    const clearInitialLoading = () => {
-      if (!initialLoadingCleared) {
+    const maybeClearInitialLoading = () => {
+      if (!initialLoadingCleared && directInitialDone && userPathDone) {
         initialLoadingCleared = true;
-        const more = initialPageCount >= PAGE_SIZE;
-        cacheEntry.hasMore = more;
-        setHasMore(more);
-        // Always push results (even an empty array) so the subject transitions
-        // from undefined → [] when there are no matches. Without this, repos
-        // stays undefined after EOSE and the skeleton never clears.
+        // Always push results so an empty search transitions undefined → []
+        // only after neither path can still produce an initial result.
         pushResults();
         setIsLoading(false);
       }
+    };
+
+    const finishDirectInitial = () => {
+      if (directInitialDone) return;
+      directInitialDone = true;
+      setHasMore(initialPageCount >= PAGE_SIZE);
+      maybeClearInitialLoading();
+    };
+
+    const finishUserPath = () => {
+      if (userPathDone) return;
+      userPathDone = true;
+      maybeClearInitialLoading();
     };
 
     // NIP-50 repo search with manual pagination.
@@ -424,30 +487,22 @@ export function useRepositorySearch(
       {
         manualPaginate$: paginate$,
         limit: PAGE_SIZE,
-        onRelaySettle: (relay) => {
-          cacheEntry.relayStatuses = {
-            ...cacheEntry.relayStatuses,
-            [relay]: "success",
-          };
+        onRelayEose: (relay) => {
           setRelayStatuses((prev) => ({ ...prev, [relay]: "success" }));
         },
         onRelayError: (relay) => {
-          cacheEntry.relayStatuses = {
-            ...cacheEntry.relayStatuses,
-            [relay]: "error",
-          };
           setRelayStatuses((prev) => ({ ...prev, [relay]: "error" }));
         },
       },
     ).subscribe({
       next: (msg) => {
         if (msg === "EOSE") {
-          clearInitialLoading();
+          finishDirectInitial();
           return;
         }
         const ev = msg as NostrEvent;
-        sessionIds.add(ev.id);
         eventStore.add(ev);
+        rememberRepoCoordinate(ev, directRepoCoordinates);
         // Push results regardless of whether eventStore.add was a no-op.
         pushResults();
 
@@ -456,7 +511,6 @@ export function useRepositorySearch(
           armPageSettleTimer(() => {
             paginatingRef.current = false;
             const more = pageEventCountRef.current >= PAGE_SIZE;
-            cacheEntry.hasMore = more;
             setHasMore(more);
             setIsLoading(false);
           });
@@ -466,36 +520,128 @@ export function useRepositorySearch(
       },
       error: () => {
         clearPageSettleTimer();
-        clearInitialLoading();
+        finishDirectInitial();
       },
       complete: () => {
         clearPageSettleTimer();
-        clearInitialLoading();
+        finishDirectInitial();
       },
     });
 
-    // NIP-50 user search (one-shot) — collect pubkeys then fetch their repos.
-    const userPubkeys = new Set<string>();
+    const profileCandidatePubkeys = new Set<string>();
+    const dispatchedAuthors = new Set<string>();
+    let profileStatusTrackingFinished = false;
+    let profileSearchTimeout: ReturnType<typeof setTimeout> | null = null;
+    let profileIntegrationTimer: ReturnType<typeof setTimeout> | null = null;
 
-    const startUserRepoFetch = () => {
-      if (userPubkeys.size === 0) return;
-      userRepoSub = resilientRequest(pool, relays, [
+    const startUserRepoFetch = (authors: string[]) => {
+      if (authors.length === 0) {
+        finishUserPath();
+        return;
+      }
+
+      // Fetch each newly matched author once. Slower profile relays add another
+      // bounded request for only their undispatched matches; earlier requests
+      // and results remain intact.
+      const sub = resilientRequest(
+        pool,
+        relays,
+        [
+          {
+            kinds: [REPO_KIND],
+            authors,
+            limit: USER_REPO_RESULT_LIMIT,
+          } as Filter,
+        ],
         {
-          kinds: [REPO_KIND],
-          authors: [...userPubkeys],
-          limit: PAGE_SIZE,
-        } as Filter,
-      ]).subscribe({
-        next: (msg) => {
-          if (msg === "EOSE") return;
-          const ev = msg as NostrEvent;
-          if (!sessionIds.has(ev.id)) {
-            sessionIds.add(ev.id);
-            eventStore.add(ev);
-            pushResults();
-          }
+          // This relay's events have already streamed into the results by EOSE.
+          // Stop showing the initial loader without waiting for slower relays;
+          // their events continue to integrate through the subscription.
+          onRelayEose: finishUserPath,
         },
+      )
+        .pipe(takeUntil(timer(USER_REPO_TIMEOUT_MS)))
+        .subscribe({
+          next: (msg) => {
+            if (msg === "EOSE") return;
+            const ev = msg as NostrEvent;
+            eventStore.add(ev);
+            rememberRepoCoordinate(ev, userRepoCoordinates);
+            pushResults();
+          },
+          error: finishUserPath,
+          complete: finishUserPath,
+        });
+      userRepoSubs.push(sub);
+    };
+
+    const setProfileRelayStatus = (relay: string, status: RelayQueryStatus) => {
+      setProfileRelayStatuses((prev) => ({ ...prev, [relay]: status }));
+    };
+
+    const integrateProfileCandidates = () => {
+      if (profileIntegrationTimer) {
+        clearTimeout(profileIntegrationTimer);
+        profileIntegrationTimer = null;
+      }
+      const candidates = [...profileCandidatePubkeys].flatMap((pubkey) => {
+        const event = eventStore.getReplaceable(0, pubkey);
+        if (!event || !isValidProfile(event)) return [];
+        const profile = getProfileContent(event);
+        return profile
+          ? [{ pubkey, profile, createdAt: event.created_at }]
+          : [];
       });
+
+      const matchedAuthors = rankProfileSearchCandidates(
+        candidates,
+        trimmedQuery,
+        new Set(gitFollowPubkeys),
+        new Set(socialFollowPubkeys),
+      ).map((candidate) => candidate.pubkey);
+      const newAuthors = matchedAuthors.filter(
+        (pubkey) => !dispatchedAuthors.has(pubkey),
+      );
+      for (const pubkey of newAuthors) dispatchedAuthors.add(pubkey);
+      setMatchedUserPubkeys(new Set(dispatchedAuthors));
+      if (newAuthors.length > 0) {
+        startUserRepoFetch(newAuthors);
+      } else if (dispatchedAuthors.size === 0) {
+        finishUserPath();
+      }
+    };
+
+    const scheduleProfileIntegration = () => {
+      if (profileIntegrationTimer) clearTimeout(profileIntegrationTimer);
+      profileIntegrationTimer = setTimeout(
+        integrateProfileCandidates,
+        PROFILE_INTEGRATION_SETTLE_MS,
+      );
+    };
+
+    const finishProfileStatusTracking = () => {
+      if (profileStatusTrackingFinished) return;
+      profileStatusTrackingFinished = true;
+      if (profileSearchTimeout) {
+        clearTimeout(profileSearchTimeout);
+        profileSearchTimeout = null;
+      }
+
+      // Any relay still searching when the request completes or times out is
+      // terminally unavailable for this search. Candidate integration is
+      // intentionally independent: it normally starts shortly after the first
+      // actual EOSE instead of waiting for these terminal statuses.
+      setProfileRelayStatuses((prev) =>
+        Object.fromEntries(
+          PROFILE_SEARCH_RELAYS.map((relay) => [
+            relay,
+            prev[relay] === "searching" || prev[relay] === undefined
+              ? "error"
+              : prev[relay],
+          ]),
+        ),
+      );
+      integrateProfileCandidates();
     };
 
     if (pubkeyHexFromQuery) {
@@ -507,61 +653,83 @@ export function useRepositorySearch(
       // Instead: treat the decoded pubkey as the matched user immediately
       // (no kind:0 round-trip needed), and fetch profile metadata via an
       // `authors:` filter so the UserLink badge can render the name/avatar.
-      // The metadata fetch is fire-and-forget — clearInitialLoading() is
-      // driven by the repo search EOSE as usual.
-      userPubkeys.add(pubkeyHexFromQuery);
-      const pubkeySet = new Set(userPubkeys);
-      cacheEntry.matchedUserPubkeys = pubkeySet;
+      // The metadata fetch is fire-and-forget. Initial loading still waits for
+      // both the direct repository search and the author-scoped request below.
+      dispatchedAuthors.add(pubkeyHexFromQuery);
+      profileStatusTrackingFinished = true;
+      const pubkeySet = new Set([pubkeyHexFromQuery]);
       setMatchedUserPubkeys(pubkeySet);
       // Fetch profile metadata from the user-search relay AND the gitIndex
       // relays — profile events are commonly carried by both.
-      const profileRelays = Array.from(new Set([USER_SEARCH_RELAY, ...relays]));
+      const profileRelays = Array.from(
+        new Set([...PROFILE_SEARCH_RELAYS, ...relays]),
+      );
       userSub = resilientRequest(pool, profileRelays, [
         { kinds: [0], authors: [pubkeyHexFromQuery] } as Filter,
-      ]).subscribe({
-        next: (msg) => {
-          if (msg === "EOSE") return;
-          eventStore.add(msg as NostrEvent);
-        },
-      });
-      startUserRepoFetch();
+      ])
+        .pipe(takeUntil(timer(PROFILE_SEARCH_TIMEOUT_MS)))
+        .subscribe({
+          next: (msg) => {
+            if (msg === "EOSE") return;
+            eventStore.add(msg as NostrEvent);
+          },
+        });
+      startUserRepoFetch([pubkeyHexFromQuery]);
     } else {
+      const initialProfileStatuses = Object.fromEntries(
+        PROFILE_SEARCH_RELAYS.map((relay) => [
+          relay,
+          "searching" as RelayQueryStatus,
+        ]),
+      );
+      setProfileRelayStatuses(initialProfileStatuses);
+
+      profileSearchTimeout = setTimeout(() => {
+        userSub?.unsubscribe();
+        finishProfileStatusTracking();
+      }, PROFILE_SEARCH_TIMEOUT_MS);
+
       userSub = resilientRequest(
         pool,
-        [USER_SEARCH_RELAY],
-        [{ kinds: [0], search: trimmedQuery, limit: 10 } as Filter],
+        PROFILE_SEARCH_RELAYS,
+        [
+          {
+            kinds: [0],
+            search: trimmedQuery,
+            limit: PROFILE_CANDIDATE_LIMIT,
+          } as Filter,
+        ],
+        {
+          onRelayEose: (relay) => {
+            setProfileRelayStatus(relay, "success");
+            // The relay's candidates have all arrived. Give other fast relays a
+            // brief settle window, then rank and query repositories while slow
+            // relays continue independently.
+            scheduleProfileIntegration();
+          },
+          onRelayError: (relay) => setProfileRelayStatus(relay, "error"),
+        },
       ).subscribe({
         next: (msg) => {
-          if (msg === "EOSE") {
-            clearInitialLoading();
-            const pubkeySet = new Set(userPubkeys);
-            cacheEntry.matchedUserPubkeys = pubkeySet;
-            setMatchedUserPubkeys(pubkeySet);
-            startUserRepoFetch();
-            return;
-          }
+          // Per-relay EOSE callbacks above drive progressive integration. The
+          // aggregate sentinel may also represent cooldown settle, so it is not
+          // evidence that a profile relay actually answered.
+          if (msg === "EOSE") return;
           const ev = msg as NostrEvent;
-          userPubkeys.add(ev.pubkey);
+          profileCandidatePubkeys.add(ev.pubkey);
           eventStore.add(ev);
         },
-        error: clearInitialLoading,
-        complete: () => {
-          clearInitialLoading();
-          const pubkeySet = new Set(userPubkeys);
-          cacheEntry.matchedUserPubkeys = pubkeySet;
-          setMatchedUserPubkeys(pubkeySet);
-          startUserRepoFetch();
-        },
+        error: finishProfileStatusTracking,
+        complete: finishProfileStatusTracking,
       });
     }
 
     return () => {
       repoSub?.unsubscribe();
       userSub?.unsubscribe();
-      userRepoSub?.unsubscribe();
-      // Null out the paginate$ ref in the cache entry so a future cache hit
-      // knows the subscription is no longer live (loadMore will be a no-op).
-      cacheEntry.paginate$ = null;
+      for (const sub of userRepoSubs) sub.unsubscribe();
+      if (profileSearchTimeout) clearTimeout(profileSearchTimeout);
+      if (profileIntegrationTimer) clearTimeout(profileIntegrationTimer);
       paginateSubRef.current = null;
       clearPageSettleTimer();
     };
@@ -571,6 +739,9 @@ export function useRepositorySearch(
     relayKey,
     isSearchMode,
     pubkeyHexFromQuery,
+    accountPubkey,
+    gitFollowKey,
+    socialFollowKey,
     armPageSettleTimer,
     clearPageSettleTimer,
   ]);
@@ -607,6 +778,7 @@ export function useRepositorySearch(
       loadMore,
       matchedUserPubkeys,
       relayStatuses,
+      profileRelayStatuses,
     };
   }
 
@@ -617,5 +789,6 @@ export function useRepositorySearch(
     loadMore,
     matchedUserPubkeys: new Set(),
     relayStatuses,
+    profileRelayStatuses: {},
   };
 }

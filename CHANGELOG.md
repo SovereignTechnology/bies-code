@@ -4,6 +4,8 @@
 
 ### Fixes
 
+- Resolve repository searches through ranked, validated user profiles across multiple NIP-50 relays.
+
 ### Features
 
 - Group notifications by user with expandable activity, bulk read/archive actions for each actor, and a dedicated unread inbox filter.
