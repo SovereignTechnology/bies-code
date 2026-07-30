@@ -227,6 +227,58 @@ function invitedRepositoryPath(
   return `${repoToPath(pubkey, repo.dTag, relays)}${pageSuffix}`;
 }
 
+function computeConfirmedMaintainerListings(
+  confirmedMaintainers: string[],
+  maintainerEdges: ResolvedRepo["maintainerEdges"],
+): Map<string, string[]> {
+  const confirmed = new Set(confirmedMaintainers);
+  const maintainerOrder = new Map(
+    confirmedMaintainers.map((pubkey, index) => [pubkey, index]),
+  );
+  const listings = new Map(
+    confirmedMaintainers.map((pubkey) => [pubkey, [] as string[]]),
+  );
+
+  for (const { from, to } of maintainerEdges) {
+    if (!confirmed.has(from) || !confirmed.has(to) || from === to) continue;
+
+    const listedMaintainers = listings.get(from);
+    if (listedMaintainers && !listedMaintainers.includes(to)) {
+      listedMaintainers.push(to);
+    }
+  }
+
+  for (const listedMaintainers of listings.values()) {
+    listedMaintainers.sort(
+      (a, b) => (maintainerOrder.get(a) ?? 0) - (maintainerOrder.get(b) ?? 0),
+    );
+  }
+
+  return listings;
+}
+
+function MaintainerListingSummary({ pubkeys }: { pubkeys: string[] }) {
+  if (pubkeys.length === 0) {
+    return <span>· lists none</span>;
+  }
+
+  return (
+    <span>
+      · lists{" "}
+      {pubkeys.map((pubkey, index) => (
+        <span key={pubkey}>
+          {index > 0 && ", "}
+          <UserName
+            pubkey={pubkey}
+            className="text-muted-foreground"
+            linkToProfile
+          />
+        </span>
+      ))}
+    </span>
+  );
+}
+
 function RequestedMaintainersSummary({
   repo,
   pageSuffix,
@@ -669,6 +721,14 @@ function FullVariant({
       ),
     [repo.confirmedMaintainers, repo.maintainerEdges],
   );
+  const maintainerListings = useMemo(
+    () =>
+      computeConfirmedMaintainerListings(
+        repo.confirmedMaintainers,
+        repo.maintainerEdges,
+      ),
+    [repo.confirmedMaintainers, repo.maintainerEdges],
+  );
 
   // Relays in other reachable announcements but not in the selected
   // maintainer's announcement.
@@ -752,7 +812,7 @@ function FullVariant({
         </h3>
         <div className="space-y-2.5">
           {repo.confirmedMaintainers.map((pk) => (
-            <div key={pk} className="flex items-center gap-2">
+            <div key={pk} className="flex flex-wrap items-center gap-2">
               <UserLink pubkey={pk} avatarSize="md" nameClassName="text-sm" />
               {pk === repo.selectedMaintainer &&
                 repo.confirmedMaintainers.length > 1 && (
@@ -771,6 +831,11 @@ function FullVariant({
                   lead
                 </Badge>
               )}
+              <span className="text-[11px] text-muted-foreground/70">
+                <MaintainerListingSummary
+                  pubkeys={maintainerListings.get(pk) ?? []}
+                />
+              </span>
             </div>
           ))}
           {repo.requestedMaintainers.length > 0 && (
