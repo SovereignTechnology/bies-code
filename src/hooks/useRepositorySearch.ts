@@ -35,7 +35,7 @@
  *   EventStore events from other relays bleeding into the view.
  */
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { BehaviorSubject, Subject, timer } from "rxjs";
 import {
   getProfileContent,
@@ -64,6 +64,7 @@ import {
 } from "@/lib/resilientSubscription";
 import { decodePubkeyIdentifier } from "@/lib/routeUtils";
 import { rankProfileSearchCandidates } from "@/lib/profileSearchRanking";
+import { RepositoryModel } from "@/models/RepositoryModel";
 
 const PROFILE_SEARCH_RELAYS = [
   "wss://relay.ditto.pub",
@@ -245,10 +246,31 @@ export function useRepositorySearch(
 
   // Apply the display limit outside of use$ so advancing it never causes a
   // re-subscribe (which would briefly yield undefined and hide the sentinel).
-  const browseRepos =
-    allBrowseRepos !== undefined
-      ? allBrowseRepos.slice(0, browseDisplayLimit)
-      : undefined;
+  const browseRepos = useMemo(
+    () => allBrowseRepos?.slice(0, browseDisplayLimit),
+    [allBrowseRepos, browseDisplayLimit],
+  );
+
+  // Hydrate each visible repository's recursive maintainer graph. The global
+  // grouping already prefers a unique lead, but it can only do so after the
+  // related announcements have reached the EventStore.
+  useEffect(() => {
+    if (isSearchMode || !browseRepos) return;
+
+    const subscriptions = browseRepos.map((repo) =>
+      (
+        store.model(
+          RepositoryModel,
+          repo.selectedMaintainer,
+          repo.dTag,
+        ) as unknown as Observable<ResolvedRepo | undefined>
+      ).subscribe(),
+    );
+
+    return () => {
+      for (const subscription of subscriptions) subscription.unsubscribe();
+    };
+  }, [browseRepos, isSearchMode, store]);
 
   useEffect(() => {
     if (isSearchMode) return;
@@ -369,6 +391,7 @@ export function useRepositorySearch(
     let repoSub: { unsubscribe(): void } | null = null;
     let userSub: { unsubscribe(): void } | null = null;
     const userRepoSubs: { unsubscribe(): void }[] = [];
+    const repoResolutionSubs = new Map<string, { unsubscribe(): void }>();
 
     setIsLoading(true);
 
@@ -401,6 +424,18 @@ export function useRepositorySearch(
         pubkey: event.pubkey,
         dTag,
       });
+
+      const coordinateKey = `${event.pubkey}:${dTag}`;
+      if (!repoResolutionSubs.has(coordinateKey)) {
+        const resolutionSub = (
+          store.model(
+            RepositoryModel,
+            event.pubkey,
+            dTag,
+          ) as unknown as Observable<ResolvedRepo | undefined>
+        ).subscribe(() => pushResults());
+        repoResolutionSubs.set(coordinateKey, resolutionSub);
+      }
     };
 
     const pushResults = () => {
@@ -728,6 +763,7 @@ export function useRepositorySearch(
       repoSub?.unsubscribe();
       userSub?.unsubscribe();
       for (const sub of userRepoSubs) sub.unsubscribe();
+      for (const sub of repoResolutionSubs.values()) sub.unsubscribe();
       if (profileSearchTimeout) clearTimeout(profileSearchTimeout);
       if (profileIntegrationTimer) clearTimeout(profileIntegrationTimer);
       paginateSubRef.current = null;
