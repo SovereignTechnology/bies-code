@@ -39,9 +39,11 @@ import {
   PR_ROOT_KINDS,
   LEGACY_REPLY_KINDS,
   COVER_NOTE_KIND,
+  parseRepoCoordinate,
 } from "@/lib/nip34";
 import { CI_EVENT_KINDS, CI_RUN_KIND } from "@/lib/ci";
 import { Repository, isValidRepository } from "@/casts/Repository";
+import { SOFTWARE_APPLICATION_KIND } from "@/casts/Software";
 import {
   createPaginatedTagValueLoader,
   type PaginatedTagValueResponse,
@@ -924,9 +926,11 @@ export function nip34SupplementalRelayLoader(
 /**
  * Repo-level observable factory.
  *
- * Subscribes to all NIP-34 root items (issues + PR/patch roots) for the given
- * repository coordinates via the relay group. For each newly discovered item
- * ID, calls nip34ListLoader so essentials and comments are fetched.
+ * Subscribes to all NIP-34 root items (issues + PR/patch roots) and trusted
+ * software applications for the given repository coordinates via the relay
+ * group. For each newly discovered root item ID, calls nip34ListLoader so
+ * essentials and comments are fetched. Software applications are written to
+ * the EventStore as priority repository data but do not fire item loaders.
  *
  * Deduplication: a seenIds Set in the closure ensures each item ID is
  * submitted to the loaders exactly once, regardless of how many times the
@@ -952,6 +956,14 @@ export function nip34RepoLoader(
     const seenIds = new Set<string>();
     const knownRelayUrls = new Set<string>();
     const inboxSubs = new Subscription();
+    const maintainerPubkeys = [
+      ...new Set(
+        coords.flatMap((coord) => {
+          const parsed = parseRepoCoordinate(coord);
+          return parsed ? [parsed.pubkey] : [];
+        }),
+      ),
+    ];
 
     function fireLoaders(id: string, relays: string[]): void {
       nip34ListLoader(id, relays).subscribe({
@@ -1007,6 +1019,11 @@ export function nip34RepoLoader(
 
     const itemFilters = [
       { kinds: [...REPO_ITEM_KINDS], "#a": coords } as Filter,
+      {
+        kinds: [SOFTWARE_APPLICATION_KIND],
+        authors: maintainerPubkeys,
+        "#a": coords,
+      } as Filter,
     ];
     const itemSub = resilientSubscription(
       pool,
@@ -1018,6 +1035,7 @@ export function nip34RepoLoader(
       .subscribe({
         next: (event) => {
           const ev = event as NostrEvent;
+          if (!REPO_ITEM_KINDS.some((kind) => kind === ev.kind)) return;
           if (!seenIds.has(ev.id)) {
             seenIds.add(ev.id);
             // knownRelayUrls is already populated by relaySub above

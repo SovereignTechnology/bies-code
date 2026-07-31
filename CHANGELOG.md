@@ -9,6 +9,7 @@
 ### Features
 
 - Group notifications by user with expandable activity, bulk read/archive actions for each actor, and a dedicated unread inbox filter.
+- Add GitHub-style repository release pages compatible with NIP-82 (Zapstore) events.
 
 ### Changes
 

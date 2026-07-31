@@ -229,6 +229,7 @@ const REPO_SUB_PATHS = [
   "branches",
   "tags",
   "actions",
+  "releases",
 ];
 
 /**
