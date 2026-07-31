@@ -1,6 +1,14 @@
-import { lazy, Suspense, useMemo } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { Link, useLocation } from "react-router-dom";
 import { useSeoMeta } from "@unhead/react";
-import { ChevronDown, Download, Package, ShieldCheck, Tag } from "lucide-react";
+import {
+  ChevronDown,
+  Download,
+  List,
+  Package,
+  ShieldCheck,
+  Tag,
+} from "lucide-react";
 import type {
   SoftwareApplication,
   SoftwareAsset,
@@ -8,14 +16,23 @@ import type {
 } from "@/casts/Software";
 import { UserLink } from "@/components/UserAvatar";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useBlossomServers } from "@/hooks/useBlossomFallback";
 import { useSoftwareReleases } from "@/hooks/useSoftwareReleases";
+import { blossomBlobUrl } from "@/lib/blossom";
 import { cn, safeFormat, safeFormatDistanceToNow } from "@/lib/utils";
 import { useRepoContext } from "./RepoContext";
 
@@ -48,26 +65,20 @@ function ReleasePageSkeleton() {
   return (
     <div className="space-y-6" aria-label="Loading releases">
       {Array.from({ length: 2 }).map((_, index) => (
-        <div
-          key={index}
-          className="grid gap-3 md:grid-cols-[11rem_minmax(0,1fr)]"
-        >
-          <div className="space-y-2 pt-1">
-            <Skeleton className="h-5 w-24" />
-            <Skeleton className="h-4 w-16" />
-          </div>
-          <Card>
-            <CardHeader className="space-y-3">
+        <Card key={index}>
+          <CardHeader className="space-y-3">
+            <div className="flex items-center gap-2">
               <Skeleton className="h-6 w-36" />
-              <Skeleton className="h-4 w-56 max-w-full" />
-            </CardHeader>
-            <CardContent className="space-y-2">
-              <Skeleton className="h-4 w-full" />
-              <Skeleton className="h-4 w-4/5" />
-              <Skeleton className="h-12 w-full mt-5" />
-            </CardContent>
-          </Card>
-        </div>
+              <Skeleton className="h-5 w-14 rounded-full" />
+            </div>
+            <Skeleton className="h-4 w-72 max-w-full" />
+          </CardHeader>
+          <CardContent className="space-y-2">
+            <Skeleton className="h-4 w-full" />
+            <Skeleton className="h-4 w-4/5" />
+            <Skeleton className="h-12 w-full mt-5" />
+          </CardContent>
+        </Card>
       ))}
     </div>
   );
@@ -91,9 +102,153 @@ function EmptyReleases({ hasApplication }: { hasApplication: boolean }) {
   );
 }
 
-function AssetRow({ asset }: { asset: SoftwareAsset }) {
+function releaseNavigationLabel(
+  release: SoftwareRelease,
+  application: SoftwareApplication | undefined,
+  showApplication: boolean,
+): string {
+  const version = displayVersion(release.version);
+  if (!showApplication) return version;
+  return `${application?.name ?? release.appId} ${version}`;
+}
+
+function ReleaseNavigation({
+  releases,
+  applicationByReleaseKey,
+  showApplication,
+  activeReleaseId,
+  onSelectRelease,
+}: {
+  releases: SoftwareRelease[];
+  applicationByReleaseKey: Map<string, SoftwareApplication>;
+  showApplication: boolean;
+  activeReleaseId: string;
+  onSelectRelease: (releaseId: string) => void;
+}) {
+  const releaseListRef = useRef<HTMLElement>(null);
+  const entries = releases.map((release) => ({
+    id: release.event.id,
+    label: releaseNavigationLabel(
+      release,
+      applicationByReleaseKey.get(`${release.pubkey}:${release.appId}`),
+      showApplication,
+    ),
+  }));
+  const jumpToRelease = (releaseId: string) => {
+    onSelectRelease(releaseId);
+    requestAnimationFrame(() => {
+      const target = document.getElementById(`release-${releaseId}`);
+      target?.scrollIntoView({ block: "start" });
+      target?.focus({ preventScroll: true });
+    });
+  };
+
+  useEffect(() => {
+    const list = releaseListRef.current;
+    const activeLink = list?.querySelector<HTMLElement>(
+      '[aria-current="location"]',
+    );
+    if (!list || !activeLink) return;
+
+    const listRect = list.getBoundingClientRect();
+    const linkRect = activeLink.getBoundingClientRect();
+    if (linkRect.top < listRect.top) {
+      list.scrollTop -= listRect.top - linkRect.top;
+    } else if (linkRect.bottom > listRect.bottom) {
+      list.scrollTop += linkRect.bottom - listRect.bottom;
+    }
+  }, [activeReleaseId]);
+
+  return (
+    <>
+      <div className="md:hidden">
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" className="w-full justify-between">
+              <span className="flex min-w-0 items-center gap-2">
+                <List className="h-4 w-4 shrink-0" />
+                <span className="truncate">Jump to release</span>
+              </span>
+              <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            align="start"
+            className="w-[var(--radix-dropdown-menu-trigger-width)]"
+            onCloseAutoFocus={(event) => event.preventDefault()}
+          >
+            {entries.map((entry) => (
+              <DropdownMenuItem
+                key={entry.id}
+                asChild
+                onSelect={() => jumpToRelease(entry.id)}
+              >
+                <Link
+                  to={`#release-${entry.id}`}
+                  className="min-w-0 cursor-pointer"
+                  aria-current={
+                    entry.id === activeReleaseId ? "location" : undefined
+                  }
+                >
+                  <Tag className="mr-2 h-4 w-4 shrink-0" />
+                  <span className="truncate">{entry.label}</span>
+                </Link>
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+
+      <aside
+        className="hidden self-start md:sticky md:top-24 md:flex md:max-h-[calc(100vh-7rem)] md:flex-col"
+        aria-label="Release list"
+      >
+        <h2 className="mb-2 shrink-0 text-sm font-semibold">Release list</h2>
+        <nav
+          ref={releaseListRef}
+          className="min-h-0 overflow-y-auto overscroll-contain pr-1"
+        >
+          <ul className="space-y-1">
+            {entries.map((entry) => {
+              const active = entry.id === activeReleaseId;
+              return (
+                <li key={entry.id}>
+                  <Link
+                    to={`#release-${entry.id}`}
+                    onClick={() => onSelectRelease(entry.id)}
+                    aria-current={active ? "location" : undefined}
+                    className={cn(
+                      "block border-l-2 px-3 py-2 text-sm break-words transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                      active
+                        ? "border-pink-500 bg-accent font-medium text-foreground"
+                        : "border-transparent text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+                    )}
+                  >
+                    {entry.label}
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
+        </nav>
+      </aside>
+    </>
+  );
+}
+
+function AssetRow({
+  asset,
+  blossomServers,
+}: {
+  asset: SoftwareAsset;
+  blossomServers: string[];
+}) {
   const size = formatBytes(asset.size);
-  const downloadable = !!asset.downloadUrl;
+  const blossomDownloadUrl = blossomServers
+    .map((server) => blossomBlobUrl(server, asset.sha256))
+    .find((url): url is string => !!url);
+  const downloadUrl = asset.downloadUrl ?? blossomDownloadUrl;
+  const downloadable = !!downloadUrl;
   const content = (
     <>
       {downloadable ? (
@@ -131,8 +286,11 @@ function AssetRow({ asset }: { asset: SoftwareAsset }) {
           </div>
         )}
         <div className="flex items-start gap-1.5 mt-2 text-xs text-muted-foreground">
-          <ShieldCheck className="h-3.5 w-3.5 shrink-0 mt-0.5" />
-          <code className="font-mono break-all" title="SHA-256 checksum">
+          <ShieldCheck className="h-4 w-4 shrink-0" />
+          <code
+            className="relative top-px font-mono leading-4 break-all"
+            title="SHA-256 checksum"
+          >
             SHA-256 {asset.sha256}
           </code>
         </div>
@@ -146,13 +304,13 @@ function AssetRow({ asset }: { asset: SoftwareAsset }) {
       "transition-colors hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
   );
 
-  if (!asset.downloadUrl) {
+  if (!downloadUrl) {
     return <div className={className}>{content}</div>;
   }
 
   return (
     <a
-      href={asset.downloadUrl}
+      href={downloadUrl}
       target="_blank"
       rel="noopener noreferrer"
       className={className}
@@ -168,11 +326,13 @@ function ReleaseAssets({
   assetsById,
   settled,
   defaultOpen,
+  blossomServers,
 }: {
   release: SoftwareRelease;
   assetsById: Map<string, SoftwareAsset>;
   settled: boolean;
   defaultOpen: boolean;
+  blossomServers: string[];
 }) {
   return (
     <Collapsible defaultOpen={defaultOpen} className="border-t">
@@ -188,7 +348,15 @@ function ReleaseAssets({
         <div className="divide-y border-t">
           {release.assets.map(({ id }) => {
             const asset = assetsById.get(id);
-            if (asset) return <AssetRow key={id} asset={asset} />;
+            if (asset) {
+              return (
+                <AssetRow
+                  key={id}
+                  asset={asset}
+                  blossomServers={blossomServers}
+                />
+              );
+            }
             if (!settled) {
               return (
                 <div key={id} className="flex items-center gap-3 px-4 py-4">
@@ -220,6 +388,7 @@ function ReleaseCard({
   assetsSettled,
   latest,
   showApplication,
+  blossomServers,
 }: {
   release: SoftwareRelease;
   application: SoftwareApplication | undefined;
@@ -227,6 +396,7 @@ function ReleaseCard({
   assetsSettled: boolean;
   latest: boolean;
   showApplication: boolean;
+  blossomServers: string[];
 }) {
   const relativeDate = safeFormatDistanceToNow(release.event.created_at, {
     addSuffix: true,
@@ -239,39 +409,34 @@ function ReleaseCard({
   const isPrerelease = release.channel !== "main";
 
   return (
-    <article className="grid gap-3 md:grid-cols-[11rem_minmax(0,1fr)]">
-      <div className="min-w-0 pt-1 md:text-right">
-        <div className="flex items-center gap-2 md:justify-end">
-          <Tag className="h-4 w-4 text-muted-foreground" />
-          <span className="font-mono text-sm font-semibold break-all">
-            {displayVersion(release.version)}
-          </span>
-        </div>
-        <div className="flex flex-wrap gap-1.5 mt-2 md:justify-end">
-          {latest && (
-            <Badge className="bg-emerald-600 text-white hover:bg-emerald-600">
-              Latest
-            </Badge>
-          )}
-          {isPrerelease && (
-            <Badge
-              variant="outline"
-              className="border-amber-500/50 text-amber-700 dark:text-amber-300"
-            >
-              {release.channel}
-            </Badge>
-          )}
-          {showApplication && application && (
-            <Badge variant="secondary">{application.name}</Badge>
-          )}
-        </div>
-      </div>
-
+    <article
+      id={`release-${release.event.id}`}
+      tabIndex={-1}
+      className="scroll-mt-24 last:min-h-[calc(100vh-6rem)] focus:outline-none"
+    >
       <Card className={cn(latest && "border-emerald-500/40")}>
         <CardHeader className="p-5 pb-4">
-          <CardTitle className="text-xl leading-tight break-words">
-            {application?.name ?? release.appId} {release.version}
-          </CardTitle>
+          <div className="flex flex-wrap items-center gap-2">
+            <CardTitle className="text-xl leading-tight break-words">
+              {application?.name ?? release.appId} {release.version}
+            </CardTitle>
+            {latest && (
+              <Badge className="bg-emerald-600 text-white hover:bg-emerald-600">
+                Latest
+              </Badge>
+            )}
+            {isPrerelease && (
+              <Badge
+                variant="outline"
+                className="border-amber-500/50 text-amber-700 dark:text-amber-300"
+              >
+                {release.channel}
+              </Badge>
+            )}
+            {showApplication && application && (
+              <Badge variant="secondary">{application.name}</Badge>
+            )}
+          </div>
           <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm text-muted-foreground">
             <UserLink pubkey={release.pubkey} avatarSize="xs" />
             <span>released this</span>
@@ -280,6 +445,13 @@ function ReleaseCard({
                 {relativeDate}
               </time>
             )}
+            <span aria-hidden="true">·</span>
+            <span className="flex min-w-0 items-center gap-1">
+              <Tag className="h-4 w-4 shrink-0" />
+              <span className="font-mono break-all">
+                {displayVersion(release.version)}
+              </span>
+            </span>
           </div>
         </CardHeader>
 
@@ -310,6 +482,7 @@ function ReleaseCard({
           assetsById={assetsById}
           settled={assetsSettled}
           defaultOpen={latest}
+          blossomServers={blossomServers}
         />
       </Card>
     </article>
@@ -318,6 +491,8 @@ function ReleaseCard({
 
 export default function RepoReleasesPage() {
   const { resolved } = useRepoContext();
+  const location = useLocation();
+  const blossomServers = useBlossomServers();
   const repo = resolved?.repo;
   const {
     applications,
@@ -355,6 +530,11 @@ export default function RepoReleasesPage() {
     }
     return ids;
   }, [releases]);
+  const releaseIds = useMemo(
+    () => releases.map((release) => release.event.id),
+    [releases],
+  );
+  const [visibleReleaseId, setVisibleReleaseId] = useState<string>();
 
   useSeoMeta({
     title: repo ? `Releases - ${repo.name} - ngit` : "Releases - ngit",
@@ -366,6 +546,62 @@ export default function RepoReleasesPage() {
   const loadingApplications = !applicationsSettled && applications.length === 0;
   const loadingReleases =
     applications.length > 0 && !releasesSettled && releases.length === 0;
+  const requestedReleaseId = location.hash.startsWith("#release-")
+    ? location.hash.slice("#release-".length)
+    : undefined;
+  const activeReleaseId =
+    releases.find((release) => release.event.id === visibleReleaseId)?.event
+      .id ??
+    releases.find((release) => release.event.id === requestedReleaseId)?.event
+      .id ??
+    releases[0]?.event.id ??
+    "";
+
+  useEffect(() => {
+    if (releaseIds.length === 0) return;
+
+    let frame: number | undefined;
+    const updateVisibleRelease = () => {
+      frame = undefined;
+      const viewportTop = 96;
+      let nextReleaseId = releaseIds[0];
+
+      for (const releaseId of releaseIds) {
+        const element = document.getElementById(`release-${releaseId}`);
+        if (!element) continue;
+        nextReleaseId = releaseId;
+        if (element.getBoundingClientRect().bottom > viewportTop) break;
+      }
+
+      setVisibleReleaseId((current) =>
+        current === nextReleaseId ? current : nextReleaseId,
+      );
+    };
+    const scheduleUpdate = () => {
+      if (frame !== undefined) return;
+      frame = requestAnimationFrame(updateVisibleRelease);
+    };
+
+    scheduleUpdate();
+    window.addEventListener("scroll", scheduleUpdate, { passive: true });
+    window.addEventListener("resize", scheduleUpdate);
+
+    return () => {
+      window.removeEventListener("scroll", scheduleUpdate);
+      window.removeEventListener("resize", scheduleUpdate);
+      if (frame !== undefined) cancelAnimationFrame(frame);
+    };
+  }, [releaseIds]);
+
+  useEffect(() => {
+    if (!location.hash || releases.length === 0) return;
+    const frame = requestAnimationFrame(() => {
+      document.getElementById(location.hash.slice(1))?.scrollIntoView({
+        block: "start",
+      });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [location.hash, releases.length]);
 
   return (
     <div className="container max-w-screen-xl px-4 md:px-8 py-6 space-y-5">
@@ -386,20 +622,30 @@ export default function RepoReleasesPage() {
       ) : releases.length === 0 ? (
         <EmptyReleases hasApplication />
       ) : (
-        <div className="space-y-8">
-          {releases.map((release) => (
-            <ReleaseCard
-              key={release.event.id}
-              release={release}
-              application={applicationByReleaseKey.get(
-                `${release.pubkey}:${release.appId}`,
-              )}
-              assetsById={assetsById}
-              assetsSettled={assetsSettled}
-              latest={latestMainReleaseIds.has(release.event.id)}
-              showApplication={applications.length > 1}
-            />
-          ))}
+        <div className="grid items-start gap-4 md:grid-cols-[11rem_minmax(0,1fr)] md:gap-6">
+          <ReleaseNavigation
+            releases={releases}
+            applicationByReleaseKey={applicationByReleaseKey}
+            showApplication={applications.length > 1}
+            activeReleaseId={activeReleaseId}
+            onSelectRelease={setVisibleReleaseId}
+          />
+          <div className="min-w-0 space-y-8">
+            {releases.map((release) => (
+              <ReleaseCard
+                key={release.event.id}
+                release={release}
+                application={applicationByReleaseKey.get(
+                  `${release.pubkey}:${release.appId}`,
+                )}
+                assetsById={assetsById}
+                assetsSettled={assetsSettled}
+                latest={latestMainReleaseIds.has(release.event.id)}
+                showApplication={applications.length > 1}
+                blossomServers={blossomServers}
+              />
+            ))}
+          </div>
         </div>
       )}
     </div>

@@ -18,7 +18,7 @@ import PRPage from "@/pages/PRPage";
 import { useIssues } from "@/hooks/useIssues";
 import { usePRs } from "@/hooks/usePRs";
 import { useRepoHasCI } from "@/hooks/useCI";
-import { useRepoHasReleases } from "@/hooks/useSoftwareReleases";
+import { useRepoReleaseSummary } from "@/hooks/useSoftwareReleases";
 import { usePrefetchNip05 } from "@/hooks/usePrefetchNip05";
 import { useDnsIdentity } from "@/hooks/useDnsIdentity";
 import { useRepositoryState } from "@/hooks/useRepositoryState";
@@ -235,6 +235,15 @@ function RepoLayoutResolved({
   );
   const repo = resolved?.repo;
 
+  // Build an encoded base path for intra-repository links. `splat` is decoded
+  // by React Router, including `%2F` inside a repository identifier; using it
+  // directly would turn an identifier such as `lightningdevkit/rust-lightning`
+  // into multiple path segments when linking to `/prs`, `/issues`, etc.
+  const basePath = useMemo(() => {
+    return repoToPath(pubkey, repoId, relayHints, nip05);
+  }, [pubkey, repoId, relayHints, nip05]);
+  const isReleasesTab = location.pathname.startsWith(`${basePath}/releases`);
+
   // Delay showing the repo search status page so the skeleton shows first.
   // Timer starts on mount (keyed to pubkey+repoId) and is never reset by
   // transient relay group changes mid-search.
@@ -314,11 +323,13 @@ function RepoLayoutResolved({
   // visibility of the Actions tab. Cheap limit-1 probe by #a across all
   // maintainer coordinates.
   const hasCI = useRepoHasCI(repo?.allCoordinates, repoRelayGroup);
-  const hasReleases = useRepoHasReleases(
+  const releaseSummary = useRepoReleaseSummary(
     repo?.allCoordinates,
     repo?.maintainerSet,
     repoRelayGroup,
+    !isReleasesTab,
   );
+  const hasReleases = releaseSummary.hasReleases;
 
   const [repoState, repoRelayEose, relayStateMap, repoStateEvents] =
     useRepositoryState(repo?.dTag, repo?.maintainerSet, repoRelayGroup);
@@ -357,13 +368,6 @@ function RepoLayoutResolved({
       ? repo.maintainerSet.includes(account.pubkey)
       : false;
 
-  // Build an encoded base path for intra-repository links. `splat` is decoded
-  // by React Router, including `%2F` inside a repository identifier; using it
-  // directly would turn an identifier such as `lightningdevkit/rust-lightning`
-  // into multiple path segments when linking to `/prs`, `/issues`, etc.
-  const basePath = useMemo(() => {
-    return repoToPath(pubkey, repoId, relayHints, nip05);
-  }, [pubkey, repoId, relayHints, nip05]);
   const repoPageSuffix = location.pathname.startsWith(basePath)
     ? location.pathname.slice(basePath.length)
     : "";
@@ -375,7 +379,6 @@ function RepoLayoutResolved({
   const isIssuesTab = location.pathname.startsWith(`${basePath}/issues`);
   const isPRsTab = location.pathname.startsWith(`${basePath}/prs`);
   const isActionsTab = location.pathname.startsWith(`${basePath}/actions`);
-  const isReleasesTab = location.pathname.startsWith(`${basePath}/releases`);
   const isAboutTab = location.pathname.startsWith(`${basePath}/about`);
   const isSettingsTab = location.pathname.startsWith(`${basePath}/settings`);
   // Determine which sub-page to render from the splat segments.
@@ -561,6 +564,7 @@ function RepoLayoutResolved({
           prCommitId,
           prBasePath,
           basePath,
+          releaseSummary,
         }
       : null;
 

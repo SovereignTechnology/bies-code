@@ -29,6 +29,8 @@ const AssetPlatformsSymbol = Symbol.for("software-asset-platforms");
 const AssetSizeSymbol = Symbol.for("software-asset-size");
 const AssetUrlSymbol = Symbol.for("software-asset-url");
 const AssetFilenameSymbol = Symbol.for("software-asset-filename");
+const HEX_64 = /^[0-9a-f]{64}$/i;
+const DIGITS_ONLY = /^\d+$/;
 
 export interface SoftwareAssetPointer {
   id: string;
@@ -39,6 +41,10 @@ function repeatedTagValues(event: NostrEvent, name: string): string[] {
   return event.tags
     .filter(([tagName, value]) => tagName === name && !!value)
     .map(([, value]) => value);
+}
+
+function isHex64(value: string | undefined): value is string {
+  return !!value && HEX_64.test(value);
 }
 
 function safeHttpUrl(value: string | undefined): string | undefined {
@@ -91,7 +97,7 @@ export function isValidSoftwareRelease(
     !!version &&
     getTagValue(event, "d") === `${appId}@${version}` &&
     !!getTagValue(event, "c") &&
-    event.tags.some(([name, id]) => name === "e" && !!id)
+    event.tags.some(([name, id]) => name === "e" && isHex64(id))
   );
 }
 
@@ -103,7 +109,7 @@ export function isValidSoftwareAsset(
     !!getTagValue(event, "i") &&
     !!getTagValue(event, "version") &&
     !!getTagValue(event, "m") &&
-    !!getTagValue(event, "x")
+    isHex64(getTagValue(event, "x"))
   );
 }
 
@@ -189,7 +195,9 @@ export class SoftwareRelease extends EventCast<SoftwareReleaseEvent> {
   get assets(): SoftwareAssetPointer[] {
     return getOrComputeCachedValue(this.event, ReleaseAssetsSymbol, () =>
       this.event.tags.flatMap(([name, id, relayHint]) =>
-        name === "e" && id ? [{ id, relayHint: relayHint || undefined }] : [],
+        name === "e" && isHex64(id)
+          ? [{ id, relayHint: relayHint || undefined }]
+          : [],
       ),
     );
   }
@@ -245,8 +253,8 @@ export class SoftwareAsset extends EventCast<SoftwareAssetEvent> {
   get size(): number | undefined {
     return getOrComputeCachedValue(this.event, AssetSizeSymbol, () => {
       const value = getTagValue(this.event, "size");
-      if (!value) return undefined;
-      const parsed = Number.parseInt(value, 10);
+      if (!value || !DIGITS_ONLY.test(value)) return undefined;
+      const parsed = Number(value);
       return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : undefined;
     });
   }

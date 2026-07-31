@@ -412,3 +412,19 @@ export const DEFAULT_BLOSSOM_SERVERS = [
   "https://blossom.dreamith.to",
   "https://blossom.primal.net",
 ];
+
+/** Build a BUD-01 content-addressed download URL for a Blossom server. */
+export function blossomBlobUrl(
+  server: string,
+  sha256: string,
+): string | undefined {
+  if (!/^[0-9a-f]{64}$/i.test(sha256)) return undefined;
+  try {
+    const url = new URL(`/${sha256}`, server);
+    return url.protocol === "https:" || url.protocol === "http:"
+      ? url.href
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}

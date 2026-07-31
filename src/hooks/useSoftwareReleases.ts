@@ -2,12 +2,14 @@ import { useMemo } from "react";
 import type { CastRefEventStore } from "applesauce-common/casts/cast";
 import type { IEventStore } from "applesauce-core/event-store";
 import { mapEventsToStore } from "applesauce-core";
-import { getSeenRelays, type Filter } from "applesauce-core/helpers";
+import type { Filter } from "applesauce-core/helpers";
 import { onlyEvents } from "applesauce-relay";
 import type { RelayGroup } from "applesauce-relay";
+import { makeCacheRequest } from "applesauce-loaders/helpers";
 import { combineLatest, EMPTY, merge, of, type Observable } from "rxjs";
 import {
   catchError,
+  endWith,
   filter,
   ignoreElements,
   map,
@@ -33,6 +35,7 @@ import {
 } from "@/lib/resilientSubscription";
 import { normalizeUrl } from "@/lib/url";
 import { relayGroupUrls$ } from "@/models/RepositoryRelayGroup";
+import { cacheRequest } from "@/services/cache";
 import { pool } from "@/services/nostr";
 
 export const ZAPSTORE_RELAY_URL = "wss://relay.zapstore.dev";
@@ -44,6 +47,12 @@ export interface RepoSoftwareReleases {
   applicationsSettled: boolean;
   releasesSettled: boolean;
   assetsSettled: boolean;
+}
+
+export interface RepoReleaseSummary {
+  hasReleases: boolean;
+  latestRelease: SoftwareRelease | undefined;
+  latestApplication: SoftwareApplication | undefined;
 }
 
 function isWebSocketUrl(value: string): boolean {
@@ -66,6 +75,26 @@ function uniqueRelayUrls(values: string[]): string[] {
     result.push(normalized);
   }
   return result;
+}
+
+function loadCacheIntoStore(
+  filters: Filter[],
+  store: IEventStore,
+): Observable<never> {
+  return hydrateCacheIntoStore(filters, store).pipe(ignoreElements());
+}
+
+function hydrateCacheIntoStore(
+  filters: Filter[],
+  store: IEventStore,
+): Observable<boolean> {
+  return makeCacheRequest(cacheRequest, filters).pipe(
+    mapEventsToStore(store),
+    ignoreElements(),
+    endWith(true),
+    catchError(() => of(true)),
+    startWith(false),
+  );
 }
 
 /**
@@ -101,8 +130,11 @@ function loadRelayIntoStore(
  * (notably Zapstore) may still hold the requested events. Track each relay's
  * own EOSE and report settled only once every current relay has settled.
  *
- * An empty relay list remains unsettled because RepositoryRelayGroup starts
- * empty and is populated asynchronously from the repository announcement.
+ * Persistent cache results are hydrated alongside the relay work. Settlement
+ * waits for both cache hydration and every relay probe so a fast EOSE cannot
+ * expose a false empty state while IndexedDB is still loading. An empty relay
+ * list remains unsettled because RepositoryRelayGroup starts empty and is
+ * populated asynchronously.
  */
 function loadIntoStoreUntilSettled(
   relays: string[],
@@ -110,27 +142,29 @@ function loadIntoStoreUntilSettled(
   store: IEventStore,
   paginate = false,
 ): Observable<boolean> {
-  if (relays.length === 0) return of(false);
-  return combineLatest(
-    relays.map((relay) => loadRelayIntoStore(relay, filters, store, paginate)),
-  ).pipe(map((settled) => settled.every(Boolean)));
+  const relaySettled$ =
+    relays.length === 0
+      ? of(false)
+      : combineLatest(
+          relays.map((relay) =>
+            loadRelayIntoStore(relay, filters, store, paginate),
+          ),
+        ).pipe(map((settled) => settled.every(Boolean)));
+
+  return combineLatest([
+    hydrateCacheIntoStore(filters, store),
+    relaySettled$,
+  ]).pipe(
+    map(([cacheSettled, relaysSettled]) => cacheSettled && relaysSettled),
+  );
 }
 
 function castApplications(
   events: Parameters<typeof isValidSoftwareApplication>[0][],
   store: CastRefEventStore,
-  repoRelays: string[],
 ): SoftwareApplication[] {
-  const repoRelaySet = new Set(repoRelays.map(normalizeUrl));
   return events.flatMap((event) => {
     if (!isValidSoftwareApplication(event)) return [];
-    const seenRelays = getSeenRelays(event);
-    if (
-      !seenRelays ||
-      ![...seenRelays].some((relay) => repoRelaySet.has(normalizeUrl(relay)))
-    ) {
-      return [];
-    }
     try {
       return [new SoftwareApplication(event, store)];
     } catch {
@@ -237,8 +271,8 @@ export function useSoftwareReleases(
       if (!repoCoords?.length || !maintainerPubkeys?.length) return of([]);
       return store
         .timeline([applicationFilter])
-        .pipe(map((events) => castApplications(events, castStore, repoRelays)));
-    }, [coordsKey, maintainerKey, repoRelayKey, store]) ?? [];
+        .pipe(map((events) => castApplications(events, castStore)));
+    }, [coordsKey, maintainerKey, store]) ?? [];
 
   const appIds = [...new Set(applications.map((app) => app.appId))];
   const appAuthors = [...new Set(applications.map((app) => app.pubkey))];
@@ -329,24 +363,26 @@ export function useSoftwareReleases(
 }
 
 /**
- * Cheap presence probe used by RepoLayout to decide whether Releases belongs
- * in repository navigation. Trusted application events arrive through the
- * priority nip34RepoLoader subscription; this hook reads them from the store,
- * then requests at most one matching release per publisher from the repository
- * relays plus Zapstore. Assets are not fetched.
+ * Cheap summary probe used by RepoLayout for repository navigation and the
+ * code-page sidebar. Trusted application events arrive through the priority
+ * nip34RepoLoader subscription or the persistent cache; this hook reads them
+ * from the store, then requests at most one matching release per publisher
+ * from the cache, repository relays, and Zapstore. It also requests the latest
+ * main-channel release so a newer prerelease does not hide the latest stable
+ * release. Assets are not fetched.
  */
-export function useRepoHasReleases(
+export function useRepoReleaseSummary(
   repoCoords: string[] | undefined,
   maintainerPubkeys: string[] | undefined,
   repoRelayGroup: RelayGroup | undefined,
-): boolean {
+  probeRelays = true,
+): RepoReleaseSummary {
   const store = useEventStore();
   const castStore = store as unknown as CastRefEventStore;
   const coordsKey = [...(repoCoords ?? [])].sort().join(",");
   const maintainerKey = [...(maintainerPubkeys ?? [])].sort().join(",");
   const repoRelays =
     use$(() => relayGroupUrls$(repoRelayGroup), [repoRelayGroup]) ?? [];
-  const repoRelayKey = repoRelays.join(",");
 
   const applicationFilter: Filter = {
     kinds: [SOFTWARE_APPLICATION_KIND],
@@ -354,37 +390,73 @@ export function useRepoHasReleases(
     "#a": repoCoords ?? [],
   } as Filter;
 
+  use$(() => {
+    if (!repoCoords?.length || !maintainerPubkeys?.length) return undefined;
+    return loadCacheIntoStore([applicationFilter], store);
+  }, [coordsKey, maintainerKey, store]);
+
   const applications =
     use$(() => {
       if (!repoCoords?.length || !maintainerPubkeys?.length) return of([]);
       return store
         .timeline([applicationFilter])
-        .pipe(map((events) => castApplications(events, castStore, repoRelays)));
-    }, [coordsKey, maintainerKey, repoRelayKey, store]) ?? [];
+        .pipe(map((events) => castApplications(events, castStore)));
+    }, [coordsKey, maintainerKey, store]) ?? [];
 
   const appPairsKey = applications
     .map((application) => `${application.pubkey}:${application.appId}`)
     .sort()
     .join(",");
   const releaseFilters = releaseFiltersForApplications(applications, 1);
+  const latestMainFilters = releaseFilters.map(
+    (releaseFilter) =>
+      ({
+        ...releaseFilter,
+        "#c": ["main"],
+      }) as Filter,
+  );
+  const summaryFilters = [...releaseFilters, ...latestMainFilters];
   const releaseRelays = uniqueRelayUrls([...repoRelays, ZAPSTORE_RELAY_URL]);
   const releaseRelayKey = releaseRelays.join(",");
 
   use$(() => {
-    if (releaseFilters.length === 0) return undefined;
-    return resilientRequest(pool, releaseRelays, releaseFilters).pipe(
-      onlyEvents(),
-      mapEventsToStore(store),
-      catchError(() => EMPTY),
+    if (summaryFilters.length === 0) return undefined;
+    if (!probeRelays) return loadCacheIntoStore(summaryFilters, store);
+    return merge(
+      loadCacheIntoStore(summaryFilters, store),
+      resilientRequest(pool, releaseRelays, summaryFilters).pipe(
+        onlyEvents(),
+        mapEventsToStore(store),
+        ignoreElements(),
+        catchError(() => EMPTY),
+      ),
     );
-  }, [appPairsKey, releaseRelayKey, store]);
+  }, [appPairsKey, probeRelays, releaseRelayKey, store]);
 
-  const hasReleases = use$(() => {
-    if (releaseFilters.length === 0) return of(false);
-    return store
-      .timeline(releaseFilters)
-      .pipe(map((events) => events.some(isValidSoftwareRelease)));
-  }, [appPairsKey, store]);
+  const releases =
+    use$(() => {
+      if (summaryFilters.length === 0) return of([]);
+      return store
+        .timeline(summaryFilters)
+        .pipe(map((events) => castReleases(events, castStore)));
+    }, [appPairsKey, store]) ?? [];
 
-  return hasReleases ?? false;
+  const latestRelease =
+    releases.find((release) => release.channel === "main") ?? releases[0];
+  const latestApplication = latestRelease
+    ? applications.find(
+        (application) =>
+          application.pubkey === latestRelease.pubkey &&
+          application.appId === latestRelease.appId,
+      )
+    : undefined;
+
+  return useMemo(
+    () => ({
+      hasReleases: releases.length > 0,
+      latestRelease,
+      latestApplication,
+    }),
+    [latestApplication, latestRelease, releases.length],
+  );
 }

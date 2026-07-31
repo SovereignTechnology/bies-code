@@ -54,6 +54,7 @@ import {
   Search,
   GitBranch,
   Tag,
+  Package,
 } from "lucide-react";
 import { getFileMediaType, toDataUri } from "@/lib/fileMediaType";
 import { cn, safeFormatDistanceToNow } from "@/lib/utils";
@@ -1556,7 +1557,85 @@ function FileTreeRow({
 
 import type { ResolvedRepo } from "@/lib/nip34";
 function RepoSidebar({ repo }: { repo: ResolvedRepo }) {
-  return <RepoAboutPanel repo={repo} variant="sidebar" />;
+  return (
+    <aside className="space-y-3 min-w-0">
+      <RepoAboutPanel repo={repo} variant="sidebar" />
+      <LatestReleaseSidebar />
+    </aside>
+  );
+}
+
+function LatestReleaseSidebar() {
+  const { basePath, releaseSummary } = useRepoContext();
+  const { latestRelease, latestApplication } = releaseSummary;
+  if (!latestRelease) return null;
+
+  const relativeDate = safeFormatDistanceToNow(latestRelease.event.created_at, {
+    addSuffix: true,
+  });
+  const date = new Date(latestRelease.event.created_at * 1000);
+  const machineDate = Number.isNaN(date.getTime())
+    ? undefined
+    : date.toISOString();
+  const version = /^v/i.test(latestRelease.version)
+    ? latestRelease.version
+    : `v${latestRelease.version}`;
+  const isPrerelease = latestRelease.channel !== "main";
+
+  return (
+    <div className="rounded-lg border border-border/60 overflow-hidden">
+      <Link
+        to={`${basePath}/releases`}
+        className="group/title flex w-full items-center gap-2 px-4 pt-3 pb-2 transition-colors hover:bg-accent/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+      >
+        <Package className="h-3.5 w-3.5 text-muted-foreground" />
+        <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide group-hover/title:text-pink-600 group-hover/title:underline dark:group-hover/title:text-pink-400">
+          Releases
+        </span>
+      </Link>
+      <Link
+        to={`${basePath}/releases#release-${latestRelease.event.id}`}
+        className="group/release flex min-w-0 items-center gap-3 px-4 py-2.5 transition-colors hover:bg-accent/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+        aria-label={`View release ${version}`}
+      >
+        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-pink-500/10 text-pink-500">
+          <Tag className="h-4 w-4" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="min-w-0 truncate font-mono text-sm font-semibold group-hover/release:text-pink-600 group-hover/release:underline dark:group-hover/release:text-pink-400">
+              {version}
+            </span>
+            <Badge
+              variant={isPrerelease ? "outline" : "secondary"}
+              className="h-5 shrink-0 px-1.5 text-[10px]"
+            >
+              {isPrerelease ? latestRelease.channel : "Latest"}
+            </Badge>
+          </div>
+          <div className="mt-1 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+            {latestApplication && (
+              <span className="truncate">{latestApplication.name}</span>
+            )}
+            {latestApplication && relativeDate && machineDate && (
+              <span aria-hidden="true">·</span>
+            )}
+            {relativeDate && machineDate && (
+              <time dateTime={machineDate} className="shrink-0">
+                {relativeDate}
+              </time>
+            )}
+          </div>
+        </div>
+      </Link>
+      <Link
+        to={`${basePath}/releases`}
+        className="block px-4 pt-2 pb-3 text-xs text-muted-foreground transition-colors hover:bg-accent/30 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+      >
+        View all
+      </Link>
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------------------

@@ -36,26 +36,9 @@ const BLOSSOM_PATH_REGEX = /^\/([a-f0-9]{64})\b/;
  *   - `failed`  — true once all candidates have been exhausted
  */
 export function useBlossomFallback(originalUrl: string) {
-  const store = useEventStore();
-  const account = useActiveAccount();
+  const servers = useBlossomServers();
   const [fallbackIndex, setFallbackIndex] = useState(-1);
   const failedRef = useRef(false);
-
-  // Reactively subscribe to the user's blossom server list (kind 10063)
-  const blossomServers = use$(
-    () =>
-      account?.pubkey
-        ? store.model(UserBlossomServersModel, account.pubkey)
-        : undefined,
-    [account?.pubkey, store],
-  );
-
-  const servers = useMemo(() => {
-    if (blossomServers && blossomServers.length > 0) {
-      return blossomServers.map((s) => s.toString());
-    }
-    return DEFAULT_BLOSSOM_SERVERS;
-  }, [blossomServers]);
 
   // Build the list of alternative URLs from configured Blossom servers.
   // Only applies if the URL path looks like a content-addressed blob (/<sha256>...).
@@ -107,4 +90,26 @@ export function useBlossomFallback(originalUrl: string) {
     onError,
     failed: failedRef.current && fallbackIndex >= alternatives.length - 1,
   };
+}
+
+/** Resolve the active account's configured Blossom servers or safe defaults. */
+export function useBlossomServers(): string[] {
+  const store = useEventStore();
+  const account = useActiveAccount();
+
+  // Reactively subscribe to the user's blossom server list (kind 10063)
+  const blossomServers = use$(
+    () =>
+      account?.pubkey
+        ? store.model(UserBlossomServersModel, account.pubkey)
+        : undefined,
+    [account?.pubkey, store],
+  );
+
+  return useMemo(() => {
+    if (blossomServers && blossomServers.length > 0) {
+      return blossomServers.map((s) => s.toString());
+    }
+    return DEFAULT_BLOSSOM_SERVERS;
+  }, [blossomServers]);
 }

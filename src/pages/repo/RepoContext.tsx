@@ -7,6 +7,7 @@ import type {
   RepoQueryOptions,
 } from "@/lib/nip34";
 import type { RepositoryState } from "@/casts/RepositoryState";
+import type { RepoReleaseSummary } from "@/hooks/useSoftwareReleases";
 import type { NostrEvent } from "nostr-tools";
 
 export interface RepoContextValue {
@@ -67,6 +68,8 @@ export interface RepoContextValue {
    * decoded route params or `window.location.pathname`.
    */
   basePath: string;
+  /** Lightweight release data shared by repository navigation and sidebar. */
+  releaseSummary: RepoReleaseSummary;
 }
 
 export const RepoContext = createContext<RepoContextValue | null>(null);
