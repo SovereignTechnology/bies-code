@@ -1017,13 +1017,27 @@ export function nip34RepoLoader(
         }
       });
 
+    // Fetch software applications in their own REQ, before the potentially
+    // large issue/PR query. Some relays merge and chronologically order all
+    // filters in a single REQ before sending any events, which can leave an
+    // older application event behind the repository's item backlog.
+    const softwareApplicationSub = resilientSubscription(
+      pool,
+      relayGroupUrls$(relayGroup),
+      [
+        {
+          kinds: [SOFTWARE_APPLICATION_KIND],
+          authors: maintainerPubkeys,
+          "#a": coords,
+        } as Filter,
+      ],
+      { reconnect: true, gapFill: true, settle: false },
+    )
+      .pipe(onlyEvents(), mapEventsToStore(eventStore))
+      .subscribe();
+
     const itemFilters = [
       { kinds: [...REPO_ITEM_KINDS], "#a": coords } as Filter,
-      {
-        kinds: [SOFTWARE_APPLICATION_KIND],
-        authors: maintainerPubkeys,
-        "#a": coords,
-      } as Filter,
     ];
     const itemSub = resilientSubscription(
       pool,
@@ -1070,6 +1084,7 @@ export function nip34RepoLoader(
 
     return () => {
       relaySub.unsubscribe();
+      softwareApplicationSub.unsubscribe();
       itemSub.unsubscribe();
       repoMetaSub.unsubscribe();
       inboxSubs.unsubscribe();
