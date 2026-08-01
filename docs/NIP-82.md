@@ -6,9 +6,7 @@
 
 This NIP defines kind 32267 to describe a software application, kind 30063 for a software release and kind 3063 for a software asset.
 
-All software assets MUST be installable or executable given only the target platform and a standard runtime implied by the MIME type. Assets that require additional dependency resolution beyond what that runtime ordinarily performs are out of scope. Native executables SHOULD be statically linked.
-
-The asset's MIME type determines its runtime and handling. Platform tags are used to restrict compatibility when the MIME type alone is insufficient.
+A software asset is a file associated with a software release. Automatic installation and dependency resolution are client concerns outside this NIP.
 
 ## Software Application
 
@@ -171,7 +169,7 @@ Note that a release version, typically a git tag, does not need to coincide with
 
 ## Software Asset
 
-An asset is a regular non-replaceable event, mainly used to cryptographically link a file through its SHA-256 hash. This kind is an extension of [kind 1063](94.md). See [Appendix C](#appendix-c-mime-types) for supported MIME types.
+An asset is a regular non-replaceable event, mainly used to cryptographically link a file through its SHA-256 hash. This kind is an extension of [kind 1063](94.md). See [Appendix C](#appendix-c-mime-types) for MIME type handling.
 
 ```jsonc
 {
@@ -194,10 +192,16 @@ An asset is a regular non-replaceable event, mainly used to cryptographically li
       "<asset-url>",
     ],
     [
+      // OPTIONAL
+      // Filename for the asset
+      "filename",
+      "<download-filename>",
+    ],
+    [
       // REQUIRED
       // MIME type of the asset
-      // NOTE: This is the primary source of truth for the asset type and runtime.
-      // See Appendix C for supported MIME types.
+      // NOTE: This is the primary source of truth for the asset format.
+      // See Appendix C for MIME type handling.
       "m",
       "<mime-type>",
     ],
@@ -354,7 +358,7 @@ Custom channel identifiers MAY be used for organization-specific needs (e.g., `i
 
 ## Appendix C: MIME types
 
-The MIME type is the primary source of truth for determining the asset's runtime and handling. Generic archives (e.g., `application/gzip`, `application/zip`) and dependency-based packages (e.g., `.deb`, `.rpm`) are NOT supported.
+Any valid MIME type MAY be used. The following non-exhaustive table lists formats with commonly understood platform or runtime handling.
 
 | MIME type                                       | Platform/Runtime    | Common Extension |
 | ----------------------------------------------- | ------------------- | ---------------- |
@@ -375,7 +379,7 @@ The MIME type is the primary source of truth for determining the asset's runtime
 | `application/wasm`                              | Browser / WASI      | `.wasm`          |
 | `application/webbundle`                         | Browser (PWA)       | `.wbn`, `.swbn`  |
 
-The `f` tag is OPTIONAL. Omitting it means the asset supports any/all architectures for the implied platform (e.g., universal APK, macOS fat binary). Publishers SHOULD include explicit `f` tags for clarity, even for universal builds.
+The `f` tag is OPTIONAL. It records publisher-declared compatibility restrictions. Omitting it means that the publisher has declared no restriction beyond the MIME type; it does not guarantee compatibility with every device. Publishers SHOULD include explicit `f` tags for clarity, even for universal builds.
 
 ### Native executables
 
