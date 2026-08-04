@@ -4,7 +4,33 @@
 
 Uses [NIP-78](https://github.com/nostr-protocol/nips/blob/master/78.md) (Arbitrary Custom App Data) to persist notification read/archived state across devices.
 
-### Event Structure
+Notification state uses two addressable events. The user's primary account only creates and decrypts a key envelope; routine state updates use the dedicated keypair stored in that envelope.
+
+### Key Envelope
+
+The key envelope is authored by the user's primary account and NIP-44 encrypted to the same account:
+
+```json
+{
+  "kind": 30078,
+  "tags": [["d", "git-notifications-nsec"]],
+  "content": "<NIP-44 encrypted JSON>"
+}
+```
+
+When decrypted, its content contains the hex-encoded private key for a dedicated notification keypair:
+
+```json
+{
+  "nsec": "<hex private key>"
+}
+```
+
+Despite the `git-notifications-nsec` identifier, the `nsec` field contains the raw private key encoded as hexadecimal, not a Bech32 `nsec1...` string.
+
+### State Event
+
+The state event is authored by the dedicated notification keypair and NIP-44 encrypted to that keypair's own pubkey:
 
 ```json
 {
@@ -14,9 +40,9 @@ Uses [NIP-78](https://github.com/nostr-protocol/nips/blob/master/78.md) (Arbitra
 }
 ```
 
-### Encrypted Content Schema
+### State Content Schema
 
-The `content` field is NIP-44 encrypted to self (the user's own pubkey). When decrypted, it contains a JSON object with the following fields:
+When decrypted with the dedicated notification keypair, the state event contains a JSON object with the following fields:
 
 | Field | Type       | Description                                                                                            |
 | ----- | ---------- | ------------------------------------------------------------------------------------------------------ |
@@ -37,6 +63,8 @@ The `content` field is NIP-44 encrypted to self (the user's own pubkey). When de
 ```
 
 ### Design Rationale
+
+Separating the key envelope from the state event avoids repeatedly invoking the user's primary signer. The primary signer is needed when creating the envelope and when decrypting a newer envelope received from another device. The decrypted dedicated key is cached locally, and all subsequent state encryption, decryption, and signing use that keypair.
 
 The high-water-mark model keeps the payload compact:
 
