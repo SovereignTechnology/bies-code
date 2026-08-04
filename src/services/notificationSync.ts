@@ -5,7 +5,9 @@
  *
  * ### Nsec envelope (kind 30078, d: "git-notifications-nsec")
  *   - Authored by the user's pubkey, encrypted with their own signer (NIP-44).
- *   - Contains `{ nsec: "<hex private key>" }` — a dedicated notification keypair.
+ *   - Contains `{ "nsec-for-notification-state": "<hex private key>" }` for a
+ *     dedicated notification keypair. Legacy `{ nsec: "..." }` envelopes are
+ *     still accepted.
  *   - Created once the first time the user marks a notification.
  *   - Decrypted once per session; the plaintext hex key is cached in localStorage
  *     (alongside the envelope's event ID and created_at) so the user's signer is
@@ -54,6 +56,18 @@ import {
   getAppDataContent,
 } from "applesauce-common/helpers/app-data";
 import type { Subscription } from "rxjs";
+
+interface NotificationKeyEnvelope {
+  "nsec-for-notification-state"?: string;
+  /** Legacy field written before the purpose-specific field was introduced. */
+  nsec?: string;
+}
+
+function getNotificationKey(
+  content: NotificationKeyEnvelope | undefined,
+): string | undefined {
+  return content?.["nsec-for-notification-state"] ?? content?.nsec;
+}
 
 // ---------------------------------------------------------------------------
 // localStorage cache — stores the decrypted nsec alongside envelope metadata
@@ -217,12 +231,14 @@ export async function getOrCreateNotificationSigner(
       if (!isAppDataUnlocked(currentEnvelope)) {
         await unlockAppData(currentEnvelope, userSigner);
       }
-      const content = getAppDataContent<{ nsec: string }>(currentEnvelope);
-      if (content?.nsec) {
-        const signer = PrivateKeySigner.fromKey(hexToBytes(content.nsec));
+      const content =
+        getAppDataContent<NotificationKeyEnvelope>(currentEnvelope);
+      const notificationKey = getNotificationKey(content);
+      if (notificationKey) {
+        const signer = PrivateKeySigner.fromKey(hexToBytes(notificationKey));
         signerCache.set(pubkey, signer);
         saveNsecCache(pubkey, {
-          hexKey: content.nsec,
+          hexKey: notificationKey,
           eventId: currentEnvelope.id,
           createdAt: currentEnvelope.created_at,
         });
@@ -247,12 +263,13 @@ export async function getOrCreateNotificationSigner(
     // captured in the setHiddenContent closure is always undefined and the
     // encrypt step throws silently.
     const userPubkey = await userSigner.getPublicKey();
-    const signed = await AppDataFactory.create<{ nsec: string }>(
+    const envelopeContent = { "nsec-for-notification-state": hexKey };
+    const signed = await AppDataFactory.create(
       NOTIFICATION_NSEC_D_TAG,
-      { nsec: hexKey },
+      envelopeContent,
     )
       .as(userSigner)
-      .encryptedContent(userPubkey, JSON.stringify({ nsec: hexKey }), "nip44")
+      .encryptedContent(userPubkey, JSON.stringify(envelopeContent), "nip44")
       .sign();
 
     // Add to local store immediately

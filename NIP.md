@@ -22,11 +22,11 @@ When decrypted, its content contains the hex-encoded private key for a dedicated
 
 ```json
 {
-  "nsec": "<hex private key>"
+  "nsec-for-notification-state": "<hex private key>"
 }
 ```
 
-Despite the `git-notifications-nsec` identifier, the `nsec` field contains the raw private key encoded as hexadecimal, not a Bech32 `nsec1...` string.
+The field contains the raw private key encoded as hexadecimal, not a Bech32 `nsec1...` string. Readers MUST also accept the legacy `{ "nsec": "<hex private key>" }` content schema, but writers MUST use `nsec-for-notification-state` for newly created envelopes.
 
 ### State Event
 
