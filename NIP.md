@@ -1,5 +1,7 @@
 # ngitstack Custom Nostr Events
 
+GitWorkshop's software release implementation follows the vendored [NIP-82 Software Applications](docs/NIP-82.md), including its release asset clarifications.
+
 ## Notification Read State (kind 30078)
 
 Uses [NIP-78](https://github.com/nostr-protocol/nips/blob/master/78.md) (Arbitrary Custom App Data) to persist notification read/archived state across devices.
