@@ -190,6 +190,19 @@ export function decodeEventIdentifier(s: string): string | undefined {
 }
 
 /**
+ * Match an event ID against a raw hex prefix or a NIP-19 event identifier.
+ * Hex prefixes require at least eight characters to avoid overly broad matches.
+ */
+export function eventIdMatchesSearch(id: string, search: string): boolean {
+  const query = search.trim().toLowerCase();
+  const identifier = query.startsWith("nostr:") ? query.slice(6) : query;
+  const decodedId = decodeEventIdentifier(identifier);
+
+  if (decodedId) return id === decodedId;
+  return /^[0-9a-f]{8,64}$/.test(identifier) && id.startsWith(identifier);
+}
+
+/**
  * Extract relay hints from a nevent1 identifier.
  * Returns an empty array for note1 or invalid identifiers.
  */

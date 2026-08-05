@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { eventIdToNevent } from "@/lib/routeUtils";
+import { eventIdMatchesSearch, eventIdToNevent } from "@/lib/routeUtils";
 import { compactNumber } from "@/lib/utils";
 import { useSeoMeta } from "@unhead/react";
 import { useProfile } from "@/hooks/useProfile";
@@ -139,7 +139,8 @@ export default function RepoIssuesPage() {
         if (
           !issue.currentSubject.toLowerCase().includes(q) &&
           !issue.originalSubject.toLowerCase().includes(q) &&
-          !issue.content.toLowerCase().includes(q)
+          !issue.content.toLowerCase().includes(q) &&
+          !eventIdMatchesSearch(issue.id, q)
         )
           return false;
       }
@@ -220,7 +221,7 @@ export default function RepoIssuesPage() {
         <div className="relative flex-1 max-w-sm">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
-            placeholder="Search issues..."
+            placeholder="Search issues or event ID..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="pl-10 bg-background/60"

@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { eventIdToNevent } from "@/lib/routeUtils";
+import { eventIdMatchesSearch, eventIdToNevent } from "@/lib/routeUtils";
 import { compactNumber } from "@/lib/utils";
 import { useSeoMeta } from "@unhead/react";
 import { useProfile } from "@/hooks/useProfile";
@@ -129,7 +129,8 @@ export default function RepoPRsPage() {
         if (
           !pr.currentSubject.toLowerCase().includes(q) &&
           !pr.originalSubject.toLowerCase().includes(q) &&
-          !pr.content.toLowerCase().includes(q)
+          !pr.content.toLowerCase().includes(q) &&
+          !eventIdMatchesSearch(pr.id, q)
         )
           return false;
       }
@@ -189,7 +190,7 @@ export default function RepoPRsPage() {
         <div className="relative flex-1 max-w-sm">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
-            placeholder="Search PRs..."
+            placeholder="Search PRs or event ID..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="pl-10 bg-background/60"
