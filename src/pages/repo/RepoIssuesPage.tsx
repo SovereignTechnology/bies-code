@@ -123,29 +123,41 @@ export default function RepoIssuesPage() {
   }));
 
   // Apply filters
-  const filteredIssues = useMemo(() => {
-    if (!issues) return undefined;
-    return issues.filter((issue) => {
-      if (statusFilter.length > 0 && !statusFilter.includes(issue.status))
-        return false;
-      if (
-        labelFilter.length > 0 &&
-        !labelFilter.some((l) => issue.labels.includes(l))
-      )
-        return false;
-      if (authorFilter && issue.pubkey !== authorFilter) return false;
+  const { filteredIssues, idMatchesOutsideFilters } = useMemo(() => {
+    if (!issues) {
+      return { filteredIssues: undefined, idMatchesOutsideFilters: 0 };
+    }
+    let outsideFilterCount = 0;
+    const filtered = issues.filter((issue) => {
+      const matchesFacets =
+        (statusFilter.length === 0 || statusFilter.includes(issue.status)) &&
+        !(
+          labelFilter.length > 0 &&
+          !labelFilter.some((label) => issue.labels.includes(label))
+        ) &&
+        (!authorFilter || issue.pubkey === authorFilter);
+      const matchesId = eventIdMatchesSearch(issue.id, searchQuery);
+
+      if (matchesId) {
+        if (!matchesFacets) outsideFilterCount++;
+        return true;
+      }
+      if (!matchesFacets) return false;
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
         if (
           !issue.currentSubject.toLowerCase().includes(q) &&
           !issue.originalSubject.toLowerCase().includes(q) &&
-          !issue.content.toLowerCase().includes(q) &&
-          !eventIdMatchesSearch(issue.id, q)
+          !issue.content.toLowerCase().includes(q)
         )
           return false;
       }
       return true;
     });
+    return {
+      filteredIssues: filtered,
+      idMatchesOutsideFilters: outsideFilterCount,
+    };
   }, [issues, statusFilter, labelFilter, authorFilter, searchQuery]);
 
   const { visibleAcceptedIssues, visibleUnconfirmedIssues } = useMemo(() => {
@@ -271,6 +283,17 @@ export default function RepoIssuesPage() {
           )}
         </div>
       </div>
+
+      {idMatchesOutsideFilters > 0 && (
+        <p
+          role="status"
+          className="mb-3 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-sm text-amber-700 dark:text-amber-300"
+        >
+          Showing {idMatchesOutsideFilters} issue
+          {idMatchesOutsideFilters === 1 ? "" : "s"} outside your current
+          filters.
+        </p>
+      )}
 
       {/* Bordered container with status tabs header + list */}
       <div className="rounded-lg border border-border overflow-hidden">

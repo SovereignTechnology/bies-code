@@ -195,7 +195,10 @@ export function decodeEventIdentifier(s: string): string | undefined {
  */
 export function eventIdMatchesSearch(id: string, search: string): boolean {
   const query = search.trim().toLowerCase();
-  const identifier = query.startsWith("nostr:") ? query.slice(6) : query;
+  const withoutScheme = query.startsWith("nostr:") ? query.slice(6) : query;
+  const identifier = withoutScheme.startsWith("#")
+    ? withoutScheme.slice(1)
+    : withoutScheme;
   const decodedId = decodeEventIdentifier(identifier);
 
   if (decodedId) return id === decodedId;

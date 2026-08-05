@@ -111,31 +111,40 @@ export default function RepoPRsPage() {
   }));
 
   // Apply filters
-  const filteredPRs = useMemo(() => {
-    if (!prs) return undefined;
-    return prs.filter((pr) => {
-      if (statusFilter.length > 0 && !statusFilter.includes(pr.status))
-        return false;
-      if (typeFilter.length > 0 && !typeFilter.includes(pr.itemType))
-        return false;
-      if (
-        labelFilter.length > 0 &&
-        !labelFilter.some((l) => pr.labels.includes(l))
-      )
-        return false;
-      if (authorFilter && pr.pubkey !== authorFilter) return false;
+  const { filteredPRs, idMatchesOutsideFilters } = useMemo(() => {
+    if (!prs) return { filteredPRs: undefined, idMatchesOutsideFilters: 0 };
+    let outsideFilterCount = 0;
+    const filtered = prs.filter((pr) => {
+      const matchesFacets =
+        (statusFilter.length === 0 || statusFilter.includes(pr.status)) &&
+        (typeFilter.length === 0 || typeFilter.includes(pr.itemType)) &&
+        !(
+          labelFilter.length > 0 &&
+          !labelFilter.some((label) => pr.labels.includes(label))
+        ) &&
+        (!authorFilter || pr.pubkey === authorFilter);
+      const matchesId = eventIdMatchesSearch(pr.id, searchQuery);
+
+      if (matchesId) {
+        if (!matchesFacets) outsideFilterCount++;
+        return true;
+      }
+      if (!matchesFacets) return false;
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
         if (
           !pr.currentSubject.toLowerCase().includes(q) &&
           !pr.originalSubject.toLowerCase().includes(q) &&
-          !pr.content.toLowerCase().includes(q) &&
-          !eventIdMatchesSearch(pr.id, q)
+          !pr.content.toLowerCase().includes(q)
         )
           return false;
       }
       return true;
     });
+    return {
+      filteredPRs: filtered,
+      idMatchesOutsideFilters: outsideFilterCount,
+    };
   }, [prs, statusFilter, typeFilter, labelFilter, authorFilter, searchQuery]);
 
   const { visibleAcceptedItems, visibleUnconfirmedItems } = useMemo(() => {
@@ -248,6 +257,17 @@ export default function RepoPRsPage() {
           )}
         </div>
       </div>
+
+      {idMatchesOutsideFilters > 0 && (
+        <p
+          role="status"
+          className="mb-3 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-sm text-amber-700 dark:text-amber-300"
+        >
+          Showing {idMatchesOutsideFilters} pull request
+          {idMatchesOutsideFilters === 1 ? "" : "s"} outside your current
+          filters.
+        </p>
+      )}
 
       {/* Bordered container with status tabs header + list */}
       <div className="rounded-lg border border-border overflow-hidden">
