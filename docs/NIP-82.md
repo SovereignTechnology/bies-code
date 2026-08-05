@@ -117,7 +117,14 @@ It also contains a release channel name.
   "tags": [
     [
       // REQUIRED
-      // This MUST be the `d` tag in the application kind 32267
+      // Pointer to the software application kind 32267
+      "a",
+      "32267:<app-publisher-pubkey>:<app-id>",
+      "<relay-hint>",
+    ],
+    [
+      // REQUIRED
+      // This MUST be the `<app-id>` in the `a` tag
       "i",
       "<app-id>",
     ],
@@ -158,6 +165,8 @@ It also contains a release channel name.
 ```
 
 The `e` tags are pointers to all [Software Asset](#software-asset)s in this release. This event MUST be the authoritative source for assets belonging to a given version.
+
+The `i` tag MUST be the `<app-id>` component of the kind 32267 coordinate in the `a` tag.
 
 When `f` tags are included, they MUST be the aggregate (deduplicated union) of all `f` tags on the linked kind 3063 events. Clients MAY use them for discovery and filtering without resolving every asset. Publishers SHOULD include them whenever any linked asset has platform tags, and keep them in sync when assets are added, removed, or retagged.
 
