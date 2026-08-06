@@ -1622,7 +1622,7 @@ export function CreateReleaseDialog({
           existingApplications={availableApplications}
           repoCoordinates={repoCoordinates}
           relayHint={relayHint}
-          onCreated={(application) => {
+          onPublished={(application) => {
             setCreatedApplication(application);
             setApplicationCoordinate(application.coordinate);
           }}

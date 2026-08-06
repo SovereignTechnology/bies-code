@@ -7,7 +7,12 @@ import {
   useRef,
   useState,
 } from "react";
-import { Link, useLocation, useSearchParams } from "react-router-dom";
+import {
+  Link,
+  useLocation,
+  useNavigate,
+  useSearchParams,
+} from "react-router-dom";
 import { useSeoMeta } from "@unhead/react";
 import { useActiveAccount } from "applesauce-react/hooks";
 import {
@@ -622,6 +627,7 @@ function SoftwareApplicationPage({
   blossomServers,
   basePath,
   relayHints,
+  onEdit,
 }: {
   application: SoftwareApplication;
   releases: SoftwareRelease[];
@@ -631,6 +637,7 @@ function SoftwareApplicationPage({
   blossomServers: string[];
   basePath: string;
   relayHints: string[];
+  onEdit?: () => void;
 }) {
   const repositoryUrl = externalHttpUrl(application.repository);
   const sourceUpstream = application.repository
@@ -684,6 +691,8 @@ function SoftwareApplicationPage({
               <EventCardActions
                 event={application.event}
                 className="shrink-0"
+                onEdit={onEdit}
+                editTitle="Edit application"
               />
             </div>
             {(application.topics.length > 0 ||
@@ -869,6 +878,7 @@ function SoftwareApplicationsIndex({
   relayHints,
   canPublish,
   onCreate,
+  onEdit,
 }: {
   applications: SoftwareApplication[];
   releases: SoftwareRelease[];
@@ -876,7 +886,10 @@ function SoftwareApplicationsIndex({
   relayHints: string[];
   canPublish: boolean;
   onCreate: () => void;
+  onEdit: (application: SoftwareApplication) => void;
 }) {
+  const account = useActiveAccount();
+
   return (
     <div className="container max-w-screen-xl space-y-5 px-4 py-6 md:px-8">
       <div className="flex flex-wrap items-center gap-3">
@@ -951,6 +964,12 @@ function SoftwareApplicationsIndex({
                       <EventCardActions
                         event={application.event}
                         className="shrink-0"
+                        onEdit={
+                          application.pubkey === account?.pubkey
+                            ? () => onEdit(application)
+                            : undefined
+                        }
+                        editTitle="Edit application"
                       />
                     </div>
                     {application.summary && (
@@ -983,10 +1002,13 @@ export default function RepoReleasesPage({
   const { basePath, cloneUrls, resolved, repoState } = useRepoContext();
   const account = useActiveAccount();
   const location = useLocation();
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const blossomServers = useBlossomServers();
   const [createReleaseOpen, setCreateReleaseOpen] = useState(false);
   const [createApplicationOpen, setCreateApplicationOpen] = useState(false);
+  const [editingApplication, setEditingApplication] =
+    useState<SoftwareApplication>();
   const repo = resolved?.repo;
   const {
     applications,
@@ -1102,7 +1124,10 @@ export default function RepoReleasesPage({
       : undefined;
   const selectedApplication =
     eventId && view === "applications"
-      ? applications.find((application) => application.event.id === eventId)
+      ? (applications.find((application) => application.event.id === eventId) ??
+        (editingApplication?.event.id === eventId
+          ? editingApplication
+          : undefined))
       : undefined;
 
   useSeoMeta({
@@ -1229,6 +1254,7 @@ export default function RepoReleasesPage({
           relayHints={repo?.relays.slice(0, 1) ?? []}
           canPublish={canPublishRelease}
           onCreate={() => setCreateApplicationOpen(true)}
+          onEdit={setEditingApplication}
         />
         {repo && (
           <CreateSoftwareApplicationDialog
@@ -1237,6 +1263,19 @@ export default function RepoReleasesPage({
             existingApplications={applications}
             repoCoordinates={repo.allCoordinates}
             relayHint={repo.relays[0]}
+          />
+        )}
+        {repo && editingApplication && (
+          <CreateSoftwareApplicationDialog
+            open
+            onOpenChange={(nextOpen) => {
+              if (!nextOpen) setEditingApplication(undefined);
+            }}
+            existingApplications={applications}
+            repoCoordinates={repo.allCoordinates}
+            relayHint={repo.relays[0]}
+            application={editingApplication}
+            onPublished={() => setEditingApplication(undefined)}
           />
         )}
       </>
@@ -1258,19 +1297,49 @@ export default function RepoReleasesPage({
 
     if (selectedApplication) {
       return (
-        <SoftwareApplicationPage
-          application={selectedApplication}
-          releases={releases.filter(
-            (release) =>
-              release.applicationCoordinate === selectedApplication.coordinate,
+        <>
+          <SoftwareApplicationPage
+            application={selectedApplication}
+            releases={releases.filter(
+              (release) =>
+                release.applicationCoordinate ===
+                selectedApplication.coordinate,
+            )}
+            assetsById={assetsById}
+            assetsSettled={assetsSettled}
+            latestMainReleaseIds={latestMainReleaseIds}
+            blossomServers={blossomServers}
+            basePath={basePath}
+            relayHints={repo?.relays.slice(0, 1) ?? []}
+            onEdit={
+              selectedApplication.pubkey === account?.pubkey
+                ? () => setEditingApplication(selectedApplication)
+                : undefined
+            }
+          />
+          {repo && editingApplication && (
+            <CreateSoftwareApplicationDialog
+              open
+              onOpenChange={(nextOpen) => {
+                if (!nextOpen) setEditingApplication(undefined);
+              }}
+              existingApplications={applications}
+              repoCoordinates={repo.allCoordinates}
+              relayHint={repo.relays[0]}
+              application={editingApplication}
+              onPublished={(application) => {
+                setEditingApplication(undefined);
+                navigate(
+                  `${basePath}/releases/apps/${eventIdToNevent(
+                    application.event.id,
+                    repo.relays.slice(0, 1),
+                  )}`,
+                  { replace: true },
+                );
+              }}
+            />
           )}
-          assetsById={assetsById}
-          assetsSettled={assetsSettled}
-          latestMainReleaseIds={latestMainReleaseIds}
-          blossomServers={blossomServers}
-          basePath={basePath}
-          relayHints={repo?.relays.slice(0, 1) ?? []}
-        />
+        </>
       );
     }
 

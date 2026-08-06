@@ -1,6 +1,9 @@
 import { blankEventTemplate, EventFactory } from "applesauce-core/factories";
-import type { KnownEventTemplate } from "applesauce-core/helpers/event";
-import { includeSingletonTag } from "applesauce-core/operations/tags";
+import {
+  getTagValue,
+  type KnownEventTemplate,
+} from "applesauce-core/helpers/event";
+import type { NostrEvent } from "nostr-tools";
 import { SOFTWARE_APPLICATION_KIND } from "@/casts/Software";
 
 type SoftwareApplicationTemplate = KnownEventTemplate<
@@ -22,7 +25,24 @@ export interface SoftwareApplicationInput {
   platforms?: string[];
   license?: string;
   createdAt: number;
+  /** Existing addressable event whose unrecognised metadata must be retained. */
+  baseEvent?: NostrEvent;
 }
+
+const MANAGED_APPLICATION_TAGS = new Set([
+  "d",
+  "name",
+  "summary",
+  "icon",
+  "image",
+  "t",
+  "url",
+  "repository",
+  "a",
+  "f",
+  "license",
+  "alt",
+]);
 
 function trimmed(value: string | undefined): string | undefined {
   return value?.trim() || undefined;
@@ -43,6 +63,13 @@ export class SoftwareApplicationFactory extends EventFactory<
     const name = input.name.trim();
     if (!appId) throw new Error("Application ID is required");
     if (!name) throw new Error("Application name is required");
+    if (
+      input.baseEvent &&
+      (input.baseEvent.kind !== SOFTWARE_APPLICATION_KIND ||
+        getTagValue(input.baseEvent, "d") !== appId)
+    ) {
+      throw new Error("Existing application coordinate does not match");
+    }
 
     const repoCoordinates = uniqueValues(input.repoCoordinates);
     if (repoCoordinates.length === 0) {
@@ -60,24 +87,39 @@ export class SoftwareApplicationFactory extends EventFactory<
     addOptionalTag("repository", input.repository);
     addOptionalTag("license", input.license);
 
+    const repositoryTags = new Map<string, string[]>();
+    for (const tag of input.baseEvent?.tags ?? []) {
+      if (tag[0] === "a" && tag[1]) repositoryTags.set(tag[1], [...tag]);
+    }
+    for (const coordinate of repoCoordinates) {
+      if (!repositoryTags.has(coordinate)) {
+        repositoryTags.set(
+          coordinate,
+          input.relayHint
+            ? ["a", coordinate, input.relayHint]
+            : ["a", coordinate],
+        );
+      }
+    }
+
+    const preservedTags = (input.baseEvent?.tags ?? [])
+      .filter(([tagName]) => !MANAGED_APPLICATION_TAGS.has(tagName))
+      .map((tag) => [...tag]);
+
     return new SoftwareApplicationFactory((resolve) =>
       resolve(blankEventTemplate(SOFTWARE_APPLICATION_KIND)),
     )
       .content(input.description)
       .created(input.createdAt)
-      .chain(includeSingletonTag(["d", appId], true))
-      .modifyPublicTags((tags) => [
-        ...tags,
+      .modifyPublicTags(() => [
+        ["d", appId],
         ["name", name],
         ...optionalTags,
         ...uniqueValues(input.images).map((image) => ["image", image]),
         ...uniqueValues(input.topics).map((topic) => ["t", topic]),
-        ...repoCoordinates.map((coordinate) =>
-          input.relayHint
-            ? ["a", coordinate, input.relayHint]
-            : ["a", coordinate],
-        ),
+        ...repositoryTags.values(),
         ...uniqueValues(input.platforms).map((platform) => ["f", platform]),
+        ...preservedTags,
       ])
       .alt(`Software application: ${name}`);
   }

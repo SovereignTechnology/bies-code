@@ -14,7 +14,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Copy, Check, Share2, Braces } from "lucide-react";
+import { Copy, Check, Share2, Braces, Pencil } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 /** Build a NIP-19 identifier for an event, including any seen relay hints. */
@@ -83,9 +83,16 @@ function CopyRow({ label, value }: { label: string; value: string }) {
 interface EventCardActionsProps {
   event: NostrEvent;
   className?: string;
+  onEdit?: () => void;
+  editTitle?: string;
 }
 
-export function EventCardActions({ event, className }: EventCardActionsProps) {
+export function EventCardActions({
+  event,
+  className,
+  onEdit,
+  editTitle = "Edit event",
+}: EventCardActionsProps) {
   const [shareOpen, setShareOpen] = useState(false);
   const [jsonOpen, setJsonOpen] = useState(false);
 
@@ -94,6 +101,18 @@ export function EventCardActions({ event, className }: EventCardActionsProps) {
   return (
     <>
       <div className={cn("flex items-center gap-0.5", className)}>
+        {onEdit && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 text-muted-foreground/50 hover:text-foreground"
+            title={editTitle}
+            aria-label={editTitle}
+            onClick={onEdit}
+          >
+            <Pencil className="h-3.5 w-3.5" />
+          </Button>
+        )}
         <Button
           variant="ghost"
           size="icon"

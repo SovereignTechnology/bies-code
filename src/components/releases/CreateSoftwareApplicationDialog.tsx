@@ -26,7 +26,8 @@ interface CreateSoftwareApplicationDialogProps {
   existingApplications: SoftwareApplication[];
   repoCoordinates: string[];
   relayHint?: string;
-  onCreated?: (application: SoftwareApplication) => void;
+  application?: SoftwareApplication;
+  onPublished?: (application: SoftwareApplication) => void;
 }
 
 function commaSeparatedValues(value: string): string[] {
@@ -58,7 +59,8 @@ export function CreateSoftwareApplicationDialog({
   existingApplications,
   repoCoordinates,
   relayHint,
-  onCreated,
+  application,
+  onPublished,
 }: CreateSoftwareApplicationDialogProps) {
   const account = useActiveAccount();
   const store = useEventStore();
@@ -77,23 +79,38 @@ export function CreateSoftwareApplicationDialog({
   const [platforms, setPlatforms] = useState("");
   const [publishing, setPublishing] = useState(false);
   const [error, setError] = useState<string>();
+  const editing = !!application;
 
   useEffect(() => {
     if (!open) return;
-    setAppId("");
-    setName("");
-    setSummary("");
-    setDescription("");
-    setIcon("");
-    setImages("");
-    setWebsite("");
-    setRepository("");
-    setLicense("");
-    setTopics("");
-    setPlatforms("");
+    setAppId(application?.appId ?? "");
+    setName(application?.name ?? "");
+    setSummary(application?.summary ?? "");
+    setDescription(application?.description ?? "");
+    setIcon(application?.icon ?? "");
+    setImages(application?.images.join("\n") ?? "");
+    setWebsite(application?.website ?? "");
+    setRepository(application?.repository ?? "");
+    setLicense(application?.license ?? "");
+    setTopics(application?.topics.join(", ") ?? "");
+    setPlatforms(application?.platforms.join(", ") ?? "");
     setPublishing(false);
     setError(undefined);
-  }, [open]);
+  }, [
+    application?.appId,
+    application?.description,
+    application?.event.id,
+    application?.icon,
+    application?.images,
+    application?.license,
+    application?.name,
+    application?.platforms,
+    application?.repository,
+    application?.summary,
+    application?.topics,
+    application?.website,
+    open,
+  ]);
 
   const validate = (): string | undefined => {
     if (!appId.trim()) return "Enter an application ID.";
@@ -101,9 +118,10 @@ export function CreateSoftwareApplicationDialog({
     if (
       account &&
       existingApplications.some(
-        (application) =>
-          application.pubkey === account.pubkey &&
-          application.appId === appId.trim(),
+        (existingApplication) =>
+          existingApplication.pubkey === account.pubkey &&
+          existingApplication.appId === appId.trim() &&
+          existingApplication.coordinate !== application?.coordinate,
       )
     ) {
       return "This account already has an application with that ID.";
@@ -128,11 +146,15 @@ export function CreateSoftwareApplicationDialog({
       return;
     }
     if (!account) return;
+    if (application && application.pubkey !== account.pubkey) {
+      setError("Only the application publisher can edit it.");
+      return;
+    }
 
     setPublishing(true);
     setError(undefined);
     try {
-      const application = await SoftwareApplicationFactory.create({
+      const signedApplication = await SoftwareApplicationFactory.create({
         appId,
         name,
         summary,
@@ -147,17 +169,20 @@ export function CreateSoftwareApplicationDialog({
         repoCoordinates,
         relayHint,
         createdAt: Math.floor(Date.now() / 1000),
+        baseEvent: application?.event,
       }).sign(account.signer);
-      await publish(application, repoCoordinates);
-      onCreated?.(
+      await publish(signedApplication, repoCoordinates);
+      onPublished?.(
         new SoftwareApplication(
-          application,
+          signedApplication,
           store as unknown as CastRefEventStore,
         ),
       );
       toast({
-        title: "Application published",
-        description: `${name.trim()} can now receive software releases.`,
+        title: editing ? "Application updated" : "Application published",
+        description: editing
+          ? `${name.trim()} has been updated.`
+          : `${name.trim()} can now receive software releases.`,
       });
       onOpenChange(false);
     } catch (caught) {
@@ -181,10 +206,15 @@ export function CreateSoftwareApplicationDialog({
     >
       <DialogContent className="max-h-[92vh] max-w-2xl overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Add a software application</DialogTitle>
+          <DialogTitle>
+            {editing
+              ? "Edit software application"
+              : "Add a software application"}
+          </DialogTitle>
           <DialogDescription>
-            Applications hold the shared name, description, artwork, and
-            platform metadata for their releases.
+            {editing
+              ? "Update the shared metadata used across this application's releases."
+              : "Applications hold the shared name, description, artwork, and platform metadata for their releases."}
           </DialogDescription>
         </DialogHeader>
 
@@ -218,7 +248,7 @@ export function CreateSoftwareApplicationDialog({
               value={appId}
               onChange={(event) => setAppId(event.target.value)}
               placeholder="dev.gitworkshop.app"
-              disabled={publishing}
+              disabled={publishing || editing}
               required
             />
           </div>
@@ -333,7 +363,7 @@ export function CreateSoftwareApplicationDialog({
           </Button>
           <Button type="button" onClick={handleSubmit} disabled={publishing}>
             {publishing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            Publish application
+            {editing ? "Save changes" : "Publish application"}
           </Button>
         </DialogFooter>
       </DialogContent>
