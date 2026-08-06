@@ -15,6 +15,7 @@ import {
   Check,
   ChevronDown,
   FileArchive,
+  Link2,
   Loader2,
   Plus,
   Trash2,
@@ -23,6 +24,7 @@ import {
 } from "lucide-react";
 import type { SoftwareApplication, SoftwareRelease } from "@/casts/Software";
 import { CreateSoftwareApplicationDialog } from "@/components/releases/CreateSoftwareApplicationDialog";
+import { LinkSoftwareApplicationDialog } from "@/components/releases/LinkSoftwareApplicationDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -187,6 +189,8 @@ interface CreateReleaseDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   applications: SoftwareApplication[];
+  accountApplications: SoftwareApplication[];
+  accountApplicationsSettled: boolean;
   existingReleases: SoftwareRelease[];
   gitTags: Array<{ name: string; commitId: string }>;
   repoCoordinates: string[];
@@ -761,6 +765,8 @@ export function CreateReleaseDialog({
   open,
   onOpenChange,
   applications,
+  accountApplications,
+  accountApplicationsSettled,
   existingReleases,
   gitTags,
   repoCoordinates,
@@ -778,6 +784,7 @@ export function CreateReleaseDialog({
   const selectedFileIdsRef = useRef(new Set<string>());
   const uploadQueueRef = useRef(Promise.resolve());
   const [createApplicationOpen, setCreateApplicationOpen] = useState(false);
+  const [linkApplicationOpen, setLinkApplicationOpen] = useState(false);
   const [createdApplication, setCreatedApplication] =
     useState<SoftwareApplication>();
   const [applicationCoordinate, setApplicationCoordinate] = useState("");
@@ -899,6 +906,7 @@ export function CreateReleaseDialog({
     selectedFileIdsRef.current.clear();
     setPlatformFocusAssetId(undefined);
     setCreateApplicationOpen(false);
+    setLinkApplicationOpen(false);
     setStage("editing");
     setError(undefined);
   }, [open]);
@@ -1271,7 +1279,10 @@ export function CreateReleaseDialog({
       open={open}
       onOpenChange={(nextOpen) => {
         if (!busy) {
-          if (!nextOpen) setCreateApplicationOpen(false);
+          if (!nextOpen) {
+            setCreateApplicationOpen(false);
+            setLinkApplicationOpen(false);
+          }
           onOpenChange(nextOpen);
         }
       }}
@@ -1295,19 +1306,33 @@ export function CreateReleaseDialog({
               </p>
               <p className="mx-auto mt-1 max-w-lg text-sm text-muted-foreground">
                 Only the pubkey that created an application can publish its
-                releases and software assets. Add an application with this
-                maintainer account, or go back and switch accounts.
+                releases and software assets. Add an application, link one you
+                already publish on Zapstore, or go back and switch accounts.
               </p>
-              <Button
-                type="button"
-                variant="outline"
-                className="mt-4"
-                onClick={() => setCreateApplicationOpen(true)}
-                disabled={busy}
-              >
-                <Plus className="mr-2 h-4 w-4" />
-                Add application
-              </Button>
+              <div className="mt-4 flex flex-wrap justify-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setCreateApplicationOpen(true)}
+                  disabled={busy}
+                >
+                  <Plus className="mr-2 h-4 w-4" />
+                  Add application
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setLinkApplicationOpen(true)}
+                  disabled={busy || !accountApplicationsSettled}
+                >
+                  {accountApplicationsSettled ? (
+                    <Link2 className="mr-2 h-4 w-4" />
+                  ) : (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  )}
+                  Link existing Zapstore application
+                </Button>
+              </div>
             </div>
           ) : (
             <div className="grid gap-4 md:grid-cols-3">
@@ -1641,6 +1666,18 @@ export function CreateReleaseDialog({
           maintainerPubkeys={maintainerPubkeys}
           relayHint={relayHint}
           onPublished={(application) => {
+            setCreatedApplication(application);
+            setApplicationCoordinate(application.coordinate);
+          }}
+        />
+        <LinkSoftwareApplicationDialog
+          open={linkApplicationOpen}
+          onOpenChange={setLinkApplicationOpen}
+          applications={accountApplications}
+          settled={accountApplicationsSettled}
+          repoCoordinates={repoCoordinates}
+          relayHint={relayHint}
+          onLinked={(application) => {
             setCreatedApplication(application);
             setApplicationCoordinate(application.coordinate);
           }}

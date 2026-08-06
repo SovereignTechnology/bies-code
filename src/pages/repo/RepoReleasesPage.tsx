@@ -134,19 +134,36 @@ function ReleasePageSkeleton() {
   );
 }
 
-function EmptyReleases({ hasApplication }: { hasApplication: boolean }) {
+function EmptyReleases({
+  onCreateRelease,
+  createReady = true,
+}: {
+  onCreateRelease?: () => void;
+  createReady?: boolean;
+}) {
   return (
     <Card className="border-dashed">
       <CardContent className="py-12 px-8 text-center">
         <Package className="h-9 w-9 text-muted-foreground mx-auto mb-3" />
-        <p className="font-medium mb-1">
-          {hasApplication ? "No releases yet" : "No application linked"}
-        </p>
+        <p className="font-medium mb-1">No releases</p>
         <p className="text-muted-foreground max-w-md mx-auto">
-          {hasApplication
-            ? "No releases were found on this repository’s relays or Zapstore."
-            : "Releases appear here when a maintainer links a NIP-82 software application to this repository."}
+          No releases were found on this repository’s relays or Zapstore.
         </p>
+        {onCreateRelease && (
+          <Button
+            type="button"
+            className="mt-5"
+            onClick={onCreateRelease}
+            disabled={!createReady}
+          >
+            {createReady ? (
+              <Plus className="mr-2 h-4 w-4" />
+            ) : (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            )}
+            Add release
+          </Button>
+        )}
       </CardContent>
     </Card>
   );
@@ -866,7 +883,7 @@ function SoftwareApplicationPage({
           <Badge variant="secondary">{releases.length}</Badge>
         </div>
         {releases.length === 0 ? (
-          <EmptyReleases hasApplication />
+          <EmptyReleases />
         ) : (
           <div className="space-y-8">
             {renderedReleases.map((release) => (
@@ -1509,6 +1526,8 @@ export default function RepoReleasesPage({
           open={createReleaseOpen}
           onOpenChange={setCreateReleaseOpen}
           applications={applications}
+          accountApplications={accountApplications}
+          accountApplicationsSettled={accountApplicationsSettled}
           existingReleases={releases}
           gitTags={gitTags}
           repoCoordinates={repo.allCoordinates}
@@ -1561,9 +1580,19 @@ export default function RepoReleasesPage({
       {loadingApplications || loadingReleases ? (
         <ReleasePageSkeleton />
       ) : applications.length === 0 ? (
-        <EmptyReleases hasApplication={false} />
+        <EmptyReleases
+          onCreateRelease={
+            canPublishRelease ? () => setCreateReleaseOpen(true) : undefined
+          }
+          createReady={releaseFormReady}
+        />
       ) : visibleReleases.length === 0 ? (
-        <EmptyReleases hasApplication />
+        <EmptyReleases
+          onCreateRelease={
+            canPublishRelease ? () => setCreateReleaseOpen(true) : undefined
+          }
+          createReady={releaseFormReady}
+        />
       ) : (
         <div className="grid items-start gap-4 md:grid-cols-[11rem_minmax(0,1fr)] md:gap-6">
           <ReleaseNavigation

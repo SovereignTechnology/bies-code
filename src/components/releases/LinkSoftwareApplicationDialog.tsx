@@ -42,6 +42,7 @@ interface LinkSoftwareApplicationDialogProps {
   settled: boolean;
   repoCoordinates: string[];
   relayHint?: string;
+  onLinked?: (application: SoftwareApplication) => void;
 }
 
 function applicationLinksRepository(
@@ -70,6 +71,7 @@ export function LinkSoftwareApplicationDialog({
   settled,
   repoCoordinates,
   relayHint,
+  onLinked,
 }: LinkSoftwareApplicationDialogProps) {
   const account = useActiveAccount();
   const { toast } = useToast();
@@ -139,6 +141,7 @@ export function LinkSoftwareApplicationDialog({
         title: "Application linked",
         description: `${selectedApplication.name} now appears in this repository's releases.`,
       });
+      onLinked?.(selectedApplication);
       onOpenChange(false);
     } catch (caught) {
       setError(
