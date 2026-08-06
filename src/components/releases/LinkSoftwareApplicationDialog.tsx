@@ -1,0 +1,234 @@
+import { useEffect, useState } from "react";
+import { useActiveAccount } from "applesauce-react/hooks";
+import { Link2, Loader2, Package } from "lucide-react";
+import type { SoftwareApplication } from "@/casts/Software";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Skeleton } from "@/components/ui/skeleton";
+import { SoftwareApplicationFactory } from "@/factories/SoftwareApplicationFactory";
+import { useToast } from "@/hooks/useToast";
+import { cn } from "@/lib/utils";
+import { publish } from "@/services/nostr";
+
+interface LinkSoftwareApplicationDialogProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  applications: SoftwareApplication[];
+  settled: boolean;
+  repoCoordinates: string[];
+  relayHint?: string;
+}
+
+function applicationLinksRepository(
+  application: SoftwareApplication,
+  repoCoordinates: string[],
+): boolean {
+  const coordinates = new Set(repoCoordinates);
+  return application.repoCoords.some((coordinate) =>
+    coordinates.has(coordinate),
+  );
+}
+
+export function LinkSoftwareApplicationDialog({
+  open,
+  onOpenChange,
+  applications,
+  settled,
+  repoCoordinates,
+  relayHint,
+}: LinkSoftwareApplicationDialogProps) {
+  const account = useActiveAccount();
+  const { toast } = useToast();
+  const [selectedCoordinate, setSelectedCoordinate] = useState("");
+  const [publishing, setPublishing] = useState(false);
+  const [error, setError] = useState<string>();
+  const selectedApplication = applications.find(
+    (application) => application.coordinate === selectedCoordinate,
+  );
+
+  useEffect(() => {
+    if (!open) return;
+    setSelectedCoordinate("");
+    setPublishing(false);
+    setError(undefined);
+  }, [open]);
+
+  const handleLink = async () => {
+    if (!account || !selectedApplication) return;
+    if (selectedApplication.pubkey !== account.pubkey) {
+      setError("Only the application publisher can link it.");
+      return;
+    }
+    if (applicationLinksRepository(selectedApplication, repoCoordinates)) {
+      setError("This application is already linked to the repository.");
+      return;
+    }
+
+    setPublishing(true);
+    setError(undefined);
+    try {
+      const updatedApplication =
+        await SoftwareApplicationFactory.linkRepositories(
+          selectedApplication.event,
+          repoCoordinates,
+          relayHint,
+          Math.floor(Date.now() / 1000),
+        ).sign(account.signer);
+      await publish(updatedApplication, repoCoordinates);
+      toast({
+        title: "Application linked",
+        description: `${selectedApplication.name} now appears in this repository's releases.`,
+      });
+      onOpenChange(false);
+    } catch (caught) {
+      setError(
+        caught instanceof Error ? caught.message : "Failed to link application",
+      );
+      setPublishing(false);
+    }
+  };
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (!publishing) onOpenChange(nextOpen);
+      }}
+    >
+      <DialogContent className="max-h-[88vh] max-w-2xl overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>Your software applications</DialogTitle>
+          <DialogDescription>
+            Choose an application you already publish to associate it with this
+            repository. Existing releases and application metadata are kept.
+          </DialogDescription>
+        </DialogHeader>
+
+        {!settled && applications.length === 0 ? (
+          <div className="space-y-3 py-2">
+            {[0, 1, 2].map((index) => (
+              <Skeleton key={index} className="h-20 w-full rounded-xl" />
+            ))}
+          </div>
+        ) : applications.length === 0 ? (
+          <div className="rounded-xl border border-dashed px-6 py-10 text-center">
+            <Package className="mx-auto h-8 w-8 text-muted-foreground" />
+            <p className="mt-3 font-medium">No applications found</p>
+            <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">
+              No software applications published by this account were found on
+              its outbox relays or Zapstore.
+            </p>
+          </div>
+        ) : (
+          <RadioGroup
+            value={selectedCoordinate}
+            onValueChange={setSelectedCoordinate}
+            className="gap-3 py-2"
+            aria-label="Software application"
+          >
+            {applications.map((application) => {
+              const linked = applicationLinksRepository(
+                application,
+                repoCoordinates,
+              );
+              const inputId = `link-application-${application.event.id}`;
+              return (
+                <div
+                  key={application.coordinate}
+                  className={cn(
+                    "flex items-start gap-3 rounded-xl border p-4 transition-colors",
+                    linked
+                      ? "bg-muted/30"
+                      : "hover:border-pink-500/50 hover:bg-muted/20",
+                  )}
+                >
+                  <RadioGroupItem
+                    id={inputId}
+                    value={application.coordinate}
+                    disabled={linked || publishing}
+                    className="mt-1 shrink-0"
+                  />
+                  {application.icon ? (
+                    <img
+                      src={application.icon}
+                      alt=""
+                      className="h-11 w-11 shrink-0 rounded-lg border bg-muted object-cover"
+                    />
+                  ) : (
+                    <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border bg-muted">
+                      <Package className="h-5 w-5 text-muted-foreground" />
+                    </div>
+                  )}
+                  <Label
+                    htmlFor={inputId}
+                    className={cn(
+                      "min-w-0 flex-1",
+                      linked ? "cursor-default" : "cursor-pointer",
+                    )}
+                  >
+                    <span className="flex items-center gap-2">
+                      <span className="truncate font-medium">
+                        {application.name}
+                      </span>
+                      {linked && <Badge variant="secondary">Linked</Badge>}
+                    </span>
+                    <span className="mt-0.5 block truncate font-mono text-xs font-normal text-muted-foreground">
+                      {application.appId}
+                    </span>
+                    {application.repository && (
+                      <span
+                        className="mt-1 block truncate text-xs font-normal text-muted-foreground"
+                        title={application.repository}
+                      >
+                        {application.repository}
+                      </span>
+                    )}
+                  </Label>
+                </div>
+              );
+            })}
+          </RadioGroup>
+        )}
+
+        {error && (
+          <p className="text-sm text-destructive" role="alert">
+            {error}
+          </p>
+        )}
+
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => onOpenChange(false)}
+            disabled={publishing}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            onClick={handleLink}
+            disabled={!selectedApplication || publishing}
+          >
+            {publishing ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <Link2 className="mr-2 h-4 w-4" />
+            )}
+            Link to repository
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}

@@ -51,6 +51,11 @@ export interface RepoSoftwareReleases {
   assetsSettled: boolean;
 }
 
+export interface AccountSoftwareApplications {
+  applications: SoftwareApplication[];
+  settled: boolean;
+}
+
 export interface RepoReleaseSummary {
   hasReleases: boolean;
   latestRelease: SoftwareRelease | undefined;
@@ -227,6 +232,76 @@ function releaseFiltersForApplications(
         ...(limit === undefined ? {} : { limit }),
       }) as Filter,
   );
+}
+
+/**
+ * Discover every software application published by one account from its
+ * outbox, the current repository relays, and Zapstore. This is intentionally
+ * author-scoped: these events are candidates the account can republish to add
+ * a repository association, not trusted state for the current repository.
+ */
+export function useAccountSoftwareApplications(
+  pubkey: string | undefined,
+  repoRelayGroup: RelayGroup | undefined,
+): AccountSoftwareApplications {
+  const store = useEventStore();
+  const castStore = store as unknown as CastRefEventStore;
+  const repoRelays =
+    use$(() => relayGroupUrls$(repoRelayGroup), [repoRelayGroup]) ?? [];
+  const repoRelayKey = repoRelays.join(",");
+
+  const mailboxSettled =
+    use$(() => {
+      if (!pubkey) return of(true);
+      return addressLoader({ kind: 10002, pubkey }).pipe(
+        ignoreElements(),
+        endWith(true),
+        catchError(() => of(true)),
+        startWith(false),
+      );
+    }, [pubkey]) ?? false;
+
+  const outboxRelays =
+    use$(() => {
+      if (!pubkey) return of([]);
+      return store
+        .mailboxes(pubkey)
+        .pipe(map((mailboxes) => uniqueRelayUrls(mailboxes?.outboxes ?? [])));
+    }, [pubkey, store]) ?? [];
+  const relays = uniqueRelayUrls([
+    ...repoRelays,
+    ...outboxRelays,
+    ZAPSTORE_RELAY_URL,
+  ]);
+  const relayKey = relays.join(",");
+  const applicationFilter: Filter = {
+    kinds: [SOFTWARE_APPLICATION_KIND],
+    authors: pubkey ? [pubkey] : [],
+    limit: 200,
+  } as Filter;
+
+  const settled =
+    use$(() => {
+      if (!pubkey) return of(true);
+      if (!mailboxSettled) return of(false);
+      return loadIntoStoreUntilSettled(relays, [applicationFilter], store);
+    }, [pubkey, mailboxSettled, repoRelayKey, relayKey, store]) ?? false;
+
+  const applications =
+    use$(() => {
+      if (!pubkey) return of([]);
+      return store
+        .timeline([applicationFilter])
+        .pipe(
+          map((events) =>
+            castApplications(events, castStore).sort((left, right) =>
+              left.name.localeCompare(right.name),
+            ),
+          ),
+        );
+    }, [pubkey, store]) ?? [];
+
+  return { applications, settled };
 }
 
 /**

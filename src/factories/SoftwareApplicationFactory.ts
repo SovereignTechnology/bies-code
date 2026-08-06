@@ -58,6 +58,39 @@ export class SoftwareApplicationFactory extends EventFactory<
   typeof SOFTWARE_APPLICATION_KIND,
   SoftwareApplicationTemplate
 > {
+  static linkRepositories(
+    event: NostrEvent,
+    repoCoordinates: string[],
+    relayHint: string | undefined,
+    createdAt: number,
+  ): SoftwareApplicationFactory {
+    if (
+      event.kind !== SOFTWARE_APPLICATION_KIND ||
+      !getTagValue(event, "d") ||
+      !getTagValue(event, "name")
+    ) {
+      throw new Error("Invalid software application event");
+    }
+
+    const tags = event.tags.map((tag) => [...tag]);
+    const linkedCoordinates = new Set(
+      tags
+        .filter(([tagName, coordinate]) => tagName === "a" && !!coordinate)
+        .map(([, coordinate]) => coordinate),
+    );
+    for (const coordinate of uniqueValues(repoCoordinates)) {
+      if (linkedCoordinates.has(coordinate)) continue;
+      tags.push(relayHint ? ["a", coordinate, relayHint] : ["a", coordinate]);
+    }
+
+    return new SoftwareApplicationFactory((resolve) =>
+      resolve(blankEventTemplate(SOFTWARE_APPLICATION_KIND)),
+    )
+      .content(event.content)
+      .created(createdAt)
+      .modifyPublicTags(() => tags);
+  }
+
   static create(input: SoftwareApplicationInput): SoftwareApplicationFactory {
     const appId = input.appId.trim();
     const name = input.name.trim();

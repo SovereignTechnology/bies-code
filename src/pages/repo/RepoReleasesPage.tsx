@@ -38,6 +38,7 @@ import { EventCardActions } from "@/components/EventCardActions";
 import { RepoBadge } from "@/components/RepoBadge";
 import { CreateReleaseDialog } from "@/components/releases/CreateReleaseDialog";
 import { CreateSoftwareApplicationDialog } from "@/components/releases/CreateSoftwareApplicationDialog";
+import { LinkSoftwareApplicationDialog } from "@/components/releases/LinkSoftwareApplicationDialog";
 import { UserLink } from "@/components/UserAvatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -56,7 +57,10 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { useBlossomServers } from "@/hooks/useBlossomFallback";
 import { useGitPool } from "@/hooks/useGitPool";
-import { useSoftwareReleases } from "@/hooks/useSoftwareReleases";
+import {
+  useAccountSoftwareApplications,
+  useSoftwareReleases,
+} from "@/hooks/useSoftwareReleases";
 import { useUnreadHighlight } from "@/hooks/useUnreadHighlight";
 import { blossomBlobUrl } from "@/lib/blossom";
 import { parseRepoCoordinate } from "@/lib/nip34";
@@ -877,16 +881,20 @@ function SoftwareApplicationsIndex({
   basePath,
   relayHints,
   canPublish,
+  accountApplicationCount,
   onCreate,
   onEdit,
+  onBrowseApplications,
 }: {
   applications: SoftwareApplication[];
   releases: SoftwareRelease[];
   basePath: string;
   relayHints: string[];
   canPublish: boolean;
+  accountApplicationCount?: number;
   onCreate: () => void;
   onEdit: (application: SoftwareApplication) => void;
+  onBrowseApplications: () => void;
 }) {
   const account = useActiveAccount();
 
@@ -904,10 +912,23 @@ function SoftwareApplicationsIndex({
           <Badge variant="secondary">{applications.length}</Badge>
         )}
         {canPublish && (
-          <Button className="ml-auto" onClick={onCreate}>
-            <Plus className="mr-2 h-4 w-4" />
-            New application
-          </Button>
+          <div className="ml-auto flex items-center gap-2">
+            <Button variant="outline" onClick={onBrowseApplications}>
+              Your applications
+              {accountApplicationCount !== undefined && (
+                <Badge
+                  variant="secondary"
+                  className="ml-2 h-5 min-w-5 justify-center px-1.5 text-[11px]"
+                >
+                  {accountApplicationCount}
+                </Badge>
+              )}
+            </Button>
+            <Button onClick={onCreate}>
+              <Plus className="mr-2 h-4 w-4" />
+              New application
+            </Button>
+          </div>
         )}
       </div>
 
@@ -917,9 +938,20 @@ function SoftwareApplicationsIndex({
             <Package className="mx-auto mb-3 h-9 w-9 text-muted-foreground" />
             <p className="font-medium">No applications linked</p>
             <p className="mx-auto mt-1 max-w-md text-muted-foreground">
-              Add a NIP-82 software application before publishing its first
-              release.
+              Add the product this repository builds, or link an application you
+              already publish.
             </p>
+            {canPublish && (
+              <div className="mt-5 flex flex-wrap justify-center gap-2">
+                <Button variant="outline" onClick={onBrowseApplications}>
+                  Your applications
+                </Button>
+                <Button onClick={onCreate}>
+                  <Plus className="mr-2 h-4 w-4" />
+                  New application
+                </Button>
+              </div>
+            )}
           </CardContent>
         </Card>
       ) : (
@@ -1007,6 +1039,7 @@ export default function RepoReleasesPage({
   const blossomServers = useBlossomServers();
   const [createReleaseOpen, setCreateReleaseOpen] = useState(false);
   const [createApplicationOpen, setCreateApplicationOpen] = useState(false);
+  const [linkApplicationOpen, setLinkApplicationOpen] = useState(false);
   const [editingApplication, setEditingApplication] =
     useState<SoftwareApplication>();
   const repo = resolved?.repo;
@@ -1062,6 +1095,13 @@ export default function RepoReleasesPage({
   );
   const canPublishRelease =
     !!account && !!repo?.maintainerSet.includes(account.pubkey);
+  const {
+    applications: accountApplications,
+    settled: accountApplicationsSettled,
+  } = useAccountSoftwareApplications(
+    canPublishRelease ? account?.pubkey : undefined,
+    resolved?.repoRelayGroup,
+  );
   const releaseDiscoverySettled =
     applicationsSettled && releasesSettled && !poolState.loading;
   // Discovery can briefly become unsettled when live filters or Git refs
@@ -1253,8 +1293,12 @@ export default function RepoReleasesPage({
           basePath={basePath}
           relayHints={repo?.relays.slice(0, 1) ?? []}
           canPublish={canPublishRelease}
+          accountApplicationCount={
+            accountApplicationsSettled ? accountApplications.length : undefined
+          }
           onCreate={() => setCreateApplicationOpen(true)}
           onEdit={setEditingApplication}
+          onBrowseApplications={() => setLinkApplicationOpen(true)}
         />
         {repo && (
           <CreateSoftwareApplicationDialog
@@ -1276,6 +1320,16 @@ export default function RepoReleasesPage({
             relayHint={repo.relays[0]}
             application={editingApplication}
             onPublished={() => setEditingApplication(undefined)}
+          />
+        )}
+        {repo && (
+          <LinkSoftwareApplicationDialog
+            open={linkApplicationOpen}
+            onOpenChange={setLinkApplicationOpen}
+            applications={accountApplications}
+            settled={accountApplicationsSettled}
+            repoCoordinates={repo.allCoordinates}
+            relayHint={repo.relays[0]}
           />
         )}
       </>
