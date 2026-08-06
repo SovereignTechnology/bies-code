@@ -914,7 +914,7 @@ function SoftwareApplicationsIndex({
         {canPublish && (
           <div className="ml-auto flex items-center gap-2">
             <Button variant="outline" onClick={onBrowseApplications}>
-              Your applications
+              All your applications
               {accountApplicationCount !== undefined && (
                 <Badge
                   variant="secondary"
@@ -944,7 +944,7 @@ function SoftwareApplicationsIndex({
             {canPublish && (
               <div className="mt-5 flex flex-wrap justify-center gap-2">
                 <Button variant="outline" onClick={onBrowseApplications}>
-                  Your applications
+                  All your applications
                 </Button>
                 <Button onClick={onCreate}>
                   <Plus className="mr-2 h-4 w-4" />

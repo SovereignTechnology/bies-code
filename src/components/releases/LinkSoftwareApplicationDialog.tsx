@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useActiveAccount } from "applesauce-react/hooks";
 import { Link2, Loader2, Package } from "lucide-react";
 import type { SoftwareApplication } from "@/casts/Software";
+import { RepoBadge } from "@/components/RepoBadge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -17,6 +18,9 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SoftwareApplicationFactory } from "@/factories/SoftwareApplicationFactory";
 import { useToast } from "@/hooks/useToast";
+import { parseRepoCoordinate } from "@/lib/nip34";
+import { parseUpstreamInput } from "@/lib/repoUpstreamInput";
+import { repoToPath } from "@/lib/routeUtils";
 import { cn } from "@/lib/utils";
 import { publish } from "@/services/nostr";
 
@@ -105,9 +109,9 @@ export function LinkSoftwareApplicationDialog({
         if (!publishing) onOpenChange(nextOpen);
       }}
     >
-      <DialogContent className="max-h-[88vh] max-w-2xl overflow-y-auto">
+      <DialogContent className="max-h-[88vh] min-w-0 max-w-2xl overflow-x-hidden overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Your software applications</DialogTitle>
+          <DialogTitle>All your applications</DialogTitle>
           <DialogDescription>
             Choose an application you already publish to associate it with this
             repository. Existing releases and application metadata are kept.
@@ -142,11 +146,16 @@ export function LinkSoftwareApplicationDialog({
                 repoCoordinates,
               );
               const inputId = `link-application-${application.event.id}`;
+              const sourceUpstream = application.repository
+                ? parseUpstreamInput(application.repository).upstream
+                : undefined;
+              const sourceCoordinate = sourceUpstream?.repository;
+              const sourceRepository = parseRepoCoordinate(sourceCoordinate);
               return (
                 <div
                   key={application.coordinate}
                   className={cn(
-                    "flex items-start gap-3 rounded-xl border p-4 transition-colors",
+                    "flex min-w-0 items-start gap-3 rounded-xl border p-4 transition-colors",
                     linked
                       ? "bg-muted/30"
                       : "hover:border-pink-500/50 hover:bg-muted/20",
@@ -169,31 +178,49 @@ export function LinkSoftwareApplicationDialog({
                       <Package className="h-5 w-5 text-muted-foreground" />
                     </div>
                   )}
-                  <Label
-                    htmlFor={inputId}
-                    className={cn(
-                      "min-w-0 flex-1",
-                      linked ? "cursor-default" : "cursor-pointer",
-                    )}
-                  >
-                    <span className="flex items-center gap-2">
-                      <span className="truncate font-medium">
-                        {application.name}
+                  <div className="min-w-0 flex-1">
+                    <Label
+                      htmlFor={inputId}
+                      className={cn(
+                        "block min-w-0",
+                        linked ? "cursor-default" : "cursor-pointer",
+                      )}
+                    >
+                      <span className="flex min-w-0 items-center gap-2">
+                        <span className="truncate font-medium">
+                          {application.name}
+                        </span>
+                        {linked && <Badge variant="secondary">Linked</Badge>}
                       </span>
-                      {linked && <Badge variant="secondary">Linked</Badge>}
-                    </span>
-                    <span className="mt-0.5 block truncate font-mono text-xs font-normal text-muted-foreground">
-                      {application.appId}
-                    </span>
+                      <span className="mt-0.5 block truncate font-mono text-xs font-normal text-muted-foreground">
+                        {application.appId}
+                      </span>
+                    </Label>
                     {application.repository && (
-                      <span
-                        className="mt-1 block truncate text-xs font-normal text-muted-foreground"
-                        title={application.repository}
-                      >
-                        {application.repository}
-                      </span>
+                      <div className="mt-1 min-w-0 max-w-full">
+                        {sourceRepository && sourceCoordinate ? (
+                          <RepoBadge
+                            coord={sourceCoordinate}
+                            to={repoToPath(
+                              sourceRepository.pubkey,
+                              sourceRepository.identifier,
+                              sourceUpstream?.relayHint
+                                ? [sourceUpstream.relayHint]
+                                : [],
+                            )}
+                            className="max-w-full overflow-hidden [&>span]:min-w-0 [&>span]:truncate"
+                          />
+                        ) : (
+                          <span
+                            className="block max-w-full truncate text-xs font-normal text-muted-foreground"
+                            title={application.repository}
+                          >
+                            {application.repository}
+                          </span>
+                        )}
+                      </div>
                     )}
-                  </Label>
+                  </div>
                 </div>
               );
             })}
