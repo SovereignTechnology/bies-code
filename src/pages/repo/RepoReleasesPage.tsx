@@ -28,6 +28,7 @@ import {
   Plus,
   ShieldCheck,
   Tag,
+  KeyRound,
 } from "lucide-react";
 import type {
   SoftwareApplication,
@@ -632,6 +633,7 @@ function SoftwareApplicationPage({
   basePath,
   relayHints,
   onEdit,
+  showPublisherControlNotice,
 }: {
   application: SoftwareApplication;
   releases: SoftwareRelease[];
@@ -642,6 +644,7 @@ function SoftwareApplicationPage({
   basePath: string;
   relayHints: string[];
   onEdit?: () => void;
+  showPublisherControlNotice?: boolean;
 }) {
   const repositoryUrl = externalHttpUrl(application.repository);
   const sourceUpstream = application.repository
@@ -716,6 +719,22 @@ function SoftwareApplicationPage({
             )}
           </div>
         </div>
+
+        {showPublisherControlNotice && (
+          <div className="flex items-start gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm">
+            <KeyRound className="mt-0.5 h-4 w-4 shrink-0 text-amber-700 dark:text-amber-300" />
+            <p className="text-muted-foreground">
+              <UserLink
+                pubkey={application.pubkey}
+                avatarSize="xs"
+                variant="inline"
+              />{" "}
+              controls this application. Only its publisher can edit it or
+              publish releases and software assets; repository maintainer access
+              does not grant that authority.
+            </p>
+          </div>
+        )}
 
         {application.images.length > 0 && (
           <div
@@ -1013,6 +1032,14 @@ function SoftwareApplicationsIndex({
                       {releaseCount}{" "}
                       {releaseCount === 1 ? "release" : "releases"}
                     </p>
+                    <div className="mt-2 text-xs text-muted-foreground">
+                      Publisher:{" "}
+                      <UserLink
+                        pubkey={application.pubkey}
+                        avatarSize="xs"
+                        variant="inline"
+                      />
+                    </div>
                   </div>
                 </CardContent>
               </Card>
@@ -1083,15 +1110,6 @@ export default function RepoReleasesPage({
         ]),
       ),
     [applications],
-  );
-  const publishableApplications = useMemo(
-    () =>
-      account
-        ? applications.filter(
-            (application) => application.pubkey === account.pubkey,
-          )
-        : [],
-    [account, applications],
   );
   const canPublishRelease =
     !!account && !!repo?.maintainerSet.includes(account.pubkey);
@@ -1306,6 +1324,7 @@ export default function RepoReleasesPage({
             onOpenChange={setCreateApplicationOpen}
             existingApplications={applications}
             repoCoordinates={repo.allCoordinates}
+            maintainerPubkeys={repo.maintainerSet}
             relayHint={repo.relays[0]}
           />
         )}
@@ -1317,6 +1336,7 @@ export default function RepoReleasesPage({
             }}
             existingApplications={applications}
             repoCoordinates={repo.allCoordinates}
+            maintainerPubkeys={repo.maintainerSet}
             relayHint={repo.relays[0]}
             application={editingApplication}
             onPublished={() => setEditingApplication(undefined)}
@@ -1370,6 +1390,10 @@ export default function RepoReleasesPage({
                 ? () => setEditingApplication(selectedApplication)
                 : undefined
             }
+            showPublisherControlNotice={
+              canPublishRelease &&
+              selectedApplication.pubkey !== account?.pubkey
+            }
           />
           {repo && editingApplication && (
             <CreateSoftwareApplicationDialog
@@ -1379,6 +1403,7 @@ export default function RepoReleasesPage({
               }}
               existingApplications={applications}
               repoCoordinates={repo.allCoordinates}
+              maintainerPubkeys={repo.maintainerSet}
               relayHint={repo.relays[0]}
               application={editingApplication}
               onPublished={(application) => {
@@ -1472,10 +1497,11 @@ export default function RepoReleasesPage({
         <CreateReleaseDialog
           open={createReleaseOpen}
           onOpenChange={setCreateReleaseOpen}
-          applications={publishableApplications}
+          applications={applications}
           existingReleases={releases}
           gitTags={gitTags}
           repoCoordinates={repo.allCoordinates}
+          maintainerPubkeys={repo.maintainerSet}
           relayHint={repo.relays[0]}
         />
       )}

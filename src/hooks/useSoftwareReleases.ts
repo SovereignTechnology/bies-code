@@ -183,12 +183,29 @@ function castApplications(
 function castReleases(
   events: Parameters<typeof isValidSoftwareRelease>[0][],
   store: CastRefEventStore,
+  applications?: SoftwareApplication[],
 ): SoftwareRelease[] {
+  const applicationPublishers = applications
+    ? new Map(
+        applications.map((application) => [
+          application.coordinate,
+          application.pubkey,
+        ]),
+      )
+    : undefined;
   return events
     .flatMap((event) => {
       if (!isValidSoftwareRelease(event)) return [];
       try {
-        return [new SoftwareRelease(event, store)];
+        const release = new SoftwareRelease(event, store);
+        if (
+          applicationPublishers &&
+          applicationPublishers.get(release.applicationCoordinate) !==
+            release.pubkey
+        ) {
+          return [];
+        }
+        return [release];
       } catch {
         return [];
       }
@@ -203,9 +220,16 @@ function castReleases(
 function castAssets(
   events: Parameters<typeof isValidSoftwareAsset>[0][],
   store: CastRefEventStore,
+  permittedPublishers?: Map<string, Set<string>>,
 ): SoftwareAsset[] {
   return events.flatMap((event) => {
     if (!isValidSoftwareAsset(event)) return [];
+    if (
+      permittedPublishers &&
+      !permittedPublishers.get(event.id)?.has(event.pubkey)
+    ) {
+      return [];
+    }
     try {
       return [new SoftwareAsset(event, store)];
     } catch {
@@ -429,7 +453,7 @@ export function useSoftwareReleases(
       if (appIds.length === 0 || appAuthors.length === 0) return of([]);
       return store
         .timeline(releaseFilters)
-        .pipe(map((events) => castReleases(events, castStore)));
+        .pipe(map((events) => castReleases(events, castStore, applications)));
     }, [appIdsKey, appAuthorsKey, appPairsKey, store]) ?? [];
 
   const assetIds = [
@@ -438,6 +462,14 @@ export function useSoftwareReleases(
     ),
   ];
   const assetIdsKey = [...assetIds].sort().join(",");
+  const assetPublishers = new Map<string, Set<string>>();
+  for (const release of releases) {
+    for (const { id } of release.assets) {
+      const publishers = assetPublishers.get(id) ?? new Set<string>();
+      publishers.add(release.pubkey);
+      assetPublishers.set(id, publishers);
+    }
+  }
   const assetRelays = uniqueRelayUrls([
     ...releaseRelays,
     ...releases.flatMap((release) =>
@@ -467,8 +499,8 @@ export function useSoftwareReleases(
     if (assetIds.length === 0) return of([]);
     return store
       .timeline(assetFilters)
-      .pipe(map((events) => castAssets(events, castStore)));
-  }, [assetIdsKey, store]);
+      .pipe(map((events) => castAssets(events, castStore, assetPublishers)));
+  }, [assetIdsKey, appPairsKey, store]);
 
   const assetsById = useMemo(
     () =>
@@ -593,7 +625,7 @@ export function useRepoReleaseSummary(
       if (summaryFilters.length === 0) return of([]);
       return store
         .timeline(summaryFilters)
-        .pipe(map((events) => castReleases(events, castStore)));
+        .pipe(map((events) => castReleases(events, castStore, applications)));
     }, [appPairsKey, store]) ?? [];
 
   const latestRelease =

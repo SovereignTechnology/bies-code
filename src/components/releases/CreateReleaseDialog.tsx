@@ -190,6 +190,7 @@ interface CreateReleaseDialogProps {
   existingReleases: SoftwareRelease[];
   gitTags: Array<{ name: string; commitId: string }>;
   repoCoordinates: string[];
+  maintainerPubkeys: string[];
   relayHint?: string;
 }
 
@@ -763,6 +764,7 @@ export function CreateReleaseDialog({
   existingReleases,
   gitTags,
   repoCoordinates,
+  maintainerPubkeys,
   relayHint,
 }: CreateReleaseDialogProps) {
   const account = useActiveAccount();
@@ -802,7 +804,14 @@ export function CreateReleaseDialog({
         : applications,
     [applications, createdApplication],
   );
-  const selectedApplication = availableApplications.find(
+  const ownedApplications = useMemo(
+    () =>
+      availableApplications.filter(
+        (application) => application.pubkey === account?.pubkey,
+      ),
+    [account?.pubkey, availableApplications],
+  );
+  const selectedApplication = ownedApplications.find(
     (application) => application.coordinate === applicationCoordinate,
   );
   const customVersionSelected = versionChoice === CUSTOM_VERSION_CHOICE;
@@ -897,13 +906,13 @@ export function CreateReleaseDialog({
   useEffect(() => {
     if (!open) return;
     setApplicationCoordinate((current) =>
-      availableApplications.some(
+      ownedApplications.some(
         (application) => application.coordinate === current,
       )
         ? current
-        : (availableApplications[0]?.coordinate ?? ""),
+        : (ownedApplications[0]?.coordinate ?? ""),
     );
-  }, [open, availableApplications]);
+  }, [open, ownedApplications]);
 
   useEffect(() => {
     if (createdApplication && createdApplication.pubkey !== account?.pubkey) {
@@ -1279,12 +1288,15 @@ export function CreateReleaseDialog({
         </DialogHeader>
 
         <div className="space-y-6 px-5 md:px-6">
-          {availableApplications.length === 0 ? (
+          {ownedApplications.length === 0 ? (
             <div className="rounded-xl border border-dashed p-6 text-center">
-              <p className="font-medium">Add the application being released</p>
+              <p className="font-medium">
+                No applications controlled by this account
+              </p>
               <p className="mx-auto mt-1 max-w-lg text-sm text-muted-foreground">
-                This is the product the repository builds. You only need to add
-                it once unless this repository releases multiple products.
+                Only the pubkey that created an application can publish its
+                releases and software assets. Add an application with this
+                maintainer account, or go back and switch accounts.
               </p>
               <Button
                 type="button"
@@ -1319,8 +1331,12 @@ export function CreateReleaseDialog({
                       <SelectItem
                         key={application.coordinate}
                         value={application.coordinate}
+                        disabled={application.pubkey !== account?.pubkey}
                       >
                         {application.name} ({application.appId})
+                        {application.pubkey !== account?.pubkey
+                          ? " — another publisher"
+                          : ""}
                       </SelectItem>
                     ))}
                     <SelectSeparator />
@@ -1330,7 +1346,8 @@ export function CreateReleaseDialog({
                   </SelectContent>
                 </Select>
                 <p className="text-xs text-muted-foreground">
-                  The product these release files belong to.
+                  Only the application publisher can sign its releases and
+                  software assets.
                 </p>
               </div>
               <div className="space-y-2">
@@ -1601,7 +1618,7 @@ export function CreateReleaseDialog({
             onClick={handleSubmit}
             disabled={
               busy ||
-              availableApplications.length === 0 ||
+              ownedApplications.length === 0 ||
               versionAlreadyExists ||
               buildCommitInvalid ||
               assetCommitInvalid ||
@@ -1621,6 +1638,7 @@ export function CreateReleaseDialog({
           onOpenChange={setCreateApplicationOpen}
           existingApplications={availableApplications}
           repoCoordinates={repoCoordinates}
+          maintainerPubkeys={maintainerPubkeys}
           relayHint={relayHint}
           onPublished={(application) => {
             setCreatedApplication(application);

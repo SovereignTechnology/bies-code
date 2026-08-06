@@ -1,8 +1,19 @@
 import { useEffect, useId, useState } from "react";
 import type { CastRefEventStore } from "applesauce-common/casts/cast";
 import { useActiveAccount } from "applesauce-react/hooks";
-import { Loader2 } from "lucide-react";
+import { KeyRound, Loader2 } from "lucide-react";
 import { SoftwareApplication } from "@/casts/Software";
+import { UserLink } from "@/components/UserAvatar";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -25,6 +36,7 @@ interface CreateSoftwareApplicationDialogProps {
   onOpenChange: (open: boolean) => void;
   existingApplications: SoftwareApplication[];
   repoCoordinates: string[];
+  maintainerPubkeys: string[];
   relayHint?: string;
   application?: SoftwareApplication;
   onPublished?: (application: SoftwareApplication) => void;
@@ -58,6 +70,7 @@ export function CreateSoftwareApplicationDialog({
   onOpenChange,
   existingApplications,
   repoCoordinates,
+  maintainerPubkeys,
   relayHint,
   application,
   onPublished,
@@ -78,6 +91,7 @@ export function CreateSoftwareApplicationDialog({
   const [topics, setTopics] = useState("");
   const [platforms, setPlatforms] = useState("");
   const [publishing, setPublishing] = useState(false);
+  const [confirmPublisher, setConfirmPublisher] = useState(false);
   const [error, setError] = useState<string>();
   const editing = !!application;
 
@@ -95,6 +109,7 @@ export function CreateSoftwareApplicationDialog({
     setTopics(application?.topics.join(", ") ?? "");
     setPlatforms(application?.platforms.join(", ") ?? "");
     setPublishing(false);
+    setConfirmPublisher(false);
     setError(undefined);
   }, [
     application?.appId,
@@ -113,6 +128,10 @@ export function CreateSoftwareApplicationDialog({
   ]);
 
   const validate = (): string | undefined => {
+    if (!account) return "Log in with a repository maintainer account.";
+    if (!maintainerPubkeys.includes(account.pubkey)) {
+      return "Select a repository maintainer account to publish this application.";
+    }
     if (!appId.trim()) return "Enter an application ID.";
     if (!name.trim()) return "Enter an application name.";
     if (
@@ -195,13 +214,26 @@ export function CreateSoftwareApplicationDialog({
     }
   };
 
+  const handleSubmitRequest = () => {
+    const validationError = validate();
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
+    if (editing) {
+      void handleSubmit();
+    } else {
+      setConfirmPublisher(true);
+    }
+  };
+
   const fieldId = (name: string) => `${fieldPrefix}-${name}`;
 
   return (
     <Dialog
       open={open}
       onOpenChange={(nextOpen) => {
-        if (!publishing) onOpenChange(nextOpen);
+        if (!publishing && !confirmPublisher) onOpenChange(nextOpen);
       }}
     >
       <DialogContent className="max-h-[92vh] max-w-2xl overflow-y-auto">
@@ -217,6 +249,26 @@ export function CreateSoftwareApplicationDialog({
               : "Applications hold the shared name, description, artwork, and platform metadata for their releases."}
           </DialogDescription>
         </DialogHeader>
+
+        {account && (
+          <div className="flex items-start gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4">
+            <KeyRound className="mt-0.5 h-4 w-4 shrink-0 text-amber-700 dark:text-amber-300" />
+            <div className="min-w-0 text-sm">
+              <p className="font-medium">Application publisher</p>
+              <div className="mt-1">
+                <UserLink
+                  pubkey={application?.pubkey ?? account.pubkey}
+                  noLink
+                />
+              </div>
+              <p className="mt-2 text-muted-foreground">
+                Only this pubkey can edit the application or publish its
+                releases and software assets. Repository maintainers do not
+                share that authority.
+              </p>
+            </div>
+          </div>
+        )}
 
         <div className="grid gap-4 py-2 sm:grid-cols-2">
           <div className="space-y-2">
@@ -361,11 +413,49 @@ export function CreateSoftwareApplicationDialog({
           >
             Cancel
           </Button>
-          <Button type="button" onClick={handleSubmit} disabled={publishing}>
+          <Button
+            type="button"
+            onClick={handleSubmitRequest}
+            disabled={publishing}
+          >
             {publishing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             {editing ? "Save changes" : "Publish application"}
           </Button>
         </DialogFooter>
+
+        <AlertDialog
+          open={confirmPublisher}
+          onOpenChange={(nextOpen) => {
+            if (!publishing) setConfirmPublisher(nextOpen);
+          }}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Publish with this account?</AlertDialogTitle>
+              <AlertDialogDescription asChild>
+                <div className="space-y-3">
+                  <UserLink pubkey={account?.pubkey ?? ""} noLink />
+                  <p>
+                    This pubkey alone will control the application and publish
+                    its releases and software assets. Other repository
+                    maintainers will not be able to do so.
+                  </p>
+                </div>
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={publishing}>
+                Go back
+              </AlertDialogCancel>
+              <AlertDialogAction
+                disabled={publishing || !account}
+                onClick={() => void handleSubmit()}
+              >
+                Publish application
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </DialogContent>
     </Dialog>
   );
