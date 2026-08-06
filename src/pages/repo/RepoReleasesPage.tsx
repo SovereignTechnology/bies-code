@@ -1317,31 +1317,32 @@ export default function RepoReleasesPage({
             {visibleReleases.length}
           </Badge>
         )}
-        <Button variant="outline" size="sm" asChild>
-          <Link to={`${basePath}/releases/apps`}>
-            Applications
-            <Badge
-              variant="secondary"
-              className="ml-2 h-5 min-w-5 justify-center px-1.5 text-[11px]"
-            >
-              {applications.length}
-            </Badge>
-          </Link>
-        </Button>
-        {canPublishRelease && (
-          <Button
-            className="ml-auto"
-            onClick={() => setCreateReleaseOpen(true)}
-            disabled={!releaseFormReady}
-          >
-            {releaseFormReady ? (
-              <Plus className="mr-2 h-4 w-4" />
-            ) : (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            )}
-            New release
+        <div className="ml-auto flex items-center gap-2">
+          <Button variant="outline" size="sm" asChild>
+            <Link to={`${basePath}/releases/apps`}>
+              Applications
+              <Badge
+                variant="secondary"
+                className="ml-2 h-5 min-w-5 justify-center px-1.5 text-[11px]"
+              >
+                {applications.length}
+              </Badge>
+            </Link>
           </Button>
-        )}
+          {canPublishRelease && (
+            <Button
+              onClick={() => setCreateReleaseOpen(true)}
+              disabled={!releaseFormReady}
+            >
+              {releaseFormReady ? (
+                <Plus className="mr-2 h-4 w-4" />
+              ) : (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              )}
+              New release
+            </Button>
+          )}
+        </div>
       </div>
 
       {canPublishRelease && repo && releaseFormReady && (
