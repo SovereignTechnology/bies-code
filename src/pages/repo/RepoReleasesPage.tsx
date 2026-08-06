@@ -1318,7 +1318,15 @@ export default function RepoReleasesPage({
           </Badge>
         )}
         <Button variant="outline" size="sm" asChild>
-          <Link to={`${basePath}/releases/apps`}>Applications</Link>
+          <Link to={`${basePath}/releases/apps`}>
+            Applications
+            <Badge
+              variant="secondary"
+              className="ml-2 h-5 min-w-5 justify-center px-1.5 text-[11px]"
+            >
+              {applications.length}
+            </Badge>
+          </Link>
         </Button>
         {canPublishRelease && (
           <Button
