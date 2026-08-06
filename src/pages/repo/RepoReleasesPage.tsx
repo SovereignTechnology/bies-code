@@ -30,6 +30,7 @@ import type {
   SoftwareRelease,
 } from "@/casts/Software";
 import { EventCardActions } from "@/components/EventCardActions";
+import { RepoBadge } from "@/components/RepoBadge";
 import { CreateReleaseDialog } from "@/components/releases/CreateReleaseDialog";
 import { CreateSoftwareApplicationDialog } from "@/components/releases/CreateSoftwareApplicationDialog";
 import { UserLink } from "@/components/UserAvatar";
@@ -53,8 +54,10 @@ import { useGitPool } from "@/hooks/useGitPool";
 import { useSoftwareReleases } from "@/hooks/useSoftwareReleases";
 import { useUnreadHighlight } from "@/hooks/useUnreadHighlight";
 import { blossomBlobUrl } from "@/lib/blossom";
+import { parseRepoCoordinate } from "@/lib/nip34";
 import { compareTagsNewestFirst } from "@/lib/refStatus";
-import { eventIdToNevent } from "@/lib/routeUtils";
+import { parseUpstreamInput } from "@/lib/repoUpstreamInput";
+import { eventIdToNevent, repoToPath } from "@/lib/routeUtils";
 import { cn, safeFormat, safeFormatDistanceToNow } from "@/lib/utils";
 import NotFound from "../NotFound";
 import { useRepoContext } from "./RepoContext";
@@ -630,6 +633,11 @@ function SoftwareApplicationPage({
   relayHints: string[];
 }) {
   const repositoryUrl = externalHttpUrl(application.repository);
+  const sourceUpstream = application.repository
+    ? parseUpstreamInput(application.repository).upstream
+    : undefined;
+  const sourceRepositoryCoordinate = sourceUpstream?.repository;
+  const sourceRepository = parseRepoCoordinate(sourceRepositoryCoordinate);
   const [renderedReleaseCount, setRenderedReleaseCount] =
     useState(RELEASE_RENDER_BATCH);
   const renderedReleases = releases.slice(0, renderedReleaseCount);
@@ -774,7 +782,18 @@ function SoftwareApplicationPage({
                 )}
                 {application.repository && (
                   <DetailRow label="Source">
-                    {repositoryUrl ? (
+                    {sourceRepository && sourceRepositoryCoordinate ? (
+                      <RepoBadge
+                        coord={sourceRepositoryCoordinate}
+                        to={repoToPath(
+                          sourceRepository.pubkey,
+                          sourceRepository.identifier,
+                          sourceUpstream?.relayHint
+                            ? [sourceUpstream.relayHint]
+                            : [],
+                        )}
+                      />
+                    ) : repositoryUrl ? (
                       <a
                         href={repositoryUrl}
                         target="_blank"
