@@ -9,7 +9,13 @@
  * Usage:
  *   const MarkdownContent = lazy(() => import("@/components/MarkdownContent"));
  */
-import React, { useState, useEffect, useCallback } from "react";
+import React, {
+  createContext,
+  useState,
+  useEffect,
+  useCallback,
+  useContext,
+} from "react";
 import { Link2, Check } from "lucide-react";
 import { cn, markdownUrlTransform } from "@/lib/utils";
 import { Link } from "react-router-dom";
@@ -36,6 +42,11 @@ import {
   EmbeddedEventByAddressPreview,
 } from "@/components/EmbeddedEventPreview";
 import { BlossomImage, BlossomVideo } from "@/components/BlossomMedia";
+import {
+  ImageGallery,
+  type ImageGallerySlide,
+  type OpenImageGallery,
+} from "@/components/ImageGallery";
 
 // Note: getOrCreatePool is safe to call here because the pool is already
 // subscribed by useGitPool higher in the tree (RepoCodePage). We are just
@@ -124,6 +135,42 @@ const rehypePluginsWithHtml: any[] = [
 // Git-aware image component
 // ---------------------------------------------------------------------------
 
+const LinkedMarkdownImageContext = createContext(false);
+
+type ImageViewerAttributes = React.ImgHTMLAttributes<HTMLImageElement> & {
+  "data-image-viewer"?: string;
+};
+
+function imageViewerProps(
+  linked: boolean,
+  alt: string | undefined,
+): ImageViewerAttributes {
+  if (linked) return {};
+  return {
+    "data-image-viewer": "",
+    role: "button",
+    tabIndex: 0,
+    "aria-label": alt ? `View image: ${alt}` : "View image",
+  };
+}
+
+function MarkdownBlossomImage(
+  props: React.ComponentProps<typeof BlossomImage>,
+) {
+  const linked = useContext(LinkedMarkdownImageContext);
+  return (
+    <BlossomImage
+      {...props}
+      {...imageViewerProps(linked, props.alt)}
+      className={cn(
+        props.className,
+        !linked &&
+          "cursor-zoom-in focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+      )}
+    />
+  );
+}
+
 /**
  * Resolve a relative image path against the markdown file's directory.
  * e.g. filePath="docs/guide.md", src="./images/foo.png" → "docs/images/foo.png"
@@ -170,6 +217,7 @@ function GitImage({
   commitHash,
   filePath,
 }: GitImageProps) {
+  const linked = useContext(LinkedMarkdownImageContext);
   const [dataUri, setDataUri] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -224,7 +272,7 @@ function GitImage({
   // Absolute URL — render with Blossom fallback
   if (!isRelativeSrc(src)) {
     return (
-      <BlossomImage
+      <MarkdownBlossomImage
         src={src}
         alt={alt ?? ""}
         className="max-w-full rounded-md my-3"
@@ -275,10 +323,15 @@ function GitImage({
     <img
       src={dataUri}
       alt={alt ?? ""}
-      className="max-w-full rounded-md my-3"
+      className={cn(
+        "max-w-full rounded-md my-3",
+        !linked &&
+          "cursor-zoom-in focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+      )}
       loading="lazy"
       title={title}
       style={Object.keys(sizeStyle).length > 0 ? sizeStyle : undefined}
+      {...imageViewerProps(linked, alt)}
     />
   );
 }
@@ -466,7 +519,9 @@ function buildComponents(
           )}
           {...props}
         >
-          {children}
+          <LinkedMarkdownImageContext.Provider value>
+            {children}
+          </LinkedMarkdownImageContext.Provider>
         </a>
       );
     },
@@ -496,7 +551,7 @@ function buildComponents(
       }
       if (!src) return null;
       return (
-        <BlossomImage
+        <MarkdownBlossomImage
           src={src}
           alt={alt ?? ""}
           className="max-w-full rounded-md my-3"
@@ -734,22 +789,61 @@ function MarkdownContent({
     return () => cancelAnimationFrame(raf);
   }, [content]);
 
+  const openRenderedImage = (
+    container: HTMLDivElement,
+    target: EventTarget | null,
+    openGallery: OpenImageGallery,
+  ) => {
+    if (!(target instanceof HTMLImageElement)) return false;
+    if (!target.hasAttribute("data-image-viewer")) return false;
+    const images = Array.from(
+      container.querySelectorAll<HTMLImageElement>("img[data-image-viewer]"),
+    );
+    const index = images.indexOf(target);
+    if (index < 0) return false;
+    const slides: ImageGallerySlide[] = images.map((image, imageIndex) => ({
+      src: image.currentSrc || image.src,
+      alt: image.alt || `Image ${imageIndex + 1}`,
+    }));
+    openGallery(slides, index);
+    return true;
+  };
+
   return (
-    <div
-      className={cn(
-        "min-w-0 w-full overflow-hidden",
-        className ?? "markdown-content",
+    <ImageGallery>
+      {(openGallery) => (
+        <div
+          className={cn(
+            "min-w-0 w-full overflow-hidden",
+            className ?? "markdown-content",
+          )}
+          onClick={(event) => {
+            if (
+              openRenderedImage(event.currentTarget, event.target, openGallery)
+            ) {
+              event.preventDefault();
+            }
+          }}
+          onKeyDown={(event) => {
+            if (event.key !== "Enter" && event.key !== " ") return;
+            if (
+              openRenderedImage(event.currentTarget, event.target, openGallery)
+            ) {
+              event.preventDefault();
+            }
+          }}
+        >
+          <ReactMarkdown
+            remarkPlugins={remarkPlugins}
+            rehypePlugins={rehypePlugins}
+            components={components}
+            urlTransform={markdownUrlTransform}
+          >
+            {content}
+          </ReactMarkdown>
+        </div>
       )}
-    >
-      <ReactMarkdown
-        remarkPlugins={remarkPlugins}
-        rehypePlugins={rehypePlugins}
-        components={components}
-        urlTransform={markdownUrlTransform}
-      >
-        {content}
-      </ReactMarkdown>
-    </div>
+    </ImageGallery>
   );
 }
 

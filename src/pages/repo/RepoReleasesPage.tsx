@@ -36,6 +36,7 @@ import type {
   SoftwareRelease,
 } from "@/casts/Software";
 import { EventCardActions } from "@/components/EventCardActions";
+import { ImageGallery } from "@/components/ImageGallery";
 import { RepoBadge } from "@/components/RepoBadge";
 import { CreateReleaseDialog } from "@/components/releases/CreateReleaseDialog";
 import { CreateSoftwareApplicationDialog } from "@/components/releases/CreateSoftwareApplicationDialog";
@@ -737,27 +738,37 @@ function SoftwareApplicationPage({
         )}
 
         {application.images.length > 0 && (
-          <div
-            className="flex snap-x gap-4 overflow-x-auto pb-3"
-            aria-label={`${application.name} screenshots`}
-          >
-            {application.images.map((imageUrl, index) => (
-              <a
-                key={`${imageUrl}-${index}`}
-                href={imageUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="shrink-0 snap-start rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                <img
-                  src={imageUrl}
-                  alt={`${application.name} screenshot ${index + 1}`}
-                  className="h-80 w-auto max-w-lg rounded-xl border bg-muted object-contain"
-                  loading="lazy"
-                />
-              </a>
-            ))}
-          </div>
+          <ImageGallery>
+            {(openGallery) => {
+              const slides = application.images.map((src, index) => ({
+                src,
+                alt: `${application.name} screenshot ${index + 1}`,
+              }));
+              return (
+                <div
+                  className="flex snap-x gap-4 overflow-x-auto pb-3"
+                  aria-label={`${application.name} screenshots`}
+                >
+                  {slides.map((slide, index) => (
+                    <button
+                      key={`${slide.src}-${index}`}
+                      type="button"
+                      onClick={() => openGallery(slides, index)}
+                      className="block shrink-0 snap-start cursor-zoom-in rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      aria-label={`View ${slide.alt}`}
+                    >
+                      <img
+                        src={slide.src}
+                        alt={slide.alt}
+                        className="h-80 w-auto max-w-lg rounded-xl border bg-muted object-contain"
+                        loading="lazy"
+                      />
+                    </button>
+                  ))}
+                </div>
+              );
+            }}
+          </ImageGallery>
         )}
 
         <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_20rem]">
