@@ -1,7 +1,8 @@
 import { useEffect, useId, useState } from "react";
+import type { CastRefEventStore } from "applesauce-common/casts/cast";
 import { useActiveAccount } from "applesauce-react/hooks";
 import { Loader2 } from "lucide-react";
-import type { SoftwareApplication } from "@/casts/Software";
+import { SoftwareApplication } from "@/casts/Software";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -15,6 +16,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { SoftwareApplicationFactory } from "@/factories/SoftwareApplicationFactory";
+import { useEventStore } from "@/hooks/useEventStore";
 import { useToast } from "@/hooks/useToast";
 import { publish } from "@/services/nostr";
 
@@ -24,6 +26,7 @@ interface CreateSoftwareApplicationDialogProps {
   existingApplications: SoftwareApplication[];
   repoCoordinates: string[];
   relayHint?: string;
+  onCreated?: (application: SoftwareApplication) => void;
 }
 
 function commaSeparatedValues(value: string): string[] {
@@ -55,8 +58,10 @@ export function CreateSoftwareApplicationDialog({
   existingApplications,
   repoCoordinates,
   relayHint,
+  onCreated,
 }: CreateSoftwareApplicationDialogProps) {
   const account = useActiveAccount();
+  const store = useEventStore();
   const { toast } = useToast();
   const fieldPrefix = useId();
   const [appId, setAppId] = useState("");
@@ -144,6 +149,12 @@ export function CreateSoftwareApplicationDialog({
         createdAt: Math.floor(Date.now() / 1000),
       }).sign(account.signer);
       await publish(application, repoCoordinates);
+      onCreated?.(
+        new SoftwareApplication(
+          application,
+          store as unknown as CastRefEventStore,
+        ),
+      );
       toast({
         title: "Application published",
         description: `${name.trim()} can now receive software releases.`,

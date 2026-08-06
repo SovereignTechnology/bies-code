@@ -22,6 +22,7 @@ import {
   X,
 } from "lucide-react";
 import type { SoftwareApplication, SoftwareRelease } from "@/casts/Software";
+import { CreateSoftwareApplicationDialog } from "@/components/releases/CreateSoftwareApplicationDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -133,6 +134,7 @@ const GIT_COMMIT_ID = /^[0-9a-f]{40}$/i;
 const CUSTOM_VERSION_CHOICE = "custom";
 const CUSTOM_CHANNEL_CHOICE = "custom";
 const CUSTOM_MIME_TYPE_CHOICE = "custom";
+const ADD_APPLICATION_CHOICE = "add-application";
 const TAG_VERSION_PREFIX = "tag:";
 
 function canonicalReleaseVersion(value: string): string {
@@ -753,6 +755,9 @@ export function CreateReleaseDialog({
   const uploadControllersRef = useRef(new Map<string, AbortController>());
   const selectedFileIdsRef = useRef(new Set<string>());
   const uploadQueueRef = useRef(Promise.resolve());
+  const [createApplicationOpen, setCreateApplicationOpen] = useState(false);
+  const [createdApplication, setCreatedApplication] =
+    useState<SoftwareApplication>();
   const [applicationCoordinate, setApplicationCoordinate] = useState("");
   const [versionChoice, setVersionChoice] = useState("");
   const [version, setVersion] = useState("");
@@ -766,7 +771,18 @@ export function CreateReleaseDialog({
   const [error, setError] = useState<string>();
   const busy = stage !== "editing";
 
-  const selectedApplication = applications.find(
+  const availableApplications = useMemo(
+    () =>
+      createdApplication &&
+      !applications.some(
+        (application) =>
+          application.coordinate === createdApplication.coordinate,
+      )
+        ? [...applications, createdApplication]
+        : applications,
+    [applications, createdApplication],
+  );
+  const selectedApplication = availableApplications.find(
     (application) => application.coordinate === applicationCoordinate,
   );
   const customVersionSelected = versionChoice === CUSTOM_VERSION_CHOICE;
@@ -853,6 +869,7 @@ export function CreateReleaseDialog({
     setAssets([]);
     selectedFileIdsRef.current.clear();
     setPlatformFocusAssetId(undefined);
+    setCreateApplicationOpen(false);
     setStage("editing");
     setError(undefined);
   }, [open]);
@@ -860,11 +877,27 @@ export function CreateReleaseDialog({
   useEffect(() => {
     if (!open) return;
     setApplicationCoordinate((current) =>
-      applications.some((application) => application.coordinate === current)
+      availableApplications.some(
+        (application) => application.coordinate === current,
+      )
         ? current
-        : (applications[0]?.coordinate ?? ""),
+        : (availableApplications[0]?.coordinate ?? ""),
     );
-  }, [open, applications]);
+  }, [open, availableApplications]);
+
+  useEffect(() => {
+    if (createdApplication && createdApplication.pubkey !== account?.pubkey) {
+      setCreatedApplication(undefined);
+    }
+  }, [account?.pubkey, createdApplication]);
+
+  const updateApplicationChoice = (coordinate: string) => {
+    if (coordinate === ADD_APPLICATION_CHOICE) {
+      setCreateApplicationOpen(true);
+      return;
+    }
+    setApplicationCoordinate(coordinate);
+  };
 
   const updateBuildCommit = (nextCommit: string, forceAssets = false) => {
     setAssets((current) =>
@@ -1066,7 +1099,9 @@ export function CreateReleaseDialog({
 
   const validate = (): string | undefined => {
     if (!account) return "Log in to publish a release.";
-    if (!selectedApplication) return "Select an application you publish.";
+    if (!selectedApplication || selectedApplication.pubkey !== account.pubkey) {
+      return "Select an application you publish.";
+    }
     if (!releaseVersion) return "Enter a release version.";
     if (versionAlreadyExists) {
       return `${selectedApplication.name} already has a ${releaseVersion} release.`;
@@ -1206,42 +1241,56 @@ export function CreateReleaseDialog({
     <Dialog
       open={open}
       onOpenChange={(nextOpen) => {
-        if (!busy) onOpenChange(nextOpen);
+        if (!busy) {
+          if (!nextOpen) setCreateApplicationOpen(false);
+          onOpenChange(nextOpen);
+        }
       }}
     >
       <DialogContent className="max-h-[92vh] max-w-4xl overflow-y-auto p-0">
         <DialogHeader className="border-b px-5 py-5 pr-12 md:px-6">
           <DialogTitle>Publish a software release</DialogTitle>
           <DialogDescription>
-            Files upload to Blossom as soon as you select them. The signed
-            release is then published before its asset metadata so repository
-            relays can accept the chain.
+            Each release belongs to an application—the product this repository
+            builds. This keeps releases separate when a repository contains more
+            than one product. Files upload to Blossom as soon as you select
+            them.
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-6 px-5 md:px-6">
-          {applications.length === 0 ? (
+          {availableApplications.length === 0 ? (
             <div className="rounded-xl border border-dashed p-6 text-center">
-              <p className="font-medium">No application available</p>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Publish a NIP-82 application linked to this repository with the
-                active account before creating a release.
+              <p className="font-medium">Add the application being released</p>
+              <p className="mx-auto mt-1 max-w-lg text-sm text-muted-foreground">
+                This is the product the repository builds. You only need to add
+                it once unless this repository releases multiple products.
               </p>
+              <Button
+                type="button"
+                variant="outline"
+                className="mt-4"
+                onClick={() => setCreateApplicationOpen(true)}
+                disabled={busy}
+              >
+                <Plus className="mr-2 h-4 w-4" />
+                Add application
+              </Button>
             </div>
           ) : (
             <div className="grid gap-4 md:grid-cols-3">
               <div className="space-y-2">
-                <Label>Application</Label>
+                <Label htmlFor="release-application">Application</Label>
                 <Select
                   value={applicationCoordinate}
-                  onValueChange={setApplicationCoordinate}
+                  onValueChange={updateApplicationChoice}
                   disabled={busy}
                 >
-                  <SelectTrigger>
+                  <SelectTrigger id="release-application">
                     <SelectValue placeholder="Select an application" />
                   </SelectTrigger>
                   <SelectContent>
-                    {applications.map((application) => (
+                    {availableApplications.map((application) => (
                       <SelectItem
                         key={application.coordinate}
                         value={application.coordinate}
@@ -1249,8 +1298,15 @@ export function CreateReleaseDialog({
                         {application.name} ({application.appId})
                       </SelectItem>
                     ))}
+                    <SelectSeparator />
+                    <SelectItem value={ADD_APPLICATION_CHOICE}>
+                      Add another application…
+                    </SelectItem>
                   </SelectContent>
                 </Select>
+                <p className="text-xs text-muted-foreground">
+                  The product these release files belong to.
+                </p>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="release-version-choice">
@@ -1502,7 +1558,7 @@ export function CreateReleaseDialog({
             onClick={handleSubmit}
             disabled={
               busy ||
-              applications.length === 0 ||
+              availableApplications.length === 0 ||
               versionAlreadyExists ||
               buildCommitInvalid ||
               assetCommitInvalid ||
@@ -1517,6 +1573,17 @@ export function CreateReleaseDialog({
             Publish release
           </Button>
         </DialogFooter>
+        <CreateSoftwareApplicationDialog
+          open={createApplicationOpen}
+          onOpenChange={setCreateApplicationOpen}
+          existingApplications={availableApplications}
+          repoCoordinates={repoCoordinates}
+          relayHint={relayHint}
+          onCreated={(application) => {
+            setCreatedApplication(application);
+            setApplicationCoordinate(application.coordinate);
+          }}
+        />
       </DialogContent>
     </Dialog>
   );
