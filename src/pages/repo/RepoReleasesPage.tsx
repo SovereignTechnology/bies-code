@@ -3,6 +3,7 @@ import { Link, useLocation } from "react-router-dom";
 import { useSeoMeta } from "@unhead/react";
 import { useActiveAccount } from "applesauce-react/hooks";
 import {
+  ArrowLeft,
   ChevronDown,
   Download,
   List,
@@ -40,7 +41,9 @@ import { useGitPool } from "@/hooks/useGitPool";
 import { useSoftwareReleases } from "@/hooks/useSoftwareReleases";
 import { blossomBlobUrl } from "@/lib/blossom";
 import { compareTagsNewestFirst } from "@/lib/refStatus";
+import { eventIdToNevent } from "@/lib/routeUtils";
 import { cn, safeFormat, safeFormatDistanceToNow } from "@/lib/utils";
+import NotFound from "../NotFound";
 import { useRepoContext } from "./RepoContext";
 
 const MarkdownContent = lazy(() => import("@/components/MarkdownContent"));
@@ -404,6 +407,7 @@ function ReleaseCard({
   latest,
   showApplication,
   blossomServers,
+  releasePath,
 }: {
   release: SoftwareRelease;
   application: SoftwareApplication | undefined;
@@ -412,6 +416,7 @@ function ReleaseCard({
   latest: boolean;
   showApplication: boolean;
   blossomServers: string[];
+  releasePath?: string;
 }) {
   const relativeDate = safeFormatDistanceToNow(release.event.created_at, {
     addSuffix: true,
@@ -433,7 +438,18 @@ function ReleaseCard({
         <CardHeader className="p-5 pb-4">
           <div className="flex flex-wrap items-center gap-2">
             <CardTitle className="text-xl leading-tight break-words">
-              {application?.name ?? release.appId} {release.version}
+              {releasePath ? (
+                <Link
+                  to={releasePath}
+                  className="hover:text-pink-500 hover:underline"
+                >
+                  {application?.name ?? release.appId} {release.version}
+                </Link>
+              ) : (
+                <>
+                  {application?.name ?? release.appId} {release.version}
+                </>
+              )}
             </CardTitle>
             {latest && (
               <Badge className="bg-emerald-600 text-white hover:bg-emerald-600">
@@ -508,8 +524,12 @@ function ReleaseCard({
   );
 }
 
-export default function RepoReleasesPage() {
-  const { cloneUrls, resolved, repoState } = useRepoContext();
+export default function RepoReleasesPage({
+  releaseId,
+}: {
+  releaseId?: string;
+}) {
+  const { basePath, cloneUrls, resolved, repoState } = useRepoContext();
   const account = useActiveAccount();
   const location = useLocation();
   const blossomServers = useBlossomServers();
@@ -591,8 +611,17 @@ export default function RepoReleasesPage() {
   );
   const [visibleReleaseId, setVisibleReleaseId] = useState<string>();
 
+  const selectedRelease = releaseId
+    ? releases.find((release) => release.event.id === releaseId)
+    : undefined;
+
   useSeoMeta({
-    title: repo ? `Releases - ${repo.name} - ngit` : "Releases - ngit",
+    title:
+      repo && selectedRelease
+        ? `${displayVersion(selectedRelease.version)} - ${repo.name} - ngit`
+        : repo
+          ? `Releases - ${repo.name} - ngit`
+          : "Releases - ngit",
     description: repo
       ? `Software releases and downloadable assets for ${repo.name}`
       : "Software releases and downloadable assets",
@@ -613,6 +642,7 @@ export default function RepoReleasesPage() {
     "";
 
   useEffect(() => {
+    if (releaseId) return;
     if (releaseIds.length === 0) return;
 
     let frame: number | undefined;
@@ -646,7 +676,7 @@ export default function RepoReleasesPage() {
       window.removeEventListener("resize", scheduleUpdate);
       if (frame !== undefined) cancelAnimationFrame(frame);
     };
-  }, [releaseIds]);
+  }, [releaseId, releaseIds]);
 
   useEffect(() => {
     if (!location.hash || releases.length === 0) return;
@@ -657,6 +687,40 @@ export default function RepoReleasesPage() {
     });
     return () => cancelAnimationFrame(frame);
   }, [location.hash, releases.length]);
+
+  if (releaseId) {
+    if (loadingApplications || loadingReleases) {
+      return (
+        <div className="container max-w-screen-xl px-4 md:px-8 py-6">
+          <ReleasePageSkeleton />
+        </div>
+      );
+    }
+
+    if (!selectedRelease) return <NotFound />;
+
+    return (
+      <div className="container max-w-screen-xl px-4 md:px-8 py-6 space-y-5">
+        <Button variant="ghost" size="sm" asChild className="-ml-3">
+          <Link to={`${basePath}/releases`}>
+            <ArrowLeft className="mr-2 h-4 w-4" />
+            All releases
+          </Link>
+        </Button>
+        <ReleaseCard
+          release={selectedRelease}
+          application={applicationByReleaseKey.get(
+            selectedRelease.applicationCoordinate,
+          )}
+          assetsById={assetsById}
+          assetsSettled={assetsSettled}
+          latest={latestMainReleaseIds.has(selectedRelease.event.id)}
+          showApplication={applications.length > 1}
+          blossomServers={blossomServers}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="container max-w-screen-xl px-4 md:px-8 py-6 space-y-5">
@@ -724,6 +788,10 @@ export default function RepoReleasesPage() {
                 latest={latestMainReleaseIds.has(release.event.id)}
                 showApplication={applications.length > 1}
                 blossomServers={blossomServers}
+                releasePath={`${basePath}/releases/${eventIdToNevent(
+                  release.event.id,
+                  repo?.relays.slice(0, 1) ?? [],
+                )}`}
               />
             ))}
           </div>
