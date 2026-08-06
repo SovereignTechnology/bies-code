@@ -211,6 +211,19 @@ function releaseFiltersForApplications(
   applications: SoftwareApplication[],
   limit?: number,
 ): Filter[] {
+  const applicationPointerFilters = applications.map(
+    (application) =>
+      ({
+        kinds: [SOFTWARE_RELEASE_KIND],
+        authors: [application.pubkey],
+        "#a": [application.coordinate],
+        ...(limit === undefined ? {} : { limit }),
+      }) as Filter,
+  );
+
+  // Compatibility (2026-08-06): Zapstore-published kind 30063 events do not
+  // yet include application `a` tags. Fran agreed with our NIP-82 suggestion
+  // and said he will add them, so retain the publisher + `#i` fallback.
   const appIdsByAuthor = new Map<string, Set<string>>();
   for (const application of applications) {
     const appIds = appIdsByAuthor.get(application.pubkey) ?? new Set<string>();
@@ -218,7 +231,7 @@ function releaseFiltersForApplications(
     appIdsByAuthor.set(application.pubkey, appIds);
   }
 
-  return [...appIdsByAuthor].map(
+  const legacyIdentifierFilters = [...appIdsByAuthor].map(
     ([author, appIds]) =>
       ({
         kinds: [SOFTWARE_RELEASE_KIND],
@@ -227,6 +240,8 @@ function releaseFiltersForApplications(
         ...(limit === undefined ? {} : { limit }),
       }) as Filter,
   );
+
+  return [...applicationPointerFilters, ...legacyIdentifierFilters];
 }
 
 /**
@@ -279,7 +294,7 @@ export function useSoftwareReleases(
   const appIdsKey = [...appIds].sort().join(",");
   const appAuthorsKey = [...appAuthors].sort().join(",");
   const appPairsKey = applications
-    .map((application) => `${application.pubkey}:${application.appId}`)
+    .map((application) => application.coordinate)
     .sort()
     .join(",");
   const releaseRelays = uniqueRelayUrls([...repoRelays, ZAPSTORE_RELAY_URL]);
@@ -404,7 +419,7 @@ export function useRepoReleaseSummary(
     }, [coordsKey, maintainerKey, store]) ?? [];
 
   const appPairsKey = applications
-    .map((application) => `${application.pubkey}:${application.appId}`)
+    .map((application) => application.coordinate)
     .sort()
     .join(",");
   const releaseFilters = releaseFiltersForApplications(applications, 1);
@@ -446,8 +461,7 @@ export function useRepoReleaseSummary(
   const latestApplication = latestRelease
     ? applications.find(
         (application) =>
-          application.pubkey === latestRelease.pubkey &&
-          application.appId === latestRelease.appId,
+          application.coordinate === latestRelease.applicationCoordinate,
       )
     : undefined;
 

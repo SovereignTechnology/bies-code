@@ -130,7 +130,7 @@ function ReleaseNavigation({
     id: release.event.id,
     label: releaseNavigationLabel(
       release,
-      applicationByReleaseKey.get(`${release.pubkey}:${release.appId}`),
+      applicationByReleaseKey.get(release.applicationCoordinate),
       showApplication,
     ),
   }));
@@ -511,7 +511,7 @@ export default function RepoReleasesPage() {
     () =>
       new Map(
         applications.map((application) => [
-          `${application.pubkey}:${application.appId}`,
+          application.coordinate,
           application,
         ]),
       ),
@@ -523,7 +523,7 @@ export default function RepoReleasesPage() {
     const ids = new Set<string>();
     for (const release of releases) {
       if (release.channel !== "main") continue;
-      const key = `${release.pubkey}:${release.appId}`;
+      const key = release.applicationCoordinate;
       if (seen.has(key)) continue;
       seen.add(key);
       ids.add(release.event.id);
@@ -636,7 +636,7 @@ export default function RepoReleasesPage() {
                 key={release.event.id}
                 release={release}
                 application={applicationByReleaseKey.get(
-                  `${release.pubkey}:${release.appId}`,
+                  release.applicationCoordinate,
                 )}
                 assetsById={assetsById}
                 assetsSettled={assetsSettled}

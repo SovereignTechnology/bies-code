@@ -1,6 +1,9 @@
 import type { CastRefEventStore } from "applesauce-common/casts/cast";
 import { EventCast } from "applesauce-common/casts/cast";
-import { getOrComputeCachedValue } from "applesauce-core/helpers";
+import {
+  getOrComputeCachedValue,
+  parseReplaceableAddress,
+} from "applesauce-core/helpers";
 import { getTagValue, type KnownEvent } from "applesauce-core/helpers/event";
 import type { NostrEvent } from "nostr-tools";
 
@@ -17,7 +20,13 @@ const ApplicationNameSymbol = Symbol.for("software-application-name");
 const ApplicationRepoCoordsSymbol = Symbol.for(
   "software-application-repo-coords",
 );
+const ApplicationCoordinateSymbol = Symbol.for(
+  "software-application-coordinate",
+);
 const ReleaseAppIdSymbol = Symbol.for("software-release-app-id");
+const ReleaseApplicationCoordinateSymbol = Symbol.for(
+  "software-release-application-coordinate",
+);
 const ReleaseVersionSymbol = Symbol.for("software-release-version");
 const ReleaseChannelSymbol = Symbol.for("software-release-channel");
 const ReleaseAssetsSymbol = Symbol.for("software-release-assets");
@@ -149,6 +158,14 @@ export class SoftwareApplication extends EventCast<SoftwareApplicationEvent> {
       () => repeatedTagValues(this.event, "a"),
     );
   }
+
+  get coordinate(): string {
+    return getOrComputeCachedValue(
+      this.event,
+      ApplicationCoordinateSymbol,
+      () => `${SOFTWARE_APPLICATION_KIND}:${this.pubkey}:${this.appId}`,
+    );
+  }
 }
 
 /** Typed view of a NIP-82 kind:30063 Software Release event. */
@@ -169,6 +186,27 @@ export class SoftwareRelease extends EventCast<SoftwareReleaseEvent> {
       this.event,
       ReleaseAppIdSymbol,
       () => getTagValue(this.event, "i")!,
+    );
+  }
+
+  get applicationCoordinate(): string {
+    return getOrComputeCachedValue(
+      this.event,
+      ReleaseApplicationCoordinateSymbol,
+      () => {
+        for (const [name, address] of this.event.tags) {
+          if (name !== "a" || !address) continue;
+          const pointer = parseReplaceableAddress(address, true);
+          if (
+            pointer?.kind === SOFTWARE_APPLICATION_KIND &&
+            pointer.identifier === this.appId
+          ) {
+            return `${SOFTWARE_APPLICATION_KIND}:${pointer.pubkey.toLowerCase()}:${pointer.identifier}`;
+          }
+        }
+
+        return `${SOFTWARE_APPLICATION_KIND}:${this.pubkey}:${this.appId}`;
+      },
     );
   }
 
