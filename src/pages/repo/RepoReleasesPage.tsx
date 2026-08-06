@@ -1,4 +1,12 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { Link, useLocation, useSearchParams } from "react-router-dom";
 import { useSeoMeta } from "@unhead/react";
 import { useActiveAccount } from "applesauce-react/hooks";
@@ -10,6 +18,7 @@ import {
   Download,
   List,
   Loader2,
+  MoreHorizontal,
   Package,
   Plus,
   ShieldCheck,
@@ -51,6 +60,7 @@ import NotFound from "../NotFound";
 import { useRepoContext } from "./RepoContext";
 
 const MarkdownContent = lazy(() => import("@/components/MarkdownContent"));
+const RELEASE_RENDER_BATCH = 20;
 
 function formatBytes(bytes: number | undefined): string | undefined {
   if (bytes === undefined) return undefined;
@@ -144,12 +154,16 @@ function ReleaseNavigation({
   showApplication,
   activeReleaseId,
   onSelectRelease,
+  hasMore,
+  onLoadMore,
 }: {
   releases: SoftwareRelease[];
   applicationByReleaseKey: Map<string, SoftwareApplication>;
   showApplication: boolean;
   activeReleaseId: string;
   onSelectRelease: (releaseId: string) => void;
+  hasMore: boolean;
+  onLoadMore: () => void;
 }) {
   const location = useLocation();
   const releaseListRef = useRef<HTMLElement>(null);
@@ -222,6 +236,15 @@ function ReleaseNavigation({
                 </Link>
               </DropdownMenuItem>
             ))}
+            {hasMore && (
+              <DropdownMenuItem
+                onSelect={onLoadMore}
+                className="justify-center"
+              >
+                <MoreHorizontal className="mr-2 h-4 w-4" />
+                Load more releases
+              </DropdownMenuItem>
+            )}
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
@@ -256,6 +279,21 @@ function ReleaseNavigation({
                 </li>
               );
             })}
+            {hasMore && (
+              <li>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="w-full justify-center text-muted-foreground"
+                  onClick={onLoadMore}
+                  aria-label="Load more releases"
+                  title="Load more releases"
+                >
+                  <MoreHorizontal className="h-4 w-4" />
+                </Button>
+              </li>
+            )}
           </ul>
         </nav>
       </aside>
@@ -592,6 +630,14 @@ function SoftwareApplicationPage({
   relayHints: string[];
 }) {
   const repositoryUrl = externalHttpUrl(application.repository);
+  const [renderedReleaseCount, setRenderedReleaseCount] =
+    useState(RELEASE_RENDER_BATCH);
+  const renderedReleases = releases.slice(0, renderedReleaseCount);
+  const hasMoreReleases = renderedReleases.length < releases.length;
+
+  useEffect(() => {
+    setRenderedReleaseCount(RELEASE_RENDER_BATCH);
+  }, [application.coordinate]);
 
   return (
     <div className="container max-w-screen-xl space-y-8 px-4 py-6 md:px-8">
@@ -760,7 +806,7 @@ function SoftwareApplicationPage({
           <EmptyReleases hasApplication />
         ) : (
           <div className="space-y-8">
-            {releases.map((release) => (
+            {renderedReleases.map((release) => (
               <ReleaseCard
                 key={release.event.id}
                 release={release}
@@ -775,6 +821,20 @@ function SoftwareApplicationPage({
                 )}`}
               />
             ))}
+            {hasMoreReleases && (
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full"
+                onClick={() =>
+                  setRenderedReleaseCount((count) =>
+                    Math.min(count + RELEASE_RENDER_BATCH, releases.length),
+                  )
+                }
+              >
+                Load more releases
+              </Button>
+            )}
           </div>
         )}
       </section>
@@ -997,9 +1057,22 @@ export default function RepoReleasesPage({
         : releases,
     [filteredApplication, releases],
   );
+  const [renderedReleaseCount, setRenderedReleaseCount] =
+    useState(RELEASE_RENDER_BATCH);
+  const renderedReleases = useMemo(
+    () => visibleReleases.slice(0, renderedReleaseCount),
+    [renderedReleaseCount, visibleReleases],
+  );
+  const hasMoreReleases = renderedReleases.length < visibleReleases.length;
+  const loadMoreSentinelRef = useRef<HTMLDivElement>(null);
+  const loadMoreReleases = useCallback(() => {
+    setRenderedReleaseCount((count) =>
+      Math.min(count + RELEASE_RENDER_BATCH, visibleReleases.length),
+    );
+  }, [visibleReleases.length]);
   const releaseIds = useMemo(
-    () => visibleReleases.map((release) => release.event.id),
-    [visibleReleases],
+    () => renderedReleases.map((release) => release.event.id),
+    [renderedReleases],
   );
   const [visibleReleaseId, setVisibleReleaseId] = useState<string>();
 
@@ -1035,12 +1108,41 @@ export default function RepoReleasesPage({
     ? location.hash.slice("#release-".length)
     : undefined;
   const activeReleaseId =
-    visibleReleases.find((release) => release.event.id === visibleReleaseId)
+    renderedReleases.find((release) => release.event.id === visibleReleaseId)
       ?.event.id ??
-    visibleReleases.find((release) => release.event.id === requestedReleaseId)
+    renderedReleases.find((release) => release.event.id === requestedReleaseId)
       ?.event.id ??
-    visibleReleases[0]?.event.id ??
+    renderedReleases[0]?.event.id ??
     "";
+
+  useEffect(() => {
+    setRenderedReleaseCount(RELEASE_RENDER_BATCH);
+  }, [filteredApplication?.coordinate]);
+
+  useEffect(() => {
+    if (!requestedReleaseId) return;
+    const requestedIndex = visibleReleases.findIndex(
+      (release) => release.event.id === requestedReleaseId,
+    );
+    if (requestedIndex < renderedReleaseCount) return;
+    setRenderedReleaseCount(
+      Math.ceil((requestedIndex + 1) / RELEASE_RENDER_BATCH) *
+        RELEASE_RENDER_BATCH,
+    );
+  }, [renderedReleaseCount, requestedReleaseId, visibleReleases]);
+
+  useEffect(() => {
+    const sentinel = loadMoreSentinelRef.current;
+    if (!sentinel || !hasMoreReleases) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) loadMoreReleases();
+      },
+      { rootMargin: "600px 0px" },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [hasMoreReleases, loadMoreReleases]);
 
   useEffect(() => {
     if (eventId) return;
@@ -1080,14 +1182,14 @@ export default function RepoReleasesPage({
   }, [eventId, releaseIds]);
 
   useEffect(() => {
-    if (!location.hash || releases.length === 0) return;
+    if (!location.hash || renderedReleases.length === 0) return;
     const frame = requestAnimationFrame(() => {
       document.getElementById(location.hash.slice(1))?.scrollIntoView({
         block: "start",
       });
     });
     return () => cancelAnimationFrame(frame);
-  }, [location.hash, releases.length]);
+  }, [location.hash, renderedReleases.length]);
 
   if (view === "applications" && !eventId) {
     if (loadingApplications || loadingReleases) {
@@ -1276,14 +1378,16 @@ export default function RepoReleasesPage({
       ) : (
         <div className="grid items-start gap-4 md:grid-cols-[11rem_minmax(0,1fr)] md:gap-6">
           <ReleaseNavigation
-            releases={visibleReleases}
+            releases={renderedReleases}
             applicationByReleaseKey={applicationByReleaseKey}
             showApplication={applications.length > 1}
             activeReleaseId={activeReleaseId}
             onSelectRelease={setVisibleReleaseId}
+            hasMore={hasMoreReleases}
+            onLoadMore={loadMoreReleases}
           />
           <div className="min-w-0 space-y-8">
-            {visibleReleases.map((release) => {
+            {renderedReleases.map((release) => {
               const application = applicationByReleaseKey.get(
                 release.applicationCoordinate,
               );
@@ -1311,6 +1415,13 @@ export default function RepoReleasesPage({
                 />
               );
             })}
+            {hasMoreReleases && (
+              <div
+                ref={loadMoreSentinelRef}
+                className="h-px"
+                aria-hidden="true"
+              />
+            )}
           </div>
         </div>
       )}

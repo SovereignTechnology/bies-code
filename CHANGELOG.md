@@ -13,6 +13,8 @@
 
 ### Changes
 
+- Bound release-history discovery to 180 entries per application and progressively render release cards in batches of 20.
+
 ## [3.1.1]
 
 ### Fixes

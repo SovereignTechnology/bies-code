@@ -39,6 +39,8 @@ import { cacheRequest } from "@/services/cache";
 import { addressLoader, pool } from "@/services/nostr";
 
 export const ZAPSTORE_RELAY_URL = "wss://relay.zapstore.dev";
+const RELEASE_DISCOVERY_LIMIT = 180;
+const ASSET_FILTER_CHUNK_SIZE = 100;
 
 export interface RepoSoftwareReleases {
   applications: SoftwareApplication[];
@@ -211,37 +213,20 @@ function releaseFiltersForApplications(
   applications: SoftwareApplication[],
   limit?: number,
 ): Filter[] {
-  const applicationPointerFilters = applications.map(
+  // Compatibility (2026-08-06): Zapstore-published kind 30063 events do not
+  // yet include application `a` tags. Fran agreed with our NIP-82 suggestion
+  // and said he will add them. Since `i` remains required either way, one
+  // author + app ID filter covers both forms without doubling this bounded
+  // history request.
+  return applications.map(
     (application) =>
       ({
         kinds: [SOFTWARE_RELEASE_KIND],
         authors: [application.pubkey],
-        "#a": [application.coordinate],
+        "#i": [application.appId],
         ...(limit === undefined ? {} : { limit }),
       }) as Filter,
   );
-
-  // Compatibility (2026-08-06): Zapstore-published kind 30063 events do not
-  // yet include application `a` tags. Fran agreed with our NIP-82 suggestion
-  // and said he will add them, so retain the publisher + `#i` fallback.
-  const appIdsByAuthor = new Map<string, Set<string>>();
-  for (const application of applications) {
-    const appIds = appIdsByAuthor.get(application.pubkey) ?? new Set<string>();
-    appIds.add(application.appId);
-    appIdsByAuthor.set(application.pubkey, appIds);
-  }
-
-  const legacyIdentifierFilters = [...appIdsByAuthor].map(
-    ([author, appIds]) =>
-      ({
-        kinds: [SOFTWARE_RELEASE_KIND],
-        authors: [author],
-        "#i": [...appIds],
-        ...(limit === undefined ? {} : { limit }),
-      }) as Filter,
-  );
-
-  return [...applicationPointerFilters, ...legacyIdentifierFilters];
 }
 
 /**
@@ -339,7 +324,13 @@ export function useSoftwareReleases(
   ]);
   const releaseRelayKey = releaseRelays.join(",");
 
-  const releaseFilters = releaseFiltersForApplications(applications);
+  // Keep enough history for the create-release version collision UI while
+  // bounding relay work. The UI progressively renders this metadata in much
+  // smaller batches; Blossom binaries are never downloaded here.
+  const releaseFilters = releaseFiltersForApplications(
+    applications,
+    RELEASE_DISCOVERY_LIMIT,
+  );
 
   const releasesSettled =
     use$(() => {
@@ -347,12 +338,7 @@ export function useSoftwareReleases(
         return of(applicationsSettled);
       }
       if (!applicationMailboxesSettled) return of(false);
-      return loadIntoStoreUntilSettled(
-        releaseRelays,
-        releaseFilters,
-        store,
-        true,
-      );
+      return loadIntoStoreUntilSettled(releaseRelays, releaseFilters, store);
     }, [
       appIdsKey,
       appAuthorsKey,
@@ -384,21 +370,28 @@ export function useSoftwareReleases(
     ),
   ]);
   const assetRelayKey = assetRelays.join(",");
-  const assetFilter: Filter = {
-    kinds: [SOFTWARE_ASSET_KIND],
-    ids: assetIds,
-  } as Filter;
+  const assetFilters: Filter[] = [];
+  for (
+    let index = 0;
+    index < assetIds.length;
+    index += ASSET_FILTER_CHUNK_SIZE
+  ) {
+    assetFilters.push({
+      kinds: [SOFTWARE_ASSET_KIND],
+      ids: assetIds.slice(index, index + ASSET_FILTER_CHUNK_SIZE),
+    } as Filter);
+  }
 
   const assetsSettled =
     use$(() => {
       if (assetIds.length === 0) return of(releasesSettled);
-      return loadIntoStoreUntilSettled(assetRelays, [assetFilter], store);
+      return loadIntoStoreUntilSettled(assetRelays, assetFilters, store);
     }, [assetIdsKey, assetRelayKey, releasesSettled, store]) ?? false;
 
   const assets = use$(() => {
     if (assetIds.length === 0) return of([]);
     return store
-      .timeline([assetFilter])
+      .timeline(assetFilters)
       .pipe(map((events) => castAssets(events, castStore)));
   }, [assetIdsKey, store]);
 
