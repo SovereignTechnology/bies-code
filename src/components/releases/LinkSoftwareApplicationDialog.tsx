@@ -1,8 +1,19 @@
 import { useEffect, useState } from "react";
 import { useActiveAccount } from "applesauce-react/hooks";
 import { Link2, Loader2, Package } from "lucide-react";
+import { nip19 } from "nostr-tools";
 import type { SoftwareApplication } from "@/casts/Software";
 import { RepoBadge } from "@/components/RepoBadge";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -18,7 +29,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SoftwareApplicationFactory } from "@/factories/SoftwareApplicationFactory";
 import { useToast } from "@/hooks/useToast";
-import { parseRepoCoordinate } from "@/lib/nip34";
+import { parseRepoCoordinate, REPO_KIND } from "@/lib/nip34";
 import { parseUpstreamInput } from "@/lib/repoUpstreamInput";
 import { repoToPath } from "@/lib/routeUtils";
 import { cn } from "@/lib/utils";
@@ -43,6 +54,15 @@ function applicationLinksRepository(
   );
 }
 
+function compactSource(source: string): string {
+  try {
+    const url = new URL(source);
+    return `${url.host}${url.pathname.replace(/\/$/, "")}`;
+  } catch {
+    return source;
+  }
+}
+
 export function LinkSoftwareApplicationDialog({
   open,
   onOpenChange,
@@ -54,20 +74,45 @@ export function LinkSoftwareApplicationDialog({
   const account = useActiveAccount();
   const { toast } = useToast();
   const [selectedCoordinate, setSelectedCoordinate] = useState("");
+  const [showSourceChoice, setShowSourceChoice] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [error, setError] = useState<string>();
   const selectedApplication = applications.find(
     (application) => application.coordinate === selectedCoordinate,
   );
+  const repository = repoCoordinates
+    .map((coordinate) => parseRepoCoordinate(coordinate))
+    .find((candidate) => !!candidate);
+  const repositoryNaddr = repository
+    ? nip19.naddrEncode({
+        kind: REPO_KIND,
+        pubkey: repository.pubkey,
+        identifier: repository.identifier,
+        relays: relayHint ? [relayHint] : undefined,
+      })
+    : undefined;
+  const selectedSourceCoordinate = selectedApplication?.repository
+    ? parseUpstreamInput(selectedApplication.repository).upstream.repository
+    : undefined;
+  const sourceAlreadyMatches = !!(
+    selectedSourceCoordinate &&
+    repoCoordinates.includes(selectedSourceCoordinate)
+  );
+  const canReplaceSource = !!repositoryNaddr && !sourceAlreadyMatches;
 
   useEffect(() => {
     if (!open) return;
     setSelectedCoordinate("");
+    setShowSourceChoice(false);
     setPublishing(false);
     setError(undefined);
   }, [open]);
 
-  const handleLink = async () => {
+  useEffect(() => {
+    setShowSourceChoice(false);
+  }, [selectedCoordinate]);
+
+  const handleLink = async (replacementRepository?: string) => {
     if (!account || !selectedApplication) return;
     if (selectedApplication.pubkey !== account.pubkey) {
       setError("Only the application publisher can link it.");
@@ -87,6 +132,7 @@ export function LinkSoftwareApplicationDialog({
           repoCoordinates,
           relayHint,
           Math.floor(Date.now() / 1000),
+          replacementRepository,
         ).sign(account.signer);
       await publish(updatedApplication, repoCoordinates);
       toast({
@@ -102,11 +148,19 @@ export function LinkSoftwareApplicationDialog({
     }
   };
 
+  const handleLinkRequest = () => {
+    if (canReplaceSource) {
+      setShowSourceChoice(true);
+      return;
+    }
+    void handleLink();
+  };
+
   return (
     <Dialog
       open={open}
       onOpenChange={(nextOpen) => {
-        if (!publishing) onOpenChange(nextOpen);
+        if (!publishing && !showSourceChoice) onOpenChange(nextOpen);
       }}
     >
       <DialogContent className="max-h-[88vh] min-w-0 max-w-2xl overflow-x-hidden overflow-y-auto">
@@ -114,7 +168,8 @@ export function LinkSoftwareApplicationDialog({
           <DialogTitle>All your applications</DialogTitle>
           <DialogDescription>
             Choose an application you already publish to associate it with this
-            repository. Existing releases and application metadata are kept.
+            repository. Existing releases and application metadata are kept
+            unless you choose to replace its source link.
           </DialogDescription>
         </DialogHeader>
 
@@ -244,7 +299,7 @@ export function LinkSoftwareApplicationDialog({
           </Button>
           <Button
             type="button"
-            onClick={handleLink}
+            onClick={handleLinkRequest}
             disabled={!selectedApplication || publishing}
           >
             {publishing ? (
@@ -256,6 +311,51 @@ export function LinkSoftwareApplicationDialog({
           </Button>
         </DialogFooter>
       </DialogContent>
+
+      <AlertDialog
+        open={showSourceChoice}
+        onOpenChange={(nextOpen) => {
+          if (!publishing) setShowSourceChoice(nextOpen);
+        }}
+      >
+        <AlertDialogContent className="min-w-0 max-w-xl overflow-hidden">
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {selectedApplication?.repository
+                ? "Replace application link?"
+                : "Link application?"}
+            </AlertDialogTitle>
+            <AlertDialogDescription className="min-w-0">
+              {selectedApplication?.repository ? (
+                <>
+                  Replace link to “
+                  <span
+                    className="break-all font-medium text-foreground"
+                    title={selectedApplication.repository}
+                  >
+                    {compactSource(selectedApplication.repository)}
+                  </span>
+                  ” with this Nostr Git repository?
+                </>
+              ) : (
+                <>Link this application to this Nostr Git repository?</>
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="flex-col-reverse gap-2 sm:flex-col-reverse sm:space-x-0">
+            <AlertDialogCancel disabled={publishing}>Go back</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={publishing || !repositoryNaddr}
+              className="min-w-0 whitespace-normal"
+              onClick={() => void handleLink(repositoryNaddr)}
+            >
+              {selectedApplication?.repository
+                ? "Replace link"
+                : "Link repository"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Dialog>
   );
 }

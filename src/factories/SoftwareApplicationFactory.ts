@@ -63,6 +63,7 @@ export class SoftwareApplicationFactory extends EventFactory<
     repoCoordinates: string[],
     relayHint: string | undefined,
     createdAt: number,
+    replacementRepository?: string,
   ): SoftwareApplicationFactory {
     if (
       event.kind !== SOFTWARE_APPLICATION_KIND ||
@@ -72,7 +73,11 @@ export class SoftwareApplicationFactory extends EventFactory<
       throw new Error("Invalid software application event");
     }
 
-    const tags = event.tags.map((tag) => [...tag]);
+    const replacement = trimmed(replacementRepository);
+    const tags = event.tags
+      .filter(([tagName]) => !replacement || tagName !== "repository")
+      .map((tag) => [...tag]);
+    if (replacement) tags.push(["repository", replacement]);
     const linkedCoordinates = new Set(
       tags
         .filter(([tagName, coordinate]) => tagName === "a" && !!coordinate)
