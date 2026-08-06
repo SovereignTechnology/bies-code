@@ -17,6 +17,7 @@ import type {
   SoftwareAsset,
   SoftwareRelease,
 } from "@/casts/Software";
+import { EventCardActions } from "@/components/EventCardActions";
 import { CreateReleaseDialog } from "@/components/releases/CreateReleaseDialog";
 import { UserLink } from "@/components/UserAvatar";
 import { Badge } from "@/components/ui/badge";
@@ -304,26 +305,34 @@ function AssetRow({
     </>
   );
 
-  const className = cn(
-    "group/asset flex items-start gap-3 px-4 py-3",
+  const contentClassName = cn(
+    "flex min-w-0 flex-1 items-start gap-3",
     downloadable &&
-      "transition-colors hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+      "rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
   );
 
-  if (!downloadUrl) {
-    return <div className={className}>{content}</div>;
-  }
-
   return (
-    <a
-      href={downloadUrl}
-      target="_blank"
-      rel="noopener noreferrer"
-      className={className}
-      aria-label={`Download ${asset.filename}`}
+    <div
+      className={cn(
+        "group/asset flex items-start gap-2 px-4 py-3",
+        downloadable && "transition-colors hover:bg-accent/50",
+      )}
     >
-      {content}
-    </a>
+      {downloadUrl ? (
+        <a
+          href={downloadUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={contentClassName}
+          aria-label={`Download ${asset.filename}`}
+        >
+          {content}
+        </a>
+      ) : (
+        <div className={contentClassName}>{content}</div>
+      )}
+      <EventCardActions event={asset.event} className="shrink-0" />
+    </div>
   );
 }
 
@@ -442,6 +451,10 @@ function ReleaseCard({
             {showApplication && application && (
               <Badge variant="secondary">{application.name}</Badge>
             )}
+            <EventCardActions
+              event={release.event}
+              className="ml-auto shrink-0"
+            />
           </div>
           <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm text-muted-foreground">
             <UserLink pubkey={release.pubkey} avatarSize="xs" />
