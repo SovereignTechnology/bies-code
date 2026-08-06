@@ -22,6 +22,7 @@ import type {
 } from "@/casts/Software";
 import { EventCardActions } from "@/components/EventCardActions";
 import { CreateReleaseDialog } from "@/components/releases/CreateReleaseDialog";
+import { CreateSoftwareApplicationDialog } from "@/components/releases/CreateSoftwareApplicationDialog";
 import { UserLink } from "@/components/UserAvatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -38,13 +39,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { useBlossomServers } from "@/hooks/useBlossomFallback";
 import { useGitPool } from "@/hooks/useGitPool";
 import { useSoftwareReleases } from "@/hooks/useSoftwareReleases";
@@ -602,9 +596,9 @@ function SoftwareApplicationPage({
   return (
     <div className="container max-w-screen-xl space-y-8 px-4 py-6 md:px-8">
       <Button variant="ghost" size="sm" asChild className="-ml-3">
-        <Link to={`${basePath}/releases`}>
+        <Link to={`${basePath}/releases/apps`}>
           <ArrowLeft className="mr-2 h-4 w-4" />
-          All releases
+          All applications
         </Link>
       </Button>
 
@@ -788,13 +782,131 @@ function SoftwareApplicationPage({
   );
 }
 
-export default function RepoReleasesPage({ eventId }: { eventId?: string }) {
+function SoftwareApplicationsIndex({
+  applications,
+  releases,
+  basePath,
+  relayHints,
+  canPublish,
+  onCreate,
+}: {
+  applications: SoftwareApplication[];
+  releases: SoftwareRelease[];
+  basePath: string;
+  relayHints: string[];
+  canPublish: boolean;
+  onCreate: () => void;
+}) {
+  return (
+    <div className="container max-w-screen-xl space-y-5 px-4 py-6 md:px-8">
+      <div className="flex flex-wrap items-center gap-3">
+        <Button variant="ghost" size="sm" asChild className="-ml-3">
+          <Link to={`${basePath}/releases`}>
+            <ArrowLeft className="mr-2 h-4 w-4" />
+            Releases
+          </Link>
+        </Button>
+        <h1 className="text-xl font-semibold">Applications</h1>
+        {applications.length > 0 && (
+          <Badge variant="secondary">{applications.length}</Badge>
+        )}
+        {canPublish && (
+          <Button className="ml-auto" onClick={onCreate}>
+            <Plus className="mr-2 h-4 w-4" />
+            New application
+          </Button>
+        )}
+      </div>
+
+      {applications.length === 0 ? (
+        <Card className="border-dashed">
+          <CardContent className="px-8 py-12 text-center">
+            <Package className="mx-auto mb-3 h-9 w-9 text-muted-foreground" />
+            <p className="font-medium">No applications linked</p>
+            <p className="mx-auto mt-1 max-w-md text-muted-foreground">
+              Add a NIP-82 software application before publishing its first
+              release.
+            </p>
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="grid gap-4 md:grid-cols-2">
+          {applications.map((application) => {
+            const releaseCount = releases.filter(
+              (release) =>
+                release.applicationCoordinate === application.coordinate,
+            ).length;
+            const applicationPath = `${basePath}/releases/apps/${eventIdToNevent(
+              application.event.id,
+              relayHints,
+            )}`;
+            return (
+              <Card key={application.coordinate}>
+                <CardContent className="flex items-start gap-4 p-5">
+                  {application.icon ? (
+                    <img
+                      src={application.icon}
+                      alt=""
+                      className="h-16 w-16 shrink-0 rounded-xl border bg-muted object-cover"
+                      loading="lazy"
+                    />
+                  ) : (
+                    <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-xl border bg-muted">
+                      <Package className="h-7 w-7 text-muted-foreground" />
+                    </div>
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-start gap-2">
+                      <div className="min-w-0 flex-1">
+                        <Link
+                          to={applicationPath}
+                          className="text-lg font-semibold hover:text-pink-500 hover:underline"
+                        >
+                          {application.name}
+                        </Link>
+                        <p className="mt-1 font-mono text-xs text-muted-foreground break-all">
+                          {application.appId}
+                        </p>
+                      </div>
+                      <EventCardActions
+                        event={application.event}
+                        className="shrink-0"
+                      />
+                    </div>
+                    {application.summary && (
+                      <p className="mt-3 text-sm text-muted-foreground">
+                        {application.summary}
+                      </p>
+                    )}
+                    <p className="mt-3 text-sm text-muted-foreground">
+                      {releaseCount}{" "}
+                      {releaseCount === 1 ? "release" : "releases"}
+                    </p>
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function RepoReleasesPage({
+  eventId,
+  view,
+}: {
+  eventId?: string;
+  view: "releases" | "applications";
+}) {
   const { basePath, cloneUrls, resolved, repoState } = useRepoContext();
   const account = useActiveAccount();
   const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const blossomServers = useBlossomServers();
   const [createReleaseOpen, setCreateReleaseOpen] = useState(false);
+  const [createApplicationOpen, setCreateApplicationOpen] = useState(false);
   const repo = resolved?.repo;
   const {
     applications,
@@ -891,12 +1003,14 @@ export default function RepoReleasesPage({ eventId }: { eventId?: string }) {
   );
   const [visibleReleaseId, setVisibleReleaseId] = useState<string>();
 
-  const selectedRelease = eventId
-    ? releases.find((release) => release.event.id === eventId)
-    : undefined;
-  const selectedApplication = eventId
-    ? applications.find((application) => application.event.id === eventId)
-    : undefined;
+  const selectedRelease =
+    eventId && view === "releases"
+      ? releases.find((release) => release.event.id === eventId)
+      : undefined;
+  const selectedApplication =
+    eventId && view === "applications"
+      ? applications.find((application) => application.event.id === eventId)
+      : undefined;
 
   useSeoMeta({
     title:
@@ -904,9 +1018,11 @@ export default function RepoReleasesPage({ eventId }: { eventId?: string }) {
         ? `${selectedApplication.name} - ${repo.name} - ngit`
         : repo && selectedRelease
           ? `${displayVersion(selectedRelease.version)} - ${repo.name} - ngit`
-          : repo
-            ? `Releases - ${repo.name} - ngit`
-            : "Releases - ngit",
+          : repo && view === "applications"
+            ? `Applications - ${repo.name} - ngit`
+            : repo
+              ? `Releases - ${repo.name} - ngit`
+              : "Releases - ngit",
     description: repo
       ? `Software releases and downloadable assets for ${repo.name}`
       : "Software releases and downloadable assets",
@@ -973,6 +1089,38 @@ export default function RepoReleasesPage({ eventId }: { eventId?: string }) {
     return () => cancelAnimationFrame(frame);
   }, [location.hash, releases.length]);
 
+  if (view === "applications" && !eventId) {
+    if (loadingApplications || loadingReleases) {
+      return (
+        <div className="container max-w-screen-xl px-4 py-6 md:px-8">
+          <ReleasePageSkeleton />
+        </div>
+      );
+    }
+
+    return (
+      <>
+        <SoftwareApplicationsIndex
+          applications={applications}
+          releases={releases}
+          basePath={basePath}
+          relayHints={repo?.relays.slice(0, 1) ?? []}
+          canPublish={canPublishRelease}
+          onCreate={() => setCreateApplicationOpen(true)}
+        />
+        {repo && (
+          <CreateSoftwareApplicationDialog
+            open={createApplicationOpen}
+            onOpenChange={setCreateApplicationOpen}
+            existingApplications={applications}
+            repoCoordinates={repo.allCoordinates}
+            relayHint={repo.relays[0]}
+          />
+        )}
+      </>
+    );
+  }
+
   if (eventId) {
     if (
       !selectedRelease &&
@@ -1026,7 +1174,7 @@ export default function RepoReleasesPage({ eventId }: { eventId?: string }) {
           blossomServers={blossomServers}
           applicationPath={
             releaseApplication
-              ? `${basePath}/releases/${eventIdToNevent(
+              ? `${basePath}/releases/apps/${eventIdToNevent(
                   releaseApplication.event.id,
                   repo?.relays.slice(0, 1) ?? [],
                 )}`
@@ -1047,33 +1195,9 @@ export default function RepoReleasesPage({ eventId }: { eventId?: string }) {
             {visibleReleases.length}
           </Badge>
         )}
-        {applications.length > 1 && (
-          <Select
-            value={filteredApplication?.coordinate ?? "all"}
-            onValueChange={(value) => {
-              const next = new URLSearchParams(searchParams);
-              if (value === "all") next.delete("application");
-              else next.set("application", value);
-              setSearchParams(next, { replace: true });
-              setVisibleReleaseId(undefined);
-            }}
-          >
-            <SelectTrigger className="w-full sm:w-64" aria-label="Application">
-              <SelectValue placeholder="All applications" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All applications</SelectItem>
-              {applications.map((application) => (
-                <SelectItem
-                  key={application.coordinate}
-                  value={application.coordinate}
-                >
-                  {application.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        )}
+        <Button variant="outline" size="sm" asChild>
+          <Link to={`${basePath}/releases/apps`}>Applications</Link>
+        </Button>
         {canPublishRelease && (
           <Button
             className="ml-auto"
@@ -1100,6 +1224,47 @@ export default function RepoReleasesPage({ eventId }: { eventId?: string }) {
           repoCoordinates={repo.allCoordinates}
           relayHint={repo.relays[0]}
         />
+      )}
+
+      {applications.length > 1 && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-muted/30 px-3 py-2">
+          <span className="mr-1 text-sm font-medium text-muted-foreground">
+            Apps in repo:
+          </span>
+          <Button
+            type="button"
+            size="sm"
+            variant={filteredApplication ? "ghost" : "secondary"}
+            onClick={() => {
+              const next = new URLSearchParams(searchParams);
+              next.delete("application");
+              setSearchParams(next, { replace: true });
+              setVisibleReleaseId(undefined);
+            }}
+          >
+            All
+          </Button>
+          {applications.map((application) => (
+            <Button
+              key={application.coordinate}
+              type="button"
+              size="sm"
+              variant={
+                filteredApplication?.coordinate === application.coordinate
+                  ? "secondary"
+                  : "ghost"
+              }
+              onClick={() => {
+                const next = new URLSearchParams(searchParams);
+                next.set("application", application.coordinate);
+                setSearchParams(next, { replace: true });
+                setVisibleReleaseId(undefined);
+              }}
+            >
+              {application.name}
+            </Button>
+          ))}
+        </div>
       )}
 
       {loadingApplications || loadingReleases ? (
@@ -1137,7 +1302,7 @@ export default function RepoReleasesPage({ eventId }: { eventId?: string }) {
                   )}`}
                   applicationPath={
                     application
-                      ? `${basePath}/releases/${eventIdToNevent(
+                      ? `${basePath}/releases/apps/${eventIdToNevent(
                           application.event.id,
                           repo?.relays.slice(0, 1) ?? [],
                         )}`

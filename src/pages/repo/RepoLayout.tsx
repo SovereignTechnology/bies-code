@@ -391,6 +391,7 @@ function RepoLayoutResolved({
     commitsRef,
     prCommitId,
     releaseId,
+    releaseView,
   } = useMemo((): {
     subPage:
       | "code"
@@ -416,6 +417,7 @@ function RepoLayoutResolved({
     commitsRef?: string;
     prCommitId?: string;
     releaseId?: string;
+    releaseView?: "releases" | "applications";
   } => {
     const segments = splat.split("/").filter(Boolean);
 
@@ -496,16 +498,21 @@ function RepoLayoutResolved({
 
     const releasesIdx = segments.indexOf("releases");
     if (releasesIdx !== -1) {
-      const rawSegment = segments[releasesIdx + 1];
+      const applicationsRoute = segments[releasesIdx + 1] === "apps";
+      const rawSegment = segments[releasesIdx + (applicationsRoute ? 2 : 1)];
       if (rawSegment) {
         return {
           subPage: "releases",
+          releaseView: applicationsRoute ? "applications" : "releases",
           releaseId: isEventIdentifier(rawSegment)
             ? (decodeEventIdentifier(rawSegment) ?? rawSegment)
             : rawSegment,
         };
       }
-      return { subPage: "releases" };
+      return {
+        subPage: "releases",
+        releaseView: applicationsRoute ? "applications" : "releases",
+      };
     }
 
     const issuesIdx = segments.indexOf("issues");
@@ -800,7 +807,10 @@ function RepoLayoutResolved({
               ) : subPage === "actions" ? (
                 <RepoActionsPage />
               ) : subPage === "releases" ? (
-                <RepoReleasesPage eventId={releaseId} />
+                <RepoReleasesPage
+                  eventId={releaseId}
+                  view={releaseView ?? "releases"}
+                />
               ) : subPage === "issue" ? (
                 <IssuePage />
               ) : subPage === "issues" ? (

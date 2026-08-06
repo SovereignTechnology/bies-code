@@ -433,7 +433,7 @@ function SoftwareApplicationRedirect({
     <RepoCoordsRedirect
       coords={coords}
       hintRelays={repoRelays}
-      subPath={`/releases/${applicationNevent}`}
+      subPath={`/releases/apps/${applicationNevent}`}
     />
   );
 }
