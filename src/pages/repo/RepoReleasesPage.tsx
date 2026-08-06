@@ -1,10 +1,12 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { Link, useLocation, useSearchParams } from "react-router-dom";
 import { useSeoMeta } from "@unhead/react";
 import { useActiveAccount } from "applesauce-react/hooks";
 import {
   ArrowLeft,
   ChevronDown,
+  ExternalLink,
+  Globe,
   Download,
   List,
   Loader2,
@@ -36,6 +38,13 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useBlossomServers } from "@/hooks/useBlossomFallback";
 import { useGitPool } from "@/hooks/useGitPool";
 import { useSoftwareReleases } from "@/hooks/useSoftwareReleases";
@@ -70,6 +79,18 @@ function displayVersion(version: string): string {
 function dateTimeValue(timestamp: number): string | undefined {
   const date = new Date(timestamp * 1000);
   return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+}
+
+function externalHttpUrl(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:"
+      ? url.href
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function ReleasePageSkeleton() {
@@ -136,6 +157,7 @@ function ReleaseNavigation({
   activeReleaseId: string;
   onSelectRelease: (releaseId: string) => void;
 }) {
+  const location = useLocation();
   const releaseListRef = useRef<HTMLElement>(null);
   const entries = releases.map((release) => ({
     id: release.event.id,
@@ -195,7 +217,7 @@ function ReleaseNavigation({
                 onSelect={() => jumpToRelease(entry.id)}
               >
                 <Link
-                  to={`#release-${entry.id}`}
+                  to={`${location.search}#release-${entry.id}`}
                   className="min-w-0 cursor-pointer"
                   aria-current={
                     entry.id === activeReleaseId ? "location" : undefined
@@ -225,7 +247,7 @@ function ReleaseNavigation({
               return (
                 <li key={entry.id}>
                   <Link
-                    to={`#release-${entry.id}`}
+                    to={`${location.search}#release-${entry.id}`}
                     onClick={() => onSelectRelease(entry.id)}
                     aria-current={active ? "location" : undefined}
                     className={cn(
@@ -416,6 +438,7 @@ function ReleaseCard({
   showApplication,
   blossomServers,
   releasePath,
+  applicationPath,
 }: {
   release: SoftwareRelease;
   application: SoftwareApplication | undefined;
@@ -425,6 +448,7 @@ function ReleaseCard({
   showApplication: boolean;
   blossomServers: string[];
   releasePath?: string;
+  applicationPath?: string;
 }) {
   const location = useLocation();
   const relativeDate = safeFormatDistanceToNow(release.event.created_at, {
@@ -476,9 +500,15 @@ function ReleaseCard({
                 {release.channel}
               </Badge>
             )}
-            {showApplication && application && (
-              <Badge variant="secondary">{application.name}</Badge>
-            )}
+            {showApplication &&
+              application &&
+              (applicationPath ? (
+                <Link to={applicationPath}>
+                  <Badge variant="secondary">{application.name}</Badge>
+                </Link>
+              ) : (
+                <Badge variant="secondary">{application.name}</Badge>
+              ))}
             <EventCardActions
               event={release.event}
               className="ml-auto shrink-0"
@@ -536,14 +566,237 @@ function ReleaseCard({
   );
 }
 
-export default function RepoReleasesPage({
-  releaseId,
+function DetailRow({
+  label,
+  children,
 }: {
-  releaseId?: string;
+  label: string;
+  children: React.ReactNode;
 }) {
+  return (
+    <div className="grid gap-1 border-b py-3 last:border-b-0 sm:grid-cols-[7rem_minmax(0,1fr)]">
+      <dt className="text-sm text-muted-foreground">{label}</dt>
+      <dd className="min-w-0 text-sm break-words">{children}</dd>
+    </div>
+  );
+}
+
+function SoftwareApplicationPage({
+  application,
+  releases,
+  assetsById,
+  assetsSettled,
+  latestMainReleaseIds,
+  blossomServers,
+  basePath,
+  relayHints,
+}: {
+  application: SoftwareApplication;
+  releases: SoftwareRelease[];
+  assetsById: Map<string, SoftwareAsset>;
+  assetsSettled: boolean;
+  latestMainReleaseIds: Set<string>;
+  blossomServers: string[];
+  basePath: string;
+  relayHints: string[];
+}) {
+  const repositoryUrl = externalHttpUrl(application.repository);
+
+  return (
+    <div className="container max-w-screen-xl space-y-8 px-4 py-6 md:px-8">
+      <Button variant="ghost" size="sm" asChild className="-ml-3">
+        <Link to={`${basePath}/releases`}>
+          <ArrowLeft className="mr-2 h-4 w-4" />
+          All releases
+        </Link>
+      </Button>
+
+      <section className="space-y-6">
+        <div className="flex items-start gap-4">
+          {application.icon ? (
+            <img
+              src={application.icon}
+              alt=""
+              className="h-20 w-20 shrink-0 rounded-xl border bg-muted object-cover shadow-sm"
+            />
+          ) : (
+            <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-xl border bg-muted">
+              <Package className="h-9 w-9 text-muted-foreground" />
+            </div>
+          )}
+          <div className="min-w-0 flex-1">
+            <div className="flex items-start gap-2">
+              <div className="min-w-0 flex-1">
+                <h1 className="text-3xl font-semibold tracking-tight break-words">
+                  {application.name}
+                </h1>
+                {application.summary && (
+                  <p className="mt-2 text-lg text-muted-foreground">
+                    {application.summary}
+                  </p>
+                )}
+              </div>
+              <EventCardActions
+                event={application.event}
+                className="shrink-0"
+              />
+            </div>
+            {(application.topics.length > 0 ||
+              application.platforms.length > 0) && (
+              <div className="mt-4 flex flex-wrap gap-1.5">
+                {application.platforms.map((platform) => (
+                  <Badge key={platform} variant="secondary">
+                    {platform}
+                  </Badge>
+                ))}
+                {application.topics.map((topic) => (
+                  <Badge key={topic} variant="outline">
+                    {topic}
+                  </Badge>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {application.images.length > 0 && (
+          <div
+            className="flex snap-x gap-4 overflow-x-auto pb-3"
+            aria-label={`${application.name} screenshots`}
+          >
+            {application.images.map((imageUrl, index) => (
+              <a
+                key={`${imageUrl}-${index}`}
+                href={imageUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="shrink-0 snap-start rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <img
+                  src={imageUrl}
+                  alt={`${application.name} screenshot ${index + 1}`}
+                  className="h-80 w-auto max-w-lg rounded-xl border bg-muted object-contain"
+                  loading="lazy"
+                />
+              </a>
+            ))}
+          </div>
+        )}
+
+        <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_20rem]">
+          <Card>
+            <CardHeader>
+              <CardTitle>About this application</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {application.description.trim() ? (
+                <Suspense fallback={<Skeleton className="h-32 w-full" />}>
+                  <MarkdownContent
+                    content={application.description}
+                    className="markdown-content text-base"
+                  />
+                </Suspense>
+              ) : (
+                <p className="text-sm text-muted-foreground italic">
+                  No application description provided.
+                </p>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Technical details</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <dl>
+                <DetailRow label="Publisher">
+                  <UserLink pubkey={application.pubkey} avatarSize="xs" />
+                </DetailRow>
+                <DetailRow label="App ID">
+                  <code className="font-mono text-xs break-all">
+                    {application.appId}
+                  </code>
+                </DetailRow>
+                {application.license && (
+                  <DetailRow label="License">{application.license}</DetailRow>
+                )}
+                {application.website && (
+                  <DetailRow label="Website">
+                    <a
+                      href={application.website}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-pink-600 hover:underline dark:text-pink-400"
+                    >
+                      <Globe className="h-3.5 w-3.5" />
+                      Visit website
+                      <ExternalLink className="h-3 w-3" />
+                    </a>
+                  </DetailRow>
+                )}
+                {application.repository && (
+                  <DetailRow label="Source">
+                    {repositoryUrl ? (
+                      <a
+                        href={repositoryUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 text-pink-600 hover:underline dark:text-pink-400"
+                      >
+                        View repository
+                        <ExternalLink className="h-3 w-3" />
+                      </a>
+                    ) : (
+                      <code className="font-mono text-xs break-all">
+                        {application.repository}
+                      </code>
+                    )}
+                  </DetailRow>
+                )}
+              </dl>
+            </CardContent>
+          </Card>
+        </div>
+      </section>
+
+      <section className="space-y-4">
+        <div className="flex items-center gap-2">
+          <h2 className="text-xl font-semibold">Releases</h2>
+          <Badge variant="secondary">{releases.length}</Badge>
+        </div>
+        {releases.length === 0 ? (
+          <EmptyReleases hasApplication />
+        ) : (
+          <div className="space-y-8">
+            {releases.map((release) => (
+              <ReleaseCard
+                key={release.event.id}
+                release={release}
+                application={application}
+                assetsById={assetsById}
+                assetsSettled={assetsSettled}
+                latest={latestMainReleaseIds.has(release.event.id)}
+                showApplication={false}
+                blossomServers={blossomServers}
+                releasePath={`${basePath}/releases/${eventIdToNevent(
+                  release.event.id,
+                  relayHints,
+                )}`}
+              />
+            ))}
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+export default function RepoReleasesPage({ eventId }: { eventId?: string }) {
   const { basePath, cloneUrls, resolved, repoState } = useRepoContext();
   const account = useActiveAccount();
   const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
   const blossomServers = useBlossomServers();
   const [createReleaseOpen, setCreateReleaseOpen] = useState(false);
   const repo = resolved?.repo;
@@ -617,23 +870,50 @@ export default function RepoReleasesPage({
     }
     return ids;
   }, [releases]);
+  const requestedApplicationCoordinate = searchParams.get("application");
+  const filteredApplication = useMemo(
+    () =>
+      applications.find(
+        (application) =>
+          application.coordinate === requestedApplicationCoordinate,
+      ),
+    [applications, requestedApplicationCoordinate],
+  );
+  const visibleReleases = useMemo(
+    () =>
+      filteredApplication
+        ? releases.filter(
+            (release) =>
+              release.applicationCoordinate === filteredApplication.coordinate,
+          )
+        : releases,
+    [filteredApplication, releases],
+  );
+  const applicationToView =
+    filteredApplication ??
+    (applications.length === 1 ? applications[0] : undefined);
   const releaseIds = useMemo(
-    () => releases.map((release) => release.event.id),
-    [releases],
+    () => visibleReleases.map((release) => release.event.id),
+    [visibleReleases],
   );
   const [visibleReleaseId, setVisibleReleaseId] = useState<string>();
 
-  const selectedRelease = releaseId
-    ? releases.find((release) => release.event.id === releaseId)
+  const selectedRelease = eventId
+    ? releases.find((release) => release.event.id === eventId)
+    : undefined;
+  const selectedApplication = eventId
+    ? applications.find((application) => application.event.id === eventId)
     : undefined;
 
   useSeoMeta({
     title:
-      repo && selectedRelease
-        ? `${displayVersion(selectedRelease.version)} - ${repo.name} - ngit`
-        : repo
-          ? `Releases - ${repo.name} - ngit`
-          : "Releases - ngit",
+      repo && selectedApplication
+        ? `${selectedApplication.name} - ${repo.name} - ngit`
+        : repo && selectedRelease
+          ? `${displayVersion(selectedRelease.version)} - ${repo.name} - ngit`
+          : repo
+            ? `Releases - ${repo.name} - ngit`
+            : "Releases - ngit",
     description: repo
       ? `Software releases and downloadable assets for ${repo.name}`
       : "Software releases and downloadable assets",
@@ -646,15 +926,15 @@ export default function RepoReleasesPage({
     ? location.hash.slice("#release-".length)
     : undefined;
   const activeReleaseId =
-    releases.find((release) => release.event.id === visibleReleaseId)?.event
-      .id ??
-    releases.find((release) => release.event.id === requestedReleaseId)?.event
-      .id ??
-    releases[0]?.event.id ??
+    visibleReleases.find((release) => release.event.id === visibleReleaseId)
+      ?.event.id ??
+    visibleReleases.find((release) => release.event.id === requestedReleaseId)
+      ?.event.id ??
+    visibleReleases[0]?.event.id ??
     "";
 
   useEffect(() => {
-    if (releaseId) return;
+    if (eventId) return;
     if (releaseIds.length === 0) return;
 
     let frame: number | undefined;
@@ -688,7 +968,7 @@ export default function RepoReleasesPage({
       window.removeEventListener("resize", scheduleUpdate);
       if (frame !== undefined) cancelAnimationFrame(frame);
     };
-  }, [releaseId, releaseIds]);
+  }, [eventId, releaseIds]);
 
   useEffect(() => {
     if (!location.hash || releases.length === 0) return;
@@ -700,8 +980,12 @@ export default function RepoReleasesPage({
     return () => cancelAnimationFrame(frame);
   }, [location.hash, releases.length]);
 
-  if (releaseId) {
-    if (loadingApplications || loadingReleases) {
+  if (eventId) {
+    if (
+      !selectedRelease &&
+      !selectedApplication &&
+      (!applicationsSettled || !releasesSettled)
+    ) {
       return (
         <div className="container max-w-screen-xl px-4 md:px-8 py-6">
           <ReleasePageSkeleton />
@@ -709,7 +993,28 @@ export default function RepoReleasesPage({
       );
     }
 
+    if (selectedApplication) {
+      return (
+        <SoftwareApplicationPage
+          application={selectedApplication}
+          releases={releases.filter(
+            (release) =>
+              release.applicationCoordinate === selectedApplication.coordinate,
+          )}
+          assetsById={assetsById}
+          assetsSettled={assetsSettled}
+          latestMainReleaseIds={latestMainReleaseIds}
+          blossomServers={blossomServers}
+          basePath={basePath}
+          relayHints={repo?.relays.slice(0, 1) ?? []}
+        />
+      );
+    }
+
     if (!selectedRelease) return <NotFound />;
+    const releaseApplication = applicationByReleaseKey.get(
+      selectedRelease.applicationCoordinate,
+    );
 
     return (
       <div className="container max-w-screen-xl px-4 md:px-8 py-6 space-y-5">
@@ -721,14 +1026,20 @@ export default function RepoReleasesPage({
         </Button>
         <ReleaseCard
           release={selectedRelease}
-          application={applicationByReleaseKey.get(
-            selectedRelease.applicationCoordinate,
-          )}
+          application={releaseApplication}
           assetsById={assetsById}
           assetsSettled={assetsSettled}
           latest={latestMainReleaseIds.has(selectedRelease.event.id)}
-          showApplication={applications.length > 1}
+          showApplication={!!releaseApplication}
           blossomServers={blossomServers}
+          applicationPath={
+            releaseApplication
+              ? `${basePath}/releases/${eventIdToNevent(
+                  releaseApplication.event.id,
+                  repo?.relays.slice(0, 1) ?? [],
+                )}`
+              : undefined
+          }
         />
       </div>
     );
@@ -736,13 +1047,52 @@ export default function RepoReleasesPage({
 
   return (
     <div className="container max-w-screen-xl px-4 md:px-8 py-6 space-y-5">
-      <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center gap-3">
         <Package className="h-5 w-5 text-muted-foreground" />
         <h1 className="text-xl font-semibold">Releases</h1>
-        {releases.length > 0 && (
+        {visibleReleases.length > 0 && (
           <Badge variant="secondary" className="h-5 px-1.5 text-[11px]">
-            {releases.length}
+            {visibleReleases.length}
           </Badge>
+        )}
+        {applications.length > 1 && (
+          <Select
+            value={filteredApplication?.coordinate ?? "all"}
+            onValueChange={(value) => {
+              const next = new URLSearchParams(searchParams);
+              if (value === "all") next.delete("application");
+              else next.set("application", value);
+              setSearchParams(next, { replace: true });
+              setVisibleReleaseId(undefined);
+            }}
+          >
+            <SelectTrigger className="w-full sm:w-64" aria-label="Application">
+              <SelectValue placeholder="All applications" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All applications</SelectItem>
+              {applications.map((application) => (
+                <SelectItem
+                  key={application.coordinate}
+                  value={application.coordinate}
+                >
+                  {application.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+        {applicationToView && (
+          <Button variant="outline" size="sm" asChild>
+            <Link
+              to={`${basePath}/releases/${eventIdToNevent(
+                applicationToView.event.id,
+                repo?.relays.slice(0, 1) ?? [],
+              )}`}
+            >
+              View application
+            </Link>
+          </Button>
         )}
         {canPublishRelease && (
           <Button
@@ -776,36 +1126,47 @@ export default function RepoReleasesPage({
         <ReleasePageSkeleton />
       ) : applications.length === 0 ? (
         <EmptyReleases hasApplication={false} />
-      ) : releases.length === 0 ? (
+      ) : visibleReleases.length === 0 ? (
         <EmptyReleases hasApplication />
       ) : (
         <div className="grid items-start gap-4 md:grid-cols-[11rem_minmax(0,1fr)] md:gap-6">
           <ReleaseNavigation
-            releases={releases}
+            releases={visibleReleases}
             applicationByReleaseKey={applicationByReleaseKey}
             showApplication={applications.length > 1}
             activeReleaseId={activeReleaseId}
             onSelectRelease={setVisibleReleaseId}
           />
           <div className="min-w-0 space-y-8">
-            {releases.map((release) => (
-              <ReleaseCard
-                key={release.event.id}
-                release={release}
-                application={applicationByReleaseKey.get(
-                  release.applicationCoordinate,
-                )}
-                assetsById={assetsById}
-                assetsSettled={assetsSettled}
-                latest={latestMainReleaseIds.has(release.event.id)}
-                showApplication={applications.length > 1}
-                blossomServers={blossomServers}
-                releasePath={`${basePath}/releases/${eventIdToNevent(
-                  release.event.id,
-                  repo?.relays.slice(0, 1) ?? [],
-                )}`}
-              />
-            ))}
+            {visibleReleases.map((release) => {
+              const application = applicationByReleaseKey.get(
+                release.applicationCoordinate,
+              );
+              return (
+                <ReleaseCard
+                  key={release.event.id}
+                  release={release}
+                  application={application}
+                  assetsById={assetsById}
+                  assetsSettled={assetsSettled}
+                  latest={latestMainReleaseIds.has(release.event.id)}
+                  showApplication={applications.length > 1}
+                  blossomServers={blossomServers}
+                  releasePath={`${basePath}/releases/${eventIdToNevent(
+                    release.event.id,
+                    repo?.relays.slice(0, 1) ?? [],
+                  )}`}
+                  applicationPath={
+                    application
+                      ? `${basePath}/releases/${eventIdToNevent(
+                          application.event.id,
+                          repo?.relays.slice(0, 1) ?? [],
+                        )}`
+                      : undefined
+                  }
+                />
+              );
+            })}
           </div>
         </div>
       )}

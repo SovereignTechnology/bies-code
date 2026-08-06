@@ -17,6 +17,19 @@ type SoftwareAssetEvent = KnownEvent<typeof SOFTWARE_ASSET_KIND>;
 
 const ApplicationIdSymbol = Symbol.for("software-application-id");
 const ApplicationNameSymbol = Symbol.for("software-application-name");
+const ApplicationSummarySymbol = Symbol.for("software-application-summary");
+const ApplicationDescriptionSymbol = Symbol.for(
+  "software-application-description",
+);
+const ApplicationIconSymbol = Symbol.for("software-application-icon");
+const ApplicationImagesSymbol = Symbol.for("software-application-images");
+const ApplicationTopicsSymbol = Symbol.for("software-application-topics");
+const ApplicationPlatformsSymbol = Symbol.for("software-application-platforms");
+const ApplicationWebsiteSymbol = Symbol.for("software-application-website");
+const ApplicationRepositorySymbol = Symbol.for(
+  "software-application-repository",
+);
+const ApplicationLicenseSymbol = Symbol.for("software-application-license");
 const ApplicationRepoCoordsSymbol = Symbol.for(
   "software-application-repo-coords",
 );
@@ -148,6 +161,71 @@ export class SoftwareApplication extends EventCast<SoftwareApplicationEvent> {
       this.event,
       ApplicationNameSymbol,
       () => getTagValue(this.event, "name")!,
+    );
+  }
+
+  get summary(): string | undefined {
+    return getOrComputeCachedValue(
+      this.event,
+      ApplicationSummarySymbol,
+      () => getTagValue(this.event, "summary") || undefined,
+    );
+  }
+
+  get description(): string {
+    return getOrComputeCachedValue(
+      this.event,
+      ApplicationDescriptionSymbol,
+      () => this.event.content,
+    );
+  }
+
+  get icon(): string | undefined {
+    return getOrComputeCachedValue(this.event, ApplicationIconSymbol, () =>
+      safeHttpUrl(getTagValue(this.event, "icon")),
+    );
+  }
+
+  get images(): string[] {
+    return getOrComputeCachedValue(this.event, ApplicationImagesSymbol, () =>
+      repeatedTagValues(this.event, "image").flatMap((value) => {
+        const url = safeHttpUrl(value);
+        return url ? [url] : [];
+      }),
+    );
+  }
+
+  get topics(): string[] {
+    return getOrComputeCachedValue(this.event, ApplicationTopicsSymbol, () =>
+      repeatedTagValues(this.event, "t"),
+    );
+  }
+
+  get platforms(): string[] {
+    return getOrComputeCachedValue(this.event, ApplicationPlatformsSymbol, () =>
+      repeatedTagValues(this.event, "f"),
+    );
+  }
+
+  get website(): string | undefined {
+    return getOrComputeCachedValue(this.event, ApplicationWebsiteSymbol, () =>
+      safeHttpUrl(getTagValue(this.event, "url")),
+    );
+  }
+
+  get repository(): string | undefined {
+    return getOrComputeCachedValue(
+      this.event,
+      ApplicationRepositorySymbol,
+      () => getTagValue(this.event, "repository") || undefined,
+    );
+  }
+
+  get license(): string | undefined {
+    return getOrComputeCachedValue(
+      this.event,
+      ApplicationLicenseSymbol,
+      () => getTagValue(this.event, "license") || undefined,
     );
   }
 

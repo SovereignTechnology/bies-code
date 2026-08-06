@@ -800,7 +800,7 @@ function RepoLayoutResolved({
               ) : subPage === "actions" ? (
                 <RepoActionsPage />
               ) : subPage === "releases" ? (
-                <RepoReleasesPage releaseId={releaseId} />
+                <RepoReleasesPage eventId={releaseId} />
               ) : subPage === "issue" ? (
                 <IssuePage />
               ) : subPage === "issues" ? (

@@ -9,7 +9,7 @@
 ### Features
 
 - Group notifications by user with expandable activity, bulk read/archive actions for each actor, and a dedicated unread inbox filter.
-- Add GitHub-style repository release pages for viewing and creating NIP-82 releases, with immediate cancellable Blossom uploads, guided platform, format, compatibility, and provenance metadata, event sharing, and repository-aware release and asset permalinks.
+- Add GitHub-style repository release and application pages for viewing, filtering, and creating NIP-82 releases, with application media and metadata, immediate cancellable Blossom uploads, guided platform, format, compatibility, and provenance metadata, event sharing, and repository-aware application, release, and asset permalinks.
 
 ### Changes
 

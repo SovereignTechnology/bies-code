@@ -414,6 +414,30 @@ function getSoftwareApplicationPointer(
   };
 }
 
+function SoftwareApplicationRedirect({
+  application,
+  hintRelays,
+}: {
+  application: NostrEvent;
+  hintRelays: string[];
+}) {
+  if (!isValidSoftwareApplication(application)) return <NotFound />;
+  const coords = getRepoCoords(application);
+  if (coords.length === 0) return <NotFound />;
+  const repoRelays = dedupeRelays([
+    ...getRepoCoordRelayHints(application),
+    ...hintRelays,
+  ]);
+  const applicationNevent = eventIdToNevent(application.id, hintRelays);
+  return (
+    <RepoCoordsRedirect
+      coords={coords}
+      hintRelays={repoRelays}
+      subPath={`/releases/${applicationNevent}`}
+    />
+  );
+}
+
 function SoftwareReleaseRedirect({
   release,
   hintRelays,
@@ -698,6 +722,15 @@ function EventRedirect({
     );
   }
 
+  if (kind === SOFTWARE_APPLICATION_KIND) {
+    return (
+      <SoftwareApplicationRedirect
+        application={event}
+        hintRelays={hintRelays}
+      />
+    );
+  }
+
   if (kind === SOFTWARE_RELEASE_KIND) {
     return <SoftwareReleaseRedirect release={event} hintRelays={hintRelays} />;
   }
@@ -960,6 +993,16 @@ export function NIP19Page() {
     return <UserPage pubkey={identifier.toLowerCase()} />;
   } else if (pointer) {
     if (!event) return <LoadingState message="Fetching event…" />;
+
+    if (event.kind === SOFTWARE_APPLICATION_KIND) {
+      const hintRelays = "relays" in pointer ? (pointer.relays ?? []) : [];
+      return (
+        <SoftwareApplicationRedirect
+          application={event}
+          hintRelays={hintRelays}
+        />
+      );
+    }
 
     // For any event kind this app doesn't have a dedicated page for, show a
     // preview with a link to njump.me so users aren't left with a blank 404.
