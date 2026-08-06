@@ -785,6 +785,7 @@ function SoftwareApplicationPage({
                     {sourceRepository && sourceRepositoryCoordinate ? (
                       <RepoBadge
                         coord={sourceRepositoryCoordinate}
+                        className="max-w-full overflow-hidden [&>span]:min-w-0 [&>span]:truncate"
                         to={repoToPath(
                           sourceRepository.pubkey,
                           sourceRepository.identifier,
