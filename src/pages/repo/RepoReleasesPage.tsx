@@ -435,7 +435,6 @@ function ReleaseCard({
   assetsById,
   assetsSettled,
   latest,
-  showApplication,
   blossomServers,
   releasePath,
   applicationPath,
@@ -445,7 +444,6 @@ function ReleaseCard({
   assetsById: Map<string, SoftwareAsset>;
   assetsSettled: boolean;
   latest: boolean;
-  showApplication: boolean;
   blossomServers: string[];
   releasePath?: string;
   applicationPath?: string;
@@ -474,17 +472,25 @@ function ReleaseCard({
         <CardHeader className="p-5 pb-4">
           <div className="flex flex-wrap items-center gap-2">
             <CardTitle className="text-xl leading-tight break-words">
+              {applicationPath && application ? (
+                <Link
+                  to={applicationPath}
+                  className="hover:text-pink-500 hover:underline"
+                >
+                  {application.name}
+                </Link>
+              ) : (
+                <span>{application?.name ?? release.appId}</span>
+              )}{" "}
               {releasePath ? (
                 <Link
                   to={releasePath}
                   className="hover:text-pink-500 hover:underline"
                 >
-                  {application?.name ?? release.appId} {release.version}
+                  {release.version}
                 </Link>
               ) : (
-                <>
-                  {application?.name ?? release.appId} {release.version}
-                </>
+                <span>{release.version}</span>
               )}
             </CardTitle>
             {latest && (
@@ -500,15 +506,6 @@ function ReleaseCard({
                 {release.channel}
               </Badge>
             )}
-            {showApplication &&
-              application &&
-              (applicationPath ? (
-                <Link to={applicationPath}>
-                  <Badge variant="secondary">{application.name}</Badge>
-                </Link>
-              ) : (
-                <Badge variant="secondary">{application.name}</Badge>
-              ))}
             <EventCardActions
               event={release.event}
               className="ml-auto shrink-0"
@@ -777,7 +774,6 @@ function SoftwareApplicationPage({
                 assetsById={assetsById}
                 assetsSettled={assetsSettled}
                 latest={latestMainReleaseIds.has(release.event.id)}
-                showApplication={false}
                 blossomServers={blossomServers}
                 releasePath={`${basePath}/releases/${eventIdToNevent(
                   release.event.id,
@@ -889,9 +885,6 @@ export default function RepoReleasesPage({ eventId }: { eventId?: string }) {
         : releases,
     [filteredApplication, releases],
   );
-  const applicationToView =
-    filteredApplication ??
-    (applications.length === 1 ? applications[0] : undefined);
   const releaseIds = useMemo(
     () => visibleReleases.map((release) => release.event.id),
     [visibleReleases],
@@ -1030,7 +1023,6 @@ export default function RepoReleasesPage({ eventId }: { eventId?: string }) {
           assetsById={assetsById}
           assetsSettled={assetsSettled}
           latest={latestMainReleaseIds.has(selectedRelease.event.id)}
-          showApplication={!!releaseApplication}
           blossomServers={blossomServers}
           applicationPath={
             releaseApplication
@@ -1081,18 +1073,6 @@ export default function RepoReleasesPage({ eventId }: { eventId?: string }) {
               ))}
             </SelectContent>
           </Select>
-        )}
-        {applicationToView && (
-          <Button variant="outline" size="sm" asChild>
-            <Link
-              to={`${basePath}/releases/${eventIdToNevent(
-                applicationToView.event.id,
-                repo?.relays.slice(0, 1) ?? [],
-              )}`}
-            >
-              View application
-            </Link>
-          </Button>
         )}
         {canPublishRelease && (
           <Button
@@ -1150,7 +1130,6 @@ export default function RepoReleasesPage({ eventId }: { eventId?: string }) {
                   assetsById={assetsById}
                   assetsSettled={assetsSettled}
                   latest={latestMainReleaseIds.has(release.event.id)}
-                  showApplication={applications.length > 1}
                   blossomServers={blossomServers}
                   releasePath={`${basePath}/releases/${eventIdToNevent(
                     release.event.id,
