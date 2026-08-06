@@ -367,6 +367,7 @@ function RepoLayoutResolved({
     account?.pubkey && repo
       ? repo.maintainerSet.includes(account.pubkey)
       : false;
+  const showReleases = hasReleases || isReleasesTab || canOpenSettings;
 
   const repoPageSuffix = location.pathname.startsWith(basePath)
     ? location.pathname.slice(basePath.length)
@@ -669,7 +670,7 @@ function RepoLayoutResolved({
                     label="Actions"
                   />
                 )}
-                {(hasReleases || isReleasesTab) && (
+                {showReleases && (
                   <TabLink
                     to={`${basePath}/releases`}
                     active={isReleasesTab}
@@ -724,7 +725,7 @@ function RepoLayoutResolved({
                         </Link>
                       </DropdownMenuItem>
                     )}
-                    {(hasReleases || isReleasesTab) && (
+                    {showReleases && (
                       <DropdownMenuItem asChild>
                         <Link
                           to={`${basePath}/releases`}
