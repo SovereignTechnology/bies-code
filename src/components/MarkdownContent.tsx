@@ -165,7 +165,7 @@ function MarkdownBlossomImage(
       className={cn(
         props.className,
         !linked &&
-          "cursor-zoom-in focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          "cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
       )}
     />
   );
@@ -326,7 +326,7 @@ function GitImage({
       className={cn(
         "max-w-full rounded-md my-3",
         !linked &&
-          "cursor-zoom-in focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          "cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
       )}
       loading="lazy"
       title={title}

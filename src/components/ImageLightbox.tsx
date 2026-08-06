@@ -40,6 +40,7 @@ export default function ImageLightbox({
       index={index}
       on={{ view: ({ index: nextIndex }) => onIndexChange(nextIndex) }}
       plugins={[Captions, Zoom]}
+      animation={{ fade: 150, swipe: 250, navigation: 180, zoom: 200 }}
       captions={{ showToggle: false, descriptionMaxLines: 3 }}
       zoom={{ pinchZoomV4: true, scrollToZoom: true }}
       controller={{ closeOnBackdropClick: true }}

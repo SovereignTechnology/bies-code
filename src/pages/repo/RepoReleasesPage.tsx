@@ -754,7 +754,7 @@ function SoftwareApplicationPage({
                       key={`${slide.src}-${index}`}
                       type="button"
                       onClick={() => openGallery(slides, index)}
-                      className="block shrink-0 snap-start cursor-zoom-in rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      className="block shrink-0 snap-start cursor-pointer rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       aria-label={`View ${slide.alt}`}
                     >
                       <img
