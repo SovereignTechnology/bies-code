@@ -7,7 +7,16 @@ import { use$ } from "applesauce-react/hooks";
 import { Navigate, useLocation, useParams } from "react-router-dom";
 import { nip19 } from "nostr-tools";
 import { useEffect, useMemo, useState } from "react";
-import { catchError, filter, map, of, startWith, tap } from "rxjs";
+import {
+  catchError,
+  endWith,
+  filter,
+  ignoreElements,
+  map,
+  of,
+  startWith,
+  tap,
+} from "rxjs";
 import { eventStore, pool } from "../services/nostr";
 import {
   computeMaintainerLeadership,
@@ -42,8 +51,20 @@ import { useDnsIdentity } from "../hooks/useDnsIdentity";
 import type { NostrEvent } from "nostr-tools";
 import type { Observable } from "rxjs";
 import type { Filter } from "applesauce-core/helpers";
-import { getReplaceableIdentifier } from "applesauce-core/helpers";
+import {
+  getReplaceableIdentifier,
+  parseReplaceableAddress,
+} from "applesauce-core/helpers";
 import { getNip10References } from "applesauce-common/helpers";
+import {
+  isValidSoftwareApplication,
+  isValidSoftwareAsset,
+  isValidSoftwareRelease,
+  SOFTWARE_APPLICATION_KIND,
+  SOFTWARE_ASSET_KIND,
+  SOFTWARE_RELEASE_KIND,
+} from "@/casts/Software";
+import { ZAPSTORE_RELAY_URL } from "@/hooks/useSoftwareReleases";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -244,7 +265,7 @@ function RepoCoordsRedirect({
       if (relays.length === 0) return of(true);
 
       return resilientRequest(pool, relays, filters).pipe(
-        tap((response) => {
+        tap((response: NostrEvent | "EOSE") => {
           if (response !== "EOSE") eventStore.add(response);
         }),
         filter((response) => response === "EOSE"),
@@ -352,6 +373,201 @@ function getNip10RootId(event: NostrEvent): string | undefined {
   // Single e tag — this event is a direct reply to that event
   if (eTags.length === 1) return eTags[0]?.[1];
   return undefined;
+}
+
+interface SoftwareApplicationPointer {
+  kind: typeof SOFTWARE_APPLICATION_KIND;
+  pubkey: string;
+  dTag: string;
+  relayHints: string[];
+}
+
+function getSoftwareApplicationPointer(
+  release: NostrEvent,
+): SoftwareApplicationPointer | undefined {
+  const appId = release.tags.find(([name]) => name === "i")?.[1];
+  if (!appId) return undefined;
+
+  for (const [name, address, relayHint] of release.tags) {
+    if (name !== "a" || !address) continue;
+    const pointer = parseReplaceableAddress(address, true);
+    if (
+      pointer?.kind === SOFTWARE_APPLICATION_KIND &&
+      pointer.identifier === appId
+    ) {
+      return {
+        kind: SOFTWARE_APPLICATION_KIND,
+        pubkey: pointer.pubkey.toLowerCase(),
+        dTag: pointer.identifier,
+        relayHints: relayHint ? [relayHint] : [],
+      };
+    }
+  }
+
+  // Compatibility with existing Zapstore releases that identify the
+  // application only by `i`; their application is published by the same key.
+  return {
+    kind: SOFTWARE_APPLICATION_KIND,
+    pubkey: release.pubkey,
+    dTag: appId,
+    relayHints: [],
+  };
+}
+
+function SoftwareReleaseRedirect({
+  release,
+  hintRelays,
+  assetId,
+}: {
+  release: NostrEvent;
+  hintRelays: string[];
+  assetId?: string;
+}) {
+  const pointer = useMemo(
+    () => getSoftwareApplicationPointer(release),
+    [release],
+  );
+  const pointerKey = pointer
+    ? `${pointer.kind}:${pointer.pubkey}:${pointer.dTag}`
+    : "";
+  const relaysKey = hintRelays.join("\u0000");
+  const searchGroups = useMemo<RelayGroupSpec[]>(() => {
+    const applicationRelays = dedupeRelays([
+      ...(pointer?.relayHints ?? []),
+      ...hintRelays,
+      ZAPSTORE_RELAY_URL,
+    ]);
+    return [
+      { label: "release relays", relays$: of(applicationRelays) },
+      { label: "git index", relays$: gitIndexRelays },
+      {
+        label: "fallback relays",
+        relays$: fallbackRelays,
+        deferred: true,
+      },
+    ];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pointerKey, relaysKey]);
+  const target = useMemo<SearchTarget | undefined>(
+    () =>
+      pointer
+        ? {
+            type: "address",
+            kind: pointer.kind,
+            pubkey: pointer.pubkey,
+            dTag: pointer.dTag,
+          }
+        : undefined,
+    [pointer],
+  );
+  const search = useEventSearch(target, searchGroups);
+  const application = search?.event;
+
+  if (!pointer || !isValidSoftwareRelease(release)) return <NotFound />;
+
+  if (application && isValidSoftwareApplication(application)) {
+    const coords = getRepoCoords(application);
+    if (coords.length === 0) return <NotFound />;
+    const repoRelays = dedupeRelays([
+      ...getRepoCoordRelayHints(application),
+      ...pointer.relayHints,
+      ...hintRelays,
+    ]);
+    const releaseNevent = eventIdToNevent(release.id, hintRelays);
+    const fragment = assetId ? `#${assetId.slice(0, 15)}` : "";
+    return (
+      <RepoCoordsRedirect
+        coords={coords}
+        hintRelays={repoRelays}
+        subPath={`/releases/${releaseNevent}${fragment}`}
+      />
+    );
+  }
+
+  if (search?.concludedNotFound) return <NotFound />;
+  return <LoadingState message="Resolving software application…" />;
+}
+
+function SoftwareAssetRedirect({
+  asset,
+  hintRelays,
+}: {
+  asset: NostrEvent;
+  hintRelays: string[];
+}) {
+  const appId = asset.tags.find(([name]) => name === "i")?.[1];
+  const version = asset.tags.find(([name]) => name === "version")?.[1];
+  const relaysKey = hintRelays.join("\u0000");
+  const releaseFilter = useMemo(
+    () =>
+      ({
+        kinds: [SOFTWARE_RELEASE_KIND],
+        "#e": [asset.id],
+      }) as Filter,
+    [asset.id],
+  );
+  const lookupComplete =
+    use$(() => {
+      const relays = dedupeRelays([
+        ...hintRelays,
+        ZAPSTORE_RELAY_URL,
+        ...gitIndexRelays.getValue(),
+        ...fallbackRelays.getValue(),
+      ]);
+      if (relays.length === 0) return of(true);
+
+      return resilientRequest(pool, relays, [releaseFilter]).pipe(
+        tap((response: NostrEvent | "EOSE") => {
+          if (response !== "EOSE") eventStore.add(response);
+        }),
+        ignoreElements(),
+        endWith(true),
+        startWith(false),
+        catchError(() => of(true)),
+      );
+    }, [asset.id, relaysKey]) ?? false;
+  const releases =
+    use$(
+      () =>
+        eventStore
+          .timeline([releaseFilter])
+          .pipe(
+            map((events) =>
+              (events as unknown as NostrEvent[])
+                .filter(
+                  (event) =>
+                    isValidSoftwareRelease(event) &&
+                    event.tags.some(
+                      ([name, value]) => name === "i" && value === appId,
+                    ) &&
+                    event.tags.some(
+                      ([name, value]) =>
+                        name === "version" && value === version,
+                    ),
+                )
+                .sort(
+                  (left, right) =>
+                    right.created_at - left.created_at ||
+                    right.id.localeCompare(left.id),
+                ),
+            ),
+          ),
+      [asset.id, appId, version],
+    ) ?? [];
+  const release = releases[0];
+
+  if (!isValidSoftwareAsset(asset)) return <NotFound />;
+  if (release) {
+    return (
+      <SoftwareReleaseRedirect
+        release={release}
+        hintRelays={hintRelays}
+        assetId={asset.id}
+      />
+    );
+  }
+  if (lookupComplete) return <NotFound />;
+  return <LoadingState message="Finding the release for this asset…" />;
 }
 
 // ---------------------------------------------------------------------------
@@ -480,6 +696,14 @@ function EventRedirect({
         stargazerPubkey={stargazerPubkey}
       />
     );
+  }
+
+  if (kind === SOFTWARE_RELEASE_KIND) {
+    return <SoftwareReleaseRedirect release={event} hintRelays={hintRelays} />;
+  }
+
+  if (kind === SOFTWARE_ASSET_KIND) {
+    return <SoftwareAssetRedirect asset={event} hintRelays={hintRelays} />;
   }
 
   // Issue

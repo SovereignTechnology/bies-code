@@ -39,6 +39,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useBlossomServers } from "@/hooks/useBlossomFallback";
 import { useGitPool } from "@/hooks/useGitPool";
 import { useSoftwareReleases } from "@/hooks/useSoftwareReleases";
+import { useUnreadHighlight } from "@/hooks/useUnreadHighlight";
 import { blossomBlobUrl } from "@/lib/blossom";
 import { compareTagsNewestFirst } from "@/lib/refStatus";
 import { eventIdToNevent } from "@/lib/routeUtils";
@@ -253,6 +254,9 @@ function AssetRow({
   asset: SoftwareAsset;
   blossomServers: string[];
 }) {
+  const anchorId = asset.event.id.slice(0, 15);
+  const { ref, highlight } = useUnreadHighlight(anchorId);
+  const rowRef = ref as React.RefObject<HTMLDivElement>;
   const size = formatBytes(asset.size);
   const blossomDownloadUrl = blossomServers
     .map((server) => blossomBlobUrl(server, asset.sha256))
@@ -316,9 +320,13 @@ function AssetRow({
 
   return (
     <div
+      id={anchorId}
+      ref={rowRef}
       className={cn(
-        "group/asset flex items-start gap-2 px-4 py-3",
+        "group/asset flex scroll-mt-24 items-start gap-2 px-4 py-3 transition-colors duration-700",
         downloadable && "transition-colors hover:bg-accent/50",
+        highlight === "strong" && "bg-pink-500/10",
+        highlight === "subtle" && "bg-pink-500/5",
       )}
     >
       {downloadUrl ? (
@@ -418,6 +426,7 @@ function ReleaseCard({
   blossomServers: string[];
   releasePath?: string;
 }) {
+  const location = useLocation();
   const relativeDate = safeFormatDistanceToNow(release.event.created_at, {
     addSuffix: true,
   });
@@ -427,6 +436,9 @@ function ReleaseCard({
   );
   const machineDate = dateTimeValue(release.event.created_at);
   const isPrerelease = release.channel !== "main";
+  const hasTargetedAsset = release.assets.some(
+    ({ id }) => location.hash === `#${id.slice(0, 15)}`,
+  );
 
   return (
     <article
@@ -516,7 +528,7 @@ function ReleaseCard({
           release={release}
           assetsById={assetsById}
           settled={assetsSettled}
-          defaultOpen={latest}
+          defaultOpen={latest || hasTargetedAsset}
           blossomServers={blossomServers}
         />
       </Card>
