@@ -11,6 +11,7 @@ import {
 } from "react";
 import { useActiveAccount } from "applesauce-react/hooks";
 import type { NostrEvent } from "nostr-tools";
+import { lastValueFrom } from "rxjs";
 import {
   Check,
   ChevronDown,
@@ -22,7 +23,11 @@ import {
   Upload,
   X,
 } from "lucide-react";
-import type { SoftwareApplication, SoftwareRelease } from "@/casts/Software";
+import {
+  SOFTWARE_RELEASE_KIND,
+  type SoftwareApplication,
+  type SoftwareRelease,
+} from "@/casts/Software";
 import { CreateSoftwareApplicationDialog } from "@/components/releases/CreateSoftwareApplicationDialog";
 import { LinkSoftwareApplicationDialog } from "@/components/releases/LinkSoftwareApplicationDialog";
 import { Badge } from "@/components/ui/badge";
@@ -57,8 +62,9 @@ import {
   SoftwareReleaseFactory,
 } from "@/factories/SoftwareReleaseFactory";
 import { useBlossomUpload, type Nip94Tags } from "@/hooks/useBlossomUpload";
+import { useEventStore } from "@/hooks/useEventStore";
 import { useToast } from "@/hooks/useToast";
-import { publish } from "@/services/nostr";
+import { addressLoader, publish } from "@/services/nostr";
 
 const CHANNEL_SUGGESTIONS = ["main", "beta", "nightly", "dev"];
 
@@ -146,6 +152,7 @@ function canonicalReleaseVersion(value: string): string {
 type UploadStatus = "pending" | "queued" | "uploading" | "uploaded" | "error";
 type PublishStage =
   | "editing"
+  | "checking-version"
   | "signing"
   | "publishing-release"
   | "publishing-assets";
@@ -192,6 +199,7 @@ interface CreateReleaseDialogProps {
   accountApplications: SoftwareApplication[];
   accountApplicationsSettled: boolean;
   existingReleases: SoftwareRelease[];
+  releaseRelays: string[];
   gitTags: Array<{ name: string; commitId: string }>;
   repoCoordinates: string[];
   maintainerPubkeys: string[];
@@ -750,6 +758,8 @@ function AssetEditor({
 
 function stageLabel(stage: PublishStage): string {
   switch (stage) {
+    case "checking-version":
+      return "Checking release version";
     case "signing":
       return "Signing release events";
     case "publishing-release":
@@ -768,12 +778,14 @@ export function CreateReleaseDialog({
   accountApplications,
   accountApplicationsSettled,
   existingReleases,
+  releaseRelays,
   gitTags,
   repoCoordinates,
   maintainerPubkeys,
   relayHint,
 }: CreateReleaseDialogProps) {
   const account = useActiveAccount();
+  const store = useEventStore();
   const { uploadFile } = useBlossomUpload();
   const { toast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1200,6 +1212,29 @@ export function CreateReleaseDialog({
           throw new Error(`${asset.file.name} has not finished uploading.`);
         }
         uploadedAssets.push({ draft: asset, uploaded: asset.uploaded });
+      }
+
+      setStage("checking-version");
+      const releaseIdentifier = `${selectedApplication.appId}@${releaseVersion}`;
+      await lastValueFrom(
+        addressLoader({
+          kind: SOFTWARE_RELEASE_KIND,
+          pubkey: selectedApplication.pubkey,
+          identifier: releaseIdentifier,
+          relays: releaseRelays,
+        }),
+        { defaultValue: undefined },
+      );
+      if (
+        store.getReplaceable(
+          SOFTWARE_RELEASE_KIND,
+          selectedApplication.pubkey,
+          releaseIdentifier,
+        )
+      ) {
+        throw new Error(
+          `${selectedApplication.name} already has a ${releaseVersion} release.`,
+        );
       }
 
       setStage("signing");

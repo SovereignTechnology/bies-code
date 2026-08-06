@@ -39,13 +39,14 @@ import { cacheRequest } from "@/services/cache";
 import { addressLoader, pool } from "@/services/nostr";
 
 export const ZAPSTORE_RELAY_URL = "wss://relay.zapstore.dev";
-const RELEASE_DISCOVERY_LIMIT = 180;
+const RELEASE_DISCOVERY_LIMIT = 30;
 const ASSET_FILTER_CHUNK_SIZE = 100;
 
 export interface RepoSoftwareReleases {
   applications: SoftwareApplication[];
   releases: SoftwareRelease[];
   assetsById: Map<string, SoftwareAsset>;
+  releaseRelays: string[];
   applicationsSettled: boolean;
   releasesSettled: boolean;
   assetsSettled: boolean;
@@ -423,9 +424,9 @@ export function useSoftwareReleases(
   ]);
   const releaseRelayKey = releaseRelays.join(",");
 
-  // Keep enough history for the create-release version collision UI while
-  // bounding relay work. The UI progressively renders this metadata in much
-  // smaller batches; Blossom binaries are never downloaded here.
+  // Keep a useful recent history while bounding release and asset metadata
+  // work. The create dialog separately checks the exact address before
+  // publishing, so overwrite protection does not depend on this window.
   const releaseFilters = releaseFiltersForApplications(
     applications,
     RELEASE_DISCOVERY_LIMIT,
@@ -436,8 +437,17 @@ export function useSoftwareReleases(
       if (appIds.length === 0 || appAuthors.length === 0) {
         return of(applicationsSettled);
       }
-      if (!applicationMailboxesSettled) return of(false);
-      return loadIntoStoreUntilSettled(releaseRelays, releaseFilters, store);
+      // Start with repository relays and Zapstore immediately. Waiting for
+      // every publisher mailbox before opening this request can leave the
+      // release page behind unrelated relay traffic. When mailbox events
+      // arrive, releaseRelayKey changes and this request restarts with the
+      // publisher outboxes included. Only report final settlement after that
+      // mailbox discovery has completed.
+      return loadIntoStoreUntilSettled(
+        releaseRelays,
+        releaseFilters,
+        store,
+      ).pipe(map((settled) => settled && applicationMailboxesSettled));
     }, [
       appIdsKey,
       appAuthorsKey,
@@ -512,6 +522,7 @@ export function useSoftwareReleases(
     applications,
     releases,
     assetsById,
+    releaseRelays,
     applicationsSettled,
     releasesSettled,
     assetsSettled,

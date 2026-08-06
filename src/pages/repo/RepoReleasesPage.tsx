@@ -1102,6 +1102,7 @@ export default function RepoReleasesPage({
     applications,
     releases,
     assetsById,
+    releaseRelays,
     applicationsSettled,
     releasesSettled,
     assetsSettled,
@@ -1529,6 +1530,7 @@ export default function RepoReleasesPage({
           accountApplications={accountApplications}
           accountApplicationsSettled={accountApplicationsSettled}
           existingReleases={releases}
+          releaseRelays={releaseRelays}
           gitTags={gitTags}
           repoCoordinates={repo.allCoordinates}
           maintainerPubkeys={repo.maintainerSet}

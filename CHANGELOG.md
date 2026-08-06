@@ -5,15 +5,20 @@
 ### Fixes
 
 - Resolve repository searches through ranked, validated user profiles across multiple NIP-50 relays.
+- Start release discovery from repository and Zapstore relays without waiting for publisher outbox discovery to finish.
 
 ### Features
 
 - Group notifications by user with expandable activity, bulk read/archive actions for each actor, and a dedicated unread inbox filter.
-- Add GitHub-style repository release and application pages for viewing, filtering, creating, editing, and linking existing NIP-82 applications and releases, with explicit publisher ownership, lightbox galleries for application and discussion images, application media and metadata, immediate cancellable Blossom uploads, guided platform, format, compatibility, and provenance metadata, event sharing, and repository-aware application, release, and asset permalinks.
+- Add NIP-82 repository releases with guided version, channel, platform, format, compatibility, and provenance metadata, plus immediate cancellable Blossom uploads.
+- Add repository software application pages and management, including creation, editing, filtering, linking existing Zapstore applications, explicit source migration, and publisher ownership enforcement.
+- Add raw-event and sharing controls with repository-aware application, release, and asset permalinks.
+- Open application and discussion images in accessible keyboard and touch lightbox galleries.
 
 ### Changes
 
-- Bound release-history discovery to 180 entries per application and progressively render release cards in batches of 20.
+- Vendor NIP-82, published to Nostr by Fran (author of franzap) on April 11, 2026, document repository association and general-purpose release assets, and retain its established application ID tag for compatibility.
+- Bound release-history and asset-metadata discovery to 30 releases per application, progressively render release cards in batches of 20, and check exact release coordinates before publishing to prevent older versions from being replaced.
 
 ## [3.1.1]
 
