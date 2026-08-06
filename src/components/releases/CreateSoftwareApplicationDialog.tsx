@@ -190,7 +190,12 @@ export function CreateSoftwareApplicationDialog({
 
         <div className="grid gap-4 py-2 sm:grid-cols-2">
           <div className="space-y-2">
-            <Label htmlFor={fieldId("name")}>Name</Label>
+            <Label htmlFor={fieldId("name")}>
+              Name{" "}
+              <span className="text-destructive" aria-hidden="true">
+                *
+              </span>
+            </Label>
             <Input
               id={fieldId("name")}
               value={name}
@@ -198,16 +203,23 @@ export function CreateSoftwareApplicationDialog({
               placeholder="GitWorkshop"
               disabled={publishing}
               autoFocus
+              required
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor={fieldId("app-id")}>Application ID</Label>
+            <Label htmlFor={fieldId("app-id")}>
+              Application ID{" "}
+              <span className="text-destructive" aria-hidden="true">
+                *
+              </span>
+            </Label>
             <Input
               id={fieldId("app-id")}
               value={appId}
               onChange={(event) => setAppId(event.target.value)}
               placeholder="dev.gitworkshop.app"
               disabled={publishing}
+              required
             />
           </div>
           <div className="space-y-2 sm:col-span-2">

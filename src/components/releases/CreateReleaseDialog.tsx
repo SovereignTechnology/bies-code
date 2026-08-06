@@ -281,6 +281,7 @@ function SuggestedTagInput({
   disabled,
   autoFocus = false,
   recommended = false,
+  required = false,
 }: {
   label: string;
   values: string[];
@@ -290,6 +291,7 @@ function SuggestedTagInput({
   disabled: boolean;
   autoFocus?: boolean;
   recommended?: boolean;
+  required?: boolean;
 }) {
   const [input, setInput] = useState("");
   const listId = useId();
@@ -331,7 +333,15 @@ function SuggestedTagInput({
       }
     >
       <div className="flex flex-wrap items-center gap-2">
-        <Label htmlFor={inputId}>{label}</Label>
+        <Label htmlFor={inputId}>
+          {label}
+          {required && (
+            <span className="text-destructive" aria-hidden="true">
+              {" "}
+              *
+            </span>
+          )}
+        </Label>
         {recommended && (
           <Badge variant="outline" className="border-primary/40 text-primary">
             Recommended
@@ -374,6 +384,7 @@ function SuggestedTagInput({
           placeholder={placeholder}
           disabled={disabled}
           aria-describedby={recommended ? descriptionId : undefined}
+          aria-required={required}
         />
         <Button
           type="button"
@@ -507,7 +518,12 @@ function AssetEditor({
           />
         </div>
         <div className="space-y-2">
-          <Label htmlFor={`${asset.id}-mime`}>MIME type</Label>
+          <Label htmlFor={`${asset.id}-mime`}>
+            MIME type{" "}
+            <span className="text-destructive" aria-hidden="true">
+              *
+            </span>
+          </Label>
           <Select
             value={mimeTypeChoice}
             onValueChange={(choice) =>
@@ -517,7 +533,7 @@ function AssetEditor({
             }
             disabled={disabled}
           >
-            <SelectTrigger id={`${asset.id}-mime`}>
+            <SelectTrigger id={`${asset.id}-mime`} aria-required="true">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -674,7 +690,10 @@ function AssetEditor({
               <>
                 <div className="space-y-2">
                   <Label htmlFor={`${asset.id}-version-code`}>
-                    Android version code
+                    Android version code{" "}
+                    <span className="text-destructive" aria-hidden="true">
+                      *
+                    </span>
                   </Label>
                   <Input
                     id={`${asset.id}-version-code`}
@@ -712,6 +731,7 @@ function AssetEditor({
                     suggestions={[]}
                     placeholder="Required SHA-256 certificate hash"
                     disabled={disabled}
+                    required
                   />
                 </div>
               </>
@@ -1280,13 +1300,18 @@ export function CreateReleaseDialog({
           ) : (
             <div className="grid gap-4 md:grid-cols-3">
               <div className="space-y-2">
-                <Label htmlFor="release-application">Application</Label>
+                <Label htmlFor="release-application">
+                  Application{" "}
+                  <span className="text-destructive" aria-hidden="true">
+                    *
+                  </span>
+                </Label>
                 <Select
                   value={applicationCoordinate}
                   onValueChange={updateApplicationChoice}
                   disabled={busy}
                 >
-                  <SelectTrigger id="release-application">
+                  <SelectTrigger id="release-application" aria-required="true">
                     <SelectValue placeholder="Select an application" />
                   </SelectTrigger>
                   <SelectContent>
@@ -1310,7 +1335,10 @@ export function CreateReleaseDialog({
               </div>
               <div className="space-y-2">
                 <Label htmlFor="release-version-choice">
-                  Version / Git tag
+                  Version / Git tag{" "}
+                  <span className="text-destructive" aria-hidden="true">
+                    *
+                  </span>
                 </Label>
                 <Select
                   value={versionChoice}
@@ -1320,6 +1348,7 @@ export function CreateReleaseDialog({
                   <SelectTrigger
                     id="release-version-choice"
                     aria-invalid={versionAlreadyExists}
+                    aria-required="true"
                   >
                     <SelectValue placeholder="Select version" />
                   </SelectTrigger>
@@ -1385,13 +1414,21 @@ export function CreateReleaseDialog({
                 )}
               </div>
               <div className="space-y-2">
-                <Label htmlFor="release-channel-choice">Channel</Label>
+                <Label htmlFor="release-channel-choice">
+                  Channel{" "}
+                  <span className="text-destructive" aria-hidden="true">
+                    *
+                  </span>
+                </Label>
                 <Select
                   value={channelChoice}
                   onValueChange={updateChannelChoice}
                   disabled={busy}
                 >
-                  <SelectTrigger id="release-channel-choice">
+                  <SelectTrigger
+                    id="release-channel-choice"
+                    aria-required="true"
+                  >
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -1457,7 +1494,13 @@ export function CreateReleaseDialog({
           <div className="space-y-3">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <h3 className="font-semibold">Release files</h3>
+                <h3 className="font-semibold">
+                  Release files{" "}
+                  <span className="text-destructive" aria-hidden="true">
+                    *
+                  </span>
+                  <span className="sr-only"> (required)</span>
+                </h3>
                 <p className="text-sm text-muted-foreground">
                   Add binaries, packages, signatures, checksums, or other
                   release artifacts.
