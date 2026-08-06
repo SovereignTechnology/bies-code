@@ -36,7 +36,7 @@ import {
 import { normalizeUrl } from "@/lib/url";
 import { relayGroupUrls$ } from "@/models/RepositoryRelayGroup";
 import { cacheRequest } from "@/services/cache";
-import { pool } from "@/services/nostr";
+import { addressLoader, pool } from "@/services/nostr";
 
 export const ZAPSTORE_RELAY_URL = "wss://relay.zapstore.dev";
 
@@ -297,7 +297,46 @@ export function useSoftwareReleases(
     .map((application) => application.coordinate)
     .sort()
     .join(",");
-  const releaseRelays = uniqueRelayUrls([...repoRelays, ZAPSTORE_RELAY_URL]);
+
+  // Releases are published to their author's NIP-65 outbox as well as the
+  // repository relays. Resolve every trusted application publisher's mailbox
+  // before declaring version discovery complete, otherwise a release visible
+  // only on the publisher's outbox could be replaced accidentally.
+  const applicationMailboxesSettled =
+    use$(() => {
+      if (appAuthors.length === 0) return of(applicationsSettled);
+      return combineLatest(
+        appAuthors.map((pubkey) =>
+          addressLoader({ kind: 10002, pubkey }).pipe(
+            ignoreElements(),
+            endWith(true),
+            catchError(() => of(true)),
+            startWith(false),
+          ),
+        ),
+      ).pipe(map((settled) => settled.every(Boolean)));
+    }, [appAuthorsKey, applicationsSettled]) ?? false;
+
+  const applicationOutboxRelays =
+    use$(() => {
+      if (appAuthors.length === 0) return of([]);
+      return combineLatest(
+        appAuthors.map((pubkey) =>
+          store.mailboxes(pubkey).pipe(startWith(undefined)),
+        ),
+      ).pipe(
+        map((mailboxes) =>
+          uniqueRelayUrls(
+            mailboxes.flatMap((mailbox) => mailbox?.outboxes ?? []),
+          ),
+        ),
+      );
+    }, [appAuthorsKey, store]) ?? [];
+  const releaseRelays = uniqueRelayUrls([
+    ...repoRelays,
+    ...applicationOutboxRelays,
+    ZAPSTORE_RELAY_URL,
+  ]);
   const releaseRelayKey = releaseRelays.join(",");
 
   const releaseFilters = releaseFiltersForApplications(applications);
@@ -307,6 +346,7 @@ export function useSoftwareReleases(
       if (appIds.length === 0 || appAuthors.length === 0) {
         return of(applicationsSettled);
       }
+      if (!applicationMailboxesSettled) return of(false);
       return loadIntoStoreUntilSettled(
         releaseRelays,
         releaseFilters,
@@ -318,6 +358,7 @@ export function useSoftwareReleases(
       appAuthorsKey,
       appPairsKey,
       applicationsSettled,
+      applicationMailboxesSettled,
       releaseRelayKey,
       store,
     ]) ?? false;
@@ -382,9 +423,9 @@ export function useSoftwareReleases(
  * code-page sidebar. Trusted application events arrive through the priority
  * nip34RepoLoader subscription or the persistent cache; this hook reads them
  * from the store, then requests at most one matching release per publisher
- * from the cache, repository relays, and Zapstore. It also requests the latest
- * main-channel release so a newer prerelease does not hide the latest stable
- * release. Assets are not fetched.
+ * from the cache, repository relays, publisher outboxes, and Zapstore. It also
+ * requests the latest main-channel release so a newer prerelease does not hide
+ * the latest stable release. Assets are not fetched.
  */
 export function useRepoReleaseSummary(
   repoCoords: string[] | undefined,
@@ -418,10 +459,37 @@ export function useRepoReleaseSummary(
         .pipe(map((events) => castApplications(events, castStore)));
     }, [coordsKey, maintainerKey, store]) ?? [];
 
+  const appAuthors = [...new Set(applications.map((app) => app.pubkey))];
+  const appAuthorsKey = [...appAuthors].sort().join(",");
   const appPairsKey = applications
     .map((application) => application.coordinate)
     .sort()
     .join(",");
+
+  use$(() => {
+    if (!probeRelays || appAuthors.length === 0) return undefined;
+    return merge(
+      ...appAuthors.map((pubkey) =>
+        addressLoader({ kind: 10002, pubkey }).pipe(catchError(() => EMPTY)),
+      ),
+    ).pipe(ignoreElements());
+  }, [appAuthorsKey, probeRelays]);
+
+  const applicationOutboxRelays =
+    use$(() => {
+      if (appAuthors.length === 0) return of([]);
+      return combineLatest(
+        appAuthors.map((pubkey) =>
+          store.mailboxes(pubkey).pipe(startWith(undefined)),
+        ),
+      ).pipe(
+        map((mailboxes) =>
+          uniqueRelayUrls(
+            mailboxes.flatMap((mailbox) => mailbox?.outboxes ?? []),
+          ),
+        ),
+      );
+    }, [appAuthorsKey, store]) ?? [];
   const releaseFilters = releaseFiltersForApplications(applications, 1);
   const latestMainFilters = releaseFilters.map(
     (releaseFilter) =>
@@ -431,7 +499,11 @@ export function useRepoReleaseSummary(
       }) as Filter,
   );
   const summaryFilters = [...releaseFilters, ...latestMainFilters];
-  const releaseRelays = uniqueRelayUrls([...repoRelays, ZAPSTORE_RELAY_URL]);
+  const releaseRelays = uniqueRelayUrls([
+    ...repoRelays,
+    ...applicationOutboxRelays,
+    ZAPSTORE_RELAY_URL,
+  ]);
   const releaseRelayKey = releaseRelays.join(",");
 
   use$(() => {

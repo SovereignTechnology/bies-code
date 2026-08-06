@@ -7,7 +7,7 @@
  * Features (matching ditto's useUploadFile):
  *   - Uploads to all configured servers simultaneously (Promise.any — fastest wins)
  *   - Mirrors the blob to remaining servers in the background (BUD-04)
- *   - 30-second per-server timeout
+ *   - Progress-based stall reporting without a fixed upload timeout
  *   - Returns full NIP-94 tags (url, x, ox, size, m, dim, blurhash) for imeta injection
  *   - Appends file extension to content-addressed URLs if missing
  *
@@ -27,6 +27,7 @@ import {
   DEFAULT_BLOSSOM_SERVERS,
   type Nip94Tags,
   type BlossomSigner,
+  type BlossomUploadOptions,
 } from "@/lib/blossom";
 import type { EventTemplate } from "nostr-tools";
 
@@ -48,7 +49,10 @@ export function useBlossomUpload() {
   );
 
   const uploadFile = useCallback(
-    async (file: File): Promise<Nip94Tags | null> => {
+    async (
+      file: File,
+      options?: BlossomUploadOptions,
+    ): Promise<Nip94Tags | null> => {
       if (!account) {
         toast({
           title: "Not logged in",
@@ -76,8 +80,9 @@ export function useBlossomUpload() {
 
       setIsUploading(true);
       try {
-        return await blossomUpload(file, servers, signer);
+        return await blossomUpload(file, servers, signer, options);
       } catch (err) {
+        if (options?.signal?.aborted) return null;
         const message = err instanceof Error ? err.message : "Upload failed";
         toast({
           title: "Upload failed",

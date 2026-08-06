@@ -9,7 +9,7 @@
 ### Features
 
 - Group notifications by user with expandable activity, bulk read/archive actions for each actor, and a dedicated unread inbox filter.
-- Add GitHub-style repository release pages compatible with NIP-82 (Zapstore) events.
+- Add GitHub-style repository release pages for viewing and creating NIP-82 releases, with immediate cancellable Blossom uploads and guided platform, format, compatibility, and provenance metadata.
 
 ### Changes
 

@@ -1,11 +1,14 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { useSeoMeta } from "@unhead/react";
+import { useActiveAccount } from "applesauce-react/hooks";
 import {
   ChevronDown,
   Download,
   List,
+  Loader2,
   Package,
+  Plus,
   ShieldCheck,
   Tag,
 } from "lucide-react";
@@ -14,6 +17,7 @@ import type {
   SoftwareAsset,
   SoftwareRelease,
 } from "@/casts/Software";
+import { CreateReleaseDialog } from "@/components/releases/CreateReleaseDialog";
 import { UserLink } from "@/components/UserAvatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -31,8 +35,10 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useBlossomServers } from "@/hooks/useBlossomFallback";
+import { useGitPool } from "@/hooks/useGitPool";
 import { useSoftwareReleases } from "@/hooks/useSoftwareReleases";
 import { blossomBlobUrl } from "@/lib/blossom";
+import { compareTagsNewestFirst } from "@/lib/refStatus";
 import { cn, safeFormat, safeFormatDistanceToNow } from "@/lib/utils";
 import { useRepoContext } from "./RepoContext";
 
@@ -490,9 +496,11 @@ function ReleaseCard({
 }
 
 export default function RepoReleasesPage() {
-  const { resolved } = useRepoContext();
+  const { cloneUrls, resolved, repoState } = useRepoContext();
+  const account = useActiveAccount();
   const location = useLocation();
   const blossomServers = useBlossomServers();
+  const [createReleaseOpen, setCreateReleaseOpen] = useState(false);
   const repo = resolved?.repo;
   const {
     applications,
@@ -506,6 +514,24 @@ export default function RepoReleasesPage() {
     repo?.maintainerSet,
     resolved?.repoRelayGroup,
   );
+  const { poolState } = useGitPool(cloneUrls, {
+    headRef: repoState?.headRef,
+    knownHeadCommit: repoState?.headCommitId,
+    stateRefs: repoState?.refs,
+    stateCreatedAt: repoState?.event.created_at,
+  });
+
+  const gitTags = useMemo(
+    () =>
+      Object.entries(poolState.authoritativeRefs)
+        .filter(([name]) => name.startsWith("refs/tags/"))
+        .map(([name, ref]) => ({
+          name: name.slice("refs/tags/".length),
+          commitId: ref.commitId,
+        }))
+        .sort((a, b) => compareTagsNewestFirst(a.name, b.name)),
+    [poolState.authoritativeRefs],
+  );
 
   const applicationByReleaseKey = useMemo(
     () =>
@@ -517,6 +543,22 @@ export default function RepoReleasesPage() {
       ),
     [applications],
   );
+  const publishableApplications = useMemo(
+    () =>
+      account
+        ? applications.filter(
+            (application) => application.pubkey === account.pubkey,
+          )
+        : [],
+    [account, applications],
+  );
+  const canPublishRelease =
+    !!account && !!repo?.maintainerSet.includes(account.pubkey);
+  const releaseDiscoverySettled =
+    applicationsSettled && releasesSettled && !poolState.loading;
+  // Discovery can briefly become unsettled when live filters or Git refs
+  // refresh. Once opened, keep the dialog mounted so its draft is not reset.
+  const releaseFormReady = releaseDiscoverySettled || createReleaseOpen;
 
   const latestMainReleaseIds = useMemo(() => {
     const seen = new Set<string>();
@@ -613,7 +655,33 @@ export default function RepoReleasesPage() {
             {releases.length}
           </Badge>
         )}
+        {canPublishRelease && (
+          <Button
+            className="ml-auto"
+            onClick={() => setCreateReleaseOpen(true)}
+            disabled={!releaseFormReady}
+          >
+            {releaseFormReady ? (
+              <Plus className="mr-2 h-4 w-4" />
+            ) : (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            )}
+            New release
+          </Button>
+        )}
       </div>
+
+      {canPublishRelease && repo && releaseFormReady && (
+        <CreateReleaseDialog
+          open={createReleaseOpen}
+          onOpenChange={setCreateReleaseOpen}
+          applications={publishableApplications}
+          existingReleases={releases}
+          gitTags={gitTags}
+          repoCoordinates={repo.allCoordinates}
+          relayHint={repo.relays[0]}
+        />
+      )}
 
       {loadingApplications || loadingReleases ? (
         <ReleasePageSkeleton />
