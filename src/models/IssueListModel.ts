@@ -9,6 +9,7 @@ import {
   COMMENT_KIND,
   LEGACY_REPLY_KINDS,
   pubkeyFromCoordinate,
+  isRepositoryRootItem,
   buildResolvedIssues,
   type ResolvedIssueLite,
   type ResolveEssentialsOptions,
@@ -71,6 +72,7 @@ export function IssueListModel(
         return pk ? [pk] : [];
       }),
     );
+    const coordinateSet = new Set(coords);
 
     const issueFilter: Filter[] = [
       { kinds: [ISSUE_KIND], "#a": coords } as Filter,
@@ -82,7 +84,9 @@ export function IssueListModel(
       auditTime(100),
 
       switchMap((issueEvents) => {
-        const events = issueEvents as NostrEvent[];
+        const events = (issueEvents as NostrEvent[]).filter((event) =>
+          isRepositoryRootItem(event, coordinateSet),
+        );
         if (events.length === 0) return of([] as ResolvedIssueLite[]);
 
         const ids = events.map((e) => e.id);

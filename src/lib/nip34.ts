@@ -199,6 +199,33 @@ export const PR_UPDATE_KIND = 1619;
 /** Root kinds that appear in the PRs list (patches + PRs). */
 export const PR_ROOT_KINDS = [PATCH_KIND, PR_KIND] as const;
 
+/**
+ * Return the repository coordinates an issue, PR, or patch is filed against.
+ *
+ * Older clients used an `a` tag with a `mention` marker where modern clients
+ * use a `q` tag. Relays cannot distinguish those legacy mentions in a `#a`
+ * query, so consumers must exclude them before attributing the item to a
+ * repository.
+ */
+export function getRootRepositoryCoordinates(event: NostrEvent): string[] {
+  return event.tags
+    .filter(
+      ([name, coordinate, , marker]) =>
+        name === "a" && Boolean(coordinate) && marker !== "mention",
+    )
+    .map(([, coordinate]) => coordinate);
+}
+
+/** Whether an item is filed against any of the given repository coordinates. */
+export function isRepositoryRootItem(
+  event: NostrEvent,
+  coordinates: ReadonlySet<string>,
+): boolean {
+  return getRootRepositoryCoordinates(event).some((coordinate) =>
+    coordinates.has(coordinate),
+  );
+}
+
 /** NIP-22 comment (kind 1111) */
 export const COMMENT_KIND = 1111;
 
@@ -930,7 +957,7 @@ export interface ResolvedIssueLite {
    * kind:1985 label events, sorted alphabetically.
    */
   labels: string[];
-  /** All repository coordinates from `#a` tags, sorted */
+  /** Repository root coordinates from `a` tags, excluding legacy mentions */
   repoCoords: string[];
   /**
    * Number of NIP-22 comments (kind:1111). Zero until nip34ListLoader
@@ -1233,10 +1260,7 @@ function buildResolvedList(
         lastActivityAt,
         status,
         labels,
-        repoCoords: ev.tags
-          .filter(([t]) => t === "a")
-          .map(([, v]) => v)
-          .sort(),
+        repoCoords: getRootRepositoryCoordinates(ev).sort(),
         commentCount: comments.length,
         participantCount: participantPubkeys.size,
         zapTotal: Math.floor((zapsByRoot.get(ev.id) ?? 0) / 1000),
@@ -1316,7 +1340,7 @@ export interface ResolvedPRLite {
   status: IssueStatus;
   /** Deduplicated labels from t-tags and NIP-32 label events, sorted */
   labels: string[];
-  /** All repository coordinates from #a tags, sorted */
+  /** Repository root coordinates from `a` tags, excluding legacy mentions */
   repoCoords: string[];
   /** Number of NIP-22 comments (kind:1111) */
   commentCount: number;
@@ -1528,10 +1552,7 @@ export function resolveItemEssentials(
     lastActivityAt,
     status,
     labels,
-    repoCoords: rootEvent.tags
-      .filter(([t]) => t === "a")
-      .map(([, v]) => v)
-      .sort(),
+    repoCoords: getRootRepositoryCoordinates(rootEvent).sort(),
     commentCount: filteredComments.length,
     participantCount: participantPubkeys.size,
     zapTotal: filteredZapTotal,

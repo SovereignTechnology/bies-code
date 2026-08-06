@@ -4,6 +4,7 @@
 
 ### Fixes
 
+- Exclude legacy repository mentions from issue and pull request attribution so work filed elsewhere no longer appears in mentioned repositories.
 - Resolve repository searches through ranked, validated user profiles across multiple NIP-50 relays.
 - Start release discovery from repository and Zapstore relays without waiting for publisher outbox discovery to finish.
 

@@ -40,6 +40,7 @@ import {
   LEGACY_REPLY_KINDS,
   COVER_NOTE_KIND,
   parseRepoCoordinate,
+  isRepositoryRootItem,
 } from "@/lib/nip34";
 import { CI_EVENT_KINDS, CI_RUN_KIND } from "@/lib/ci";
 import { Repository, isValidRepository } from "@/casts/Repository";
@@ -834,6 +835,7 @@ export function nip34SupplementalRelayLoader(
   relayGroup: RelayGroup,
 ): Observable<NostrEvent> {
   const resolveAuthorInbox = relayCurationMode.getValue() === "outbox";
+  const coordinateSet = new Set(coords);
 
   return new Observable<NostrEvent>((subscriber) => {
     const seenIds = new Set<string>();
@@ -902,7 +904,11 @@ export function nip34SupplementalRelayLoader(
         settle: false,
       },
     )
-      .pipe(onlyEvents(), mapEventsToStore(eventStore))
+      .pipe(
+        onlyEvents(),
+        filter((event) => isRepositoryRootItem(event, coordinateSet)),
+        mapEventsToStore(eventStore),
+      )
       .subscribe({
         next: (event) => {
           const ev = event as NostrEvent;
@@ -951,6 +957,7 @@ export function nip34RepoLoader(
   relayGroup: RelayGroup,
 ): Observable<NostrEvent> {
   const resolveAuthorInbox = relayCurationMode.getValue() === "outbox";
+  const coordinateSet = new Set(coords);
 
   return new Observable<NostrEvent>((subscriber) => {
     const seenIds = new Set<string>();
@@ -1045,7 +1052,11 @@ export function nip34RepoLoader(
       itemFilters,
       { reconnect: true, gapFill: true, settle: false },
     )
-      .pipe(onlyEvents(), mapEventsToStore(eventStore))
+      .pipe(
+        onlyEvents(),
+        filter((event) => isRepositoryRootItem(event, coordinateSet)),
+        mapEventsToStore(eventStore),
+      )
       .subscribe({
         next: (event) => {
           const ev = event as NostrEvent;

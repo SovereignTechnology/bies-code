@@ -2,7 +2,11 @@ import { CastRefEventStore, EventCast } from "applesauce-common/casts/cast";
 import { getOrComputeCachedValue } from "applesauce-core/helpers";
 import { getTagValue, KnownEvent } from "applesauce-core/helpers/event";
 import type { NostrEvent } from "nostr-tools";
-import { PR_KIND, PATCH_CHAIN_TAGS } from "@/lib/nip34";
+import {
+  PR_KIND,
+  PATCH_CHAIN_TAGS,
+  getRootRepositoryCoordinates,
+} from "@/lib/nip34";
 
 type PREvent = KnownEvent<typeof PR_KIND>;
 
@@ -40,15 +44,17 @@ export class PR extends EventCast<PREvent> {
   }
 
   get repoCoord(): string | undefined {
-    return getOrComputeCachedValue(this.event, RepoCoordSymbol, () =>
-      getTagValue(this.event, "a"),
+    return getOrComputeCachedValue(
+      this.event,
+      RepoCoordSymbol,
+      () => getRootRepositoryCoordinates(this.event)[0],
     );
   }
 
-  /** All repository coordinates from #a tags (a PR may tag multiple repos). */
+  /** Repository root coordinates, excluding legacy `a`-tag mentions. */
   get repoCoords(): string[] {
     return getOrComputeCachedValue(this.event, RepoCoordsSymbol, () =>
-      this.event.tags.filter(([t]) => t === "a").map(([, v]) => v),
+      getRootRepositoryCoordinates(this.event),
     );
   }
 

@@ -11,6 +11,7 @@ import {
   COMMENT_KIND,
   LEGACY_REPLY_KINDS,
   pubkeyFromCoordinate,
+  isRepositoryRootItem,
   buildResolvedPRs,
   type ResolvedPRLite,
 } from "@/lib/nip34";
@@ -43,6 +44,7 @@ export function PRListModel(coordsCacheKey: string): Model<ResolvedPRLite[]> {
         return pk ? [pk] : [];
       }),
     );
+    const coordinateSet = new Set(coords);
 
     const prFilter: Filter[] = [
       { kinds: [PATCH_KIND, PR_KIND], "#a": coords } as Filter,
@@ -58,11 +60,12 @@ export function PRListModel(coordsCacheKey: string): Model<ResolvedPRLite[]> {
         // belong to the original root patch's thread, not as separate list entries.
         const events = (prEvents as NostrEvent[]).filter(
           (ev) =>
-            ev.kind === PR_KIND ||
-            (ev.kind === PATCH_KIND &&
-              hasNameValueTag(ev, "t", "root") &&
-              !hasNameValueTag(ev, "t", "root-revision") &&
-              !hasNameValueTag(ev, "t", "revision-root")),
+            isRepositoryRootItem(ev, coordinateSet) &&
+            (ev.kind === PR_KIND ||
+              (ev.kind === PATCH_KIND &&
+                hasNameValueTag(ev, "t", "root") &&
+                !hasNameValueTag(ev, "t", "root-revision") &&
+                !hasNameValueTag(ev, "t", "revision-root"))),
         );
         if (events.length === 0) return of([] as ResolvedPRLite[]);
 

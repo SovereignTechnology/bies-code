@@ -27,6 +27,7 @@ import {
   PR_UPDATE_KIND,
   repoCoordinate,
   resolveChain,
+  getRootRepositoryCoordinates,
 } from "../lib/nip34";
 import {
   eventIdToNevent,
@@ -70,12 +71,12 @@ import { ZAPSTORE_RELAY_URL } from "@/hooks/useSoftwareReleases";
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Extract repository coordinates from `a` tags, preserving tag order. */
+/** Extract root repository coordinates, preserving tag order. */
 function getRepoCoords(event: NostrEvent): string[] {
   const seen = new Set<string>();
   const coords: string[] = [];
 
-  for (const [, coord] of event.tags.filter(([t]) => t === "a")) {
+  for (const coord of getRootRepositoryCoordinates(event)) {
     if (!coord || seen.has(coord)) continue;
     const parsed = parseRepoCoord(coord);
     if (parsed?.kind !== REPO_KIND || !isHexPubkey(parsed.pubkey)) continue;
@@ -90,7 +91,7 @@ function getRepoCoords(event: NostrEvent): string[] {
 function getRepoCoordRelayHints(event: NostrEvent): string[] {
   return dedupeRelays(
     event.tags
-      .filter(([t]) => t === "a")
+      .filter(([name, , , marker]) => name === "a" && marker !== "mention")
       .map(([, , relay]) => relay)
       .filter((relay): relay is string => !!relay),
   );
