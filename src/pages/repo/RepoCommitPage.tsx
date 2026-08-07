@@ -10,9 +10,10 @@ import { CIChecksPanel } from "@/components/ci/CIChecksPanel";
 import { isNonHttpUrl } from "@/lib/git-grasp-pool";
 import { IncompatibleProtocolError } from "@/components/IncompatibleProtocolError";
 import { useActiveAccount } from "applesauce-react/hooks";
+import { useCommitHistory } from "@/hooks/useGitExplorer";
 
 export default function RepoCommitPage() {
-  const { cloneUrls, commitId, resolved, pubkey, repoId, basePath } =
+  const { cloneUrls, commitId, resolved, pubkey, repoId, basePath, repoState } =
     useRepoContext();
   const repo = resolved?.repo;
   const account = useActiveAccount();
@@ -30,7 +31,25 @@ export default function RepoCommitPage() {
     twitterCard: repoOwnerProfile?.picture ? "summary" : "summary_large_image",
   });
 
-  const { pool } = useGitPool(cloneUrls);
+  const { pool, poolState } = useGitPool(cloneUrls, {
+    headRef: repoState?.headRef,
+    knownHeadCommit: repoState?.headCommitId,
+    stateRefs: repoState?.refs,
+    stateCreatedAt: repoState?.event.created_at,
+  });
+
+  // Some git servers reject a direct upload-pack `want` for a historical SHA
+  // even when it is reachable from an advertised ref. Warm the commit cache by
+  // walking the authoritative head, matching the commits-page behaviour that
+  // previously made direct links work only after visiting history first.
+  const discovery = useCommitHistory(
+    pool,
+    poolState,
+    repoState?.headRef ?? poolState.defaultBranch ?? undefined,
+    500,
+    undefined,
+    commitId,
+  );
 
   // CI checks (ngit-ci kinds 9841/9842) for this commit — shown between the
   // commit header and the diff.
@@ -71,6 +90,7 @@ export default function RepoCommitPage() {
       <CommitDetailView
         commitId={commitId}
         pool={pool}
+        retryKey={discovery.commits.length}
         basePath={basePath}
         backTo={`${basePath}/commits`}
         headerExtra={
