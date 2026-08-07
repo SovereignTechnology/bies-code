@@ -18,6 +18,7 @@
 
 ### Changes
 
+- Improve issue search by ID.
 - Vendor NIP-82, published to Nostr by Fran (author of franzap) on April 11, 2026, document repository association and general-purpose release assets, and retain its established application ID tag for compatibility.
 - Bound release-history and asset-metadata discovery to 30 releases per application, progressively render release cards in batches of 20, and check exact release coordinates before publishing to prevent older versions from being replaced.
 

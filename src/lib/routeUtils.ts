@@ -191,7 +191,7 @@ export function decodeEventIdentifier(s: string): string | undefined {
 
 /**
  * Match an event ID against a raw hex prefix or a NIP-19 event identifier.
- * Hex prefixes require at least eight characters to avoid overly broad matches.
+ * Hex prefixes require at least three characters to avoid overly broad matches.
  */
 export function eventIdMatchesSearch(id: string, search: string): boolean {
   const query = search.trim().toLowerCase();
@@ -202,7 +202,7 @@ export function eventIdMatchesSearch(id: string, search: string): boolean {
   const decodedId = decodeEventIdentifier(identifier);
 
   if (decodedId) return id === decodedId;
-  return /^[0-9a-f]{8,64}$/.test(identifier) && id.startsWith(identifier);
+  return /^[0-9a-f]{3,64}$/.test(identifier) && id.startsWith(identifier);
 }
 
 /**
