@@ -27,6 +27,8 @@ import {
   type ResolvedPR,
   type PRRevision,
   type PRItemType,
+  compareNip01Chronologically,
+  isItemEventAuthorised,
 } from "@/lib/nip34";
 import { resolveAllChains } from "@/hooks/usePatchChain";
 import { Patch, isValidPatch } from "@/casts/Patch";
@@ -267,16 +269,16 @@ export function PRDetailModel(
               .filter(([t]) => t === "clone")
               .flatMap(([, ...urls]) => urls.filter(Boolean));
 
-            // Sort updates by created_at ascending
+            // Sort chronologically; the NIP-01 winner is the latest revision.
             const sortedUpdates = [...prUpdateEvents]
               .filter((ev) =>
-                isPubkeyAuthorised(
+                isItemEventAuthorised(
                   ev.pubkey,
                   rootEvent.pubkey,
                   effectiveMaintainers,
                 ),
               )
-              .sort((a, b) => a.created_at - b.created_at);
+              .sort(compareNip01Chronologically);
 
             revisions = sortedUpdates.map((ev, idx) => ({
               type: "pr-update" as const,
@@ -484,23 +486,6 @@ export function PRDetailModel(
       ),
     );
   };
-}
-
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
-
-/**
- * Returns true when a pubkey is authorised to write status, label, or
- * PR Update events for a given PR/patch.
- */
-function isPubkeyAuthorised(
-  pubkey: string,
-  itemPubkey: string,
-  maintainers: Set<string>,
-): boolean {
-  if (maintainers.size === 0) return true; // still loading
-  return pubkey === itemPubkey || maintainers.has(pubkey);
 }
 
 /** Extract clone URLs from a chain of patches. */

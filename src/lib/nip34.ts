@@ -1358,6 +1358,30 @@ export interface ResolvedPRLite {
   deletedEssentialEventIds: Set<string>;
 }
 
+/** Whether an event author may update state for a repository item. */
+export function isItemEventAuthorised(
+  pubkey: string,
+  itemPubkey: string,
+  maintainers: ReadonlySet<string>,
+): boolean {
+  // An empty set means repository resolution is still loading. Existing
+  // models keep events visible until the authoritative set arrives.
+  return (
+    maintainers.size === 0 || pubkey === itemPubkey || maintainers.has(pubkey)
+  );
+}
+
+/**
+ * Sort events from oldest to newest using NIP-01 replacement ordering.
+ * For equal timestamps the lower event ID wins, so it sorts last.
+ */
+export function compareNip01Chronologically(
+  a: Pick<NostrEvent, "created_at" | "id">,
+  b: Pick<NostrEvent, "created_at" | "id">,
+): number {
+  return a.created_at - b.created_at || b.id.localeCompare(a.id);
+}
+
 // ---------------------------------------------------------------------------
 // resolveItemEssentials — per-item resolution shared by detail model & list
 // ---------------------------------------------------------------------------

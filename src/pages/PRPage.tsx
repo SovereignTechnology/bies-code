@@ -98,6 +98,14 @@ import {
 import { eventIdToNevent } from "@/lib/routeUtils";
 import { nip19 } from "nostr-tools";
 import type { NostrEvent } from "nostr-tools";
+import { useInferredPRParents } from "@/hooks/useInferredPRParents";
+import { InferredPRStackMap } from "@/components/InferredPRParentLinks";
+import {
+  getInferredPRAmbiguousChildren,
+  getInferredPRChildren,
+  getInferredPRStackItems,
+  getInferredPRStackLayer,
+} from "@/lib/inferredPRParents";
 import {
   buildSyntheticCommit,
   buildSyntheticCommitFallback,
@@ -258,6 +266,18 @@ export default function PRPage() {
   const repoAllCoords = repo?.allCoordinates;
 
   const store = useEventStore();
+  const inferredParents = useInferredPRParents(repoAllCoords);
+  const inferredParent = prId ? inferredParents?.get(prId) : undefined;
+  const inferredStackItems =
+    prId && inferredParents
+      ? getInferredPRStackItems(inferredParents, prId)
+      : [];
+  const inferredAmbiguousChildren =
+    prId && inferredParents
+      ? getInferredPRAmbiguousChildren(inferredParents, prId)
+      : [];
+  const inferredBranchedChildren =
+    prId && inferredParents ? getInferredPRChildren(inferredParents, prId) : [];
 
   // ── Sub-patch redirect ────────────────────────────────────────────────────
   // When the URL points to a sub-patch (a kind:1617 that has an #e tag
@@ -1247,6 +1267,27 @@ export default function PRPage() {
           ) : null}
         </div>
       </div>
+
+      {pr &&
+        (inferredParent ||
+          inferredStackItems.length > 1 ||
+          inferredAmbiguousChildren.length > 0 ||
+          inferredBranchedChildren.length > 1) && (
+          <InferredPRStackMap
+            relation={inferredParent}
+            items={inferredStackItems}
+            currentRootId={pr.rootEvent.id}
+            ambiguousChildren={inferredAmbiguousChildren}
+            branchedChildren={inferredBranchedChildren}
+            repoPath={repoBasePath}
+            relayHints={repoRelayHints}
+            layer={
+              inferredParents
+                ? getInferredPRStackLayer(inferredParents, pr.rootEvent.id)
+                : undefined
+            }
+          />
+        )}
 
       {/* Content */}
       <div className="container max-w-screen-xl px-4 md:px-8 py-6">

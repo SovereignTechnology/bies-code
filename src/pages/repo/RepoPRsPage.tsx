@@ -22,7 +22,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Search, MessageCircle, Users, X, Zap } from "lucide-react";
+import { Search, MessageCircle, Users, X, Zap, GitBranch } from "lucide-react";
 import {
   hasAcceptedRepositoryReference,
   type IssueStatus,
@@ -37,6 +37,12 @@ import {
   RepoItemAttributionIndicator,
   RepoItemAttributionWarning,
 } from "@/components/RepoItemAttributionWarning";
+import { useInferredPRParents } from "@/hooks/useInferredPRParents";
+import type { InferredPRParentRelation } from "@/lib/inferredPRParents";
+import {
+  getInferredPRChildren,
+  getInferredPRStackLayer,
+} from "@/lib/inferredPRParents";
 
 const TYPE_OPTIONS: MultiSelectOption[] = [
   { value: "pr", label: "Pull Requests" },
@@ -49,6 +55,7 @@ export default function RepoPRsPage() {
   const { pubkey, repoId, resolved, prs, basePath } = useRepoContext();
   const repo = resolved?.repo;
   const repoOwnerProfile = useProfile(pubkey);
+  const inferredParents = useInferredPRParents(repo?.allCoordinates);
 
   // Filters — all multi-select; status defaults to open+draft
   const [statusFilter, setStatusFilter] = useState<IssueStatus[]>(
@@ -310,6 +317,17 @@ export default function RepoPRsPage() {
                 repoPath={basePath}
                 repoRelays={repo?.relays ?? []}
                 repo={repo}
+                inferredParent={inferredParents?.get(pr.id)}
+                stackLayer={
+                  inferredParents
+                    ? getInferredPRStackLayer(inferredParents, pr.id)
+                    : undefined
+                }
+                hasStackBranches={
+                  (inferredParents
+                    ? getInferredPRChildren(inferredParents, pr.id).length
+                    : 0) > 1
+                }
               />
             ))}
           </ul>
@@ -335,6 +353,17 @@ export default function RepoPRsPage() {
                   repoPath={basePath}
                   repoRelays={repo.relays}
                   repo={repo}
+                  inferredParent={inferredParents?.get(pr.id)}
+                  stackLayer={
+                    inferredParents
+                      ? getInferredPRStackLayer(inferredParents, pr.id)
+                      : undefined
+                  }
+                  hasStackBranches={
+                    (inferredParents
+                      ? getInferredPRChildren(inferredParents, pr.id).length
+                      : 0) > 1
+                  }
                 />
               ))}
             </ul>
@@ -359,11 +388,17 @@ function PRRow({
   repoPath,
   repoRelays,
   repo,
+  inferredParent,
+  stackLayer,
+  hasStackBranches,
 }: {
   pr: ResolvedPRLite;
   repoPath: string;
   repoRelays: string[];
   repo: ResolvedRepo | undefined;
+  inferredParent: InferredPRParentRelation | undefined;
+  stackLayer: { position: number; size: number } | undefined;
+  hasStackBranches: boolean;
 }) {
   const lastActive = formatDistanceToNow(new Date(pr.lastActivityAt * 1000), {
     addSuffix: true,
@@ -403,6 +438,31 @@ function PRRow({
                 className="inline-flex shrink-0"
               >
                 <CIStatusIcon status={ci.status} className="h-3.5 w-3.5" />
+              </span>
+            )}
+            {(stackLayer ||
+              hasStackBranches ||
+              inferredParent?.status === "ambiguous") && (
+              <span
+                title={
+                  inferredParent?.status === "ambiguous"
+                    ? "Inferred stack parent is ambiguous"
+                    : hasStackBranches
+                      ? "Inferred stack branches"
+                      : stackLayer
+                        ? `Inferred stack: layer ${stackLayer.position} of ${stackLayer.size}`
+                        : "Inferred stack"
+                }
+                className="inline-flex shrink-0 items-center gap-1 text-[10px] text-muted-foreground"
+              >
+                <GitBranch className="h-3 w-3" />
+                {inferredParent?.status === "ambiguous"
+                  ? "Stack?"
+                  : hasStackBranches
+                    ? "Stack"
+                    : stackLayer
+                      ? `${stackLayer.position}/${stackLayer.size}`
+                      : "Stack"}
               </span>
             )}
             {pr.labels.map((label) => (

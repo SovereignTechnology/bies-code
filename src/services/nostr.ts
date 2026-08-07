@@ -21,8 +21,16 @@ import {
   firstValueFrom,
   of,
   timer,
+  EMPTY,
 } from "rxjs";
-import { filter, map, take, timeout } from "rxjs/operators";
+import {
+  catchError,
+  filter,
+  map,
+  switchMap,
+  take,
+  timeout,
+} from "rxjs/operators";
 import { MailboxesModel } from "applesauce-core/models";
 import { cacheRequest, saveEvents } from "./cache";
 import { nip05IdbCache, loadAllNip05FromIdb } from "./nip05IdbCache";
@@ -53,6 +61,10 @@ import { resilientSubscription } from "@/lib/resilientSubscription";
 import { outboxStore, type RelayGroupResolver } from "./outbox";
 import { normalizeUrl } from "@/lib/url";
 import { relayGroupUrls$ } from "@/models/RepositoryRelayGroup";
+import {
+  buildStackCandidateFilter,
+  getEffectivePRMergeBases,
+} from "@/lib/inferredPRParents";
 
 /**
  * Global EventStore instance for all Nostr events.
@@ -1093,11 +1105,51 @@ export function nip34RepoLoader(
       .pipe(onlyEvents(), mapEventsToStore(eventStore))
       .subscribe();
 
+    // Discover inferred stack parents in one repository-scoped #c query.
+    // Historical PR updates loaded by the list loaders participate too.
+    const stackCandidateSub = eventStore
+      .timeline([{ kinds: [1618, 1619], "#a": coords } as Filter])
+      .pipe(
+        map((events) => {
+          const repositoryEvents = events as NostrEvent[];
+          return [
+            ...new Set(
+              getEffectivePRMergeBases(
+                repositoryEvents.filter((event) => event.kind === 1618),
+                repositoryEvents.filter((event) => event.kind === 1619),
+                coords,
+              ).values(),
+            ),
+          ].sort();
+        }),
+        distinctUntilChanged(
+          (a, b) =>
+            a.length === b.length &&
+            a.every((value, index) => b[index] === value),
+        ),
+        switchMap((mergeBases) => {
+          const candidateFilter = buildStackCandidateFilter(coords, mergeBases);
+          if (!candidateFilter) return EMPTY;
+          return resilientSubscription(
+            pool,
+            relayGroupUrls$(relayGroup),
+            [candidateFilter],
+            { reconnect: true, gapFill: true, settle: false },
+          ).pipe(
+            onlyEvents(),
+            mapEventsToStore(eventStore),
+            catchError(() => EMPTY),
+          );
+        }),
+      )
+      .subscribe();
+
     return () => {
       relaySub.unsubscribe();
       softwareApplicationSub.unsubscribe();
       itemSub.unsubscribe();
       repoMetaSub.unsubscribe();
+      stackCandidateSub.unsubscribe();
       inboxSubs.unsubscribe();
     };
   });

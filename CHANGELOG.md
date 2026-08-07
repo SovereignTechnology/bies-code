@@ -10,6 +10,7 @@
 
 ### Features
 
+- Show inferred pull request stacks from repository-local Git topology, including historical updates, linked stack navigation, and clear ambiguity handling.
 - Add a GitHub-style repository compare page with progressive commit-graph loading and batched file-diff retrieval between branches, tags, or commit IDs.
 - Group notifications by user with expandable activity, bulk read/archive actions for each actor, and a dedicated unread inbox filter.
 - Add NIP-82 repository releases with guided version, channel, platform, format, compatibility, and provenance metadata, plus immediate cancellable Blossom uploads.
