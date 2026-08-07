@@ -2065,70 +2065,35 @@ export class GitGraspPool {
     signal: AbortSignal,
     fallbackUrls?: string[],
   ): Promise<Commit | null> {
+    if (!/^[0-9a-f]{40}$/i.test(commitHash)) {
+      throw new Error(
+        `Invalid commit ID "${commitHash}": expected a 40-character hexadecimal SHA-1`,
+      );
+    }
+
     const cached = this.cache.peekCommit(commitHash);
     if (cached) return cached;
 
     const idbCached = await this.cache.getCommit(commitHash);
     if (idbCached) return idbCached;
 
-    const fetchCommit = () =>
-      this.withFallback(
-        signal,
-        async (url) => {
-          const start = Date.now();
-          const result = await this.http.fetchSingleCommit(
-            url,
-            commitHash,
-            signal,
-          );
-          if (result) {
-            const tracker = this.urlManager.get(url);
-            tracker?.recordOperationSuccess(Date.now() - start);
-          }
-          return result;
-        },
-        fallbackUrls,
-      );
-
-    const racedDiscovery = this.fetching;
-    const result = await fetchCommit();
-    if (result || signal.aborted || !racedDiscovery) return result;
-
-    // A cold lookup can share the pool's in-flight info/refs request. If that
-    // discovery is superseded when signed state or more clone URLs arrive, its
-    // abort makes the lookup appear to be a missing object. Retry once after
-    // the replacement discovery settles, against the complete ordered URL set.
-    await this.waitForFetchToSettle(signal);
-    if (signal.aborted) return null;
-
-    const warmed = this.cache.peekCommit(commitHash);
-    if (warmed) return warmed;
-    return fetchCommit();
-  }
-
-  private waitForFetchToSettle(signal: AbortSignal): Promise<void> {
-    if (!this.fetching || signal.aborted) return Promise.resolve();
-
-    return new Promise((resolve) => {
-      let settled = false;
-      const subscription = new Subscription();
-
-      const finish = () => {
-        if (settled) return;
-        settled = true;
-        signal.removeEventListener("abort", finish);
-        subscription.unsubscribe();
-        resolve();
-      };
-
-      signal.addEventListener("abort", finish, { once: true });
-      subscription.add(
-        this.observable.subscribe(() => {
-          if (!this.fetching) finish();
-        }),
-      );
-      if (settled) subscription.unsubscribe();
-    });
+    return this.withFallback(
+      signal,
+      async (url) => {
+        const start = Date.now();
+        const result = await this.http.fetchSingleCommit(
+          url,
+          commitHash,
+          signal,
+        );
+        if (result) {
+          const tracker = this.urlManager.get(url);
+          tracker?.recordOperationSuccess(Date.now() - start);
+        }
+        return result;
+      },
+      fallbackUrls,
+    );
   }
 
   /**
