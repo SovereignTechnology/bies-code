@@ -77,8 +77,6 @@ export interface CommitDetailViewProps {
    * When set, a "Resolve" button is shown to users in this set.
    */
   authorizedPubkeys?: Set<string>;
-  /** Changes when an external history walk may have warmed the commit cache. */
-  retryKey?: string | number;
 }
 
 // ---------------------------------------------------------------------------
@@ -99,7 +97,6 @@ export function CommitDetailView({
   repoCoords,
   relayHint,
   authorizedPubkeys,
-  retryKey,
 }: CommitDetailViewProps) {
   const [commit, setCommit] = useState<Commit | null>(null);
   const [loading, setLoading] = useState(true);
@@ -131,7 +128,7 @@ export function CommitDetailView({
 
     return () => abort.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pool, commitId, fallbackUrls?.join(","), retryKey]);
+  }, [pool, commitId, fallbackUrls?.join(",")]);
 
   return (
     <div className="space-y-4">
