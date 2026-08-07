@@ -15,6 +15,7 @@ import React, {
   useEffect,
   useCallback,
   useContext,
+  useMemo,
 } from "react";
 import { Link2, Check } from "lucide-react";
 import { cn, markdownUrlTransform } from "@/lib/utils";
@@ -739,6 +740,8 @@ function buildComponents(
 // Public component
 // ---------------------------------------------------------------------------
 
+const EMPTY_CLONE_URLS: string[] = [];
+
 export interface MarkdownContentProps {
   content: string;
   className?: string;
@@ -769,12 +772,18 @@ export interface MarkdownContentProps {
 function MarkdownContent({
   content,
   className,
-  cloneUrls = [],
+  cloneUrls = EMPTY_CLONE_URLS,
   commitHash = null,
   filePath = "",
   allowHtml = false,
 }: MarkdownContentProps) {
-  const components = buildComponents(cloneUrls, commitHash, filePath);
+  // react-markdown treats renderer functions as component types. Rebuilding
+  // this map on every render remounts embedded previews, briefly resetting
+  // loaded avatars to their fallback while Radix reloads the image.
+  const components = useMemo(
+    () => buildComponents(cloneUrls, commitHash, filePath),
+    [cloneUrls, commitHash, filePath],
+  );
   const rehypePlugins = allowHtml ? rehypePluginsWithHtml : rehypePluginsBase;
 
   // After the markdown renders, scroll to the heading referenced by the URL
