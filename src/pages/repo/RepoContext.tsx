@@ -52,6 +52,10 @@ export interface RepoContextValue {
   commitId?: string;
   /** The ref segment from a /commits/:ref URL (branch, tag, or commit hash). */
   commitsRef?: string;
+  /** Base ref from a /compare/:base...:head URL. */
+  compareBaseRef?: string;
+  /** Head ref from a /compare/:base...:head URL. */
+  compareHeadRef?: string;
   /**
    * Set when viewing a commit detail scoped to a PR
    * (route: prs/<prId>/commit/<commitId>).

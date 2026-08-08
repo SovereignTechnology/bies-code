@@ -11,6 +11,7 @@ import RepoCommitsPage from "./RepoCommitsPage";
 import RepoCommitPage from "./RepoCommitPage";
 import RepoBranchesPage from "./RepoBranchesPage";
 import RepoTagsPage from "./RepoTagsPage";
+import RepoComparePage from "./RepoComparePage";
 import RepoActionsPage from "./RepoActionsPage";
 import RepoReleasesPage from "./RepoReleasesPage";
 import IssuePage from "@/pages/IssuePage";
@@ -144,7 +145,6 @@ export default function RepoLayout() {
         repoId={parsed.repoId}
         relayHints={parsed.relayHints}
         location={location}
-        splat={splat ?? ""}
       />
     );
   }
@@ -156,7 +156,6 @@ export default function RepoLayout() {
       repoId={parsed.repoId}
       relayHints={parsed.relayHints}
       location={location}
-      splat={splat ?? ""}
     />
   );
 }
@@ -170,13 +169,11 @@ function RepoLayoutNip05({
   repoId,
   relayHints,
   location,
-  splat,
 }: {
   nip05: string;
   repoId: string;
   relayHints: string[];
   location: ReturnType<typeof useLocation>;
-  splat: string;
 }) {
   const identity = useDnsIdentity(nip05);
 
@@ -199,7 +196,6 @@ function RepoLayoutNip05({
       nip05Relays={identity.relays}
       relayHints={relayHints}
       location={location}
-      splat={splat}
       nip05={nip05}
     />
   );
@@ -215,7 +211,6 @@ function RepoLayoutResolved({
   nip05Relays,
   relayHints,
   location,
-  splat,
   nip05,
 }: {
   pubkey: string;
@@ -224,7 +219,6 @@ function RepoLayoutResolved({
   nip05Relays?: string[];
   relayHints: string[];
   location: ReturnType<typeof useLocation>;
-  splat: string;
   nip05?: string;
 }) {
   const { resolved, repoSearch } = useResolvedRepository(
@@ -235,10 +229,9 @@ function RepoLayoutResolved({
   );
   const repo = resolved?.repo;
 
-  // Build an encoded base path for intra-repository links. `splat` is decoded
-  // by React Router, including `%2F` inside a repository identifier; using it
-  // directly would turn an identifier such as `lightningdevkit/rust-lightning`
-  // into multiple path segments when linking to `/prs`, `/issues`, etc.
+  // Build an encoded base path for intra-repository links. Route wildcard
+  // values are decoded by React Router, including `%2F` inside a repository
+  // identifier, so always rebuild links from the resolved route values.
   const basePath = useMemo(() => {
     return repoToPath(pubkey, repoId, relayHints, nip05);
   }, [pubkey, repoId, relayHints, nip05]);
@@ -369,9 +362,30 @@ function RepoLayoutResolved({
       : false;
   const showReleases = hasReleases || isReleasesTab || canOpenSettings;
 
-  const repoPageSuffix = location.pathname.startsWith(basePath)
-    ? location.pathname.slice(basePath.length)
-    : "";
+  const repoPageSuffix = useMemo(() => {
+    if (location.pathname.startsWith(basePath)) {
+      return location.pathname.slice(basePath.length);
+    }
+
+    // Incoming raw-hex and legacy identity routes may not equal the canonical
+    // npub/NIP-05 basePath. Locate the repo segment from the parsed relay shape
+    // without searching decoded repo IDs for reserved sub-page words.
+    const rawSegments = location.pathname.slice(1).split("/").filter(Boolean);
+    let repoSegmentIndex = relayHints.length > 0 ? 2 : 1;
+    if (relayHints.length > 0) {
+      let relaySegment = rawSegments[1] ?? "";
+      try {
+        relaySegment = decodeURIComponent(relaySegment);
+      } catch {
+        // Keep the raw segment when it is not valid percent-encoding.
+      }
+      if (relaySegment === "ws:" || relaySegment === "wss:") {
+        repoSegmentIndex = 3;
+      }
+    }
+    const suffix = rawSegments.slice(repoSegmentIndex + 1).join("/");
+    return suffix ? `/${suffix}` : "";
+  }, [basePath, location.pathname, relayHints.length]);
 
   const isCodeTab =
     location.pathname.startsWith(`${basePath}/tree`) ||
@@ -382,7 +396,7 @@ function RepoLayoutResolved({
   const isActionsTab = location.pathname.startsWith(`${basePath}/actions`);
   const isAboutTab = location.pathname.startsWith(`${basePath}/about`);
   const isSettingsTab = location.pathname.startsWith(`${basePath}/settings`);
-  // Determine which sub-page to render from the splat segments.
+  // Determine which sub-page to render from the repository suffix.
   const {
     subPage,
     issueId,
@@ -390,6 +404,8 @@ function RepoLayoutResolved({
     treeRefAndPath,
     commitId,
     commitsRef,
+    compareBaseRef,
+    compareHeadRef,
     prCommitId,
     releaseId,
     releaseView,
@@ -405,6 +421,7 @@ function RepoLayoutResolved({
       | "commit"
       | "branches"
       | "tags"
+      | "compare"
       | "actions"
       | "releases"
       | "about"
@@ -416,23 +433,50 @@ function RepoLayoutResolved({
     treeRefAndPath?: string;
     commitId?: string;
     commitsRef?: string;
+    compareBaseRef?: string;
+    compareHeadRef?: string;
     prCommitId?: string;
     releaseId?: string;
     releaseView?: "releases" | "applications";
   } => {
-    const segments = splat.split("/").filter(Boolean);
+    const segments = repoPageSuffix
+      .split("/")
+      .filter(Boolean)
+      .map((segment) => {
+        try {
+          return decodeURIComponent(segment);
+        } catch {
+          return segment;
+        }
+      });
 
-    // Find the index of the first known sub-path keyword
-    const treeIdx = segments.indexOf("tree");
-    if (treeIdx !== -1) {
+    // Only the first segment after the resolved repository path selects a
+    // sub-page. Reserved words inside refs and file paths are ordinary data.
+    if (segments[0] === "compare") {
+      const comparison = segments.slice(1).join("/");
+      const delimiter = comparison.indexOf("...");
+      if (delimiter === -1) {
+        return {
+          subPage: "compare",
+          compareBaseRef: comparison || undefined,
+        };
+      }
+      return {
+        subPage: "compare",
+        compareBaseRef: comparison.slice(0, delimiter) || undefined,
+        compareHeadRef: comparison.slice(delimiter + 3) || undefined,
+      };
+    }
+
+    if (segments[0] === "tree") {
       // Pass everything after "tree" as a single string; useGitExplorer will
       // resolve the ref via longest-prefix matching against known git refs.
-      const refAndPath = segments.slice(treeIdx + 1).join("/");
+      const refAndPath = segments.slice(1).join("/");
       return { subPage: "code", treeRefAndPath: refAndPath || undefined };
     }
 
-    const prsIdx = segments.indexOf("prs");
-    if (prsIdx !== -1) {
+    if (segments[0] === "prs") {
+      const prsIdx = 0;
       if (segments.length > prsIdx + 1) {
         const rawSegment = segments[prsIdx + 1];
         // Accept both raw hex IDs (legacy) and nevent1/note1 identifiers
@@ -469,36 +513,31 @@ function RepoLayoutResolved({
       return { subPage: "prs" };
     }
 
-    const commitIdx = segments.indexOf("commit");
-    if (commitIdx !== -1) {
-      return { subPage: "commit", commitId: segments[commitIdx + 1] };
+    if (segments[0] === "commit") {
+      return { subPage: "commit", commitId: segments[1] };
     }
 
-    const commitsIdx = segments.indexOf("commits");
-    if (commitsIdx !== -1) {
+    if (segments[0] === "commits") {
       return {
         subPage: "commits",
-        commitsRef: segments.slice(commitsIdx + 1).join("/") || undefined,
+        commitsRef: segments.slice(1).join("/") || undefined,
       };
     }
 
-    const branchesIdx = segments.indexOf("branches");
-    if (branchesIdx !== -1) {
+    if (segments[0] === "branches") {
       return { subPage: "branches" };
     }
 
-    const tagsIdx = segments.indexOf("tags");
-    if (tagsIdx !== -1) {
+    if (segments[0] === "tags") {
       return { subPage: "tags" };
     }
 
-    const actionsIdx = segments.indexOf("actions");
-    if (actionsIdx !== -1) {
+    if (segments[0] === "actions") {
       return { subPage: "actions" };
     }
 
-    const releasesIdx = segments.indexOf("releases");
-    if (releasesIdx !== -1) {
+    if (segments[0] === "releases") {
+      const releasesIdx = 0;
       const applicationsRoute = segments[releasesIdx + 1] === "apps";
       const rawSegment = segments[releasesIdx + (applicationsRoute ? 2 : 1)];
       if (rawSegment) {
@@ -516,8 +555,8 @@ function RepoLayoutResolved({
       };
     }
 
-    const issuesIdx = segments.indexOf("issues");
-    if (issuesIdx !== -1) {
+    if (segments[0] === "issues") {
+      const issuesIdx = 0;
       if (segments.length > issuesIdx + 1) {
         const rawSegment = segments[issuesIdx + 1];
         // Accept both raw hex IDs (legacy) and nevent1/note1 identifiers
@@ -529,36 +568,32 @@ function RepoLayoutResolved({
       return { subPage: "issues" };
     }
 
-    const editIdx = segments.indexOf("edit");
-    if (editIdx !== -1) {
+    if (segments[0] === "edit") {
       return { subPage: "edit" };
     }
 
-    const aboutIdx = segments.indexOf("about");
-    if (aboutIdx !== -1) {
+    if (segments[0] === "about") {
       return { subPage: "about" };
     }
 
-    const settingsIdx = segments.indexOf("settings");
-    if (settingsIdx !== -1) {
+    if (segments[0] === "settings") {
       return { subPage: "settings" };
     }
 
     return { subPage: "code" };
-  }, [splat]);
+  }, [repoPageSuffix]);
 
   const cloneUrls = repo?.cloneUrls ?? [];
 
   // The PR base path: basePath + /prs/<prId> — used for PR sub-route links.
   const prBasePath = useMemo(() => {
     if (!prId) return undefined;
-    const segments = splat.split("/").filter(Boolean);
-    const prsIdx = segments.indexOf("prs");
-    const prIdSegment = segments[prsIdx + 1];
-    return prsIdx === -1 || !prIdSegment
+    const segments = repoPageSuffix.split("/").filter(Boolean);
+    const prIdSegment = segments[1];
+    return segments[0] !== "prs" || !prIdSegment
       ? undefined
       : `${basePath}/prs/${prIdSegment}`;
-  }, [basePath, splat, prId]);
+  }, [basePath, repoPageSuffix, prId]);
 
   const ctxValue: RepoContextValue | null =
     pubkey && repoId && resolved
@@ -580,6 +615,8 @@ function RepoLayoutResolved({
           treeRefAndPath,
           commitId,
           commitsRef,
+          compareBaseRef,
+          compareHeadRef,
           prCommitId,
           prBasePath,
           basePath,
@@ -805,6 +842,8 @@ function RepoLayoutResolved({
                 <RepoBranchesPage />
               ) : subPage === "tags" ? (
                 <RepoTagsPage />
+              ) : subPage === "compare" ? (
+                <RepoComparePage />
               ) : subPage === "actions" ? (
                 <RepoActionsPage />
               ) : subPage === "releases" ? (

@@ -244,6 +244,7 @@ const REPO_SUB_PATHS = [
   "tree",
   "branches",
   "tags",
+  "compare",
   "actions",
   "releases",
 ];

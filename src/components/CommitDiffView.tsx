@@ -51,6 +51,8 @@ export interface CommitDiffViewProps {
   pool: GitGraspPool;
   /** Called whenever the number of changed files becomes known. */
   onFileCountChange?: (count: number) => void;
+  /** Called when tree/blob loading and browser-side diff generation starts or finishes. */
+  onLoadingChange?: (loading: boolean) => void;
   /**
    * Extra URLs to try after the pool's own URLs if commit/blob data is not
    * found there. Not tracked by the pool. Used to pass PR/PR-Update clone
@@ -302,6 +304,7 @@ export function CommitDiffView({
   baseCommitId,
   pool,
   onFileCountChange,
+  onLoadingChange,
   fallbackUrls,
   rootEvent,
   parentEvent,
@@ -314,6 +317,8 @@ export function CommitDiffView({
   const [phase, setPhase] = useState<Phase>({ kind: "loading-trees" });
   const [activeFile, setActiveFile] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const loading =
+    phase.kind === "loading-trees" || phase.kind === "loading-diff";
 
   const handleFileSelect = (path: string) => {
     setActiveFile(path);
@@ -330,6 +335,10 @@ export function CommitDiffView({
       onFileCountChange(phase.changes.length);
     }
   }, [phase, onFileCountChange]);
+
+  useEffect(() => {
+    onLoadingChange?.(loading);
+  }, [loading, onLoadingChange]);
 
   useEffect(() => {
     abortRef.current?.abort();

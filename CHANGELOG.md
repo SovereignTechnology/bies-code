@@ -10,6 +10,7 @@
 
 ### Features
 
+- Add a GitHub-style repository compare page for inspecting commits and file changes between branches, tags, or commit IDs.
 - Group notifications by user with expandable activity, bulk read/archive actions for each actor, and a dedicated unread inbox filter.
 - Add NIP-82 repository releases with guided version, channel, platform, format, compatibility, and provenance metadata, plus immediate cancellable Blossom uploads.
 - Add repository software application pages and management, including creation, editing, filtering, linking existing Zapstore applications, explicit source migration, and publisher ownership enforcement.
