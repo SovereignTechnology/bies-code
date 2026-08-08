@@ -108,7 +108,7 @@ export default function RepoTagsPage() {
   useSeoMeta({
     title: repo ? `Tags - ${repo.name} - ngit` : "Tags - ngit",
     description: repo?.description ?? "Browse repository tags",
-    ogImage: repoOwnerProfile?.picture ?? "/og-image.svg",
+    ogImage: repoOwnerProfile?.picture ?? "/og-image.png",
     ogImageAlt: repo?.name,
     twitterCard: repoOwnerProfile?.picture ? "summary" : "summary_large_image",
   });

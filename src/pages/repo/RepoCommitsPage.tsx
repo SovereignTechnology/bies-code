@@ -105,7 +105,7 @@ export default function RepoCommitsPage() {
         : `Commits - ${repo.name} - ngit`
       : "Commits - ngit",
     description: repo?.description ?? "Browse commit history",
-    ogImage: repoOwnerProfile?.picture ?? "/og-image.svg",
+    ogImage: repoOwnerProfile?.picture ?? "/og-image.png",
     ogImageAlt: repo?.name,
     twitterCard: repoOwnerProfile?.picture ? "summary" : "summary_large_image",
   });

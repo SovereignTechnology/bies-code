@@ -853,7 +853,7 @@ export default function PRPage() {
       ? `${pr.currentSubject || pr.originalSubject} - ngit`
       : "PR - ngit",
     description: pr?.body.slice(0, 160) || "Loading PR...",
-    ogImage: repoOwnerProfile?.picture ?? "/og-image.svg",
+    ogImage: repoOwnerProfile?.picture ?? "/og-image.png",
     ogImageAlt: repo?.name ?? repoId,
     twitterCard: repoOwnerProfile?.picture ? "summary" : "summary_large_image",
   });

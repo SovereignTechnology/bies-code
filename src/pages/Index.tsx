@@ -10,7 +10,7 @@ const Index = () => {
     title: "ngit — Decentralized Git over Nostr",
     description:
       "Distributed code collaboration with Nostr. Browse repositories, track issues, and contribute — without a central server.",
-    ogImage: "/og-image.svg",
+    ogImage: "/og-image.png",
     ogImageWidth: 1200,
     ogImageHeight: 630,
     ogImageAlt: "ngit — Decentralized Git over Nostr",

@@ -162,7 +162,7 @@ export default function IssuePage() {
       ? `${issue.currentSubject || issue.originalSubject} - ngit`
       : "Issue - ngit",
     description: issue?.body.slice(0, 160) ?? "Loading issue...",
-    ogImage: repoOwnerProfile?.picture ?? "/og-image.svg",
+    ogImage: repoOwnerProfile?.picture ?? "/og-image.png",
     ogImageAlt: repo?.name ?? repoId,
     twitterCard: repoOwnerProfile?.picture ? "summary" : "summary_large_image",
   });

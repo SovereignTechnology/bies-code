@@ -386,7 +386,7 @@ export default function NgitPage() {
     title: "Install ngit — Decentralized Git CLI",
     description:
       "Install the ngit CLI to collaborate on git repositories over Nostr. Works with any Nostr-compatible relay.",
-    ogImage: "/og-image.svg",
+    ogImage: "/og-image.png",
     ogImageWidth: 1200,
     ogImageHeight: 630,
     twitterCard: "summary_large_image",

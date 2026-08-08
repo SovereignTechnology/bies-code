@@ -12,7 +12,7 @@ export default function RepoAboutPage() {
   useSeoMeta({
     title: repo ? `${repo.name} - about - ngit` : "About - ngit",
     description: repo?.description ?? "Repository details",
-    ogImage: repoOwnerProfile?.picture ?? "/og-image.svg",
+    ogImage: repoOwnerProfile?.picture ?? "/og-image.png",
     ogImageAlt: repo?.name,
     twitterCard: repoOwnerProfile?.picture ? "summary" : "summary_large_image",
   });

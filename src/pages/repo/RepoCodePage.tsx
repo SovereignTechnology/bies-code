@@ -180,7 +180,7 @@ export default function RepoCodePage() {
     title: seoTitle,
     description:
       repo?.description ?? `Browse the source code of ${repo?.name ?? repoId}`,
-    ogImage: repoOwnerProfile?.picture ?? "/og-image.svg",
+    ogImage: repoOwnerProfile?.picture ?? "/og-image.png",
     ogImageAlt: repo?.name ?? repoId,
     twitterCard: repoOwnerProfile?.picture ? "summary" : "summary_large_image",
   });

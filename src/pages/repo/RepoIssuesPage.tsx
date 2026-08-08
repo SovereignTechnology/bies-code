@@ -197,7 +197,7 @@ export default function RepoIssuesPage() {
   useSeoMeta({
     title: repo ? `Issues - ${repo.name} - ngit` : "Repository Issues - ngit",
     description: repo?.description ?? "Browse issues for this repository",
-    ogImage: repoOwnerProfile?.picture ?? "/og-image.svg",
+    ogImage: repoOwnerProfile?.picture ?? "/og-image.png",
     ogImageAlt: repo?.name ?? repoId,
     twitterCard: repoOwnerProfile?.picture ? "summary" : "summary_large_image",
   });

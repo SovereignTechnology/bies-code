@@ -187,7 +187,7 @@ export default function RepoPRsPage() {
     title: repo ? `PRs - ${repo.name} - ngit` : "Pull Requests - ngit",
     description:
       repo?.description ?? "Browse pull requests for this repository",
-    ogImage: repoOwnerProfile?.picture ?? "/og-image.svg",
+    ogImage: repoOwnerProfile?.picture ?? "/og-image.png",
     ogImageAlt: repo?.name ?? repoId,
     twitterCard: repoOwnerProfile?.picture ? "summary" : "summary_large_image",
   });

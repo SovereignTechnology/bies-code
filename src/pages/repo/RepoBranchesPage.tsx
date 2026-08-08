@@ -176,7 +176,7 @@ export default function RepoBranchesPage() {
   useSeoMeta({
     title: repo ? `Branches - ${repo.name} - ngit` : "Branches - ngit",
     description: repo?.description ?? "Browse repository branches",
-    ogImage: repoOwnerProfile?.picture ?? "/og-image.svg",
+    ogImage: repoOwnerProfile?.picture ?? "/og-image.png",
     ogImageAlt: repo?.name,
     twitterCard: repoOwnerProfile?.picture ? "summary" : "summary_large_image",
   });

@@ -78,7 +78,7 @@ export default function NotificationsPage() {
         ? `(${unreadCount}) Notifications - ngit`
         : "Notifications - ngit",
     description: "Your notification inbox",
-    ogImage: "/og-image.svg",
+    ogImage: "/og-image.png",
     ogImageWidth: 1200,
     ogImageHeight: 630,
     twitterCard: "summary_large_image",
