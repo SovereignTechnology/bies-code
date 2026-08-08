@@ -82,6 +82,7 @@ export function CommitLink({ hash }: CommitLinkProps) {
     );
   }
 
-  // Not yet verified or outside a repo page — plain monospace text.
-  return <code className="font-mono text-[0.875em]">{shortHash}</code>;
+  // Not yet verified or outside a repo page — preserve the original text.
+  // Abbreviating an unverified candidate can corrupt unrelated identifiers.
+  return <code className="font-mono text-[0.875em]">{hash}</code>;
 }
