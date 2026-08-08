@@ -11,7 +11,7 @@
  * Everything under this module is intentionally kept behind a dynamic
  * `import()` boundary at the call sites (see
  * `src/lib/namecoin/lazy.ts`). No code outside the two thin integration
- * points in `useNamecoinSearchRedirect` and `useNamecoinNip05Identity`
+ * points in `useNamecoinSearchResolution` and `useDnsIdentity`
  * should statically import this file, so the whole feature stays out
  * of the main app bundle and startup path.
  */

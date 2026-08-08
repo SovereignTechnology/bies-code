@@ -715,6 +715,27 @@ export function useRepositorySearch(
       integrateProfileCandidates();
     };
 
+    const startResolvedAuthorSearch = (pubkey: string) => {
+      dispatchedAuthors.add(pubkey);
+      profileStatusTrackingFinished = true;
+      setMatchedUserPubkeys(new Set([pubkey]));
+
+      const profileRelays = Array.from(
+        new Set([...PROFILE_SEARCH_RELAYS, ...relays]),
+      );
+      userSub = resilientRequest(pool, profileRelays, [
+        { kinds: [0], authors: [pubkey] } as Filter,
+      ])
+        .pipe(takeUntil(timer(PROFILE_SEARCH_TIMEOUT_MS)))
+        .subscribe({
+          next: (msg) => {
+            if (msg === "EOSE") return;
+            eventStore.add(msg as NostrEvent);
+          },
+        });
+      startUserRepoFetch([pubkey]);
+    };
+
     if (pubkeyHexFromQuery) {
       // Pubkey-query short-circuit. NIP-50 `search:` indexes the kind:0
       // content blob, which does not contain the author's pubkey. Searching
@@ -726,26 +747,7 @@ export function useRepositorySearch(
       // `authors:` filter so the UserLink badge can render the name/avatar.
       // The metadata fetch is fire-and-forget. Initial loading still waits for
       // both the direct repository search and the author-scoped request below.
-      dispatchedAuthors.add(pubkeyHexFromQuery);
-      profileStatusTrackingFinished = true;
-      const pubkeySet = new Set([pubkeyHexFromQuery]);
-      setMatchedUserPubkeys(pubkeySet);
-      // Fetch profile metadata from the user-search relay AND the gitIndex
-      // relays — profile events are commonly carried by both.
-      const profileRelays = Array.from(
-        new Set([...PROFILE_SEARCH_RELAYS, ...relays]),
-      );
-      userSub = resilientRequest(pool, profileRelays, [
-        { kinds: [0], authors: [pubkeyHexFromQuery] } as Filter,
-      ])
-        .pipe(takeUntil(timer(PROFILE_SEARCH_TIMEOUT_MS)))
-        .subscribe({
-          next: (msg) => {
-            if (msg === "EOSE") return;
-            eventStore.add(msg as NostrEvent);
-          },
-        });
-      startUserRepoFetch([pubkeyHexFromQuery]);
+      startResolvedAuthorSearch(pubkeyHexFromQuery);
     } else if (namecoin.isNamecoinQuery) {
       // Namecoin `.bit` / `d/` / `id/` short-circuit.
       //
@@ -761,22 +763,7 @@ export function useRepositorySearch(
       // `.bit` string sitting in a repo's content can still surface.
       profileStatusTrackingFinished = true;
       if (namecoinResolvedPubkey) {
-        dispatchedAuthors.add(namecoinResolvedPubkey);
-        setMatchedUserPubkeys(new Set([namecoinResolvedPubkey]));
-        const profileRelays = Array.from(
-          new Set([...PROFILE_SEARCH_RELAYS, ...relays]),
-        );
-        userSub = resilientRequest(pool, profileRelays, [
-          { kinds: [0], authors: [namecoinResolvedPubkey] } as Filter,
-        ])
-          .pipe(takeUntil(timer(PROFILE_SEARCH_TIMEOUT_MS)))
-          .subscribe({
-            next: (msg) => {
-              if (msg === "EOSE") return;
-              eventStore.add(msg as NostrEvent);
-            },
-          });
-        startUserRepoFetch([namecoinResolvedPubkey]);
+        startResolvedAuthorSearch(namecoinResolvedPubkey);
       } else if (
         namecoin.status === "not-found" ||
         namecoin.status === "unavailable"

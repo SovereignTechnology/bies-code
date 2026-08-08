@@ -20,8 +20,8 @@ application:
    `dist/index-*.js` bundle contains none of them; a dedicated chunk is
    fetched on first use.
 4. **Concentrated in its own module.** The Namecoin implementation lives
-   under `src/lib/namecoin/`. Integration points elsewhere in the app
-   are limited to two tiny surfaces (see below).
+   under `src/lib/namecoin/`. The rest of the app sees it through two hook
+   boundaries and one presentation component (see below).
 5. **Same client-side resolver for URLs and search.** The direct
    `.bit` repo URL path and the search bar both go through the same
    `resolveNamecoinLazily` entry point.
@@ -49,18 +49,20 @@ src/lib/namecoin/
 └── __tests__/      78 hermetic vitest cases
 ```
 
-`lazy.ts` is the boundary of the eager surface. Nothing outside the two
-integration points (below) statically imports anything else from
-`src/lib/namecoin/`. `lazy.ts` re-exports the cheap synchronous
+`lazy.ts` is the boundary of the eager surface. Nothing outside that boundary
+statically imports the resolver implementation from `src/lib/namecoin/`.
+`lazy.ts` re-exports the cheap synchronous
 `isNamecoinIdentifier` predicate (a tiny regex) so callers can gate
 without paying the resolver's cost.
 
 ## Integration points
 
-The rest of the application touches Namecoin in exactly two places.
-Both use dynamic `import(/* webpackChunkName: "namecoin-resolver" */
-"@/lib/namecoin/lazy")` so the resolver only lands in the browser when
-a user actually needs it.
+The resolver enters the rest of the application through two hooks. A separate
+presentation component keeps Namecoin-specific status rendering out of the
+repositories page. Both hook paths use dynamic
+`import(/* webpackChunkName: "namecoin-resolver" */
+"@/lib/namecoin/lazy")` so the resolver only lands in the browser when a user
+actually needs it.
 
 ### 1. `useDnsIdentity` — direct `.bit` repo URLs
 
@@ -80,6 +82,13 @@ resolver and reports `resolving` / `resolved` / `not-found` /
 `unavailable`. `useRepositorySearch` reads its output and, on
 `resolved`, funnels the resulting pubkey through the same
 matched-user fan-out that the `npub1…` short-circuit uses.
+
+### 3. `NamecoinResolutionBanner` — presentation
+
+`src/components/namecoin/NamecoinResolutionBanner.tsx` owns the optional
+search-status UI. `RepositoriesPage` only decides whether to render it and
+passes through the hook state; it contains no Namecoin-specific rendering
+branches.
 
 ## Tri-state semantics
 
@@ -118,9 +127,7 @@ grep -c "electrumx\|blockchain.scripthash\|resolveNamecoinLookup" \
   dist/assets/index-*.js
 ```
 
-should show `0` for the biggest chunk (the main app) and a small
-non-zero for the on-demand `namecoin-resolver` chunk (~10 KB
-minified). If the numbers ever change, the lazy discipline has
-regressed — check for a new static `import { ... } from
-"@/lib/namecoin/index"` outside the two documented integration
-points.
+should show `0` for the biggest chunk (the main app) and a small non-zero for
+the on-demand `namecoin-resolver` chunk (~10 KB minified). If the numbers ever
+change, the lazy discipline has regressed — check for a new static
+`import { ... } from "@/lib/namecoin/index"` outside `lazy.ts`.
