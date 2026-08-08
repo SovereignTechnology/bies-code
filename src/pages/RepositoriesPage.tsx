@@ -7,6 +7,7 @@ import type { RelayQueryStatus } from "@/hooks/useRepositorySearch";
 import { useDefaultRepoPath } from "@/hooks/useRepoPath";
 import { usePrefetchNip05 } from "@/hooks/usePrefetchNip05";
 import { UserLink } from "@/components/UserAvatar";
+import { NamecoinResolutionBanner } from "@/components/namecoin/NamecoinResolutionBanner";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
@@ -82,6 +83,7 @@ export default function RepositoriesPage({
     matchedUserPubkeys,
     relayStatuses,
     profileRelayStatuses,
+    namecoin,
   } = useRepositorySearch(committedQuery, relayOverride);
 
   const title = relayLabel
@@ -195,6 +197,17 @@ export default function RepositoriesPage({
               />
             )}
           </div>
+
+          {/* Namecoin `.bit` / `d/` / `id/` resolution banner. Only
+              rendered for identifier-shape queries; non-Namecoin
+              searches see nothing extra. */}
+          {namecoin.isNamecoinQuery && (
+            <NamecoinResolutionBanner
+              status={namecoin.status}
+              query={committedQuery}
+              pubkey={namecoin.pubkey}
+            />
+          )}
         </div>
       </div>
 
