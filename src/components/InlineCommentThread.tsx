@@ -133,6 +133,7 @@ function InlineComposer({
   const [body, setBody] = useState("");
   const [activeTab, setActiveTab] = useState<"write" | "preview">("write");
   const [isPending, setIsPending] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
   const { toast } = useToast();
   const { openAuthModal } = useAuthModal();
 
@@ -222,6 +223,7 @@ function InlineComposer({
             onTabChange={setActiveTab}
             disabled={isPending}
             autoFocus={autoFocus}
+            onUploadingChange={setIsUploading}
           />
 
           <div className="flex items-center gap-2">
@@ -259,7 +261,12 @@ function InlineComposer({
               <Button
                 type="submit"
                 size="sm"
-                disabled={isPending || !body.trim() || composerHasNsec(body)}
+                disabled={
+                  isPending ||
+                  isUploading ||
+                  !body.trim() ||
+                  composerHasNsec(body)
+                }
                 className="h-7 text-xs bg-pink-600 hover:bg-pink-700 text-white"
               >
                 {isPending ? (

@@ -24,7 +24,7 @@ import {
   forwardRef,
 } from "react";
 import { nip19 } from "nostr-tools";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, Loader2 } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { UserAvatar } from "@/components/UserAvatar";
 import { CommentContent } from "@/components/CommentContent";
@@ -72,6 +72,8 @@ export interface NostrComposerProps {
   activeTab?: "write" | "preview";
   onTabChange?: (tab: "write" | "preview") => void;
   onFocusChange?: (focused: boolean) => void;
+  /** Called whenever a Blossom upload starts or finishes. */
+  onUploadingChange?: (isUploading: boolean) => void;
   /** Pubkeys to surface first in @ mention results */
   priorityPubkeys?: string[];
   /**
@@ -108,6 +110,7 @@ export const NostrComposer = forwardRef<
     activeTab: activeTabProp,
     onTabChange,
     onFocusChange,
+    onUploadingChange,
     priorityPubkeys,
     onUploadedTags,
     autoFocus,
@@ -121,6 +124,10 @@ export const NostrComposer = forwardRef<
   const _setActiveTab = onTabChange ?? setInternalTab;
 
   const { uploadFile, isUploading } = useBlossomUpload();
+
+  useEffect(() => {
+    onUploadingChange?.(isUploading);
+  }, [isUploading, onUploadingChange]);
 
   // Expose triggerAttach + isUploading to parents
   useImperativeHandle(
@@ -296,6 +303,17 @@ export const NostrComposer = forwardRef<
           </div>
         )}
       </div>
+
+      {isUploading && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="flex items-center gap-2 rounded-md border border-blue-500/30 bg-blue-500/10 px-3 py-2 text-sm text-muted-foreground"
+        >
+          <Loader2 className="h-4 w-4 shrink-0 motion-safe:animate-spin" />
+          <span>Uploading attachment…</span>
+        </div>
+      )}
 
       {/* nsec guard */}
       {hasNsec && (
