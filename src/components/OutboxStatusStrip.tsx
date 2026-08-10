@@ -127,7 +127,10 @@ export function OutboxStatusBadge({ event }: { event: NostrEvent }) {
           {label}
         </button>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-96 p-3">
+      <PopoverContent
+        align="start"
+        className="w-[calc(100vw-2rem)] max-w-96 p-3"
+      >
         <div className="space-y-2">
           <div className="flex items-center gap-2 pb-1 border-b border-border">
             <StatusIcon status={status} className={colorClass} />
