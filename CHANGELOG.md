@@ -4,23 +4,33 @@
 
 ### Fixes
 
+- Make file diffs swipeable on mobile with a compact contextual line-number gutter and hunk headers that remain visible while scrolling.
+- Keep composer edit controls visible while previewing, show live attachment-upload progress, and disable conflicting actions until uploads finish.
+- Give cover-note markdown the full card width on mobile instead of reserving action-button space beside the entire note.
+- Restore social preview images and complete the homepage's Open Graph URL and description metadata.
+- Keep embedded issue and pull request previews mounted across reactive updates, and preserve full hexadecimal-looking identifiers until Git verifies them as commits.
+- Load direct links to historical commits reliably across initial Git discovery races, while rejecting malformed commit IDs before contacting a server.
 - Exclude legacy repository mentions from issue and pull request attribution so work filed elsewhere no longer appears in mentioned repositories.
 - Resolve repository searches through ranked, validated user profiles across multiple NIP-50 relays.
+- Route repository discovery, search results, notifications, and item permalinks through the lead maintainer so multi-maintainer repositories open at their canonical paths.
 - Start release discovery from repository and Zapstore relays without waiting for publisher outbox discovery to finish.
 
 ### Features
 
 - Show inferred pull request stacks from repository-local Git topology, including historical updates, linked stack navigation, and clear ambiguity handling.
 - Add a GitHub-style repository compare page with progressive commit-graph loading and batched file-diff retrieval between branches, tags, or commit IDs.
-- Group notifications by user with expandable activity, bulk read/archive actions for each actor, and a dedicated unread inbox filter.
-- Add NIP-82 repository releases with guided version, channel, platform, format, compatibility, and provenance metadata, plus immediate cancellable Blossom uploads.
+- Resolve `.bit`, `d/`, and `id/` Namecoin identifiers in repository searches and direct repository URLs through an opt-in, lazily loaded client-side resolver.
+- Show every recursive maintainer on repository about pages, including the lead maintainer and links to each maintainer's announcement.
+- Group notifications by user with expandable activity, bulk read, unread, archive, and restore actions for each actor, and a dedicated unread inbox filter.
+- Add NIP-82 repository releases with guided version, channel, platform, format, compatibility, and provenance metadata, immediate cancellable Blossom uploads, and the latest release on repository overviews.
 - Add repository software application pages and management, including creation, editing, filtering, linking existing Zapstore applications, explicit source migration, and publisher ownership enforcement.
 - Add raw-event and sharing controls with repository-aware application, release, and asset permalinks.
 - Open application and discussion images in accessible keyboard and touch lightbox galleries.
 
 ### Changes
 
-- Improve issue search by ID.
+- Search issues and pull requests by full event ID, `nevent`, or short hexadecimal prefix, and reveal ID matches even when the active facets would otherwise hide them.
+- Write notification-state key envelopes with a purpose-specific field while continuing to read existing legacy envelopes.
 - Vendor NIP-82, published to Nostr by Fran (author of franzap) on April 11, 2026, document repository association and general-purpose release assets, and retain its established application ID tag for compatibility.
 - Bound release-history and asset-metadata discovery to 30 releases per application, progressively render release cards in batches of 20, and check exact release coordinates before publishing to prevent older versions from being replaced.
 
