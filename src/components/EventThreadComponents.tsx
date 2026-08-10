@@ -1225,11 +1225,11 @@ export function CoverNoteCard({
 
   return (
     <>
-      <div className="border-l-4 border-blue-500/60 bg-muted/30 rounded-r-md px-4 py-3 mb-4">
+      <div className="mb-4 rounded-r-md border-l-4 border-blue-500/60 bg-muted/30 px-3 py-3 sm:px-4">
         <div className="flex items-start gap-2">
-          {/* Left: metadata + content */}
+          {/* Left: metadata */}
           <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 flex-wrap text-xs text-muted-foreground mb-2">
+            <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
               <Pin className="h-3.5 w-3.5 shrink-0 text-blue-500/70" />
               <span className="font-medium uppercase tracking-wide text-blue-500/80">
                 Cover note
@@ -1250,15 +1250,6 @@ export function CoverNoteCard({
                 <Clock className="h-3 w-3" />
                 {timeAgo}
               </span>
-            </div>
-            <div className="prose prose-sm dark:prose-invert max-w-none text-sm">
-              <Suspense
-                fallback={
-                  <div className="h-8 animate-pulse bg-muted rounded" />
-                }
-              >
-                <MarkdownContent content={event.content} />
-              </Suspense>
             </div>
           </div>
 
@@ -1344,6 +1335,14 @@ export function CoverNoteCard({
               </DropdownMenu>
             )}
           </div>
+        </div>
+
+        <div className="prose prose-sm mt-2 max-w-none text-sm dark:prose-invert">
+          <Suspense
+            fallback={<div className="h-8 animate-pulse rounded bg-muted" />}
+          >
+            <MarkdownContent content={event.content} />
+          </Suspense>
         </div>
       </div>
 
