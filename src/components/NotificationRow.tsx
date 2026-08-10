@@ -420,8 +420,9 @@ function ThreadNotificationRow({
             </div>
           </Link>
 
-          {/* Action buttons — outside the link, visible on hover. Icon-only when compact. */}
-          <div className="flex items-center gap-1 self-center pr-2 shrink-0 md:hidden md:group-hover:flex md:group-focus-within:flex md:pr-3">
+          {/* Swipe gestures replace these buttons on phones. Coarse pointers
+              keep icon actions visible; precise pointers reveal them on hover. */}
+          <div className="notification-row-actions items-center gap-1 self-center shrink-0 pr-2">
             {item.unread ? (
               <Button
                 variant="ghost"
@@ -637,7 +638,7 @@ function SocialNotificationRow({
           {/* Action buttons — icon-only when compact */}
           <div
             className={cn(
-              "flex items-center gap-1 self-center pr-2 shrink-0 md:hidden md:group-hover:flex md:group-focus-within:flex md:pr-3",
+              "notification-row-actions items-center gap-1 self-center shrink-0 pr-2",
             )}
           >
             {item.unread ? (
@@ -876,7 +877,7 @@ function RepoZapNotificationRow({
           {/* Action buttons — icon-only when compact */}
           <div
             className={cn(
-              "flex items-center gap-1 self-center pr-2 shrink-0 md:hidden md:group-hover:flex md:group-focus-within:flex md:pr-3",
+              "notification-row-actions items-center gap-1 self-center shrink-0 pr-2",
             )}
           >
             {item.unread ? (
@@ -1116,7 +1117,7 @@ export function NotificationActivityRow({
               </div>
             </div>
           </Link>
-          <div className="flex shrink-0 items-center gap-1 self-center pr-2 md:hidden md:group-hover:flex md:group-focus-within:flex md:pr-3">
+          <div className="notification-row-actions shrink-0 items-center gap-1 self-center pr-2">
             {isUnread ? (
               <Button
                 variant="ghost"
@@ -1124,6 +1125,7 @@ export function NotificationActivityRow({
                 className="h-7 w-7 p-0 text-xs sm:w-auto sm:px-3"
                 onClick={() => actions.markEventAsRead(event.id)}
                 title="Mark activity as read"
+                aria-label="Mark activity as read"
               >
                 <Eye className="h-3 w-3 sm:mr-1" />
                 <span className="hidden sm:inline">Read</span>
@@ -1136,6 +1138,7 @@ export function NotificationActivityRow({
                 className="h-7 w-7 p-0 text-xs sm:w-auto sm:px-3"
                 onClick={() => actions.markEventsAsUnread([event.id])}
                 title="Mark activity as unread"
+                aria-label="Mark activity as unread"
               >
                 <EyeOff className="h-3 w-3 sm:mr-1" />
                 <span className="hidden sm:inline">Unread</span>
@@ -1151,6 +1154,7 @@ export function NotificationActivityRow({
                 className="h-7 w-7 p-0 text-xs sm:w-auto sm:px-3"
                 onClick={() => actions.markEventAsArchived(event.id)}
                 title="Archive activity"
+                aria-label="Archive activity"
               >
                 <Archive className="h-3 w-3 sm:mr-1" />
                 <span className="hidden sm:inline">Archive</span>
@@ -1164,6 +1168,7 @@ export function NotificationActivityRow({
                 className="h-7 w-7 p-0 text-xs sm:w-auto sm:px-3"
                 onClick={() => actions.markEventAsUnarchived(event.id)}
                 title="Move activity to inbox"
+                aria-label="Move activity to inbox"
               >
                 <ArchiveRestore className="h-3 w-3 sm:mr-1" />
                 <span className="hidden sm:inline">Inbox</span>

@@ -649,7 +649,7 @@ function NotificationUserGroupRow({
             </span>
           </button>
 
-          <div className="flex shrink-0 items-center gap-1">
+          <div className="notification-row-actions notification-row-actions--large shrink-0 items-center gap-1">
             <Button
               variant="ghost"
               size="sm"
@@ -660,6 +660,9 @@ function NotificationUserGroupRow({
                   : actions.markEventsAsUnread(group.eventIds)
               }
               title={isUnread ? "Mark group as read" : "Mark group as unread"}
+              aria-label={
+                isUnread ? "Mark group as read" : "Mark group as unread"
+              }
             >
               {isUnread ? (
                 <Eye className="h-3.5 w-3.5 sm:mr-1" />
@@ -680,6 +683,7 @@ function NotificationUserGroupRow({
                 className="h-8 px-2 text-xs"
                 onClick={() => actions.markEventsAsArchived(group.eventIds)}
                 title="Archive group"
+                aria-label="Archive group"
               >
                 <Archive className="h-3.5 w-3.5 sm:mr-1" />
                 <span className="hidden sm:inline">Archive</span>
@@ -693,6 +697,7 @@ function NotificationUserGroupRow({
                 className="h-8 px-2 text-xs"
                 onClick={() => actions.markEventsAsUnarchived(group.eventIds)}
                 title="Move group to inbox"
+                aria-label="Move group to inbox"
               >
                 <ArchiveRestore className="h-3.5 w-3.5 sm:mr-1" />
                 <span className="hidden sm:inline">Inbox</span>

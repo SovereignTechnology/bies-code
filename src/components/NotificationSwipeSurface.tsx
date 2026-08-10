@@ -148,7 +148,7 @@ export function NotificationSwipeSurface({
   return (
     <div
       className={cn(
-        "group/swipe relative min-w-0 overflow-hidden touch-pan-y md:touch-auto",
+        "group/swipe notification-row-action-surface relative min-w-0 overflow-hidden touch-pan-y md:touch-auto",
         className,
       )}
       onPointerDown={handlePointerDown}
@@ -166,10 +166,7 @@ export function NotificationSwipeSurface({
         <div
           aria-hidden="true"
           className={cn(
-            "absolute inset-y-0 left-0 hidden w-1/2 items-center gap-2 px-4 text-sm font-semibold text-white md:hidden",
-            archiveAction.mode === "restore"
-              ? "bg-emerald-600"
-              : "bg-amber-600",
+            "absolute inset-y-0 left-0 hidden w-1/2 items-center gap-2 bg-secondary px-4 text-sm font-semibold text-secondary-foreground md:hidden",
             archiveActionActive && "flex",
           )}
         >
@@ -181,8 +178,7 @@ export function NotificationSwipeSurface({
       <div
         aria-hidden="true"
         className={cn(
-          "absolute inset-y-0 right-0 hidden w-1/2 items-center justify-end gap-2 px-4 text-sm font-semibold text-white md:hidden",
-          unread ? "bg-sky-600" : "bg-pink-600",
+          "absolute inset-y-0 right-0 hidden w-1/2 items-center justify-end gap-2 bg-primary px-4 text-sm font-semibold text-primary-foreground md:hidden",
           readActionActive && "flex",
         )}
       >

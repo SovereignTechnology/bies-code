@@ -255,3 +255,42 @@
     background-color: transparent;
   }
 }
+
+/* Notification row actions are hidden on phones. Touch-oriented tablets keep
+   compact icon controls visible, while precise pointers reveal full labels on
+   row hover or keyboard focus regardless of viewport width. */
+.notification-row-actions {
+  display: none;
+}
+
+@media (min-width: 640px) and (hover: none),
+  (min-width: 640px) and (pointer: coarse) {
+  .notification-row-actions {
+    display: flex;
+  }
+
+  .notification-row-actions > button {
+    width: 1.75rem;
+    padding-right: 0;
+    padding-left: 0;
+  }
+
+  .notification-row-actions--large > button {
+    width: 2rem;
+  }
+
+  .notification-row-actions > button > svg {
+    margin-right: 0;
+  }
+
+  .notification-row-actions > button > span:not(.sr-only) {
+    display: none;
+  }
+}
+
+@media (min-width: 640px) and (hover: hover) and (pointer: fine) {
+  .notification-row-action-surface:hover .notification-row-actions,
+  .notification-row-action-surface:focus-within .notification-row-actions {
+    display: flex;
+  }
+}
