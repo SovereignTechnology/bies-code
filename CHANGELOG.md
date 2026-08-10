@@ -17,6 +17,7 @@
 
 ### Features
 
+- Add mobile notification gestures with live action cues: swipe left to toggle read state and right to archive or restore.
 - Show inferred pull request stacks from repository-local Git topology, including historical updates, linked stack navigation, and clear ambiguity handling.
 - Add a GitHub-style repository compare page with progressive commit-graph loading and batched file-diff retrieval between branches, tags, or commit IDs.
 - Resolve `.bit`, `d/`, and `id/` Namecoin identifiers in repository searches and direct repository URLs through an opt-in, lazily loaded client-side resolver.

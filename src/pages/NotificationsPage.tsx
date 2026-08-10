@@ -42,6 +42,7 @@ import type {
 import type { NostrEvent } from "nostr-tools";
 import { getZapAmount } from "applesauce-common/helpers";
 import { useRelativeTime } from "@/hooks/useRelativeTime";
+import { NotificationSwipeSurface } from "@/components/NotificationSwipeSurface";
 
 const ITEMS_PER_PAGE = 10;
 const USER_ACTIVITY_PAGE_SIZE = 10;
@@ -599,95 +600,108 @@ function NotificationUserGroupRow({
     group.eventIds.length === 1 ? "notification" : "notifications";
   const itemLabel = group.rootCount === 1 ? "item" : "items";
 
-  return (
-    <li
-      className={cn(
-        "min-w-0 border-l-2 transition-colors",
-        isUnread ? "border-l-pink-500 bg-accent/30" : "border-l-transparent",
-      )}
-    >
-      <div className="flex min-w-0 items-center gap-2 px-2 py-2">
-        <button
-          type="button"
-          className="flex min-w-0 flex-1 items-center gap-2 rounded-md p-1 text-left transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          aria-expanded={expanded}
-          aria-controls={activityListId}
-          onClick={() => {
-            setExpanded((value) => !value);
-            if (expanded) setVisibleActivityCount(USER_ACTIVITY_PAGE_SIZE);
-          }}
-        >
-          {expanded ? (
-            <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
-          ) : (
-            <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
-          )}
-          <UserAvatar pubkey={group.pubkey} size="md" noHoverCard />
-          <span className="min-w-0 flex-1">
-            <UserName
-              pubkey={group.pubkey}
-              className="block truncate text-sm"
-              noHoverCard
-            />
-            <span className="mt-0.5 block text-xs text-muted-foreground">
-              {group.eventIds.length} {notificationLabel} across{" "}
-              {group.rootCount} {itemLabel} · active {lastActive}
-            </span>
-          </span>
-        </button>
+  const restoreFromArchive = currentView === "archived";
 
-        <div className="flex shrink-0 items-center gap-1">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-8 px-2 text-xs"
-            onClick={() =>
-              isUnread
-                ? actions.markEventsAsRead(group.eventIds)
-                : actions.markEventsAsUnread(group.eventIds)
-            }
-            title={isUnread ? "Mark group as read" : "Mark group as unread"}
+  return (
+    <li className="min-w-0">
+      <NotificationSwipeSurface
+        unread={isUnread}
+        onToggleRead={() =>
+          isUnread
+            ? actions.markEventsAsRead(group.eventIds)
+            : actions.markEventsAsUnread(group.eventIds)
+        }
+        archiveAction={{
+          mode: restoreFromArchive ? "restore" : "archive",
+          onTrigger: () =>
+            restoreFromArchive
+              ? actions.markEventsAsUnarchived(group.eventIds)
+              : actions.markEventsAsArchived(group.eventIds),
+        }}
+      >
+        <div className="flex min-w-0 items-center gap-2 px-2 py-2">
+          <button
+            type="button"
+            className="flex min-w-0 flex-1 items-center gap-2 rounded-md p-1 text-left transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            aria-expanded={expanded}
+            aria-controls={activityListId}
+            onClick={() => {
+              setExpanded((value) => !value);
+              if (expanded) setVisibleActivityCount(USER_ACTIVITY_PAGE_SIZE);
+            }}
           >
-            {isUnread ? (
-              <Eye className="h-3.5 w-3.5 sm:mr-1" />
+            {expanded ? (
+              <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
             ) : (
-              <EyeOff className="h-3.5 w-3.5 sm:mr-1" />
+              <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
             )}
-            <span className="hidden sm:inline">
-              {isUnread ? "Read" : "Unread"}
+            <UserAvatar pubkey={group.pubkey} size="md" noHoverCard />
+            <span className="min-w-0 flex-1">
+              <UserName
+                pubkey={group.pubkey}
+                className="block truncate text-sm"
+                noHoverCard
+              />
+              <span className="mt-0.5 block text-xs text-muted-foreground">
+                {group.eventIds.length} {notificationLabel} across{" "}
+                {group.rootCount} {itemLabel} · active {lastActive}
+              </span>
             </span>
-            <span className="sr-only sm:hidden">
-              {isUnread ? "Mark group as read" : "Mark group as unread"}
-            </span>
-          </Button>
-          {(currentView === "inbox" || currentView === "unread") && (
+          </button>
+
+          <div className="flex shrink-0 items-center gap-1">
             <Button
               variant="ghost"
               size="sm"
               className="h-8 px-2 text-xs"
-              onClick={() => actions.markEventsAsArchived(group.eventIds)}
-              title="Archive group"
+              onClick={() =>
+                isUnread
+                  ? actions.markEventsAsRead(group.eventIds)
+                  : actions.markEventsAsUnread(group.eventIds)
+              }
+              title={isUnread ? "Mark group as read" : "Mark group as unread"}
             >
-              <Archive className="h-3.5 w-3.5 sm:mr-1" />
-              <span className="hidden sm:inline">Archive</span>
-              <span className="sr-only sm:hidden">Archive group</span>
+              {isUnread ? (
+                <Eye className="h-3.5 w-3.5 sm:mr-1" />
+              ) : (
+                <EyeOff className="h-3.5 w-3.5 sm:mr-1" />
+              )}
+              <span className="hidden sm:inline">
+                {isUnread ? "Read" : "Unread"}
+              </span>
+              <span className="sr-only sm:hidden">
+                {isUnread ? "Mark group as read" : "Mark group as unread"}
+              </span>
             </Button>
-          )}
-          {currentView === "archived" && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-8 px-2 text-xs"
-              onClick={() => actions.markEventsAsUnarchived(group.eventIds)}
-              title="Move group to inbox"
-            >
-              <ArchiveRestore className="h-3.5 w-3.5 sm:mr-1" />
-              <span className="hidden sm:inline">Inbox</span>
-              <span className="sr-only sm:hidden">Move group to inbox</span>
-            </Button>
-          )}
+            {(currentView === "inbox" || currentView === "unread") && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8 px-2 text-xs"
+                onClick={() => actions.markEventsAsArchived(group.eventIds)}
+                title="Archive group"
+              >
+                <Archive className="h-3.5 w-3.5 sm:mr-1" />
+                <span className="hidden sm:inline">Archive</span>
+                <span className="sr-only sm:hidden">Archive group</span>
+              </Button>
+            )}
+            {currentView === "archived" && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8 px-2 text-xs"
+                onClick={() => actions.markEventsAsUnarchived(group.eventIds)}
+                title="Move group to inbox"
+              >
+                <ArchiveRestore className="h-3.5 w-3.5 sm:mr-1" />
+                <span className="hidden sm:inline">Inbox</span>
+                <span className="sr-only sm:hidden">Move group to inbox</span>
+              </Button>
+            )}
+          </div>
         </div>
-      </div>
+      </NotificationSwipeSurface>
 
       {expanded && (
         <ul
