@@ -1471,6 +1471,9 @@ function PermalinkButton({
 // Single diff line
 // ---------------------------------------------------------------------------
 
+const inlineThreadViewportClassName =
+  "sticky left-0 w-full max-w-[calc(100vw-4rem)] md:static md:max-w-none";
+
 function DiffLine({
   change,
   tokenMap,
@@ -2066,6 +2069,7 @@ function DiffLine({
                   rootEvent={ctx.rootEvent}
                   parentEvent={ctx.parentEvent}
                   commentOptions={commentOptions}
+                  className={inlineThreadViewportClassName}
                   onClose={() => sel?.closeComposer()}
                   // Only pass autoFocus when the composing range matches the
                   // existing comments' range (same thread). When they differ,
@@ -2089,6 +2093,7 @@ function DiffLine({
                   rootEvent={ctx.rootEvent}
                   parentEvent={ctx.parentEvent}
                   commentOptions={commentOptions}
+                  className={inlineThreadViewportClassName}
                   onClose={() => sel?.closeComposer()}
                   autoFocus={true}
                 />
@@ -2105,6 +2110,7 @@ function DiffLine({
                   rootEvent={ctx.rootEvent}
                   parentEvent={ctx.parentEvent}
                   commentOptions={commentOptions}
+                  className={inlineThreadViewportClassName}
                   onClose={() => sel?.closeComposer()}
                   autoFocus={true}
                 />
