@@ -674,7 +674,7 @@ function RepoLayoutResolved({
             )}
 
             {/* Tab navigation */}
-            <nav className="flex gap-1 -mb-px">
+            <nav className="-mb-px flex w-full gap-0 sm:gap-1">
               {/* Primary tabs — always visible */}
               <TabLink
                 to={basePath}
@@ -732,12 +732,12 @@ function RepoLayoutResolved({
               </div>
 
               {/* "More" dropdown — mobile only */}
-              <div className="md:hidden flex items-end pb-px">
+              <div className="flex shrink-0 items-end pb-px md:hidden">
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <button
                       className={cn(
-                        "inline-flex items-center gap-1.5 px-3 py-2.5 text-sm font-medium border-b-2 transition-colors",
+                        "inline-flex items-center gap-1.5 px-2 py-2.5 text-sm font-medium border-b-2 transition-colors sm:px-3",
                         isAboutTab ||
                           isSettingsTab ||
                           isActionsTab ||
@@ -1644,7 +1644,7 @@ function TabLink({
     <Link
       to={to}
       className={cn(
-        "inline-flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors",
+        "inline-flex min-w-0 flex-1 items-center justify-center gap-1 px-1 py-2.5 text-sm font-medium border-b-2 transition-colors sm:flex-none sm:gap-2 sm:px-4",
         active
           ? "border-pink-500 text-foreground"
           : "border-transparent text-muted-foreground hover:text-foreground hover:border-border",
@@ -1655,7 +1655,7 @@ function TabLink({
       {count !== undefined && count > 0 && (
         <Badge
           variant="secondary"
-          className="ml-1 h-5 min-w-[20px] px-1.5 text-[11px] font-medium"
+          className="ml-0.5 h-5 min-w-[20px] shrink-0 px-1.5 text-[11px] font-medium sm:ml-1"
         >
           {count}
         </Badge>
