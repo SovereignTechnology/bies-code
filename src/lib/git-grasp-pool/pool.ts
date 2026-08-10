@@ -34,6 +34,7 @@ import type {
   Commit,
   Tree,
   CommitRangeData,
+  CommitComparisonData,
   InfoRefsUploadPackResponse,
 } from "./types";
 import { CorsProxyManager } from "./cors-proxy";
@@ -65,6 +66,9 @@ const DEFAULT_EVICTION_GRACE_MS = 60_000;
  * of a git server head that claims to be ahead of the signed state.
  */
 const ANCESTRY_VERIFICATION_MAX_DEPTH = 500;
+
+/** Graph sizes probed before falling back to a caller's full comparison cap. */
+const COMPARISON_GRAPH_DEPTHS = [15, 60, 240, 960];
 
 // ---------------------------------------------------------------------------
 // Initial state
@@ -119,6 +123,132 @@ function ancestryDistances(
   }
 
   return distances;
+}
+
+function findMergeBaseInHistories(
+  commitA: string,
+  commitB: string,
+  chainA: Commit[],
+  chainB: Commit[],
+): string | null {
+  const byHash = new Map([...chainA, ...chainB].map((c) => [c.hash, c]));
+  const distancesFromA = ancestryDistances(commitA, byHash);
+  const distancesFromB = ancestryDistances(commitB, byHash);
+
+  let bestHash: string | null = null;
+  let bestScore = Number.POSITIVE_INFINITY;
+
+  for (const [hash, distanceA] of distancesFromA) {
+    const distanceB = distancesFromB.get(hash);
+    if (distanceB === undefined) continue;
+
+    const score = distanceA + distanceB;
+    if (score < bestScore) {
+      bestScore = score;
+      bestHash = hash;
+    }
+  }
+
+  return bestHash;
+}
+
+function commitsUntilSharedHistory(
+  tipCommitId: string,
+  mergeBaseId: string,
+  firstHistory: Commit[],
+  secondHistory: Commit[],
+): Commit[] | null {
+  if (tipCommitId === mergeBaseId) return [];
+
+  const commitsByHash = new Map(
+    [...firstHistory, ...secondHistory].map((commit) => [commit.hash, commit]),
+  );
+  const secondHistoryHashes = new Set(
+    secondHistory.map((commit) => commit.hash),
+  );
+  const sharedHashes = new Set(
+    firstHistory
+      .filter((commit) => secondHistoryHashes.has(commit.hash))
+      .map((commit) => commit.hash),
+  );
+  sharedHashes.add(mergeBaseId);
+
+  const rangeHashes = new Set<string>();
+  const pending = [tipCommitId];
+
+  while (pending.length > 0) {
+    const commitId = pending.pop();
+    if (!commitId || sharedHashes.has(commitId) || rangeHashes.has(commitId)) {
+      continue;
+    }
+
+    const commit = commitsByHash.get(commitId);
+    if (!commit) return null;
+    rangeHashes.add(commitId);
+    pending.push(...commit.parents);
+  }
+
+  return Array.from(rangeHashes)
+    .map((hash) => commitsByHash.get(hash))
+    .filter((commit): commit is Commit => !!commit)
+    .sort(
+      (left, right) =>
+        (right.committer?.timestamp ?? right.author.timestamp) -
+        (left.committer?.timestamp ?? left.author.timestamp),
+    );
+}
+
+function comparisonGraphDepths(maxDepth: number): number[] {
+  const depths = COMPARISON_GRAPH_DEPTHS.filter((depth) => depth < maxDepth);
+  depths.push(maxDepth);
+  return [...new Set(depths)];
+}
+
+function comparisonFromHistories(
+  baseCommitId: string,
+  headCommitId: string,
+  baseHistory: Commit[],
+  headHistory: Commit[],
+): CommitComparisonData | null {
+  const mergeBaseId = findMergeBaseInHistories(
+    baseCommitId,
+    headCommitId,
+    baseHistory,
+    headHistory,
+  );
+  if (!mergeBaseId) return null;
+
+  const commitsByHash = new Map(
+    [...baseHistory, ...headHistory].map((commit) => [commit.hash, commit]),
+  );
+  const baseCommit = commitsByHash.get(baseCommitId);
+  const headCommit = commitsByHash.get(headCommitId);
+  if (!baseCommit || !headCommit) return null;
+
+  const baseRange = commitsUntilSharedHistory(
+    baseCommitId,
+    mergeBaseId,
+    baseHistory,
+    headHistory,
+  );
+  const headRange = commitsUntilSharedHistory(
+    headCommitId,
+    mergeBaseId,
+    headHistory,
+    baseHistory,
+  );
+  if (!baseRange || !headRange) return null;
+
+  const baseHashes = new Set(baseRange.map((commit) => commit.hash));
+  const headHashes = new Set(headRange.map((commit) => commit.hash));
+
+  return {
+    mergeBaseId,
+    baseCommit,
+    headCommit,
+    baseOnlyCommits: baseRange.filter((commit) => !headHashes.has(commit.hash)),
+    headOnlyCommits: headRange.filter((commit) => !baseHashes.has(commit.hash)),
+  };
 }
 
 /**
@@ -1813,6 +1943,71 @@ export class GitGraspPool {
   }
 
   /**
+   * Get several blobs, using one upload-pack request for uncached hashes.
+   *
+   * If no single mirror can serve the complete batch, missing hashes retain
+   * the established per-object mirror and fallback-URL behavior.
+   */
+  async getBlobs(
+    blobHashes: string[],
+    signal: AbortSignal,
+    fallbackUrls?: string[],
+  ): Promise<Map<string, Uint8Array>> {
+    const blobs = new Map<string, Uint8Array>();
+    const uniqueHashes = [...new Set(blobHashes)];
+
+    for (const hash of uniqueHashes) {
+      const cached = this.cache.peekBlob(hash);
+      if (cached) blobs.set(hash, cached);
+    }
+
+    const l2Hashes = uniqueHashes.filter((hash) => !blobs.has(hash));
+    const l2Results = await Promise.all(
+      l2Hashes.map(
+        async (hash) => [hash, await this.cache.getBlob(hash)] as const,
+      ),
+    );
+    for (const [hash, data] of l2Results) {
+      if (data) blobs.set(hash, data);
+    }
+
+    if (signal.aborted) return blobs;
+    const missing = uniqueHashes.filter((hash) => !blobs.has(hash));
+    if (missing.length === 0) return blobs;
+
+    const batch = await this.withFallback(
+      signal,
+      async (url) => {
+        const start = Date.now();
+        const result = await this.http.fetchBlobs(url, missing, signal);
+        if (result && result.size > 0) {
+          const tracker = this.urlManager.get(url);
+          tracker?.recordOperationSuccess(Date.now() - start);
+        }
+        return result;
+      },
+      fallbackUrls,
+    );
+    if (batch) {
+      for (const [hash, data] of batch) blobs.set(hash, data);
+    }
+
+    if (signal.aborted) return blobs;
+    const stillMissing = uniqueHashes.filter((hash) => !blobs.has(hash));
+    const fallbackResults = await Promise.all(
+      stillMissing.map(
+        async (hash) =>
+          [hash, await this.getBlob(hash, signal, fallbackUrls)] as const,
+      ),
+    );
+    for (const [hash, data] of fallbackResults) {
+      if (data) blobs.set(hash, data);
+    }
+
+    return blobs;
+  }
+
+  /**
    * Get an object by path within a commit.
    *
    * @param fallbackUrls - Extra URLs to try after the pool's own URLs if the
@@ -2223,27 +2418,63 @@ export class GitGraspPool {
       return null;
     }
 
-    const byHash = new Map([...chainA, ...chainB].map((c) => [c.hash, c]));
-    const distancesFromA = ancestryDistances(commitA, byHash);
-    const distancesFromB = ancestryDistances(commitB, byHash);
+    return findMergeBaseInHistories(commitA, commitB, chainA, chainB);
+  }
 
-    let bestHash: string | null = null;
-    let bestScore = Number.POSITIVE_INFINITY;
-
-    for (const [hash, distanceA] of distancesFromA) {
-      const distanceB = distancesFromB.get(hash);
-      if (distanceB === undefined) continue;
-
-      // Pick the nearest common ancestor in the graph, not the first common
-      // commit in the timestamp-sorted history returned by getCommitHistory().
-      const score = distanceA + distanceB;
-      if (score < bestScore) {
-        bestScore = score;
-        bestHash = hash;
-      }
+  /**
+   * Compare two explicit commits without downloading their full capped
+   * histories up front. The graph is expanded through bounded checkpoints and
+   * stops as soon as both the merge base and complete exclusive ranges are
+   * available.
+   */
+  async compareCommits(
+    baseCommitId: string,
+    headCommitId: string,
+    signal: AbortSignal,
+    fallbackUrls?: string[],
+    maxDepth = 200,
+  ): Promise<CommitComparisonData | null> {
+    if (baseCommitId === headCommitId) {
+      const commit = await this.getSingleCommit(
+        baseCommitId,
+        signal,
+        fallbackUrls,
+      );
+      return commit
+        ? {
+            mergeBaseId: commit.hash,
+            baseCommit: commit,
+            headCommit: commit,
+            baseOnlyCommits: [],
+            headOnlyCommits: [],
+          }
+        : null;
     }
 
-    if (bestHash) return bestHash;
+    for (const depth of comparisonGraphDepths(maxDepth)) {
+      const [baseHistory, headHistory] = await Promise.all([
+        this.getCommitHistory(baseCommitId, depth, signal),
+        this.getCommitHistory(headCommitId, depth, signal, fallbackUrls),
+      ]);
+
+      if (signal.aborted) return null;
+      if (
+        !baseHistory ||
+        baseHistory.length === 0 ||
+        !headHistory ||
+        headHistory.length === 0
+      ) {
+        return null;
+      }
+
+      const comparison = comparisonFromHistories(
+        baseCommitId,
+        headCommitId,
+        baseHistory,
+        headHistory,
+      );
+      if (comparison) return comparison;
+    }
 
     return null;
   }

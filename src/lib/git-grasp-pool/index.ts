@@ -48,6 +48,7 @@ export type {
   InfoRefsUploadPackResponse,
   // Diff data
   CommitRangeData,
+  CommitComparisonData,
 } from "./types";
 
 // --- CORS proxy (for UI components that need to display proxy status) ---

@@ -294,6 +294,65 @@ async function fetchObject(
   return result.objects.get(hash);
 }
 
+function pktEncode(data: string): string {
+  if (data.length === 0) return "0000";
+  return `${(data.length + 4).toString(16).padStart(4, "0")}${data}`;
+}
+
+/** Build one upload-pack request containing multiple object wants. */
+function createMultiWantRequest(
+  hashes: string[],
+  capabilities: string[],
+): string {
+  if (hashes.length === 0) throw new Error("at least one object is required");
+  for (const hash of hashes) {
+    if (!/^[0-9a-f]{40}$/i.test(hash)) {
+      throw new Error(`invalid git object ID: ${hash}`);
+    }
+  }
+
+  const [firstHash, ...remainingHashes] = hashes;
+  const packets = [
+    `want ${firstHash} ${capabilities.join(" ")} agent=nsa/1.0.0\n`,
+    ...remainingHashes.map((hash) => `want ${hash}\n`),
+    "deepen 1\n",
+    "",
+    "done\n",
+  ];
+  return packets.map(pktEncode).join("");
+}
+
+/** Fetch several directly-addressed objects in one upload-pack round trip. */
+async function fetchObjects(
+  effectiveUrl: string,
+  hashes: string[],
+  serverCaps: string[],
+  signal: AbortSignal,
+): Promise<Map<string, ParsedObject>> {
+  if (signal.aborted || hashes.length === 0) return new Map();
+  if (hashes.length === 1) {
+    const object = await fetchObject(
+      effectiveUrl,
+      hashes[0],
+      serverCaps,
+      signal,
+    );
+    return object ? new Map([[hashes[0], object]]) : new Map();
+  }
+
+  const capabilities = selectCapabilities(serverCaps);
+  const want = createMultiWantRequest(hashes, capabilities);
+  const result = await fetchPackfile(effectiveUrl, want, signal);
+  if (signal.aborted) return new Map();
+
+  const objects = new Map<string, ParsedObject>();
+  for (const hash of hashes) {
+    const object = result.objects.get(hash);
+    if (object) objects.set(hash, object);
+  }
+  return objects;
+}
+
 /**
  * Fetch commits only (tree:0 filter) up to maxCommits depth.
  * Requires the server to support "filter".
@@ -1083,6 +1142,55 @@ export class GitHttpClient {
       );
       if (signal.aborted) return null;
       return data;
+    } catch {
+      if (signal.aborted) return null;
+      return null;
+    }
+  }
+
+  /**
+   * Fetch multiple blobs in one upload-pack request. The pool checks both
+   * cache tiers before calling this method; this layer only repeats a cheap L1
+   * check in case another concurrent request populated a blob in the meantime.
+   * A partial map is valid so callers can retry missing hashes elsewhere.
+   */
+  async fetchBlobs(
+    url: string,
+    blobHashes: string[],
+    signal: AbortSignal,
+  ): Promise<Map<string, Uint8Array> | null> {
+    const blobs = new Map<string, Uint8Array>();
+    const missing: string[] = [];
+
+    for (const hash of new Set(blobHashes)) {
+      const cached = this.cache.peekBlob(hash);
+      if (cached) blobs.set(hash, cached);
+      else missing.push(hash);
+    }
+
+    if (signal.aborted) return null;
+    if (missing.length === 0) return blobs;
+
+    const effectiveUrl = this.cors.resolveUrl(url);
+    const serverCaps = await this.getServerCaps(url, signal);
+    if (signal.aborted) return null;
+
+    try {
+      const objects = await fetchObjects(
+        effectiveUrl,
+        missing,
+        serverCaps,
+        signal,
+      );
+      if (signal.aborted) return null;
+
+      for (const [hash, object] of objects) {
+        if (object.type !== 3) continue;
+        this.cache.putBlob(hash, object.data);
+        blobs.set(hash, object.data);
+      }
+
+      return blobs.size > 0 ? blobs : null;
     } catch {
       if (signal.aborted) return null;
       return null;

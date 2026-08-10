@@ -47,6 +47,21 @@ export interface CommitRangeData {
   baseTree: Tree;
 }
 
+/**
+ * Commit graph data for comparing two explicit refs.
+ *
+ * The exclusive commit arrays contain every commit reachable from one tip
+ * before entering ancestry shared with the other tip. They are ordered newest
+ * first, matching the commit history UI.
+ */
+export interface CommitComparisonData {
+  mergeBaseId: string;
+  baseCommit: Commit;
+  headCommit: Commit;
+  baseOnlyCommits: Commit[];
+  headOnlyCommits: Commit[];
+}
+
 // ---------------------------------------------------------------------------
 // Per-URL state
 // ---------------------------------------------------------------------------

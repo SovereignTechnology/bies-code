@@ -149,52 +149,6 @@ function resolveComparisonRef(
   return null;
 }
 
-function commitsUntilMergeBase(
-  tipCommitId: string,
-  mergeBaseId: string,
-  firstHistory: Commit[],
-  secondHistory: Commit[],
-): Commit[] | null {
-  if (tipCommitId === mergeBaseId) return [];
-
-  const commitsByHash = new Map(
-    [...firstHistory, ...secondHistory].map((commit) => [commit.hash, commit]),
-  );
-  const secondHistoryHashes = new Set(
-    secondHistory.map((commit) => commit.hash),
-  );
-  const sharedHashes = new Set(
-    firstHistory
-      .filter((commit) => secondHistoryHashes.has(commit.hash))
-      .map((commit) => commit.hash),
-  );
-  sharedHashes.add(mergeBaseId);
-
-  const rangeHashes = new Set<string>();
-  const pending = [tipCommitId];
-
-  while (pending.length > 0) {
-    const commitId = pending.pop();
-    if (!commitId || sharedHashes.has(commitId) || rangeHashes.has(commitId)) {
-      continue;
-    }
-
-    const commit = commitsByHash.get(commitId);
-    if (!commit) return null;
-    rangeHashes.add(commitId);
-    pending.push(...commit.parents);
-  }
-
-  return Array.from(rangeHashes)
-    .map((hash) => commitsByHash.get(hash))
-    .filter((commit): commit is Commit => !!commit)
-    .sort(
-      (left, right) =>
-        (right.committer?.timestamp ?? right.author.timestamp) -
-        (left.committer?.timestamp ?? left.author.timestamp),
-    );
-}
-
 function comparisonPath(basePath: string, base: string, head: string): string {
   return `${basePath}/compare/${encodeURIComponent(base)}...${encodeURIComponent(head)}`;
 }
@@ -470,7 +424,7 @@ function useComparison(
         return;
       }
 
-      const mergeBaseId = await pool.findMergeBaseBetween(
+      const comparison = await pool.compareCommits(
         effectiveBase.commitId,
         effectiveHead.commitId,
         abort.signal,
@@ -478,7 +432,7 @@ function useComparison(
         MAX_GRAPH_COMMITS,
       );
       if (abort.signal.aborted) return;
-      if (!mergeBaseId) {
+      if (!comparison) {
         setState({
           kind: "error",
           message: `No common ancestor was found within ${MAX_GRAPH_COMMITS.toLocaleString()} commits.`,
@@ -486,67 +440,13 @@ function useComparison(
         return;
       }
 
-      const [baseCommit, headCommit, headHistory, baseHistory] =
-        await Promise.all([
-          pool.getSingleCommit(effectiveBase.commitId, abort.signal),
-          pool.getSingleCommit(effectiveHead.commitId, abort.signal),
-          pool.getCommitHistory(
-            effectiveHead.commitId,
-            MAX_GRAPH_COMMITS,
-            abort.signal,
-          ),
-          pool.getCommitHistory(
-            effectiveBase.commitId,
-            MAX_GRAPH_COMMITS,
-            abort.signal,
-          ),
-        ]);
-      if (abort.signal.aborted) return;
-
-      if (!baseCommit || !headCommit || !headHistory || !baseHistory) {
-        setState({
-          kind: "error",
-          message:
-            "The git server did not return enough commit data for this comparison.",
-        });
-        return;
-      }
-
-      const headRange = commitsUntilMergeBase(
-        effectiveHead.commitId,
-        mergeBaseId,
-        headHistory,
-        baseHistory,
-      );
-      const baseRange = commitsUntilMergeBase(
-        effectiveBase.commitId,
-        mergeBaseId,
-        baseHistory,
-        headHistory,
-      );
-      if (!headRange || !baseRange) {
-        setState({
-          kind: "error",
-          message: `The comparison exceeds the ${MAX_GRAPH_COMMITS.toLocaleString()}-commit graph limit.`,
-        });
-        return;
-      }
-
-      const headHashes = new Set(headRange.map((commit) => commit.hash));
-      const baseHashes = new Set(baseRange.map((commit) => commit.hash));
-      const headOnly = headRange.filter(
-        (commit) => !baseHashes.has(commit.hash),
-      );
-      const baseOnly = baseRange.filter(
-        (commit) => !headHashes.has(commit.hash),
-      );
       setState({
         kind: "ready",
-        mergeBaseId,
-        headCommit,
-        commits: headOnly.slice(0, MAX_DISPLAY_COMMITS),
-        ahead: headOnly.length,
-        behind: baseOnly.length,
+        mergeBaseId: comparison.mergeBaseId,
+        headCommit: comparison.headCommit,
+        commits: comparison.headOnlyCommits.slice(0, MAX_DISPLAY_COMMITS),
+        ahead: comparison.headOnlyCommits.length,
+        behind: comparison.baseOnlyCommits.length,
       });
     }
 
