@@ -92,6 +92,7 @@ export function ReplyBox({
   const [activeTab, setActiveTab] = useState<"write" | "preview">("write");
   const [focused, setFocused] = useState(false);
   const [isPending, setIsPending] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
   const [anonMode, setAnonMode] = useState(false);
   /** NIP-94 tag groups accumulated from Blossom uploads in this session */
   const [uploadedTagGroups, setUploadedTagGroups] = useState<Nip94Tags[]>([]);
@@ -225,7 +226,8 @@ export function ReplyBox({
     [requestSubmit],
   );
 
-  const submitDisabled = isPending || !body.trim() || composerHasNsec(body);
+  const submitDisabled =
+    isPending || isUploading || !body.trim() || composerHasNsec(body);
 
   return (
     <div className="flex gap-3 items-start">
@@ -262,6 +264,7 @@ export function ReplyBox({
           }}
           priorityPubkeys={priorityPubkeys}
           onUploadedTags={handleUploadedTags}
+          onUploadingChange={setIsUploading}
         />
 
         <div className="flex flex-wrap items-center gap-2">
@@ -271,15 +274,11 @@ export function ReplyBox({
               <button
                 type="button"
                 title="Attach image or video (Blossom)"
-                disabled={isPending || composerRef.current?.isUploading}
+                disabled={isPending || isUploading}
                 onClick={() => composerRef.current?.triggerAttach()}
                 className="rounded p-1 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
               >
-                {composerRef.current?.isUploading ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Paperclip className="h-4 w-4" />
-                )}
+                <Paperclip className="h-4 w-4" />
               </button>
 
               <div className="flex items-center gap-0.5">
