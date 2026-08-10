@@ -74,6 +74,7 @@ import {
   getLastLineComments,
   buildThreadEvents,
 } from "@/hooks/useInlineComments";
+import { useIsMobile } from "@/hooks/useIsMobile";
 
 // ---------------------------------------------------------------------------
 // Theme hook — detect dark mode (same as CodeBlock)
@@ -832,6 +833,8 @@ const FileDiffCard = memo(function FileDiffCard({
   // Word-wrap state — on by default
   const [wordWrap, setWordWrap] = useState(true);
   const toggleWrap = useCallback(() => setWordWrap((w) => !w), []);
+  const isMobile = useIsMobile();
+  const effectiveWordWrap = isMobile ? false : wordWrap;
 
   const cardRef = useRef<HTMLDivElement>(null);
 
@@ -1224,7 +1227,7 @@ const FileDiffCard = memo(function FileDiffCard({
         fileTo={file.to}
         additions={file.additions}
         deletions={file.deletions}
-        hasLongLines={hasLongLines}
+        hasLongLines={!isMobile && hasLongLines}
         wordWrap={wordWrap}
         onToggleWrap={toggleWrap}
       />
@@ -1253,12 +1256,7 @@ const FileDiffCard = memo(function FileDiffCard({
         {/* Diff content */}
         {!collapsed && !hidden && (
           <SelectionContext.Provider value={selCtxValue}>
-            <SyncedScrollArea
-              className={cn(
-                "[&::-webkit-scrollbar]:hidden",
-                !wordWrap && "overflow-x-auto",
-              )}
-            >
+            <SyncedScrollArea className="overflow-x-auto [&::-webkit-scrollbar]:hidden">
               <table className="w-full border-collapse text-[13px] leading-[1.6] font-mono">
                 <tbody>
                   {file.chunks.map((chunk, ci) => (
@@ -1267,7 +1265,7 @@ const FileDiffCard = memo(function FileDiffCard({
                       chunk={chunk}
                       tokenMap={tokenMap}
                       isFirstChunk={ci === 0}
-                      wordWrap={wordWrap}
+                      wordWrap={effectiveWordWrap}
                       filename={filename}
                     />
                   ))}
@@ -1924,12 +1922,31 @@ function DiffLine({
               ctx && <div className="w-5 shrink-0" />
             )}
 
+            {/* One contextual line number on mobile keeps the gutter compact. */}
+            <span
+              onMouseDown={handleLineNumberMouseDown}
+              onMouseEnter={handleLineNumberMouseEnter}
+              className={cn(
+                "inline-block min-w-[3ch] cursor-pointer px-1 py-0 text-right md:hidden",
+                "text-muted-foreground/60 transition-colors duration-75",
+                !isSelected &&
+                  "group-hover:text-muted-foreground/90 hover:bg-blue-500/10",
+                isDel && "text-red-700/70 dark:text-red-400/70",
+                isAdd && "text-green-700/70 dark:text-green-400/70",
+                isSelected &&
+                  !isAdd &&
+                  !isDel &&
+                  "text-blue-600/70 dark:text-blue-400/70",
+              )}
+            >
+              {newLine ?? oldLine ?? ""}
+            </span>
             {/* Old line number */}
             <span
               onMouseDown={handleLineNumberMouseDown}
               onMouseEnter={handleLineNumberMouseEnter}
               className={cn(
-                "text-right px-2 py-0 min-w-[3ch] cursor-pointer",
+                "hidden min-w-[3ch] cursor-pointer px-2 py-0 text-right md:inline-block",
                 "text-muted-foreground/60 transition-colors duration-75",
                 !isSelected &&
                   "group-hover:text-muted-foreground/90 hover:bg-blue-500/10",
@@ -1946,7 +1963,7 @@ function DiffLine({
               onMouseDown={handleLineNumberMouseDown}
               onMouseEnter={handleLineNumberMouseEnter}
               className={cn(
-                "text-right px-2 py-0 min-w-[3ch] border-l border-border/30 cursor-pointer",
+                "hidden min-w-[3ch] cursor-pointer border-l border-border/30 px-2 py-0 text-right md:inline-block",
                 "text-muted-foreground/60 transition-colors duration-75",
                 !isSelected &&
                   "group-hover:text-muted-foreground/90 hover:bg-blue-500/10",
@@ -1963,7 +1980,7 @@ function DiffLine({
               onMouseDown={handleLineNumberMouseDown}
               onMouseEnter={handleLineNumberMouseEnter}
               className={cn(
-                "text-center px-1 py-0 border-l border-border/30 cursor-pointer",
+                "cursor-pointer border-l border-border/30 px-0.5 py-0 text-center md:px-1",
                 isAdd && "text-green-600 dark:text-green-400",
                 isDel && "text-red-600 dark:text-red-400",
                 isNormal && "text-muted-foreground/40",
@@ -1977,7 +1994,7 @@ function DiffLine({
         {/* Code content */}
         <td
           className={cn(
-            "px-3 py-0",
+            "px-2 py-0 md:px-3",
             wordWrap ? "whitespace-pre-wrap break-words" : "whitespace-pre",
           )}
           style={(() => {
