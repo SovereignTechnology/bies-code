@@ -1318,9 +1318,9 @@ function ChunkRows({
       >
         <td
           colSpan={10}
-          className="px-3 py-1.5 text-xs text-blue-600 dark:text-blue-400 font-mono select-none"
+          className="bg-blue-500/5 p-0 text-xs text-blue-600 dark:bg-blue-400/5 dark:text-blue-400 font-mono select-none"
         >
-          {chunk.content}
+          <div className="sticky left-0 w-fit px-3 py-1.5">{chunk.content}</div>
         </td>
       </tr>
 
@@ -1765,9 +1765,9 @@ function DiffLine({
           isDel && "bg-red-500/15 dark:bg-red-400/12",
         )}
       >
-        {/* Sticky gutter: comment button (left, GitHub-style) · old line · new line · +/- indicator */}
+        {/* Gutter: scrolls away on mobile, stays pinned beside code on desktop. */}
         <td
-          className="sticky left-0 select-none align-top p-0 w-[1%] whitespace-nowrap bg-background"
+          className="select-none align-top p-0 w-[1%] whitespace-nowrap bg-background md:sticky md:left-0"
           style={{
             // Layer add/del tint (and optional blue selection tint) over bg-background
             backgroundImage: isSelected
