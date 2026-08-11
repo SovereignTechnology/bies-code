@@ -1074,7 +1074,7 @@ export function GitServerStatus({
       </PopoverTrigger>
 
       <PopoverContent
-        className="p-0 overflow-hidden w-[560px]"
+        className="w-[calc(100vw-2rem)] max-w-[560px] overflow-hidden p-0"
         align="end"
         sideOffset={6}
       >

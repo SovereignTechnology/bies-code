@@ -275,7 +275,7 @@ export default function UserPage({ pubkey }: UserPageProps) {
                 <div className="space-y-3">
                   <Skeleton className="h-8 w-64" />
                   <Skeleton className="h-4 w-48" />
-                  <Skeleton className="h-4 w-96" />
+                  <Skeleton className="h-4 w-96 max-w-full" />
                   <div className="flex gap-4">
                     <Skeleton className="h-4 w-32" />
                     <Skeleton className="h-4 w-24" />

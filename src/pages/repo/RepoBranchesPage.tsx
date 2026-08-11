@@ -354,9 +354,9 @@ function BranchesSkeleton() {
         {Array.from({ length: 6 }).map((_, i) => (
           <div key={i} className="flex items-start gap-3 px-4 py-3">
             <Skeleton className="h-4 w-4 mt-0.5 rounded" />
-            <div className="flex-1 space-y-2">
+            <div className="min-w-0 flex-1 space-y-2">
               <Skeleton className="h-4 w-40" />
-              <Skeleton className="h-3 w-72" />
+              <Skeleton className="h-3 w-72 max-w-full" />
             </div>
             <Skeleton className="h-5 w-12 rounded" />
           </div>
