@@ -766,9 +766,7 @@ function ThreadChildren({
 
   return (
     <div
-      className={`min-w-0 ${
-        depth > 3 ? "border-l-0 pl-0 sm:border-l sm:pl-1" : "border-l pl-1"
-      }`}
+      className={`min-w-0 border-l ${depth > 3 ? "pl-px sm:pl-1" : "pl-1"}`}
       style={{ borderLeftColor: `rgb(59 130 246 / ${lineOpacity})` }}
     >
       {/* Collapse / expand toggle */}
