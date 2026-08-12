@@ -160,6 +160,12 @@ It also contains a release channel name.
       "f",
       "<platform-identifier>",
     ],
+    [
+      // OPTIONAL
+      // Git commit represented by this release (same as NIP-34)
+      "commit",
+      "<git-commit-id>",
+    ],
   ],
 }
 ```
@@ -175,6 +181,11 @@ The event's `created_at` timestamp MUST be the release date.
 The identifier `i` MUST be the exact same used in the application. The `d` tag is required and MUST be `<identifier>@<version>` (`i` and `version` tags joined by `@`).
 
 Note that a release version, typically a git tag, does not need to coincide with any of the linked asset versions.
+
+The optional `commit` tag identifies the Git commit represented by the release.
+Publishers SHOULD include it when the application source is maintained in Git.
+It describes the release as a whole; individual assets MAY continue to use
+their own `commit` tags when an asset was built from a different commit.
 
 ## Software Asset
 

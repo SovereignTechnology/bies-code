@@ -1273,6 +1273,7 @@ export function CreateReleaseDialog({
         appId: selectedApplication.appId,
         version: releaseVersion,
         channel: channel.trim(),
+        commit: buildCommit,
         notes,
         assets: signedAssets.map((asset, index) => ({
           eventId: asset.id,

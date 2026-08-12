@@ -46,6 +46,7 @@ export interface SoftwareReleaseInput {
   appId: string;
   version: string;
   channel: string;
+  commit?: string;
   notes: string;
   assets: SoftwareReleaseAssetInput[];
   relayHint?: string;
@@ -155,6 +156,10 @@ export class SoftwareReleaseFactory extends EventFactory<
     }
     if (!version) throw new Error("Release version is required");
     if (!channel) throw new Error("Release channel is required");
+    const commit = trimmed(input.commit);
+    if (commit && !/^[0-9a-f]{40}$/i.test(commit)) {
+      throw new Error("Release Git commit ID is invalid");
+    }
     if (input.assets.length === 0) {
       throw new Error("At least one release asset is required");
     }
@@ -181,6 +186,7 @@ export class SoftwareReleaseFactory extends EventFactory<
         ["i", appId],
         ["version", version],
         ["c", channel],
+        ...(commit ? [["commit", commit.toLowerCase()]] : []),
         ...assetTags,
         ...platforms.map((platform) => ["f", platform]),
       ])
