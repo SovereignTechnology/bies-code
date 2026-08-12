@@ -186,6 +186,13 @@ An asset is a regular non-replaceable event, mainly used to cryptographically li
   // Empty content
   "content": "",
   "tags": [
+    [
+      // OPTIONAL
+      // Pointer to the software application kind 32267
+      "a",
+      "32267:<app-publisher-pubkey>:<app-id>",
+      "<relay-hint>",
+    ],
     // Tags derived from kind 1063
     [
       // REQUIRED
@@ -323,6 +330,11 @@ An asset is a regular non-replaceable event, mainly used to cryptographically li
 ```
 
 Both asset identifier `i` and `version` tags MAY be different to the application and release identifier and version.
+
+When an asset includes an `a` tag, it MUST point to the kind 32267 application
+which owns the release containing that asset. Publishers SHOULD include this
+pointer so relays can validate and accept assets before the release event is
+published. Clients MUST NOT require the pointer when reading existing assets.
 
 When `url` is omitted, clients SHOULD locate the asset via its SHA-256 hash using a Blossom [BUD-01](https://github.com/hzrd149/blossom/blob/master/buds/01.md#get-sha256---get-blob) endpoint.
 
