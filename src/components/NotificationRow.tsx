@@ -303,6 +303,41 @@ function ThreadNotificationRow({
         : actions.markAsUnread(item.rootId);
   const restoreFromArchive =
     currentView === "archived" || (currentView === "all" && item.archived);
+  const metadataContent = (
+    <>
+      {summary.purpose &&
+        (isNewRoot ? (
+          <RootPurposeBadge purpose={summary.purpose} isUnread={item.unread} />
+        ) : (
+          <span className="text-xs text-muted-foreground">
+            {summary.purpose}
+          </span>
+        ))}
+      {summary.unreadText && (
+        <UnreadSummaryBadge
+          summary={summary.unreadText}
+          hasMerge={summary.hasMerge}
+          hasClosed={summary.hasClosed}
+        />
+      )}
+      {repoCoord && (
+        <RepoBadge
+          coord={repoCoord}
+          repoNameOnly
+          asSpan
+          className="max-w-full md:hidden"
+        />
+      )}
+      {activityActors[0] && (
+        <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+          <ActivityActors pubkeys={activityActors} />
+        </span>
+      )}
+      <span className="whitespace-nowrap text-xs text-muted-foreground">
+        active {lastActive}
+      </span>
+    </>
+  );
 
   return (
     <li className="group min-w-0">
@@ -324,7 +359,10 @@ function ThreadNotificationRow({
         <div className="flex items-start">
           <Link
             to={linkPath}
-            className="flex items-start gap-3 min-w-0 flex-1 px-3 py-3"
+            className={cn(
+              "flex min-w-0 flex-1 items-start gap-3 px-3",
+              compact ? "py-3" : "pb-1 pt-3",
+            )}
             onClick={() =>
               eventScoped
                 ? actions.markEventsAsRead(eventIds)
@@ -372,43 +410,11 @@ function ThreadNotificationRow({
                 {title.length > 70 ? `${title.slice(0, 67)}...` : title}
               </p>
 
-              {/* Latest activity author + root/unread state */}
-              <div className="flex items-center gap-2 mt-1 flex-wrap">
-                {summary.purpose &&
-                  (isNewRoot ? (
-                    <RootPurposeBadge
-                      purpose={summary.purpose}
-                      isUnread={item.unread}
-                    />
-                  ) : (
-                    <span className="text-xs text-muted-foreground">
-                      {summary.purpose}
-                    </span>
-                  ))}
-                {summary.unreadText && (
-                  <UnreadSummaryBadge
-                    summary={summary.unreadText}
-                    hasMerge={summary.hasMerge}
-                    hasClosed={summary.hasClosed}
-                  />
-                )}
-                {repoCoord && (
-                  <RepoBadge
-                    coord={repoCoord}
-                    repoNameOnly
-                    asSpan
-                    className="max-w-full md:hidden"
-                  />
-                )}
-                {activityActors[0] && (
-                  <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-                    <ActivityActors pubkeys={activityActors} />
-                  </span>
-                )}
-                <span className="text-xs text-muted-foreground whitespace-nowrap">
-                  active {lastActive}
-                </span>
-              </div>
+              {compact && (
+                <div className="mt-1 flex flex-wrap items-center gap-2">
+                  {metadataContent}
+                </div>
+              )}
             </div>
 
             {/* Root context occupies the former activity-avatar position. */}
@@ -422,29 +428,6 @@ function ThreadNotificationRow({
               )}
             </div>
           </Link>
-
-          {!compact && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="mr-1 h-8 w-8 shrink-0 self-center gap-1 p-0 sm:w-auto sm:px-2"
-              onClick={() => setActivityExpanded((expanded) => !expanded)}
-              aria-expanded={activityExpanded}
-              aria-controls={activityListId}
-              aria-label={`${activityExpanded ? "Hide" : "Show"} ${item.events.length} ${currentView} ${item.events.length === 1 ? "activity" : "activities"}`}
-              title={`${activityExpanded ? "Hide" : "Show"} activity`}
-            >
-              <span className="hidden text-xs text-muted-foreground sm:inline">
-                {item.events.length}
-              </span>
-              <ChevronDown
-                className={cn(
-                  "h-4 w-4 transition-transform motion-reduce:transition-none",
-                  activityExpanded && "rotate-180",
-                )}
-              />
-            </Button>
-          )}
 
           {/* Swipe gestures replace these buttons on phones. Coarse pointers
               keep icon actions visible; precise pointers reveal them on hover. */}
@@ -532,6 +515,30 @@ function ThreadNotificationRow({
             )}
           </div>
         </div>
+
+        {!compact && (
+          <div className="flex flex-wrap items-center gap-2 pb-3 pl-16 pr-3">
+            {metadataContent}
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 gap-0.5 px-1.5 text-xs text-muted-foreground hover:text-foreground"
+              onClick={() => setActivityExpanded((expanded) => !expanded)}
+              aria-expanded={activityExpanded}
+              aria-controls={activityListId}
+              aria-label={`${activityExpanded ? "Hide" : "Show"} ${item.events.length} ${currentView} ${item.events.length === 1 ? "activity" : "activities"}`}
+              title={`${activityExpanded ? "Hide" : "Show"} activity`}
+            >
+              <span>{item.events.length}</span>
+              <ChevronDown
+                className={cn(
+                  "h-3 w-3 transition-transform motion-reduce:transition-none",
+                  activityExpanded && "rotate-180",
+                )}
+              />
+            </Button>
+          </div>
+        )}
       </NotificationSwipeSurface>
 
       {!compact && activityExpanded && (
