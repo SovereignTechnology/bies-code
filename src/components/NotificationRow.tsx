@@ -7,7 +7,7 @@
  * The default (compact={false}) is the full notifications-page layout.
  */
 
-import { useMemo, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { useActiveAccount } from "applesauce-react/hooks";
 import {
@@ -23,6 +23,7 @@ import {
   ArchiveRestore,
   Eye,
   EyeOff,
+  ChevronDown,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -262,13 +263,14 @@ function ThreadNotificationRow({
   resolvedMap,
   eventScoped,
 }: {
-  item: NotificationItem;
+  item: ThreadNotificationItem;
   actions: NotificationActions;
   compact: boolean;
   currentView: ViewTab;
   resolvedMap?: Map<string, ResolvedIssueLite>;
   eventScoped: boolean;
 }) {
+  const [activityExpanded, setActivityExpanded] = useState(false);
   const activeAccount = useActiveAccount();
   const rootEvent = useRootEvent(item.rootId);
 
@@ -286,17 +288,10 @@ function ThreadNotificationRow({
   const nevent = eventIdToNevent(item.rootId);
   const linkPath = buildNotificationLink(nevent, item);
 
-  const unreadCommenters =
-    compact || !item.unread
-      ? []
-      : getCommenters({
-          ...item,
-          events: item.events.filter((event) =>
-            item.unreadEventIds.includes(event.id),
-          ),
-        });
+  const activityActors = compact ? [] : getCommenters(item);
   const lastActive = useRelativeTime(item.latestActivity);
   const eventIds = item.events.map((event) => event.id);
+  const activityListId = `notification-activity-${item.rootId}`;
 
   const toggleRead = () =>
     item.unread
@@ -397,9 +392,17 @@ function ThreadNotificationRow({
                     hasClosed={summary.hasClosed}
                   />
                 )}
-                {unreadCommenters[0] && (
+                {repoCoord && (
+                  <RepoBadge
+                    coord={repoCoord}
+                    repoNameOnly
+                    asSpan
+                    className="max-w-full md:hidden"
+                  />
+                )}
+                {activityActors[0] && (
                   <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-                    <ActivityActors pubkeys={unreadCommenters} />
+                    <ActivityActors pubkeys={activityActors} />
                   </span>
                 )}
                 <span className="text-xs text-muted-foreground whitespace-nowrap">
@@ -419,6 +422,29 @@ function ThreadNotificationRow({
               )}
             </div>
           </Link>
+
+          {!compact && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="mr-1 h-8 w-8 shrink-0 self-center gap-1 p-0 sm:w-auto sm:px-2"
+              onClick={() => setActivityExpanded((expanded) => !expanded)}
+              aria-expanded={activityExpanded}
+              aria-controls={activityListId}
+              aria-label={`${activityExpanded ? "Hide" : "Show"} ${item.events.length} ${currentView} ${item.events.length === 1 ? "activity" : "activities"}`}
+              title={`${activityExpanded ? "Hide" : "Show"} activity`}
+            >
+              <span className="hidden text-xs text-muted-foreground sm:inline">
+                {item.events.length}
+              </span>
+              <ChevronDown
+                className={cn(
+                  "h-4 w-4 transition-transform motion-reduce:transition-none",
+                  activityExpanded && "rotate-180",
+                )}
+              />
+            </Button>
+          )}
 
           {/* Swipe gestures replace these buttons on phones. Coarse pointers
               keep icon actions visible; precise pointers reveal them on hover. */}
@@ -507,6 +533,24 @@ function ThreadNotificationRow({
           </div>
         </div>
       </NotificationSwipeSurface>
+
+      {!compact && activityExpanded && (
+        <ul
+          id={activityListId}
+          className="divide-y divide-border/40 border-t border-border/40 bg-muted/10 pl-2 sm:pl-6"
+        >
+          {item.events.map((event) => (
+            <NotificationActivityRow
+              key={event.id}
+              item={item}
+              event={event}
+              actions={actions}
+              currentView={currentView}
+              resolvedMap={resolvedMap}
+            />
+          ))}
+        </ul>
+      )}
     </li>
   );
 }
