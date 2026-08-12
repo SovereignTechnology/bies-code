@@ -23,7 +23,7 @@ import {
   ArchiveRestore,
   Eye,
   EyeOff,
-  ChevronDown,
+  ChevronRight,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -539,10 +539,10 @@ function ThreadNotificationRow({
               aria-label={`${activityExpanded ? "Hide" : "Show"} ${item.events.length} ${currentView} ${item.events.length === 1 ? "activity" : "activities"}`}
               title={`${activityExpanded ? "Hide" : "Show"} activity`}
             >
-              <ChevronDown
+              <ChevronRight
                 className={cn(
                   "h-3 w-3 transition-transform motion-reduce:transition-none",
-                  activityExpanded && "rotate-180",
+                  activityExpanded && "rotate-90",
                 )}
               />
             </Button>
