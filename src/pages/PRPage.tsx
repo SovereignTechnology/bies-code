@@ -98,6 +98,7 @@ import {
 } from "@/lib/nip34";
 import { eventIdToNevent } from "@/lib/routeUtils";
 import { nip19 } from "nostr-tools";
+import { EventShareButton } from "@/components/EventCardActions";
 import type { NostrEvent } from "nostr-tools";
 import { useInferredPRParents } from "@/hooks/useInferredPRParents";
 import { InferredPRStackMap } from "@/components/InferredPRParentLinks";
@@ -1239,9 +1240,16 @@ export default function PRPage() {
                 </div>
 
                 <div className="flex items-center gap-4 flex-wrap text-sm text-muted-foreground ml-[calc(theme(spacing.3)+4.5rem-3.5rem)]">
-                  <code className="font-mono text-xs text-muted-foreground/80">
-                    #{pr.rootEvent.id.slice(0, 8)}
-                  </code>
+                  <div className="flex items-center gap-1.5">
+                    <code className="font-mono text-xs text-muted-foreground/80">
+                      #{pr.rootEvent.id.slice(0, 8)}
+                    </code>
+                    <EventShareButton
+                      event={pr.rootEvent}
+                      label="Copy link"
+                      dialogTitle={`Copy link to ${pr.itemType === "patch" ? "patch" : "pull request"}`}
+                    />
+                  </div>
                   <div className="flex items-center gap-1">
                     <TypeIcon className="h-3.5 w-3.5" />
                     <span className="text-xs capitalize">{pr.itemType}</span>
