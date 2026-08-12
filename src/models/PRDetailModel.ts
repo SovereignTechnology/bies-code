@@ -29,6 +29,7 @@ import {
   type PRItemType,
   compareNip01Chronologically,
   isItemEventAuthorised,
+  getPRTargetBranch,
 } from "@/lib/nip34";
 import { resolveAllChains } from "@/hooks/usePatchChain";
 import { Patch, isValidPatch } from "@/casts/Patch";
@@ -446,6 +447,7 @@ export function PRDetailModel(
             pubkey: core.pubkey,
             event: core.event,
             itemType,
+            targetBranch: getPRTargetBranch(rootEvent),
             originalSubject: core.originalSubject,
             currentSubject: core.currentSubject,
             content: core.content,

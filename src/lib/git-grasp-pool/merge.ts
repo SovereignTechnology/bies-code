@@ -112,6 +112,11 @@ export interface GraspMergeContext {
   defaultBranchName: string;
   /** Current HEAD of the default branch (oldHash for the push). */
   defaultBranchHead: string;
+  /**
+   * Whether the updated branch should also become the repository HEAD.
+   * Defaults to true; non-default PR targets set this to false.
+   */
+  updateHead?: boolean;
   /** Current kind:30618 repository state, used to preserve all existing refs. */
   currentStateEvent?: NostrEvent | null;
   /** All repo coordinates ("30617:<pubkey>:<d>") for the status #a tags. */
@@ -392,6 +397,12 @@ async function runMergeSequence(
 ): Promise<MergeSequenceResult> {
   const defaultBranchRef = `refs/heads/${params.defaultBranchName}`;
 
+  if (params.updateHead === false && !params.currentStateEvent) {
+    throw new Error(
+      "Cannot safely update a non-default branch without the current repository state.",
+    );
+  }
+
   // Safety guard: the new tip MUST descend from the current branch tip (i.e.
   // advancing the branch to it is a fast-forward). A non-fast-forward update
   // orphans commits already on the branch — the disaster an incorrect merge
@@ -405,6 +416,7 @@ async function runMergeSequence(
     params.currentStateEvent,
     newTipHash,
     params.defaultBranchName,
+    params.updateHead ?? true,
   ).sign(params.signer);
 
   params.onStep?.("publishing-state");

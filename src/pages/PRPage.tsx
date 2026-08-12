@@ -32,7 +32,7 @@ import type { RelayGroupSpec } from "@/hooks/useEventSearch";
 import { useRepoContext } from "@/pages/repo/RepoContext";
 import { gitIndexRelays, fallbackRelays } from "@/services/settings";
 import { useGitPool } from "@/hooks/useGitPool";
-import { useAuthoritativeDefaultBranch } from "@/hooks/useAuthoritativeDefaultBranch";
+import { useAuthoritativePRTargetBranch } from "@/hooks/useAuthoritativePRTargetBranch";
 import { UserAvatar, UserLink } from "@/components/UserAvatar";
 import {
   StatusDropdownBadge,
@@ -59,6 +59,7 @@ import {
   FileDiff,
   Loader2,
   Pin,
+  GitBranch,
 } from "lucide-react";
 import {
   PatchSetPushEvent,
@@ -417,6 +418,22 @@ export default function PRPage() {
     stateCreatedAt: repoState ? repoState.event.created_at : undefined,
   });
 
+  // A PR's optional `b` tag replaces the repository default as the base for
+  // comparisons and merge pushes. Non-default refs are lazily ancestry-
+  // verified by the shared git pool before they become authoritative.
+  const {
+    targetBranchName,
+    targetBranchHead,
+    defaultBranchName,
+    targetIsDefaultBranch,
+    targetBranchValid,
+  } = useAuthoritativePRTargetBranch(
+    gitPool,
+    gitPoolState,
+    repoState,
+    pr?.itemType === "pr" ? pr.targetBranch : undefined,
+  );
+
   // Derive the active tab from the URL.
   // Also returns "commits" when on a commit detail sub-path.
   const activeTab = useMemo(() => {
@@ -451,6 +468,9 @@ export default function PRPage() {
       pr?.tip.commitId,
       pr?.tip.explicitMergeBase,
       effectiveCloneUrls,
+      targetBranchHead,
+      gitPoolState.loading,
+      !!pr?.targetBranch,
     );
 
   // Commit history for the PR commits tab — fetches from the effective tip.
@@ -570,27 +590,19 @@ export default function PRPage() {
     );
   }, [hasRevisions, originalPRTipCommitId, prCommitHistory.commits]);
 
-  // Mergeability evaluation and merge pushes must target the authoritative
-  // default-branch tip — resolved by the pool (`PoolState.authoritativeHead`):
-  // the signed Nostr state head, unless a git server is verifiably ahead of
-  // it. Never `gitPoolState.latestCommit`, which can point at whichever
-  // server won the git-info race while mirrors converge after a push.
-  const { defaultBranchName, defaultBranchHead } =
-    useAuthoritativeDefaultBranch(gitPoolState, repoState);
-
   const [behindCount, setBehindCount] = useState<number | undefined>(undefined);
-  // false = merge base is not on the default branch (no shared ancestor)
-  const [baseOnDefaultBranch, setBaseOnDefaultBranch] = useState<
+  // false = merge base is not on the target branch (no shared ancestor)
+  const [baseOnTargetBranch, setBaseOnTargetBranch] = useState<
     boolean | undefined
   >(undefined);
   const behindAbortRef = useRef<AbortController | null>(null);
 
   // ── Ahead / behind counts ─────────────────────────────────────────────
   // Suppress the "ahead" count when we know the base commit has no shared
-  // ancestor with the default branch — "N commits ahead" is meaningless
+  // ancestor with the target branch — "N commits ahead" is meaningless
   // without a common history.
   const aheadCount =
-    baseOnDefaultBranch === false
+    baseOnTargetBranch === false
       ? undefined
       : pr?.itemType === "pr"
         ? prCommits.length > 0
@@ -603,9 +615,9 @@ export default function PRPage() {
           : undefined;
 
   useEffect(() => {
-    if (!gitPool || !effectiveMergeBase) {
+    if (!gitPool || !effectiveMergeBase || !targetBranchHead) {
       setBehindCount(undefined);
-      setBaseOnDefaultBranch(undefined);
+      setBaseOnTargetBranch(undefined);
       return;
     }
 
@@ -614,23 +626,29 @@ export default function PRPage() {
     behindAbortRef.current = abort;
 
     gitPool
-      .countCommitsBehind(effectiveMergeBase, abort.signal)
+      .countCommitsBehind(
+        effectiveMergeBase,
+        abort.signal,
+        200,
+        5000,
+        targetBranchHead,
+      )
       .then((result) => {
         if (abort.signal.aborted) return;
-        // result === null means the merge base was not found in the default
+        // result === null means the merge base was not found in the target
         // branch history — no shared ancestor with the current codebase.
-        setBaseOnDefaultBranch(result !== null);
+        setBaseOnTargetBranch(result !== null);
         setBehindCount(result ?? undefined);
       })
       .catch(() => {
         if (!abort.signal.aborted) {
           setBehindCount(undefined);
-          setBaseOnDefaultBranch(undefined);
+          setBaseOnTargetBranch(undefined);
         }
       });
 
     return () => abort.abort();
-  }, [gitPool, effectiveMergeBase, defaultBranchHead]);
+  }, [gitPool, effectiveMergeBase, targetBranchHead]);
 
   // Patch chain — needed for both file count and Commits tab.
   // Cover-letter patches (t:cover-letter) are excluded — they carry no diff
@@ -1071,7 +1089,7 @@ export default function PRPage() {
           backLabel="PR commits"
           hasCommitId={patchMatch.hasCommitId}
           patchChain={commitDetailPatchChain.chain}
-          defaultBranchHead={defaultBranchHead}
+          defaultBranchHead={targetBranchHead}
           superseded={patchMatch.superseded}
           isBaseGuessed={commitDetailPatchMergeBase.isGuessed}
           guessedBaseCommitId={
@@ -1132,7 +1150,7 @@ export default function PRPage() {
     patchMatch,
     gitPool,
     gitPoolState.winnerUrl,
-    defaultBranchHead,
+    targetBranchHead,
     cloneUrls,
     prCloneUrls,
     prBasePath,
@@ -1267,6 +1285,53 @@ export default function PRPage() {
           ) : null}
         </div>
       </div>
+
+      {pr?.itemType === "pr" && pr.targetBranch && (
+        <div className="container max-w-screen-xl px-4 pt-4 md:px-8">
+          <div
+            role={
+              !targetBranchValid ||
+              (!gitPoolState.loading && !targetBranchHead) ||
+              (!targetIsDefaultBranch && repoState === null)
+                ? "alert"
+                : undefined
+            }
+            className={cn(
+              "flex items-start gap-2 rounded-lg border px-3 py-2.5 text-sm",
+              !targetBranchValid ||
+                (!gitPoolState.loading && !targetBranchHead) ||
+                (!targetIsDefaultBranch && repoState === null)
+                ? "border-amber-500/40 bg-amber-500/5 text-amber-800 dark:text-amber-300"
+                : "border-border/60 bg-muted/30 text-muted-foreground",
+            )}
+          >
+            <GitBranch className="mt-0.5 h-4 w-4 shrink-0" />
+            <p>
+              This pull request targets{" "}
+              <code className="rounded bg-background px-1 py-0.5 font-mono text-xs text-foreground">
+                {pr.targetBranch}
+              </code>
+              {defaultBranchName && (
+                <>
+                  {" "}
+                  instead of the default{" "}
+                  <code className="rounded bg-background px-1 py-0.5 font-mono text-xs text-foreground">
+                    {defaultBranchName}
+                  </code>
+                </>
+              )}
+              .{" "}
+              {!targetBranchValid
+                ? "This is not a valid Git branch name, so comparison and merge actions are unavailable."
+                : !targetIsDefaultBranch && repoState === null
+                  ? "The current repository state is unavailable, so this branch cannot be updated safely in the browser."
+                  : !gitPoolState.loading && !targetBranchHead
+                    ? "The target branch could not be found, so comparison and browser merge actions are unavailable."
+                    : "Comparisons and merges use this branch."}
+            </p>
+          </div>
+        </div>
+      )}
 
       {pr &&
         (inferredParent ||
@@ -1652,8 +1717,9 @@ export default function PRPage() {
                       gitPool={gitPool}
                       effectiveCloneUrls={effectiveCloneUrls}
                       behindCount={behindCount}
-                      defaultBranchName={defaultBranchName ?? "main"}
-                      defaultBranchHead={defaultBranchHead}
+                      defaultBranchName={targetBranchName ?? "main"}
+                      defaultBranchHead={targetBranchHead}
+                      targetIsDefaultBranch={targetIsDefaultBranch}
                       currentStateEvent={repoState?.event}
                       guessedBaseCommitId={
                         pr.itemType === "patch" && patchMergeBase.isGuessed
@@ -1714,7 +1780,7 @@ export default function PRPage() {
                       chain={patchChain}
                       baseCommitId={patchMergeBase.baseCommitId}
                       isBaseGuessed={patchMergeBase.isGuessed}
-                      defaultBranchHead={defaultBranchHead}
+                      defaultBranchHead={targetBranchHead}
                       pool={gitPool}
                       onFileCountChange={(count) => {
                         if (pr?.itemType === "patch") setFileCount(count);
@@ -1849,11 +1915,11 @@ export default function PRPage() {
                               </span>
                             </p>
                           )}
-                          {defaultBranchName && (
+                          {targetBranchName && (
                             <p className="text-xs text-muted-foreground">
                               vs{" "}
                               <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">
-                                {defaultBranchName}
+                                {targetBranchName}
                               </code>
                             </p>
                           )}

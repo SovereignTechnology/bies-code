@@ -116,12 +116,14 @@ interface MergePanelProps {
   gitPool: GitGraspPool | null;
   /** All effective clone URLs */
   effectiveCloneUrls: string[];
-  /** Behind count (how many commits the default branch moved since the patch base) */
+  /** Behind count (how many commits the merge target moved since the item base) */
   behindCount: number | undefined;
-  /** The default branch name (e.g. "main") */
+  /** Effective merge target branch name (the default when b is absent). */
   defaultBranchName: string;
-  /** The current HEAD commit of the default branch */
+  /** Current authoritative tip commit of the effective merge target. */
   defaultBranchHead: string | undefined;
+  /** Whether the effective merge target is the repository default branch. */
+  targetIsDefaultBranch: boolean;
   /** Current kind:30618 repository state, used to preserve existing branches/tags. */
   currentStateEvent?: NostrEvent | null;
   /**
@@ -332,6 +334,7 @@ export function MergePanel({
   behindCount,
   defaultBranchName,
   defaultBranchHead,
+  targetIsDefaultBranch,
   currentStateEvent,
   guessedBaseCommitId,
   prNevent,
@@ -393,11 +396,11 @@ export function MergePanel({
   );
 
   // Issue auto-resolution context (ngit parity): commit messages landing on
-  // the default branch are scanned for resolution keywords against the repo's
-  // open/draft issues. Resolved/closed/deleted issues are filtered here so
-  // the merge never re-resolves them.
+  // the repository default branch are scanned for resolution keywords against
+  // the repo's open/draft issues. Resolved/closed/deleted issues are filtered
+  // here so the merge never re-resolves them.
   const issueAutoResolve = useMemo<IssueAutoResolveContext | undefined>(() => {
-    if (!issues?.length) return undefined;
+    if (!targetIsDefaultBranch || !issues?.length) return undefined;
     const candidates: IssueCandidate[] = issues
       .filter((issue) => issue.status === "open" || issue.status === "draft")
       .map((issue) => ({
@@ -407,7 +410,7 @@ export function MergePanel({
       }));
     if (candidates.length === 0) return undefined;
     return { issues: candidates, maintainers: repo.maintainerSet };
-  }, [issues, repo.maintainerSet]);
+  }, [issues, repo.maintainerSet, targetIsDefaultBranch]);
 
   const patchTipCommitId = useMemo(() => {
     if (isPRType || !patchChain?.length) return undefined;
@@ -523,6 +526,7 @@ export function MergePanel({
     !detectedMergeCommit &&
     mergeability.status === "ready" &&
     defaultBranchHead &&
+    (targetIsDefaultBranch || !!currentStateEvent) &&
     mergeStep === "idle";
 
   // Can we show the apply-to-tip button? (patch-type only)
@@ -722,6 +726,7 @@ export function MergePanel({
         dTag: repo.dTag,
         defaultBranchName,
         defaultBranchHead,
+        updateHead: targetIsDefaultBranch,
         currentStateEvent,
         repoCoords: pr.repoCoords,
         rootEventId: pr.rootEvent.id,
@@ -754,6 +759,7 @@ export function MergePanel({
     defaultBranchHead,
     currentStateEvent,
     defaultBranchName,
+    targetIsDefaultBranch,
     gitPool,
     effectiveCloneUrls,
     pr,
@@ -804,6 +810,7 @@ export function MergePanel({
         dTag: repo.dTag,
         defaultBranchName,
         defaultBranchHead,
+        updateHead: targetIsDefaultBranch,
         currentStateEvent,
         repoCoords: pr.repoCoords,
         rootEventId: pr.rootEvent.id,
@@ -829,6 +836,7 @@ export function MergePanel({
     defaultBranchHead,
     currentStateEvent,
     defaultBranchName,
+    targetIsDefaultBranch,
     gitPool,
     effectiveCloneUrls,
     pr,
@@ -881,6 +889,7 @@ export function MergePanel({
         dTag: repo.dTag,
         defaultBranchName,
         defaultBranchHead,
+        updateHead: targetIsDefaultBranch,
         currentStateEvent,
         repoCoords: pr.repoCoords,
         rootEventId: pr.rootEvent.id,
@@ -911,6 +920,7 @@ export function MergePanel({
     defaultBranchHead,
     currentStateEvent,
     defaultBranchName,
+    targetIsDefaultBranch,
     gitPool,
     effectiveCloneUrls,
     pr,
@@ -1065,7 +1075,7 @@ export function MergePanel({
                           {behindCount !== undefined && behindCount > 0 && (
                             <>
                               {" "}
-                              The default branch is{" "}
+                              The target branch is{" "}
                               <strong>
                                 {behindCount} commit
                                 {behindCount !== 1 ? "s" : ""}
@@ -1508,8 +1518,8 @@ function StatusHeadline({
           {behindCount !== undefined && behindCount > 0 && (
             <p className="text-xs text-amber-600 mt-0.5">
               {isPRType
-                ? `Default branch is ${behindCount} commit${behindCount !== 1 ? "s" : ""} ahead of the PR base. Consider updating the PR branch first.`
-                : `Default branch is ${behindCount} commit${behindCount !== 1 ? "s" : ""} ahead of the patch base, but patches apply cleanly.`}
+                ? `Target branch is ${behindCount} commit${behindCount !== 1 ? "s" : ""} ahead of the PR base. Consider updating the PR branch first.`
+                : `Target branch is ${behindCount} commit${behindCount !== 1 ? "s" : ""} ahead of the patch base, but patches apply cleanly.`}
             </p>
           )}
           {!isPRType && isBaseGuessed && (

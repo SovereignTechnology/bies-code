@@ -18,6 +18,7 @@ const RepoCoordsSymbol = Symbol.for("pr-repo-coords");
 const TipCommitIdSymbol = Symbol.for("pr-tip-commit-id");
 const MergeBaseSymbol = Symbol.for("pr-merge-base");
 const CloneUrlsSymbol = Symbol.for("pr-clone-urls");
+const TargetBranchSymbol = Symbol.for("pr-target-branch");
 
 /** Validate that a raw event is a well-formed pull request */
 export function isValidPR(event: NostrEvent): event is PREvent {
@@ -91,6 +92,18 @@ export class PR extends EventCast<PREvent> {
       this.event,
       MergeBaseSymbol,
       () => this.event.tags.find(([t]) => t === "merge-base")?.[1],
+    );
+  }
+
+  /**
+   * Non-default target branch from the optional ["b", "<branch>"] tag.
+   * An absent tag means the repository's default branch.
+   */
+  get targetBranch(): string | undefined {
+    return getOrComputeCachedValue(
+      this.event,
+      TargetBranchSymbol,
+      () => getTagValue(this.event, "b") || undefined,
     );
   }
 

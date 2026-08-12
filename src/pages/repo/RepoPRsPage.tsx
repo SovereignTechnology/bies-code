@@ -52,7 +52,8 @@ const TYPE_OPTIONS: MultiSelectOption[] = [
 const DEFAULT_STATUS_FILTER: IssueStatus[] = ["open", "draft"];
 
 export default function RepoPRsPage() {
-  const { pubkey, repoId, resolved, prs, basePath } = useRepoContext();
+  const { pubkey, repoId, resolved, prs, basePath, repoState } =
+    useRepoContext();
   const repo = resolved?.repo;
   const repoOwnerProfile = useProfile(pubkey);
   const inferredParents = useInferredPRParents(repo?.allCoordinates);
@@ -64,6 +65,10 @@ export default function RepoPRsPage() {
   const [typeFilter, setTypeFilter] = useState<PRItemType[]>([]);
   const [labelFilter, setLabelFilter] = useState<string[]>([]);
   const [authorFilter, setAuthorFilter] = useState<string | null>(null);
+  // null = all targets, empty string = repository default branch.
+  const [targetBranchFilter, setTargetBranchFilter] = useState<string | null>(
+    null,
+  );
   const [searchQuery, setSearchQuery] = useState("");
 
   // Status counts describe only work addressed to the accepted repository.
@@ -98,17 +103,25 @@ export default function RepoPRsPage() {
   }, [prs, repo]);
 
   // Collect all unique labels and authors from resolved PRs.
-  const { allLabels, allAuthors } = useMemo(() => {
-    if (!prs) return { allLabels: [], allAuthors: [] };
+  const { allLabels, allAuthors, nonDefaultTargetBranches } = useMemo(() => {
+    if (!prs)
+      return {
+        allLabels: [],
+        allAuthors: [],
+        nonDefaultTargetBranches: [],
+      };
     const labels = new Set<string>();
     const authors = new Set<string>();
+    const targetBranches = new Set<string>();
     for (const pr of prs) {
       pr.labels.forEach((l) => labels.add(l));
       authors.add(pr.pubkey);
+      if (pr.targetBranch) targetBranches.add(pr.targetBranch);
     }
     return {
       allLabels: Array.from(labels).sort(),
       allAuthors: Array.from(authors),
+      nonDefaultTargetBranches: Array.from(targetBranches).sort(),
     };
   }, [prs]);
 
@@ -129,7 +142,11 @@ export default function RepoPRsPage() {
           labelFilter.length > 0 &&
           !labelFilter.some((label) => pr.labels.includes(label))
         ) &&
-        (!authorFilter || pr.pubkey === authorFilter);
+        (!authorFilter || pr.pubkey === authorFilter) &&
+        (targetBranchFilter === null ||
+          (targetBranchFilter === ""
+            ? !pr.targetBranch
+            : pr.targetBranch === targetBranchFilter));
       const matchesId = eventIdMatchesSearch(pr.id, searchQuery);
 
       if (matchesId) {
@@ -142,7 +159,8 @@ export default function RepoPRsPage() {
         if (
           !pr.currentSubject.toLowerCase().includes(q) &&
           !pr.originalSubject.toLowerCase().includes(q) &&
-          !pr.content.toLowerCase().includes(q)
+          !pr.content.toLowerCase().includes(q) &&
+          !pr.targetBranch?.toLowerCase().includes(q)
         )
           return false;
       }
@@ -152,7 +170,15 @@ export default function RepoPRsPage() {
       filteredPRs: filtered,
       idMatchesOutsideFilters: outsideFilterCount,
     };
-  }, [prs, statusFilter, typeFilter, labelFilter, authorFilter, searchQuery]);
+  }, [
+    prs,
+    statusFilter,
+    typeFilter,
+    labelFilter,
+    authorFilter,
+    targetBranchFilter,
+    searchQuery,
+  ]);
 
   const { visibleAcceptedItems, visibleUnconfirmedItems } = useMemo(() => {
     if (!filteredPRs || !repo) {
@@ -180,6 +206,7 @@ export default function RepoPRsPage() {
     typeFilter.length > 0 ||
     labelFilter.length > 0 ||
     !!authorFilter ||
+    targetBranchFilter !== null ||
     searchQuery.trim().length > 0;
 
   const clearFilters = () => {
@@ -187,6 +214,7 @@ export default function RepoPRsPage() {
     setTypeFilter([]);
     setLabelFilter([]);
     setAuthorFilter(null);
+    setTargetBranchFilter(null);
     setSearchQuery("");
   };
 
@@ -245,6 +273,44 @@ export default function RepoPRsPage() {
                 {allAuthors.map((pk) => (
                   <SelectItem key={pk} value={pk}>
                     <AuthorSelectLabel pubkey={pk} />
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+
+          {nonDefaultTargetBranches.length > 0 && (
+            <Select
+              value={
+                targetBranchFilter === null
+                  ? "__all__"
+                  : targetBranchFilter === ""
+                    ? "__default__"
+                    : `branch:${targetBranchFilter}`
+              }
+              onValueChange={(value) =>
+                setTargetBranchFilter(
+                  value === "__all__"
+                    ? null
+                    : value === "__default__"
+                      ? ""
+                      : value.slice("branch:".length),
+                )
+              }
+            >
+              <SelectTrigger className="w-[168px] h-9 text-sm">
+                <SelectValue placeholder="Target branch" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__all__">All target branches</SelectItem>
+                <SelectItem value="__default__">
+                  {repoState?.headBranch
+                    ? `Default (${repoState.headBranch})`
+                    : "Default branch"}
+                </SelectItem>
+                {nonDefaultTargetBranches.map((branch) => (
+                  <SelectItem key={branch} value={`branch:${branch}`}>
+                    {branch}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -463,6 +529,18 @@ function PRRow({
                     : stackLayer
                       ? `${stackLayer.position}/${stackLayer.size}`
                       : "Stack"}
+              </span>
+            )}
+            {pr.targetBranch && (
+              <span
+                title={`Targets non-default branch ${pr.targetBranch}`}
+                aria-label={`Targets branch ${pr.targetBranch}`}
+                className="inline-flex min-w-0 shrink items-center gap-1 rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
+              >
+                <GitBranch className="h-3 w-3 shrink-0" />
+                <span aria-hidden="true" className="truncate">
+                  → {pr.targetBranch}
+                </span>
               </span>
             )}
             {pr.labels.map((label) => (

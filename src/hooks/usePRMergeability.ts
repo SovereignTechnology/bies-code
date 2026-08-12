@@ -5,18 +5,18 @@
  * author pushed a branch. The merge:
  *
  *   1. Confirms the tip commit exists and fetches its tree.
- *   2. Computes the REAL merge base between the current default-branch tip and
+ *   2. Computes the REAL merge base between the current target-branch tip and
  *      the PR tip from git history — NOT the PR event's claimed `merge-base`
  *      tag, which may be wrong (an incorrect ngit merge base is exactly the
  *      bug that caused a non-fast-forward, history-losing merge).
- *   3. If the default branch has not advanced past the merge base (merge base
- *      === default-branch tip), the PR tip's tree is correct as-is — the
+ *   3. If the target branch has not advanced past the merge base (merge base
+ *      === target-branch tip), the PR tip's tree is correct as-is — the
  *      classic fast path.
  *   4. Otherwise it performs a real three-way merge of the PR tip into the
- *      default branch tip over their common ancestor, so changes made on the
- *      default branch since the base are preserved instead of being silently
+ *      target branch tip over their common ancestor, so changes made on the
+ *      target branch since the base are preserved instead of being silently
  *      reverted. Auto-merge conflicts are surfaced as `conflicts`.
- *   5. Builds a merge commit with [defaultBranchHead, tipCommitId] as parents
+ *   5. Builds a merge commit with [targetBranchHead, tipCommitId] as parents
  *      and the (possibly three-way-merged) tree.
  *
  * The pre-built merge commit object plus any NEW objects the three-way merge
@@ -76,7 +76,7 @@ export interface PRMergeability {
   /**
    * Set when the PR event's claimed `merge-base` tag disagrees with the common
    * ancestor computed from git history before the PR has landed. Once the PR
-   * tip is reachable from the default branch, that is treated as
+   * tip is reachable from the target branch, that is treated as
    * `already-merged`, not as a bad merge-base tag.
    */
   mergeBaseMismatch: MergeBaseMismatch | null;
@@ -92,7 +92,7 @@ export interface PRMergeability {
  * Check whether a PR-type item can be merged and pre-build the merge commit.
  *
  * @param tipCommitId       - The PR's tip commit ID (from pr.tip.commitId)
- * @param defaultBranchHead - Current HEAD of the default branch
+ * @param defaultBranchHead - Current authoritative tip of the target branch
  * @param committer         - The maintainer's CommitPerson
  * @param rootEventId       - The PR root event id (for the `#<hex8>` shorthand)
  * @param subject           - PR subject for the merge commit message
@@ -191,7 +191,7 @@ export function usePRMergeability(
 
       // Compute the REAL merge base from git history (NOT the PR's claimed
       // merge-base tag, which may be wrong). This is the common ancestor of the
-      // default-branch tip and the PR tip.
+      // target-branch tip and the PR tip.
       const mergeBase = await gitPool!.findMergeBaseBetween(
         defaultBranchHead!,
         tipCommitId!,
@@ -204,14 +204,14 @@ export function usePRMergeability(
       if (!mergeBase) {
         setStatus("error");
         setErrorMessage(
-          "Could not determine the merge base between the default branch and " +
+          "Could not determine the merge base between the target branch and " +
             "the PR tip from git history. Refusing to merge — adopting the PR " +
-            "tree blindly could orphan commits on the default branch.",
+            "tree blindly could orphan commits on the target branch.",
         );
         return;
       }
 
-      // If the nearest common ancestor is the PR tip, the default branch
+      // If the nearest common ancestor is the PR tip, the target branch
       // already contains this PR tip. That is not the PR's original merge base;
       // it is an already-merged/reachable condition, so do not build another
       // merge commit or compare it to the claimed merge-base tag.
@@ -229,12 +229,12 @@ export function usePRMergeability(
       }
 
       // Decide the merge tree.
-      //   Fast path: the default branch has NOT advanced past the merge base,
+      //   Fast path: the target branch has NOT advanced past the merge base,
       //   so the PR tip's tree already incorporates everything on the branch —
       //   adopt it verbatim. The push path still includes PR branch objects,
       //   because forked PR commits may not exist on the target server.
       //   Diverged: perform a real three-way merge so changes made on the
-      //   default branch since the base are preserved.
+      //   target branch since the base are preserved.
       let mergeTreeHash = tipData.commit.tree;
       let extraObjects: PackableObject[] = [];
 
@@ -249,7 +249,7 @@ export function usePRMergeability(
         if (!baseData || !oursData) {
           setStatus("error");
           setErrorMessage(
-            "Could not fetch the merge-base or default-branch tree from the " +
+            "Could not fetch the merge-base or target-branch tree from the " +
               "git server — cannot compute a safe three-way merge.",
           );
           return;
