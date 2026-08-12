@@ -123,8 +123,7 @@ function getMobileThreadIndent(depth: number) {
   if (depth <= 1) return "pl-1";
   if (depth === 2) return "pl-[3px]";
   if (depth === 3) return "pl-0.5";
-  if (depth === 4) return "pl-px";
-  return "pl-0";
+  return "pl-px";
 }
 
 // ---------------------------------------------------------------------------
