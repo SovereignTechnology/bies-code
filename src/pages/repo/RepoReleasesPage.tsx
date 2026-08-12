@@ -689,40 +689,43 @@ function SoftwareApplicationPage({
       </Button>
 
       <section className="space-y-6">
-        <div className="flex items-start gap-4">
+        <div className="grid grid-cols-[4rem_minmax(0,1fr)] items-start gap-x-3 gap-y-3 sm:grid-cols-[5rem_minmax(0,1fr)] sm:gap-x-4 sm:gap-y-0">
           {application.icon ? (
             <img
               src={application.icon}
               alt=""
-              className="h-20 w-20 shrink-0 rounded-xl border bg-muted object-cover shadow-sm"
+              className="h-16 w-16 rounded-xl border bg-muted object-cover shadow-sm sm:row-span-2 sm:h-20 sm:w-20"
             />
           ) : (
-            <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-xl border bg-muted">
+            <div className="flex h-16 w-16 items-center justify-center rounded-xl border bg-muted sm:row-span-2 sm:h-20 sm:w-20">
               <Package className="h-9 w-9 text-muted-foreground" />
             </div>
           )}
-          <div className="min-w-0 flex-1">
-            <div className="flex items-start gap-2">
-              <div className="min-w-0 flex-1">
-                <h1 className="text-3xl font-semibold tracking-tight break-words">
-                  {application.name}
-                </h1>
-                {application.summary && (
-                  <p className="mt-2 text-lg text-muted-foreground">
-                    {application.summary}
-                  </p>
-                )}
-              </div>
-              <EventCardActions
-                event={application.event}
-                className="shrink-0"
-                onEdit={onEdit}
-                editTitle="Edit application"
-              />
-            </div>
+          <div className="flex min-w-0 self-center items-center gap-2 sm:self-start sm:items-start">
+            <h1 className="min-w-0 flex-1 break-words text-2xl font-semibold tracking-tight sm:text-3xl">
+              {application.name}
+            </h1>
+            <EventCardActions
+              event={application.event}
+              className="shrink-0"
+              onEdit={onEdit}
+              editTitle="Edit application"
+            />
+          </div>
+          <div className="col-span-2 min-w-0 sm:col-span-1 sm:col-start-2">
+            {application.summary && (
+              <p className="text-lg text-muted-foreground sm:mt-2">
+                {application.summary}
+              </p>
+            )}
             {(application.topics.length > 0 ||
               application.platforms.length > 0) && (
-              <div className="mt-4 flex flex-wrap gap-1.5">
+              <div
+                className={cn(
+                  "flex flex-wrap gap-1.5",
+                  application.summary ? "mt-3 sm:mt-4" : "sm:mt-4",
+                )}
+              >
                 {application.platforms.map((platform) => (
                   <Badge key={platform} variant="secondary">
                     {platform}

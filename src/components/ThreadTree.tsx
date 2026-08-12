@@ -119,6 +119,13 @@ interface ThreadTreeProps {
   threadContext?: ThreadContext;
 }
 
+function getMobileThreadIndent(depth: number) {
+  if (depth <= 1) return "pl-1";
+  if (depth === 2) return "pl-[3px]";
+  if (depth === 3) return "pl-0.5";
+  return "pl-px";
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -551,11 +558,12 @@ export function ThreadComment({
 
       {/* Header row */}
       <div className="flex items-center justify-between gap-2 mb-1.5">
-        <div className="flex items-center gap-2">
+        <div className="flex min-w-0 flex-1 items-center gap-2">
           <UserLink
             pubkey={event.pubkey}
             avatarSize="md"
-            nameClassName="text-sm"
+            className="min-w-0"
+            nameClassName="truncate text-sm"
           />
           <span className="inline-flex items-center gap-1.5 flex-wrap">
             <span className="text-xs text-muted-foreground/60 flex items-center gap-1">
@@ -565,7 +573,7 @@ export function ThreadComment({
             <OutboxStatusBadge event={event} />
           </span>
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex shrink-0 items-center gap-1">
           {(canReply || onReplyCallback) && (
             <button
               type="button"
@@ -765,7 +773,7 @@ function ThreadChildren({
 
   return (
     <div
-      className="min-w-0 border-l pl-1"
+      className={`min-w-0 border-l ${getMobileThreadIndent(depth)} sm:pl-1`}
       style={{ borderLeftColor: `rgb(59 130 246 / ${lineOpacity})` }}
     >
       {/* Collapse / expand toggle */}
