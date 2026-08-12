@@ -39,6 +39,7 @@ import { gitIndexRelays, fallbackRelays } from "@/services/settings";
 import { ArrowLeft, MessageCircle, Zap, Users, Clock, Pin } from "lucide-react";
 import { hasAcceptedRepositoryReference } from "@/lib/nip34";
 import { RepoItemAttributionWarning } from "@/components/RepoItemAttributionWarning";
+import { EventShareButton } from "@/components/EventCardActions";
 
 export default function IssuePage() {
   const { pubkey, repoId, resolved, issueId, nip05 } = useRepoContext();
@@ -236,9 +237,16 @@ export default function IssuePage() {
               </div>
 
               <div className="flex items-center gap-4 flex-wrap text-sm text-muted-foreground ml-[calc(theme(spacing.3)+4.5rem-3.5rem)]">
-                <code className="font-mono text-xs text-muted-foreground/80">
-                  #{issue.id.slice(0, 8)}
-                </code>
+                <div className="flex items-center gap-1.5">
+                  <code className="font-mono text-xs text-muted-foreground/80">
+                    #{issue.id.slice(0, 8)}
+                  </code>
+                  <EventShareButton
+                    event={issue.rootEvent}
+                    label="Copy link"
+                    dialogTitle="Copy link to issue"
+                  />
+                </div>
                 <UserLink
                   pubkey={issue.pubkey}
                   avatarSize="sm"
