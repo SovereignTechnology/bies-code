@@ -80,6 +80,13 @@ export interface IssueResolution {
   mergeCommit?: string;
 }
 
+/** Optional Nostr event that introduced the resolving commit. */
+export interface IssueResolutionContextEvent {
+  id: string;
+  pubkey: string;
+  relay?: string;
+}
+
 /** Minimal signer shape (matches `MergeSigner` structurally). */
 interface ResolutionSigner {
   getPublicKey(): string | Promise<string>;
@@ -452,8 +459,8 @@ export function createIssueResolutionContent(
 /**
  * Sign the kind:1631 resolved status for one auto-resolved issue. Shares
  * `StatusChangeFactory` with the manual status flow (root `e` tag, `a` tags
- * per coordinate, `p` notifications) and adds the ngit-specific `alt` and
- * commit `r` tags.
+ * per coordinate, `p` notifications) and adds optional proposal and commit
+ * provenance alongside the ngit-compatible `alt`, content, and `r` tags.
  */
 export async function signIssueResolutionStatus(params: {
   signer: ResolutionSigner;
@@ -461,11 +468,25 @@ export async function signIssueResolutionStatus(params: {
   /** All repo coordinates ("30617:<pubkey>:<d>"). */
   repoCoords: string[];
   resolution: IssueResolution;
+  /** PR or patch that introduced the resolving commit, when known. */
+  relatedEvent?: IssueResolutionContextEvent;
 }): Promise<NostrEvent> {
-  const { resolution } = params;
-  const commitTags: string[][] = [["r", resolution.sourceCommit]];
+  const { resolution, relatedEvent } = params;
+  const commitTags: string[][] = [
+    ["c", resolution.sourceCommit],
+    ["r", resolution.sourceCommit],
+  ];
   if (resolution.mergeCommit) {
+    commitTags.push(["merge-commit", resolution.mergeCommit]);
     commitTags.push(["r", resolution.mergeCommit]);
+  }
+  if (relatedEvent) {
+    commitTags.push([
+      "q",
+      relatedEvent.id,
+      relatedEvent.relay ?? "",
+      relatedEvent.pubkey,
+    ]);
   }
 
   return StatusChangeFactory.create(
