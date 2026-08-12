@@ -42,6 +42,7 @@ const ReleaseApplicationCoordinateSymbol = Symbol.for(
 );
 const ReleaseVersionSymbol = Symbol.for("software-release-version");
 const ReleaseChannelSymbol = Symbol.for("software-release-channel");
+const ReleaseCommitSymbol = Symbol.for("software-release-commit");
 const ReleaseAssetsSymbol = Symbol.for("software-release-assets");
 const AssetAppIdSymbol = Symbol.for("software-asset-app-id");
 const AssetVersionSymbol = Symbol.for("software-asset-version");
@@ -52,6 +53,7 @@ const AssetSizeSymbol = Symbol.for("software-asset-size");
 const AssetUrlSymbol = Symbol.for("software-asset-url");
 const AssetFilenameSymbol = Symbol.for("software-asset-filename");
 const HEX_64 = /^[0-9a-f]{64}$/i;
+const HEX_40 = /^[0-9a-f]{40}$/i;
 const DIGITS_ONLY = /^\d+$/;
 
 export interface SoftwareAssetPointer {
@@ -306,6 +308,13 @@ export class SoftwareRelease extends EventCast<SoftwareReleaseEvent> {
 
   get notes(): string {
     return this.event.content;
+  }
+
+  get commit(): string | undefined {
+    return getOrComputeCachedValue(this.event, ReleaseCommitSymbol, () => {
+      const value = getTagValue(this.event, "commit")?.trim();
+      return value && HEX_40.test(value) ? value.toLowerCase() : undefined;
+    });
   }
 
   get assets(): SoftwareAssetPointer[] {

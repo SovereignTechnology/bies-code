@@ -12,7 +12,9 @@ type SoftwareAssetTemplate = KnownEventTemplate<typeof SOFTWARE_ASSET_KIND>;
 type SoftwareReleaseTemplate = KnownEventTemplate<typeof SOFTWARE_RELEASE_KIND>;
 
 export interface SoftwareAssetInput {
+  applicationCoordinate: string;
   appId: string;
+  relayHint?: string;
   version: string;
   url?: string;
   filename?: string;
@@ -44,6 +46,7 @@ export interface SoftwareReleaseInput {
   appId: string;
   version: string;
   channel: string;
+  commit?: string;
   notes: string;
   assets: SoftwareReleaseAssetInput[];
   relayHint?: string;
@@ -66,8 +69,17 @@ export class SoftwareAssetFactory extends EventFactory<
   SoftwareAssetTemplate
 > {
   static create(input: SoftwareAssetInput): SoftwareAssetFactory {
-    if (!input.appId.trim())
-      throw new Error("Asset application ID is required");
+    const appId = input.appId.trim();
+    const application = parseReplaceableAddress(
+      input.applicationCoordinate,
+      true,
+    );
+    if (
+      application?.kind !== SOFTWARE_APPLICATION_KIND ||
+      application.identifier !== appId
+    ) {
+      throw new Error("Asset application coordinate does not match its ID");
+    }
     if (!input.version.trim()) throw new Error("Asset version is required");
     if (!input.mimeType.trim()) throw new Error("Asset MIME type is required");
     if (!/^[0-9a-f]{64}$/i.test(input.sha256)) {
@@ -76,6 +88,9 @@ export class SoftwareAssetFactory extends EventFactory<
 
     const url = trimmed(input.url);
     const filename = trimmed(input.filename);
+    const applicationTag = input.relayHint
+      ? ["a", input.applicationCoordinate, input.relayHint]
+      : ["a", input.applicationCoordinate];
     const metadataTags: string[][] = [];
     const addOptionalTag = (name: string, value: string | undefined) => {
       const clean = trimmed(value);
@@ -108,7 +123,8 @@ export class SoftwareAssetFactory extends EventFactory<
       .created(input.createdAt)
       .modifyPublicTags((tags) => [
         ...tags,
-        ["i", input.appId.trim()],
+        applicationTag,
+        ["i", appId],
         ...(url ? [["url", url]] : []),
         ...(filename ? [["filename", filename]] : []),
         ["m", input.mimeType.trim()],
@@ -140,6 +156,10 @@ export class SoftwareReleaseFactory extends EventFactory<
     }
     if (!version) throw new Error("Release version is required");
     if (!channel) throw new Error("Release channel is required");
+    const commit = trimmed(input.commit);
+    if (commit && !/^[0-9a-f]{40}$/i.test(commit)) {
+      throw new Error("Release Git commit ID is invalid");
+    }
     if (input.assets.length === 0) {
       throw new Error("At least one release asset is required");
     }
@@ -166,6 +186,7 @@ export class SoftwareReleaseFactory extends EventFactory<
         ["i", appId],
         ["version", version],
         ["c", channel],
+        ...(commit ? [["commit", commit.toLowerCase()]] : []),
         ...assetTags,
         ...platforms.map((platform) => ["f", platform]),
       ])

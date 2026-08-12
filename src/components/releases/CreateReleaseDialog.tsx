@@ -1243,7 +1243,9 @@ export function CreateReleaseDialog({
       for (const { draft, uploaded } of uploadedAssets) {
         signedAssets.push(
           await SoftwareAssetFactory.create({
+            applicationCoordinate: selectedApplication.coordinate,
             appId: selectedApplication.appId,
+            relayHint,
             version: releaseVersion,
             url: uploaded.url,
             filename: draft.filename,
@@ -1271,6 +1273,7 @@ export function CreateReleaseDialog({
         appId: selectedApplication.appId,
         version: releaseVersion,
         channel: channel.trim(),
+        commit: buildCommit,
         notes,
         assets: signedAssets.map((asset, index) => ({
           eventId: asset.id,
@@ -1281,13 +1284,13 @@ export function CreateReleaseDialog({
         createdAt,
       }).sign(account.signer);
 
-      setStage("publishing-release");
-      await publish(release, repoCoordinates);
-
       setStage("publishing-assets");
       await Promise.all(
         signedAssets.map((asset) => publish(asset, repoCoordinates)),
       );
+
+      setStage("publishing-release");
+      await publish(release, repoCoordinates);
 
       toast({
         title: "Release published",

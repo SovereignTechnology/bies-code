@@ -16,10 +16,12 @@ import {
 import { useSeoMeta } from "@unhead/react";
 import { useActiveAccount } from "applesauce-react/hooks";
 import {
+  AlertTriangle,
   ArrowLeft,
   ChevronDown,
   ExternalLink,
   Globe,
+  GitCommit,
   Download,
   List,
   Loader2,
@@ -76,6 +78,16 @@ import { useRepoContext } from "./RepoContext";
 const MarkdownContent = lazy(() => import("@/components/MarkdownContent"));
 const RELEASE_RENDER_BATCH = 20;
 
+interface GitTagRef {
+  name: string;
+  commitId: string;
+}
+
+type ReleaseCommitVerification =
+  | { status: "match"; tag: GitTagRef }
+  | { status: "missing-tag" }
+  | { status: "mismatch"; tag: GitTagRef };
+
 function formatBytes(bytes: number | undefined): string | undefined {
   if (bytes === undefined) return undefined;
   if (bytes < 1024) return `${bytes} B`;
@@ -92,6 +104,29 @@ function formatBytes(bytes: number | undefined): string | undefined {
 
 function displayVersion(version: string): string {
   return /^v/i.test(version) ? version : `v${version}`;
+}
+
+function canonicalReleaseVersion(version: string): string {
+  return version.trim().replace(/^[vV](?=\d)/, "");
+}
+
+function verifyReleaseCommit(
+  version: string,
+  commit: string,
+  gitTags: GitTagRef[],
+): ReleaseCommitVerification {
+  const canonicalVersion = canonicalReleaseVersion(version);
+  const versionTags = gitTags.filter(
+    (tag) => canonicalReleaseVersion(tag.name) === canonicalVersion,
+  );
+  if (versionTags.length === 0) return { status: "missing-tag" };
+
+  const tag =
+    versionTags.find((candidate) => candidate.name === version) ??
+    versionTags[0];
+  return tag.commitId.toLowerCase() === commit.toLowerCase()
+    ? { status: "match", tag }
+    : { status: "mismatch", tag };
 }
 
 function dateTimeValue(timestamp: number): string | undefined {
@@ -501,6 +536,9 @@ function ReleaseCard({
   blossomServers,
   releasePath,
   applicationPath,
+  basePath,
+  gitTags,
+  gitTagsSettled,
 }: {
   release: SoftwareRelease;
   application: SoftwareApplication | undefined;
@@ -510,6 +548,9 @@ function ReleaseCard({
   blossomServers: string[];
   releasePath?: string;
   applicationPath?: string;
+  basePath: string;
+  gitTags: GitTagRef[];
+  gitTagsSettled: boolean;
 }) {
   const location = useLocation();
   const relativeDate = safeFormatDistanceToNow(release.event.created_at, {
@@ -524,6 +565,10 @@ function ReleaseCard({
   const hasTargetedAsset = release.assets.some(
     ({ id }) => location.hash === `#${id.slice(0, 15)}`,
   );
+  const commitVerification =
+    release.commit && gitTagsSettled
+      ? verifyReleaseCommit(release.version, release.commit, gitTags)
+      : undefined;
 
   return (
     <article
@@ -589,6 +634,37 @@ function ReleaseCard({
                 {displayVersion(release.version)}
               </span>
             </span>
+            {release.commit && (
+              <>
+                <span aria-hidden="true">·</span>
+                <Link
+                  to={`${basePath}/commit/${release.commit}`}
+                  title={release.commit}
+                  className="inline-flex min-w-0 items-center gap-1 font-mono text-pink-600 hover:underline dark:text-pink-400"
+                >
+                  <GitCommit className="h-4 w-4 shrink-0" />
+                  {release.commit.slice(0, 12)}
+                </Link>
+                {commitVerification?.status === "missing-tag" && (
+                  <span
+                    className="inline-flex items-center gap-1 text-xs text-amber-700 dark:text-amber-300"
+                    title={`No Git tag matches release version ${release.version}`}
+                  >
+                    <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                    Git tag not found
+                  </span>
+                )}
+                {commitVerification?.status === "mismatch" && (
+                  <span
+                    className="inline-flex items-center gap-1 text-xs text-amber-700 dark:text-amber-300"
+                    title={`Git tag ${commitVerification.tag.name} peels to ${commitVerification.tag.commitId}, not ${release.commit}`}
+                  >
+                    <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                    Tag points elsewhere
+                  </span>
+                )}
+              </>
+            )}
           </div>
         </CardHeader>
 
@@ -649,6 +725,8 @@ function SoftwareApplicationPage({
   latestMainReleaseIds,
   blossomServers,
   basePath,
+  gitTags,
+  gitTagsSettled,
   relayHints,
   onEdit,
   showPublisherControlNotice,
@@ -660,6 +738,8 @@ function SoftwareApplicationPage({
   latestMainReleaseIds: Set<string>;
   blossomServers: string[];
   basePath: string;
+  gitTags: GitTagRef[];
+  gitTagsSettled: boolean;
   relayHints: string[];
   onEdit?: () => void;
   showPublisherControlNotice?: boolean;
@@ -898,6 +978,9 @@ function SoftwareApplicationPage({
                 assetsSettled={assetsSettled}
                 latest={latestMainReleaseIds.has(release.event.id)}
                 blossomServers={blossomServers}
+                basePath={basePath}
+                gitTags={gitTags}
+                gitTagsSettled={gitTagsSettled}
                 releasePath={`${basePath}/releases/${eventIdToNevent(
                   release.event.id,
                   relayHints,
@@ -1132,6 +1215,8 @@ export default function RepoReleasesPage({
         .sort((a, b) => compareTagsNewestFirst(a.name, b.name)),
     [poolState.authoritativeRefs],
   );
+  const gitTagsAvailable =
+    poolState.health === "ok" || poolState.health === "degraded";
 
   const applicationByReleaseKey = useMemo(
     () =>
@@ -1416,6 +1501,8 @@ export default function RepoReleasesPage({
             latestMainReleaseIds={latestMainReleaseIds}
             blossomServers={blossomServers}
             basePath={basePath}
+            gitTags={gitTags}
+            gitTagsSettled={gitTagsAvailable}
             relayHints={repo?.relays.slice(0, 1) ?? []}
             onEdit={
               selectedApplication.pubkey === account?.pubkey
@@ -1474,6 +1561,9 @@ export default function RepoReleasesPage({
           assetsSettled={assetsSettled}
           latest={latestMainReleaseIds.has(selectedRelease.event.id)}
           blossomServers={blossomServers}
+          basePath={basePath}
+          gitTags={gitTags}
+          gitTagsSettled={gitTagsAvailable}
           applicationPath={
             releaseApplication
               ? `${basePath}/releases/apps/${eventIdToNevent(
@@ -1623,6 +1713,9 @@ export default function RepoReleasesPage({
                   assetsSettled={assetsSettled}
                   latest={latestMainReleaseIds.has(release.event.id)}
                   blossomServers={blossomServers}
+                  basePath={basePath}
+                  gitTags={gitTags}
+                  gitTagsSettled={gitTagsAvailable}
                   releasePath={`${basePath}/releases/${eventIdToNevent(
                     release.event.id,
                     repo?.relays.slice(0, 1) ?? [],
