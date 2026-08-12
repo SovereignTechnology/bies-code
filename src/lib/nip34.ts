@@ -200,6 +200,19 @@ export const PR_UPDATE_KIND = 1619;
 export const PR_ROOT_KINDS = [PATCH_KIND, PR_KIND] as const;
 
 /**
+ * Return the non-default target branch declared by a pull request.
+ *
+ * NIP-34 omits the optional `b` tag when the repository default branch is the
+ * target. Empty values are treated as absent; validation happens before the
+ * value is used as a git ref so malformed metadata is never retargeted to the
+ * default branch.
+ */
+export function getPRTargetBranch(event: NostrEvent): string | undefined {
+  if (event.kind !== PR_KIND) return undefined;
+  return event.tags.find(([name]) => name === "b")?.[1] || undefined;
+}
+
+/**
  * Return the repository coordinates an issue, PR, or patch is filed against.
  *
  * Older clients used an `a` tag with a `mention` marker where modern clients
@@ -1322,6 +1335,8 @@ export interface ResolvedPRLite {
   event: NostrEvent;
   /** Whether this is a root patch (kind 1617) or a pull request (kind 1618) */
   itemType: PRItemType;
+  /** Non-default target branch from the PR's `b` tag; absent means default. */
+  targetBranch: string | undefined;
   /** Original subject from the event itself */
   originalSubject: string;
   /** Current (effective) subject — latest authorised rename, or originalSubject */
@@ -2339,6 +2354,7 @@ export function buildResolvedPRs(
   ).map((item) => ({
     ...item,
     itemType: (item.event.kind === PATCH_KIND ? "patch" : "pr") as PRItemType,
+    targetBranch: getPRTargetBranch(item.event),
   }));
 }
 
