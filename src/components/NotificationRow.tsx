@@ -418,7 +418,12 @@ function ThreadNotificationRow({
             </div>
 
             {/* Root context occupies the former activity-avatar position. */}
-            <div className="hidden items-center self-center shrink-0 text-right md:flex group-hover:hidden">
+            <div
+              className={cn(
+                "hidden items-center self-center shrink-0 text-right md:flex group-hover:hidden",
+                !compact && "translate-y-4",
+              )}
+            >
               {repoCoord && (
                 <RepoBadge
                   coord={repoCoord}
@@ -431,7 +436,12 @@ function ThreadNotificationRow({
 
           {/* Swipe gestures replace these buttons on phones. Coarse pointers
               keep icon actions visible; precise pointers reveal them on hover. */}
-          <div className="notification-row-actions items-center gap-1 self-center shrink-0 pr-2">
+          <div
+            className={cn(
+              "notification-row-actions items-center gap-1 self-center shrink-0 pr-2",
+              !compact && "translate-y-4",
+            )}
+          >
             {item.unread ? (
               <Button
                 variant="ghost"
@@ -517,19 +527,18 @@ function ThreadNotificationRow({
         </div>
 
         {!compact && (
-          <div className="flex flex-wrap items-center gap-2 pb-3 pl-16 pr-3">
+          <div className="relative flex flex-wrap items-center gap-2 pb-3 pl-16 pr-3">
             {metadataContent}
             <Button
               variant="ghost"
               size="sm"
-              className="h-6 gap-0.5 px-1.5 text-xs text-muted-foreground hover:text-foreground"
+              className="absolute bottom-1 left-1 h-6 w-6 p-0 text-muted-foreground/80 hover:bg-transparent hover:text-muted-foreground"
               onClick={() => setActivityExpanded((expanded) => !expanded)}
               aria-expanded={activityExpanded}
               aria-controls={activityListId}
               aria-label={`${activityExpanded ? "Hide" : "Show"} ${item.events.length} ${currentView} ${item.events.length === 1 ? "activity" : "activities"}`}
               title={`${activityExpanded ? "Hide" : "Show"} activity`}
             >
-              <span>{item.events.length}</span>
               <ChevronDown
                 className={cn(
                   "h-3 w-3 transition-transform motion-reduce:transition-none",
