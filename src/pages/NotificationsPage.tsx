@@ -4,6 +4,13 @@ import { useSeoMeta } from "@unhead/react";
 import { useNotifications } from "@/hooks/useNotifications";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { UserAvatar, UserName } from "@/components/UserAvatar";
 import { cn } from "@/lib/utils";
@@ -289,7 +296,7 @@ export default function NotificationsPage() {
         <h1 className="text-xl font-semibold tracking-tight">Notifications</h1>
 
         {/* Tabs */}
-        <div className="flex w-fit max-w-full items-center gap-1 rounded-lg border border-border/60 bg-muted/30 p-0.5">
+        <div className="hidden w-fit max-w-full items-center gap-1 rounded-lg border border-border/60 bg-muted/30 p-0.5 sm:flex">
           <TabButton
             active={currentView === "inbox"}
             onClick={() => handleTabChange("inbox")}
@@ -318,8 +325,95 @@ export default function NotificationsPage() {
         </div>
       </div>
 
+      {/* Compact mobile filters */}
+      <div className="mb-3 rounded-xl border border-border/60 bg-muted/20 p-2 sm:hidden">
+        <div className="grid grid-cols-2 gap-2">
+          <div className="space-y-1">
+            <span className="px-1 text-[11px] font-medium text-muted-foreground">
+              View
+            </span>
+            <Select
+              value={currentView}
+              onValueChange={(value) => handleTabChange(value as ViewTab)}
+            >
+              <SelectTrigger
+                className="h-9 bg-background px-2.5"
+                aria-label="Notification view"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="inbox">Inbox</SelectItem>
+                <SelectItem value="unread">
+                  Unread{unreadCount > 0 ? ` (${unreadCount})` : ""}
+                </SelectItem>
+                <SelectItem value="archived">Archived</SelectItem>
+                <SelectItem value="all">All</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="space-y-1">
+            <span className="px-1 text-[11px] font-medium text-muted-foreground">
+              Group by
+            </span>
+            <Select
+              value={groupingMode}
+              onValueChange={(value) =>
+                handleGroupingModeChange(value as GroupingMode)
+              }
+            >
+              <SelectTrigger
+                className="h-9 bg-background px-2.5"
+                aria-label="Notification grouping"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="root">Item</SelectItem>
+                <SelectItem value="user">User</SelectItem>
+                <SelectItem value="activity">Activity</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+
+        {(currentView === "inbox" || currentView === "unread") &&
+          displayEntries &&
+          displayEntries.length > 0 && (
+            <div className="mt-2 grid grid-cols-2 gap-1 border-t border-border/60 pt-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-9 justify-center px-2 text-xs text-muted-foreground hover:text-foreground"
+                onClick={
+                  currentView === "unread"
+                    ? () => actions.markEventsAsRead(unreadInboxEventIds)
+                    : actions.markAllAsRead
+                }
+              >
+                <Check className="mr-1 h-3.5 w-3.5" />
+                Mark all read
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-9 justify-center px-2 text-xs text-muted-foreground hover:text-foreground"
+                onClick={
+                  currentView === "unread"
+                    ? () => actions.markEventsAsArchived(unreadInboxEventIds)
+                    : actions.markAllAsArchived
+                }
+              >
+                <Archive className="mr-1 h-3.5 w-3.5" />
+                Archive all
+              </Button>
+            </div>
+          )}
+      </div>
+
       {/* View and bulk actions bar */}
-      <div className="mb-2 flex min-h-9 flex-wrap items-center justify-between gap-3">
+      <div className="mb-2 hidden min-h-9 flex-wrap items-center justify-between gap-3 sm:flex">
         <div className="flex items-center gap-2">
           <span className="text-xs text-muted-foreground">Group by</span>
           <ToggleGroup
