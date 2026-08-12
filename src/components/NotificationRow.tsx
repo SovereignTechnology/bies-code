@@ -544,7 +544,7 @@ function ThreadNotificationRow({
       {!compact && activityExpanded && (
         <ul
           id={activityListId}
-          className="divide-y divide-border/40 border-t border-border/40 bg-muted/10 pl-2 sm:pl-6"
+          className="divide-y divide-border/40 border-t border-border/40 bg-muted/50 pl-2 sm:pl-6"
         >
           {item.events.map((event) => (
             <NotificationActivityRow
@@ -554,6 +554,7 @@ function ThreadNotificationRow({
               actions={actions}
               currentView={currentView}
               resolvedMap={resolvedMap}
+              nested
             />
           ))}
         </ul>
@@ -1031,15 +1032,17 @@ function RepoZapNotificationRow({
 // Ungrouped thread activity row
 // ---------------------------------------------------------------------------
 
-function activityVerb(event: NostrEvent): string {
+function activityVerb(event: NostrEvent, nested: boolean): string {
   if (event.kind === ZAP_RECEIPT_KIND) return "zapped";
   if (event.kind === COMMENT_KIND || event.kind === LEGACY_REPLY_KIND) {
-    return "commented on";
+    return nested ? "commented" : "commented on";
   }
   if (event.kind === PR_KIND) return "opened a pull request";
   if (event.kind === ISSUE_KIND) return "opened an issue";
   if (event.kind === PATCH_KIND) return "sent a patch";
-  if (event.kind === PR_UPDATE_KIND) return "pushed an update to";
+  if (event.kind === PR_UPDATE_KIND) {
+    return nested ? "pushed an update" : "pushed an update to";
+  }
   return "updated";
 }
 
@@ -1059,12 +1062,14 @@ export function NotificationActivityRow({
   actions,
   currentView,
   resolvedMap,
+  nested = false,
 }: {
   item: ThreadNotificationItem;
   event: NostrEvent;
   actions: NotificationActions;
   currentView: ViewTab;
   resolvedMap?: Map<string, ResolvedIssueLite>;
+  nested?: boolean;
 }) {
   const activeAccount = useActiveAccount();
   const rootEvent = useRootEvent(item.rootId);
@@ -1092,6 +1097,7 @@ export function NotificationActivityRow({
     <li className="group min-w-0">
       <NotificationSwipeSurface
         unread={isUnread}
+        surfaceClassName={nested ? "bg-muted/50" : undefined}
         onToggleRead={() =>
           isUnread
             ? actions.markEventAsRead(event.id)
@@ -1108,64 +1114,93 @@ export function NotificationActivityRow({
         <div className="flex items-start">
           <Link
             to={linkPath}
-            className="flex min-w-0 flex-1 items-start gap-3 px-3 py-3"
+            className={cn(
+              "flex min-w-0 flex-1 items-start px-3",
+              nested ? "gap-2 py-2" : "gap-3 py-3",
+            )}
             onClick={() => isUnread && actions.markEventAsRead(event.id)}
           >
-            <div className="w-2 shrink-0 pt-2.5">
+            <div className={cn("w-2 shrink-0", nested ? "pt-2" : "pt-2.5")}>
               {isUnread && <div className="h-2 w-2 rounded-full bg-pink-500" />}
             </div>
-            <UserAvatar pubkey={actorPubkey} size="md" noHoverCard />
-            <div className="min-w-0 flex-1">
-              <p className="text-sm leading-5">
+            <UserAvatar
+              pubkey={actorPubkey}
+              size={nested ? "sm" : "md"}
+              className={nested ? "h-6 w-6" : undefined}
+              noHoverCard
+            />
+            <div
+              className={cn(
+                "min-w-0 flex-1",
+                nested && "flex flex-wrap items-baseline gap-x-2 gap-y-0.5",
+              )}
+            >
+              <p
+                className={cn(
+                  "text-sm leading-5",
+                  nested && "text-xs leading-4",
+                )}
+              >
                 <UserName pubkey={actorPubkey} />{" "}
                 <span className="text-muted-foreground">
-                  {activityVerb(event)}
-                </span>{" "}
-                <span
-                  className={cn(
-                    isUnread
-                      ? "font-medium text-foreground"
-                      : "text-foreground/80",
-                  )}
-                >
-                  {title}
+                  {activityVerb(event, nested)}
                 </span>
+                {!nested && (
+                  <>
+                    {" "}
+                    <span
+                      className={cn(
+                        isUnread
+                          ? "font-medium text-foreground"
+                          : "text-foreground/80",
+                      )}
+                    >
+                      {title}
+                    </span>
+                  </>
+                )}
               </p>
-              <div className="mt-1 flex flex-wrap items-center gap-2">
+              {nested ? (
                 <span className="text-xs text-muted-foreground">
                   {lastActive}
                 </span>
-                <span className="text-xs text-muted-foreground/40">
-                  &middot;
-                </span>
-                {resolved ? (
-                  <StatusIcon
-                    status={resolved.status}
-                    variant={
-                      rootType === "patch"
-                        ? "patch"
-                        : rootType === "pr"
-                          ? "pr"
-                          : "issue"
-                    }
-                    className="h-4 w-4"
-                  />
-                ) : (
-                  <RootTypeIcon type={rootType} compact={false} />
-                )}
-                {repoCoord && (
-                  <>
-                    <span className="text-xs text-muted-foreground/40">
-                      &middot;
-                    </span>
-                    <RepoBadge
-                      coord={repoCoord}
-                      repoNameOnly={isOwnRepository}
-                      asSpan
+              ) : (
+                <div className="mt-1 flex flex-wrap items-center gap-2">
+                  <span className="text-xs text-muted-foreground">
+                    {lastActive}
+                  </span>
+                  <span className="text-xs text-muted-foreground/40">
+                    &middot;
+                  </span>
+                  {resolved ? (
+                    <StatusIcon
+                      status={resolved.status}
+                      variant={
+                        rootType === "patch"
+                          ? "patch"
+                          : rootType === "pr"
+                            ? "pr"
+                            : "issue"
+                      }
+                      className="h-4 w-4"
                     />
-                  </>
-                )}
-              </div>
+                  ) : (
+                    <RootTypeIcon type={rootType} compact={false} />
+                  )}
+                  {repoCoord && (
+                    <>
+                      <span className="text-xs text-muted-foreground/40">
+                        &middot;
+                      </span>
+                      <RepoBadge
+                        coord={repoCoord}
+                        repoNameOnly={isOwnRepository}
+                        asSpan
+                      />
+                    </>
+                  )}
+                </div>
+              )}
             </div>
           </Link>
           <div className="notification-row-actions shrink-0 items-center gap-1 self-center pr-2">

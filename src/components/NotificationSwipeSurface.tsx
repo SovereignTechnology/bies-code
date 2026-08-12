@@ -19,6 +19,7 @@ interface NotificationSwipeSurfaceProps {
   onToggleRead: () => void;
   archiveAction?: NotificationArchiveSwipeAction;
   className?: string;
+  surfaceClassName?: string;
 }
 
 interface GestureState {
@@ -43,6 +44,7 @@ export function NotificationSwipeSurface({
   onToggleRead,
   archiveAction,
   className,
+  surfaceClassName,
 }: NotificationSwipeSurfaceProps) {
   const isMobile = useIsMobile();
   const gestureRef = useRef<GestureState>();
@@ -191,6 +193,7 @@ export function NotificationSwipeSurface({
           "relative z-10 border-l-2 bg-card transition-transform duration-200 ease-out motion-reduce:transition-none",
           unread ? "border-l-pink-500" : "border-l-transparent",
           dragging && "select-none transition-none",
+          surfaceClassName,
         )}
         style={{ transform: `translate3d(${offset}px, 0, 0)` }}
       >
