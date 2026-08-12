@@ -119,6 +119,14 @@ interface ThreadTreeProps {
   threadContext?: ThreadContext;
 }
 
+function getMobileThreadIndent(depth: number) {
+  if (depth <= 1) return "pl-1";
+  if (depth === 2) return "pl-[3px]";
+  if (depth === 3) return "pl-0.5";
+  if (depth === 4) return "pl-px";
+  return "pl-0";
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -766,7 +774,7 @@ function ThreadChildren({
 
   return (
     <div
-      className={`min-w-0 border-l ${depth > 3 ? "pl-px sm:pl-1" : "pl-1"}`}
+      className={`min-w-0 border-l ${getMobileThreadIndent(depth)} sm:pl-1`}
       style={{ borderLeftColor: `rgb(59 130 246 / ${lineOpacity})` }}
     >
       {/* Collapse / expand toggle */}
