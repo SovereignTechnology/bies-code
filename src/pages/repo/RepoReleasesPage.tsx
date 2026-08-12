@@ -689,22 +689,22 @@ function SoftwareApplicationPage({
       </Button>
 
       <section className="space-y-6">
-        <div className="flex items-start gap-4">
+        <div className="flex items-start gap-3 sm:gap-4">
           {application.icon ? (
             <img
               src={application.icon}
               alt=""
-              className="h-20 w-20 shrink-0 rounded-xl border bg-muted object-cover shadow-sm"
+              className="h-16 w-16 shrink-0 rounded-xl border bg-muted object-cover shadow-sm sm:h-20 sm:w-20"
             />
           ) : (
-            <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-xl border bg-muted">
+            <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-xl border bg-muted sm:h-20 sm:w-20">
               <Package className="h-9 w-9 text-muted-foreground" />
             </div>
           )}
           <div className="min-w-0 flex-1">
             <div className="flex items-start gap-2">
               <div className="min-w-0 flex-1">
-                <h1 className="text-3xl font-semibold tracking-tight break-words">
+                <h1 className="text-2xl font-semibold tracking-tight break-words sm:text-3xl">
                   {application.name}
                 </h1>
                 {application.summary && (
