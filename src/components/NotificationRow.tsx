@@ -369,12 +369,11 @@ function ThreadNotificationRow({
                 : actions.markAsRead(item.rootId)
             }
           >
-            {/* Unread dot */}
-            <div className="w-2 pt-1.5 shrink-0">
-              {item.unread ? (
-                <div className="h-2 w-2 rounded-full bg-pink-500 shrink-0" />
-              ) : (
-                <div className="h-2 w-2 shrink-0" />
+            {/* Full rows distribute the unread dot and disclosure in one
+                gutter; compact rows retain the dot-only treatment. */}
+            <div className={cn("w-2 shrink-0", compact && "pt-1.5")}>
+              {compact && item.unread && (
+                <div className="h-2 w-2 shrink-0 rounded-full bg-pink-500" />
               )}
             </div>
 
@@ -527,33 +526,45 @@ function ThreadNotificationRow({
         </div>
 
         {!compact && (
-          <div className="relative flex flex-wrap items-center gap-2 pb-3 pl-16 pr-3">
-            {metadataContent}
+          <>
+            <div className="flex flex-wrap items-center gap-2 pb-3 pl-16 pr-3">
+              {metadataContent}
+            </div>
             <Button
               variant="ghost"
               size="sm"
-              className="absolute bottom-1 left-1 h-6 w-6 p-0 text-muted-foreground/80 hover:bg-transparent hover:text-muted-foreground"
+              className="absolute inset-y-0 left-0 z-10 h-auto w-8 rounded-none p-0 text-muted-foreground/60 hover:bg-accent/40 hover:text-muted-foreground"
               onClick={() => setActivityExpanded((expanded) => !expanded)}
               aria-expanded={activityExpanded}
               aria-controls={activityListId}
               aria-label={`${activityExpanded ? "Hide" : "Show"} ${item.events.length} ${currentView} ${item.events.length === 1 ? "activity" : "activities"}`}
               title={`${activityExpanded ? "Hide" : "Show"} activity`}
             >
-              <ChevronRight
+              <span
                 className={cn(
-                  "h-3 w-3 transition-transform motion-reduce:transition-none",
-                  activityExpanded && "rotate-90",
+                  "flex h-full w-full flex-col items-center",
+                  item.unread ? "justify-between pb-2 pt-4" : "justify-center",
                 )}
-              />
+              >
+                {item.unread && (
+                  <span className="h-2 w-2 shrink-0 rounded-full bg-pink-500" />
+                )}
+                <ChevronRight
+                  className={cn(
+                    "h-3 w-3 shrink-0 transition-transform motion-reduce:transition-none",
+                    activityExpanded && "rotate-90",
+                  )}
+                />
+              </span>
             </Button>
-          </div>
+          </>
         )}
       </NotificationSwipeSurface>
 
       {!compact && activityExpanded && (
         <ul
           id={activityListId}
-          className="divide-y divide-border/40 border-t border-border/40 bg-muted/50 pl-2 sm:pl-6"
+          className="ml-4 divide-y divide-border/40 border-l border-t border-border/50 bg-background sm:ml-6"
         >
           {item.events.map((event) => (
             <NotificationActivityRow
@@ -1106,7 +1117,6 @@ export function NotificationActivityRow({
     <li className="group min-w-0">
       <NotificationSwipeSurface
         unread={isUnread}
-        surfaceClassName={nested ? "bg-muted/50" : undefined}
         onToggleRead={() =>
           isUnread
             ? actions.markEventAsRead(event.id)
