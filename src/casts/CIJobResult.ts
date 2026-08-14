@@ -21,10 +21,30 @@ const ExitCodeSymbol = Symbol.for("ci-job-result-exit-code");
 const LogUrlSymbol = Symbol.for("ci-job-result-log-url");
 const RunsOnSymbol = Symbol.for("ci-job-result-runs-on");
 const ArtifactUrlsSymbol = Symbol.for("ci-job-result-artifact-urls");
+const OutputsSymbol = Symbol.for("ci-job-result-outputs");
+const OmittedOutputsSymbol = Symbol.for("ci-job-result-omitted-outputs");
+const AllocationRefSymbol = Symbol.for("ci-job-result-allocation-ref");
 
 export interface CIArtifactRef {
   url: string;
   filename: string | undefined;
+  name: string | undefined;
+}
+
+export interface CIOutputRef {
+  name: string;
+  value: string;
+}
+
+export interface CIOmittedOutputRef {
+  name: string;
+  reason: "missing" | "oversized" | "unresolved";
+}
+
+export interface CIAllocationRef {
+  eventId: string;
+  relay: string | undefined;
+  coordinatorPubkey: string | undefined;
 }
 
 /** Validate that a raw event is a kind:9841 CI job result event. */
@@ -127,8 +147,57 @@ export class CIJobResultEvent extends CIContextCast<CIJobResultNostrEvent> {
     return getOrComputeCachedValue(this.event, ArtifactUrlsSymbol, () =>
       this.event.tags
         .filter(([name, url]) => name === "artifact" && !!url)
-        .map(([, url, filename]) => ({ url, filename })),
+        .map(([, url, filename, name]) => ({ url, filename, name })),
     );
+  }
+
+  /** Public scalar outputs declared by the workflow. */
+  get outputs(): CIOutputRef[] {
+    return getOrComputeCachedValue(this.event, OutputsSymbol, () =>
+      this.event.tags
+        .filter(
+          (tag): tag is [string, string, string, ...string[]] =>
+            tag[0] === "output" && !!tag[1] && tag[2] !== undefined,
+        )
+        .map(([, name, value]) => ({ name, value })),
+    );
+  }
+
+  /** Declared outputs which the provider could not publish. */
+  get omittedOutputs(): CIOmittedOutputRef[] {
+    return getOrComputeCachedValue(this.event, OmittedOutputsSymbol, () =>
+      this.event.tags.flatMap(([tagName, name, reason]) => {
+        if (
+          tagName !== "output-omitted" ||
+          !name ||
+          (reason !== "missing" &&
+            reason !== "oversized" &&
+            reason !== "unresolved")
+        ) {
+          return [];
+        }
+        return [{ name, reason }];
+      }),
+    );
+  }
+
+  /** Directed Nix allocation quoted by this provider result, when present. */
+  get allocationRef(): CIAllocationRef | undefined {
+    return getOrComputeCachedValue(this.event, AllocationRefSymbol, () => {
+      const tag = this.event.tags.find(
+        ([type, eventId, , , marker]) =>
+          type === "q" && !!eventId && marker === "job-allocation",
+      );
+      if (!tag) return undefined;
+      const [, eventId, relay, coordinatorPubkey] = tag;
+      return {
+        eventId,
+        relay,
+        coordinatorPubkey: /^[0-9a-f]{64}$/.test(coordinatorPubkey ?? "")
+          ? coordinatorPubkey
+          : undefined,
+      };
+    });
   }
 
   /** Captured log tail. */

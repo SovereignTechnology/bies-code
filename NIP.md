@@ -413,64 +413,105 @@ Cover notes reference the root via **lowercase** NIP-10 `#e` (not the uppercase 
 
 ---
 
-## CI Workflow Events (kinds 9840, 9841, 9842, and 39842) — consumed
+## NIP-34 CI extension — consumed and emitted
 
-This project **consumes** (does not define) the experimental CI events published by [`ngit-ci`](https://github.com/DanConwayDev/ngit-ci) for NIP-34 repositories. The authoritative event shapes are defined in [ngit-ci's working Nostr CI NIP](https://gitworkshop.dev/npub15qydau2hjma6ngxkl2cyar74wzyjshvl65za5k5rl69264ar2exs5cyejr/ngit-ci/tree/master/NIP.md), which is implemented but has not yet been merged into the upstream NIPs repository. ngit-ci is working with Hive-CI to achieve consensus around a shared CI standard; this is the working NIP for that effort. This section documents the subset gitworkshop relies on and how it fetches and interprets it.
+gitworkshop implements the experimental CI protocol published by [`ngit-ci`](https://gitworkshop.dev/npub15qydau2hjma6ngxkl2cyar74wzyjshvl65za5k5rl69264ar2exs5cyejr/ngit-ci/tree/master/NIP.md). That working NIP is authoritative; this section records the client behavior and trust boundaries.
 
-- **Kind 9840 — Manual Trigger**: a maintainer-signed request for a coordinator to run a selected workflow again. It targets the coordinator with a `p` tag and copies the source workflow's repository and trigger context, omitting `o` because its normalized trigger is always `manual`. gitworkshop exposes this only to confirmed repository maintainers; coordinators independently verify that authorization before scheduling work.
-- **Kind 9841 — Job Result**: an attestation of an individual job outcome, signed by the compute provider that ran it. `content` holds a small log tail; the full log is referenced with a `logs` tag.
-- **Kind 9842 — Workflow Result**: the coordinator-signed combined outcome of a workflow run, with `q` tags that reference its Job Results. A manual replay additionally quotes its Kind 9840 request with the `manual-trigger` marker, preserving the requester and request time.
-- **Kind 39842 — Workflow Progress** (optional): an addressable, NIP-40-expiring marker for a queued, in-progress, or recently concluded workflow run.
+|  Kind | Event                         | Client behavior                                                                                                                                                               |
+| ----: | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 19843 | Coordinator Advertisement     | Consumed from Git index relays as the short-lived coordinator liveness, capability, admission, execution, billing, and secret-recipient signal.                               |
+| 19844 | Request-Readiness List        | Consumed from Git index relays for exact repository `a` items and maintainer-rooted `p` items. It is a discovery hint, never authority.                                       |
+| 19845 | Nix Provider Advertisement    | Understood as the capability and allocation-inbox event quoted by native Nix allocations. It does not confer provider trust.                                                  |
+| 39844 | Coordinator Repository Status | Consumed from repository relays to show effective workflow paths, runner capabilities, and a value-free secret inventory for coordinators currently acting on the repository. |
+|  9843 | Service Request               | Emitted by a confirmed maintainer to request standing service from one coordinator for the selected repository perspective.                                                   |
+|  9844 | Service Stop                  | Emitted by a confirmed maintainer to stop earlier standing requests for the selected perspective.                                                                             |
+|  9845 | Nix Job Allocation            | Understood through the allocation quote on a provider-signed Job Result, preserving coordinator-versus-provider provenance.                                                   |
+| 29846 | Repository Secret Update      | Emitted ephemerally to the exact inbox relays and NIP-44 recipient from a live Coordinator Advertisement.                                                                     |
+|  9840 | Manual Trigger                | Emitted by a confirmed maintainer to replay an exact workflow/commit combination.                                                                                             |
+|  9841 | Job Result                    | Consumed as the compute provider's direct execution claim, including logs, artifacts, public outputs, and omitted outputs.                                                    |
+|  9842 | Workflow Result               | Consumed as the coordinator's combined conclusion and acceptance of its quoted Job Results.                                                                                   |
+| 39842 | Workflow Progress             | Consumed as an expiring, replaceable queued/in-progress/recently-concluded marker.                                                                                            |
 
-All three kinds share the common context tags:
+### Coordinator discovery and service control
+
+A kind:19843 Advertisement is actionable only while its NIP-40 expiry is live. gitworkshop validates the required `W`, `R`, `M`, `X`, and `expiration` shape and never interprets an unknown policy as open, automatic, or free service. Runner selectors use `<family>:<selector>`; `runs_on` remains result-only metadata.
+
+The Actions page separates coordinators into:
+
+- **Watching** — a live Advertisement plus a matching, unexpired kind:39844 status on a repository relay.
+- **Ready for this repo** — a live Advertisement plus a matching `a` or maintainer-rooted `p` entry in the coordinator's kind:19844 list.
+- **Available coordinator** — a live Advertisement which may be selected or requested according to its published admission policy.
+
+All live coordinators remain visible because independent service discovery is intentionally open. The signing identity, policy, software version, families, and selectors are shown; a discovery event is not presented as repository authority.
+
+For request-required execution, a confirmed maintainer can publish kind:9843 or kind:9844 with exactly the selected repository `a` coordinate and coordinator `p` tag. These events are sent to the maintainer outbox, repository relays, and the coordinator's NIP-65 inbox. Reads are filtered by the repository's current confirmed maintainer authors. Controls are ordered by `created_at`, with the lexicographically lower event ID later at equal timestamps.
+
+### Repository secret updates
+
+Secret controls appear only for confirmed maintainers and coordinators whose live Advertisement contains a valid `secrets-key` tag. gitworkshop:
+
+1. creates a fresh secp256k1 sender key for each submission;
+2. binds the plaintext `author` and `created_at` to the outer maintainer-signed event;
+3. encrypts the atomic `set`/`remove` mutation using NIP-44 v2 and the exact advertised recipient;
+4. erases the temporary sender and conversation keys after encryption;
+5. signs kind:29846 with exactly the protocol tags, without a client or `alt` tag;
+6. publishes directly to every advertised secret-inbox relay and requires at least one relay acknowledgement.
+
+The signed update is deliberately not added to the general EventStore or durable outbox. Secret names and values are encrypted together. A kind:39844 status may later disclose only effective names, source maintainer pubkeys, and update timestamps; the UI never expects or displays a value from public repository status.
+
+Secret updates use the active maintainer's own `30617:<author>:<repo-id>` perspective. This preserves the NIP's job-time authorization boundary: stored values remain usable only while that perspective is in the current confirmed maintainership.
+
+The client also rejects the coordinator/runner-owned names `PATH`, `HOME`, `CI`, `DOCKER_HOST`, `XDG_CONFIG_HOME`, and `XDG_CACHE_HOME`, plus the `GITHUB_`, `NGIT_CI_`, `RUNNER_`, and `ACTIONS_` namespaces, before encryption.
+
+### Workflow and job interpretation
+
+Workflow events share repository `a`, commit `c`, workflow `w`, and normalized trigger `o` tags. Push contexts use a Git-ref `r`; pull-request contexts use uppercase `E`/`K`/`P` root tags and lowercase `e`/`k`/`p` parent tags.
+
+Every Workflow Result includes its workflow-run ID as the non-Git-ref `r` value matching Workflow Progress `d`. gitworkshop uses this exact pair to retire the pending marker. For older publishers without the result run ID, the conservative compatibility fallback remains coordinator + `queued_at` + complete shared trigger context; ambiguous fallbacks never hide a pending attempt.
+
+A queued request-gated Progress event intentionally has no Service Request quote. From the first `in_progress` replacement onward, the frozen provenance is:
 
 ```jsonc
 [
-  ["a", "30617:<repo-owner-pubkey>:<repo-id>"],
-  ["c", "<commit-id>"],
-  ["w", "<workflow-file-path>", "<sha256-of-workflow-file-content>"],
-  ["o", "<push|pull_request|manual|schedule>"],
+  "q",
+  "<9843-request-id>",
+  "<relay-url>",
+  "<requester-pubkey>",
+  "service-request",
 ]
 ```
 
-Multi-maintainer repositories are announced under one kind:30617 coordinate per maintainer, so CI events MAY carry **multiple `a` tags** — one per maintainer coordinate. gitworkshop passes the repo's full transitive coordinate set (see §"Repository authorization model" in `docs/matainership.md`) in every `#a` filter and store read, so an event tagged under any maintainer's coordinate is found.
+Manual replays analogously use the `manual-trigger` marker. gitworkshop fetches the exact signed request from its quoted relay, labels the run **Maintainer requested**, and shows the requester as the first timeline phase. Runs without either quote are not given that treatment.
 
-PR-triggered workflows additionally carry NIP-22-style trigger tags — uppercase `E`/`K`/`P` for the root PR (kind:1618) and lowercase `e`/`k`/`p` for the concrete trigger (the PR itself, or a kind:1619 PR Update). Push-triggered workflows carry `["r", "refs/heads/<branch>"]` instead.
+Job Results are rendered only inside a Workflow Result or Progress event which quotes them. The provider signer is always shown separately from the coordinator. A marked `job-allocation` quote identifies directed native Nix execution and its coordinator. Artifact tags retain both the per-file path and artifact group name. Public `output` values and `output-omitted` reasons (`missing`, `oversized`, or `unresolved`) are displayed distinctly; an omitted output is never treated as an empty value.
 
-Job Result-specific tags on kind:9841 include `job`, `conclusion`, `logs`, and optionally `name`, `artifact`, `queued_at`, `started_at`, `exit_code`, and `runs_on`. Workflow Results (kind:9842) carry a combined `conclusion`, optional `queued_at` and `started_at` timestamps, plus a `q` tag for each Job Result. Manual replay results and progress events also carry `['q', '<9840-request-id>', '<relay-url>', '<requester-pubkey>', 'manual-trigger']`; gitworkshop fetches this request from its quoted relay and renders its author and timestamp as the first workflow-timeline node. Workflow Progress (kind:39842) carries every Workflow Result tag — including the workflow timestamps and its growing set of completed-job `q` tags — then adds an addressable `d` tag, `status` (`queued`, `in_progress`, or `concluded`), optional `queue` and `in-progress` tags, and a NIP-40 `expiration` tag. gitworkshop treats Workflow Progress as the live source of truth: its `q` tags reveal completed jobs before the final Workflow Result is published, while `in-progress` and omitted jobs distinguish executing and pending work. Since progress markers are replaceable and renewed before expiry, gitworkshop uses their `queued_at` and `started_at` rather than `created_at` when displaying the time a queued or executing workflow entered that state. The `queue` value is displayed as an estimated number of coordinator capacity rounds ahead, not an exact job position.
-
-### Fetching strategy
+### Query strategy
 
 ```jsonc
-// PR checks — CI activity rides the #E comments fan-out for every repo item
-{ "kinds": [1111, 1619, 9841, 9842, 39842], "#E": ["<pr-or-patch-event-id>"] }
+// Live coordinator discovery and repo-specific readiness, on Git index relays
+{ "kinds": [19843] }
+{ "kinds": [19844], "#a": ["30617:<pubkey>:<repo-id>"] }
+{ "kinds": [19844], "#p": ["<confirmed-maintainer-pubkey>"] }
 
-// Workflow progress — fetched repo-wide; NIP-40 expiry keeps the set small
-{ "kinds": [39842], "#a": ["30617:<maintainer-pubkey>:<repo-id>", "..."] }
+// Acting coordinator state, on repository relays
+{ "kinds": [39844], "#a": ["30617:<pubkey>:<repo-id>", "..."] }
 
-// Commit status ticks — batched per page of displayed commits
-{ "kinds": [9842], "#c": ["<commit-id>", "<commit-id>", "..."] }
+// Trust-bearing standing controls, author-filtered on repository relays
+{ "kinds": [9843, 9844], "authors": ["<confirmed-maintainer>", "..."], "#a": ["30617:<selected-maintainer>:<repo-id>"] }
 
-// Actions tab — all CI activity repo-wide, fetched on demand
-{ "kinds": [9841, 9842, 39842], "#a": ["30617:<maintainer-pubkey>:<repo-id>", "..."] }
+// PR activity through the pre-wired #E fan-out
+{ "kinds": [9841, 9842, 39842], "#E": ["<pr-event-id>"] }
 
-// Actions tab visibility — one-shot limit-1 presence probe per repo visit
-{ "kinds": [9841, 9842, 39842], "#a": ["30617:<maintainer-pubkey>:<repo-id>", "..."], "limit": 1 }
+// Commit ticks and Actions history
+{ "kinds": [9841, 9842, 39842], "#c": ["<commit-id>", "..."] }
+{ "kinds": [9841, 9842, 39842], "#a": ["30617:<pubkey>:<repo-id>", "..."] }
 ```
 
-- **PR / patch pages and lists**: kinds:9841, 9842, and 39842 are fetched alongside NIP-22 comments via the `#E` root-tag loader, so PR list rows and detail pages get CI activity with no extra subscriptions. The no-kind thread loader on detail pages also picks up all three kinds.
-- **Kind:39842** is fetched once per repo via the `#a` coordinate filter in the repo meta subscription — because markers expire (NIP-40), the live set stays small. Expired markers are dropped at display time and re-checked periodically so pending spinners clear without a new event.
-- **Commit ticks** (CodeBar head commit, commit history rows, commit detail page) fetch kind:9842 by `#c` for exactly the commits being displayed; a singleton batched loader collapses a page of commits into one REQ per relay.
-- **Actions tab**: a repo-wide live `#a` subscription for all three kinds runs only while the tab is open (kind:9841 events carry log tails and can be large, so this is not fetched eagerly). Tab visibility is decided by a cheap one-shot limit-1 probe fired from the repo layout, combined with any CI events already in the store from the other loaders.
+All relay reads use the resilient subscription/request layer. PR events continue to ride the pre-wired NIP-22 loaders; commit queries use the singleton batched `#c` loader; repo-wide result/log history loads only on the Actions page. A live Coordinator Advertisement also makes the Actions tab visible before the repository's first run.
 
-### Interpretation rules
+### Trust boundaries
 
-- Each immutable kind:9842 event represents a distinct **workflow run attempt**, even when multiple attempts share the same coordinator, commit, and workflow path. A Workflow Result links only the Job Results that make up that attempt through its `q` tags; clients MUST NOT merge attempts merely because their shared context tags match.
-- Job Results are displayed only within the Workflow Result or Workflow Progress event that quotes them. Clients MUST NOT promote an unquoted Job Result to a top-level workflow run, because it has no authoritative workflow-attempt container.
-- An unexpired kind:39842 Workflow Progress marker counts as **pending** while its `status` is `queued` or `in_progress`; a newer marker for the same `d` tag replaces the earlier state, while different `d` tags are separate attempts.
-- Roll-up uses the workflow's `conclusion`, with job-level `conclusion` values available from the referenced kind:9841 events. Clients MUST tolerate the NIP's standard conclusion values: `success`, `failure`, `neutral`, `cancelled`, `skipped`, `timed_out`, and `startup_failure`.
-- Clients MUST NOT require a kind:39842 progress marker to accept a kind:9842 Workflow Result — publishing progress is optional.
-
-### Trust model
-
-**None yet, by design.** Any pubkey can publish CI events for any repository; gitworkshop displays all of them and always renders the signing runner identity next to each result so users can judge for themselves. If spam appears, a trust model (maintainer-designated runners, follow-based filtering) will be layered on without changing the event shapes.
+- Repository service controls are accepted into the UI state only from current confirmed maintainers.
+- Coordinator Advertisements, Readiness Lists, and Repository Status are independent signed service claims. Matching a repository does not make their author a maintainer or trusted runner.
+- A Job Result is the provider's execution claim. A Workflow Result is the coordinator's claim that it scheduled or accepted those quoted results. gitworkshop shows both identities instead of collapsing them.
+- Repository coordinate matching uses the full multi-maintainer coordinate set, while mutations retain the exact selected or author-rooted perspective required by the CI NIP.

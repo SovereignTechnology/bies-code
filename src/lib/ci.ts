@@ -1,5 +1,5 @@
 /**
- * ngit-ci CI workflow events (experimental kinds 9840 / 9841 / 9842 / 39842).
+ * ngit-ci CI protocol events.
  *
  * Kind 9841 — "CI Job Result": one job's result, signed by the compute
  * provider. Content is a small log tail, with the full log in a `logs` tag.
@@ -47,11 +47,42 @@ export const CI_RESULT_KIND = 9842;
 /** Kind 39842 — CI workflow progress (temporary addressable marker). */
 export const CI_RUN_KIND = 39842;
 
+/** Kind 19843 — live coordinator capabilities and service policy. */
+export const CI_COORDINATOR_ADVERTISEMENT_KIND = 19843;
+
+/** Kind 19844 — repositories for which a coordinator is request-ready. */
+export const CI_REQUEST_READINESS_KIND = 19844;
+
+/** Kind 19845 — live native Nix compute-provider capabilities. */
+export const CI_NIX_PROVIDER_ADVERTISEMENT_KIND = 19845;
+
+/** Kind 39844 — effective coordinator service for one repository root. */
+export const CI_REPOSITORY_STATUS_KIND = 39844;
+
+/** Kind 9843 — standing request for coordinator service. */
+export const CI_SERVICE_REQUEST_KIND = 9843;
+
+/** Kind 9844 — stop a standing coordinator service request. */
+export const CI_SERVICE_STOP_KIND = 9844;
+
+/** Kind 9845 — one directed native Nix job allocation. */
+export const CI_NIX_JOB_ALLOCATION_KIND = 9845;
+
+/** Kind 29846 — ephemeral, encrypted repository-secret update. */
+export const CI_REPOSITORY_SECRET_UPDATE_KIND = 29846;
+
 /** All ngit-ci event kinds. */
 export const CI_EVENT_KINDS = [
   CI_JOB_RESULT_KIND,
   CI_RESULT_KIND,
   CI_RUN_KIND,
+] as const;
+
+/** Discovery/state events used by the repository Actions surface. */
+export const CI_COORDINATOR_EVENT_KINDS = [
+  CI_COORDINATOR_ADVERTISEMENT_KIND,
+  CI_REQUEST_READINESS_KIND,
+  CI_REPOSITORY_STATUS_KIND,
 ] as const;
 
 /** Conclusion values ngit-ci reports, aligned with GitHub's conclusion field. */
@@ -182,10 +213,10 @@ const WORKFLOW_ATTEMPT_CONTEXT_TAGS = new Set([
  * Build the correlation key shared by an ngit-ci progress marker and its
  * final result.
  *
- * Kind:9842 intentionally does not reference the kind:39842 event or its
- * `d` identifier. The stable per-attempt value available to both events is
- * `queued_at`; combine it with the coordinator and every shared context tag
- * to avoid conflating distinct triggers of the same workflow and commit.
+ * Current kind:9842 events carry the Workflow Progress `d` value as their
+ * non-Git-ref `r` tag, giving an exact correlation key. Older publishers did
+ * not include that value, so `queued_at` plus the shared context remains a
+ * deliberately conservative compatibility fallback.
  *
  * A missing queue timestamp is deliberately not guessed. Leaving an older or
  * malformed progress marker visible is safer than hiding a different attempt.
@@ -193,6 +224,9 @@ const WORKFLOW_ATTEMPT_CONTEXT_TAGS = new Set([
 function workflowAttemptContextKey(
   event: CIRun | CIResult,
 ): string | undefined {
+  if (event.workflowRunId) {
+    return JSON.stringify([event.pubkey, event.workflowRunId]);
+  }
   if (event.queuedAt === undefined) return undefined;
 
   const contextTags = event.event.tags
@@ -212,8 +246,8 @@ function workflowAttemptContextKey(
  * - Every kind:9842 event is an independent completed workflow attempt, even
  *   when several attempts use the same commit and workflow path.
  * - A pending kind:39842 marker is omitted once exactly one kind:9842 result
- *   has the same coordinator, `queued_at`, and complete shared trigger
- *   context. Kind:9842 does not carry the marker's `d` identifier, so an
+ *   has the same coordinator and workflow-run ID. The older `queued_at` plus
+ *   shared-context correlation remains as a compatibility fallback; an
  *   ambiguous or incomplete correlation never hides a progress marker.
  * - A result only receives jobs that it explicitly quotes with `q` tags.
  *   Unquoted job results are not rendered as top-level runs: workflow results
@@ -432,6 +466,18 @@ export function splitRunsByCommit(
     else older.push(run);
   }
   return { current, older };
+}
+
+/**
+ * Repository coordinates a workflow run claims to belong to, preferring the
+ * container event (result / progress marker) over per-job results.
+ */
+export function workflowRunRepoCoords(run: CIWorkflowRun): string[] {
+  const containerCoords =
+    run.workflowResult?.repoCoords ?? run.pendingRun?.repoCoords;
+  if (containerCoords && containerCoords.length > 0) return containerCoords;
+
+  return Array.from(new Set(run.jobs.flatMap((job) => job.result.repoCoords)));
 }
 
 // ---------------------------------------------------------------------------

@@ -82,8 +82,13 @@ import { useCommitHistory } from "@/hooks/useGitExplorer";
 import { usePRMergeBase } from "@/hooks/usePRMergeBase";
 import { usePatchMergeBase } from "@/hooks/usePatchMergeBase";
 import { MergePanel } from "@/components/MergePanel";
-import { CIChecksPanel } from "@/components/ci/CIChecksPanel";
+import {
+  CIChecksPanel,
+  type CIRunTrustContext,
+} from "@/components/ci/CIChecksPanel";
 import { useCIForPR } from "@/hooks/useCI";
+import { useCICoordinators } from "@/hooks/useCICoordinators";
+import { classifyCICoordinatorRelationships } from "@/lib/ciCoordinatorRelationship";
 import { CommitDetailView } from "@/components/CommitDetailView";
 import { PatchCommitDetailView } from "@/components/PatchCommitDetailView";
 import { useEventStore } from "@/hooks/useEventStore";
@@ -392,6 +397,32 @@ export default function PRPage() {
   // Store-read only — 9842 results arrive via the #E comments loader and
   // 9841 running markers via the repo-level #a meta subscription.
   const ciChecks = useCIForPR(pr?.rootEvent.id, pr?.tip.commitId);
+
+  // Coordinator relationships + immutable service-control history give the
+  // checks panel the same per-run trust shields and attribution warnings as
+  // the repo Actions tab. Coordinator state is only fetched once this PR
+  // actually has CI runs.
+  const hasCIRuns = !!ciChecks && ciChecks.runs.length > 0;
+  const coordinatorState = useCICoordinators(
+    hasCIRuns ? repo?.allCoordinates : undefined,
+    hasCIRuns ? repo?.selectedCoordinate : undefined,
+    hasCIRuns ? repo?.confirmedMaintainers : undefined,
+    resolved?.repoRelayGroup,
+  );
+  const ciTrustContext = useMemo<CIRunTrustContext | undefined>(() => {
+    if (!repo) return undefined;
+    if (!coordinatorState) return { repo };
+    return {
+      repo,
+      coordinatorRelationships: classifyCICoordinatorRelationships(
+        ciChecks?.runs ?? [],
+        repo.confirmedMaintainers,
+        coordinatorState.currentlyRequestedCoordinatorPubkeys,
+        coordinatorState.previouslyRequestedCoordinatorPubkeys,
+      ),
+      serviceControls: coordinatorState.serviceControls,
+    };
+  }, [repo, coordinatorState, ciChecks?.runs]);
 
   // Ordered priority pubkeys for @ mention autocomplete:
   // parent author first, then participants, then maintainers (deduped).
@@ -1701,7 +1732,11 @@ export default function PRPage() {
                 {/* CI checks — shown to everyone whenever any CI runner has
                     published workflow runs/results for this PR */}
                 {pr && ciChecks && ciChecks.runs.length > 0 && (
-                  <CIChecksPanel checks={ciChecks} canRetry={isMaintainer} />
+                  <CIChecksPanel
+                    checks={ciChecks}
+                    canRetry={isMaintainer}
+                    trustContext={ciTrustContext}
+                  />
                 )}
 
                 {/* Merge panel — shown for PRs and patches on git-backed repos, for maintainers */}

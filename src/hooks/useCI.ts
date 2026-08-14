@@ -51,7 +51,10 @@ import {
 import { mapEventsToStore } from "applesauce-core";
 import { onlyEvents } from "applesauce-relay";
 import { relayGroupUrls$ } from "@/models/RepositoryRelayGroup";
+import { gitIndexRelays } from "@/services/settings";
+import { isValidCICoordinatorAdvertisement } from "@/casts/CICoordinator";
 import {
+  CI_COORDINATOR_ADVERTISEMENT_KIND,
   CI_RUN_KIND,
   CI_RESULT_KIND,
   CI_JOB_RESULT_KIND,
@@ -383,6 +386,8 @@ export function useRepoHasCI(
   const relays =
     use$(() => relayGroupUrls$(repoRelayGroup), [repoRelayGroup]) ?? [];
   const relayKey = relays.join(",");
+  const indexRelays = use$(() => gitIndexRelays, []) ?? [];
+  const indexRelayKey = indexRelays.join(",");
 
   // Presence probe — one event per relay is enough to decide.
   use$(() => {
@@ -401,11 +406,44 @@ export function useRepoHasCI(
     );
   }, [coordsKey, relayKey, store]);
 
+  // A live coordinator makes the Actions surface useful before a repository's
+  // first run. Keep this subscription live because advertisements expire and
+  // are replaced every few minutes.
+  use$(() => {
+    if (indexRelays.length === 0) return undefined;
+    return resilientSubscription(pool, indexRelays, [
+      { kinds: [CI_COORDINATOR_ADVERTISEMENT_KIND] } as Filter,
+    ]).pipe(
+      onlyEvents(),
+      mapEventsToStore(store),
+      catchError(() => EMPTY),
+    );
+  }, [indexRelayKey, store]);
+
   const hasCI = use$(() => {
     if (!repoCoords || repoCoords.length === 0) return undefined;
-    return store
-      .timeline([{ kinds: [...CI_EVENT_KINDS], "#a": repoCoords } as Filter])
-      .pipe(map((events) => events.length > 0));
+    return combineLatest([
+      store.timeline([
+        { kinds: [...CI_EVENT_KINDS], "#a": repoCoords } as Filter,
+      ]),
+      store.timeline([
+        { kinds: [CI_COORDINATOR_ADVERTISEMENT_KIND] } as Filter,
+      ]),
+      timer(0, EXPIRY_RECHECK_INTERVAL_MS),
+    ]).pipe(
+      map(([events, advertisements]) => {
+        if (events.length > 0) return true;
+        const now = Math.floor(Date.now() / 1000);
+        return (advertisements as NostrEvent[]).some((event) => {
+          if (!isValidCICoordinatorAdvertisement(event)) return false;
+          const expiration = Number.parseInt(
+            event.tags.find(([name]) => name === "expiration")?.[1] ?? "",
+            10,
+          );
+          return expiration > now;
+        });
+      }),
+    );
   }, [coordsKey, store]);
 
   return hasCI ?? false;
