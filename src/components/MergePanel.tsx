@@ -60,6 +60,7 @@ import { useMyProfile } from "@/hooks/useProfile";
 import { type MergeabilityStatus } from "@/hooks/usePatchMergeability";
 import { type PRMergeabilityStatus } from "@/hooks/usePRMergeability";
 import type { MergeAnalysis } from "@/hooks/useMergeAnalysis";
+import { useMergedPRCommitMatch } from "@/hooks/useMergedPRCommitMatch";
 import {
   performMerge,
   performPRMerge,
@@ -85,6 +86,7 @@ import type { Patch } from "@/casts/Patch";
 import {
   type ResolvedRepo,
   type ResolvedPR,
+  type ResolvedPRLite,
   type ResolvedIssueLite,
 } from "@/lib/nip34";
 import {
@@ -146,6 +148,8 @@ interface MergePanelProps {
    * matching ngit's push-time behaviour.
    */
   issues?: ResolvedIssueLite[];
+  /** Repository PRs, used to explain stale bases from already-merged stacks. */
+  prs?: ResolvedPRLite[];
   /**
    * Called after at least one Grasp server accepted the git push. Lets the
    * parent keep this panel mounted after the merged status event changes the PR
@@ -262,6 +266,7 @@ export function MergePanel({
   analysis,
   prefetched,
   issues,
+  prs,
   onSuccessfulPush,
 }: MergePanelProps) {
   const account = useActiveAccount();
@@ -355,6 +360,14 @@ export function MergePanel({
           | PRMergeabilityStatus,
         mergeBaseMismatch: null,
       };
+
+  const mergedPRCommitMatch = useMergedPRCommitMatch(
+    isPRType ? prMergeability.mergeBaseMismatch?.computed : undefined,
+    pr.rootEvent.id,
+    pr.rootEvent.created_at,
+    prs,
+    repo,
+  );
 
   // Best-effort scan for an ngit-style merge commit whose kind:1631 merged
   // status never made it to the relays. The scan itself runs at the page
@@ -1092,10 +1105,26 @@ export function MergePanel({
               </div>
             </div>
 
-            {/* Stale claimed merge-base warning */}
+            {/* Stale claimed merge-base explanation */}
             {mergeStep === "idle" &&
               !detectedMergeCommit &&
-              mergeability.mergeBaseMismatch && (
+              mergeability.mergeBaseMismatch &&
+              mergedPRCommitMatch !== undefined &&
+              (mergedPRCommitMatch ? (
+                <div className="rounded-md border border-muted bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+                  <div className="flex items-start gap-2">
+                    <Info className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                    <p>
+                      <span className="font-medium text-foreground">
+                        Stack parent already merged.
+                      </span>{" "}
+                      This PR was opened before its stack parent “
+                      {mergedPRCommitMatch.subject}” was merged, so this merge
+                      uses Git's computed base.
+                    </p>
+                  </div>
+                </div>
+              ) : (
                 <div className="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
                   <div className="flex items-start gap-2">
                     <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
@@ -1125,7 +1154,7 @@ export function MergePanel({
                     </div>
                   </div>
                 </div>
-              )}
+              ))}
 
             {/* Already-merged detection hit its look-back cap */}
             {!detectedMergeCommit &&
