@@ -114,8 +114,14 @@ export class GraspServer {
     const bind = `127.0.0.1:${port}`;
     const gitDataDir = mkdtempSync(join(tmpdir(), `grasp-${role}-`));
 
-    const env: NodeJS.ProcessEnv = {
-      ...process.env,
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    // Git exports repository-context variables (GIT_DIR etc.) when it runs
+    // hooks; a grasp server inheriting them operates on the invoking
+    // repository instead of its own bare repos and rejects every push.
+    for (const key of Object.keys(env)) {
+      if (key.startsWith("GIT_")) delete env[key];
+    }
+    Object.assign(env, {
       NGIT_BIND_ADDRESS: bind,
       NGIT_DOMAIN: bind,
       NGIT_GIT_DATA_PATH: gitDataDir,
@@ -124,7 +130,7 @@ export class GraspServer {
       NGIT_SYNC_STARTUP_DELAY_SECS: "0",
       NGIT_SYNC_STARTUP_JITTER_MS: "0",
       NGIT_SYNC_DISCONNECT_CHECK_INTERVAL_SECS: "1",
-    };
+    });
     if (options.grasp06) env.NGIT_GRASP06_ENABLE = "true";
 
     const child = spawn(binary, [], {
