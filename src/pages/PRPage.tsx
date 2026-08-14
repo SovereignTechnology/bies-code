@@ -273,18 +273,6 @@ export default function PRPage() {
   const repoAllCoords = repo?.allCoordinates;
 
   const store = useEventStore();
-  const inferredParents = useInferredPRParents(repoAllCoords);
-  const inferredParent = prId ? inferredParents?.get(prId) : undefined;
-  const inferredStackItems =
-    prId && inferredParents
-      ? getInferredPRStackItems(inferredParents, prId)
-      : [];
-  const inferredAmbiguousChildren =
-    prId && inferredParents
-      ? getInferredPRAmbiguousChildren(inferredParents, prId)
-      : [];
-  const inferredBranchedChildren =
-    prId && inferredParents ? getInferredPRChildren(inferredParents, prId) : [];
 
   // ── Sub-patch redirect ────────────────────────────────────────────────────
   // When the URL points to a sub-patch (a kind:1617 that has an #e tag
@@ -449,6 +437,23 @@ export default function PRPage() {
     stateRefs: repoState?.refs,
     stateCreatedAt: repoState ? repoState.event.created_at : undefined,
   });
+  const inferredParents = useInferredPRParents(
+    repoAllCoords,
+    gitPool,
+    gitPoolState,
+    repoState,
+  );
+  const inferredParent = prId ? inferredParents?.get(prId) : undefined;
+  const inferredStackItems =
+    prId && inferredParents
+      ? getInferredPRStackItems(inferredParents, prId)
+      : [];
+  const inferredAmbiguousChildren =
+    prId && inferredParents
+      ? getInferredPRAmbiguousChildren(inferredParents, prId)
+      : [];
+  const inferredBranchedChildren =
+    prId && inferredParents ? getInferredPRChildren(inferredParents, prId) : [];
 
   // A PR's optional `b` tag replaces the repository default as the base for
   // comparisons and merge pushes. Non-default refs are lazily ancestry-
