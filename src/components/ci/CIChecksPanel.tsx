@@ -5,8 +5,11 @@
  * expandable row per workflow attempt for the current tip commit, and a
  * collapsed section for runs against superseded commits.
  *
- * No trust filtering is applied yet — the signing runner identity is shown
- * on every row so users can judge results for themselves.
+ * No trust filtering is applied — the signing runner identity is shown on
+ * every row so users can judge results for themselves. When the caller
+ * supplies a trust context (resolved repo plus coordinator relationships),
+ * rows additionally carry the same coordinator-trust shields and
+ * repository-attribution warnings as the repo Actions tab.
  */
 
 import {
@@ -49,9 +52,20 @@ import {
   ciStatusLabel,
   formatCIDuration,
   summarizeRuns,
+  workflowRunRepoCoords,
   type CIJobResult,
   type CIWorkflowRun,
 } from "@/lib/ci";
+import {
+  getCICoordinatorRelationship,
+  getCIRunMaintainerLink,
+  wasCIServiceRequestedWhenRunStarted,
+  type CICoordinatorRelationship,
+} from "@/lib/ciCoordinatorRelationship";
+import { hasAcceptedRepositoryReference, type ResolvedRepo } from "@/lib/nip34";
+import type { CIServiceControl } from "@/casts/CICoordinator";
+import { RepoItemAttributionIndicator } from "@/components/RepoItemAttributionWarning";
+import { CoordinatorTrustIndicator } from "./CoordinatorTrustIndicator";
 import type { CIRun } from "@/casts/CIRun";
 import type {
   CIManualTriggerRef,
@@ -70,10 +84,23 @@ import { pool } from "@/services/nostr";
 import { mapEventsToStore } from "applesauce-core";
 import { onlyEvents } from "applesauce-relay";
 
+/**
+ * Repository trust inputs for per-run warnings. `repo` alone enables the
+ * attribution warning; relationships and service controls (assembled the same
+ * way as on the repo Actions tab) additionally enable the trust shields.
+ */
+export interface CIRunTrustContext {
+  repo: ResolvedRepo;
+  coordinatorRelationships?: ReadonlyMap<string, CICoordinatorRelationship>;
+  serviceControls?: readonly CIServiceControl[];
+}
+
 interface CIChecksPanelProps {
   checks: PRCIChecks;
   /** Whether the active account is a confirmed repository maintainer. */
   canRetry?: boolean;
+  /** When provided, rows show coordinator-trust and attribution warnings. */
+  trustContext?: CIRunTrustContext;
   className?: string;
 }
 
@@ -442,6 +469,7 @@ export function CITriggerRefBadge({
 export function CIChecksPanel({
   checks,
   canRetry = false,
+  trustContext,
   className,
 }: CIChecksPanelProps) {
   const { currentRuns, olderRuns } = checks;
@@ -471,10 +499,11 @@ export function CIChecksPanel({
         ) : (
           <ul className="divide-y divide-border/60">
             {currentRuns.map((run) => (
-              <CIRunRow
+              <TrustAwareRunRow
                 key={run.key}
                 run={run}
                 canRetry={canRetry}
+                trustContext={trustContext}
                 defaultOpen={
                   currentRuns.length === 1 &&
                   (run.status === "failure" ||
@@ -496,7 +525,12 @@ export function CIChecksPanel({
             <CollapsibleContent>
               <ul className="divide-y divide-border/60 border-t border-border/60 opacity-80">
                 {olderRuns.map((run) => (
-                  <CIRunRow key={run.key} run={run} canRetry={canRetry} />
+                  <TrustAwareRunRow
+                    key={run.key}
+                    run={run}
+                    canRetry={canRetry}
+                    trustContext={trustContext}
+                  />
                 ))}
               </ul>
             </CollapsibleContent>
@@ -504,6 +538,75 @@ export function CIChecksPanel({
         )}
       </CardContent>
     </Card>
+  );
+}
+
+const EMPTY_RELATIONSHIPS: ReadonlyMap<string, CICoordinatorRelationship> =
+  new Map();
+const EMPTY_SERVICE_CONTROLS: readonly CIServiceControl[] = [];
+
+/**
+ * CIRunRow plus the per-run trust decorations derived from a trust context —
+ * mirrors how the repo Actions tab decorates its rows.
+ */
+function TrustAwareRunRow({
+  run,
+  canRetry,
+  trustContext,
+  defaultOpen,
+}: {
+  run: CIWorkflowRun;
+  canRetry: boolean;
+  trustContext: CIRunTrustContext | undefined;
+  defaultOpen?: boolean;
+}) {
+  if (!trustContext) {
+    return <CIRunRow run={run} canRetry={canRetry} defaultOpen={defaultOpen} />;
+  }
+
+  const { repo, coordinatorRelationships, serviceControls } = trustContext;
+  const showCoordinatorTrust = coordinatorRelationships !== undefined;
+  const maintainerLink = getCIRunMaintainerLink(run, repo.confirmedMaintainers);
+  const repoCoords = workflowRunRepoCoords(run);
+  const needsAttributionCheck = !hasAcceptedRepositoryReference(
+    repoCoords,
+    repo,
+  );
+
+  return (
+    <CIRunRow
+      run={run}
+      canRetry={canRetry}
+      defaultOpen={defaultOpen}
+      maintainerRequestedOverride={
+        showCoordinatorTrust ? false : maintainerLink !== undefined
+      }
+      trustIndicator={
+        showCoordinatorTrust ? (
+          <CoordinatorTrustIndicator
+            maintainerLink={maintainerLink}
+            relationship={getCICoordinatorRelationship(
+              coordinatorRelationships ?? EMPTY_RELATIONSHIPS,
+              run.pubkey,
+            )}
+            serviceRequestedAtRun={wasCIServiceRequestedWhenRunStarted(
+              run,
+              serviceControls ?? EMPTY_SERVICE_CONTROLS,
+            )}
+          />
+        ) : undefined
+      }
+      attributionIndicator={
+        needsAttributionCheck ? (
+          <RepoItemAttributionIndicator
+            repo={repo}
+            repoCoords={repoCoords}
+            itemLabel="workflow"
+            pageSuffix="/actions"
+          />
+        ) : undefined
+      }
+    />
   );
 }
 

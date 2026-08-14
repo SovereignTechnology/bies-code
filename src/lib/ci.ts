@@ -468,6 +468,18 @@ export function splitRunsByCommit(
   return { current, older };
 }
 
+/**
+ * Repository coordinates a workflow run claims to belong to, preferring the
+ * container event (result / progress marker) over per-job results.
+ */
+export function workflowRunRepoCoords(run: CIWorkflowRun): string[] {
+  const containerCoords =
+    run.workflowResult?.repoCoords ?? run.pendingRun?.repoCoords;
+  if (containerCoords && containerCoords.length > 0) return containerCoords;
+
+  return Array.from(new Set(run.jobs.flatMap((job) => job.result.repoCoords)));
+}
+
 // ---------------------------------------------------------------------------
 // Display helpers
 // ---------------------------------------------------------------------------
