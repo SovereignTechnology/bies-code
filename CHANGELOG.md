@@ -4,6 +4,7 @@
 
 ### Fixes
 
+- Stop the Android app from repeatedly re-opening a cold-start gitworkshop.dev link, which blocked navigating away from the opened page and caused visible flashing.
 - Stop showing inferred stacked-PR relationships once the shared base commit is reachable from the PR's target branch, including fast-forwarded parents.
 - Show the repo Actions tab's coordinator-trust shields and repository-attribution warnings on pull request checks as well.
 - Keep repository tabs, inline diff comment threads, Git and relay status popovers, and profile and branch loading placeholders within phone-sized viewports.

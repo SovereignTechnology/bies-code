@@ -33,19 +33,35 @@ import { REPO_KIND } from "./lib/nip34";
 import { getGitWorkshopPath } from "./lib/gitworkshopUrl";
 
 /**
+ * A cold-start App Link stays in App.getLaunchUrl() for the lifetime of the
+ * activity, so it must be consumed at most once or later effect runs would
+ * navigate back to the launch page.
+ */
+let launchUrlConsumed = false;
+
+/**
  * Handles public GitWorkshop links in native builds. This stays inside the
  * BrowserRouter so both Android App Links and in-WebView clicks can use React
  * Router without affecting ordinary web-browser navigation.
  */
 function NativeGitWorkshopLinks() {
   const navigate = useNavigate();
+  // useNavigate returns a new identity after every route change; the listeners
+  // below must live for the whole session, so they read the latest navigate
+  // through a ref instead of re-running the effect.
+  const navigateRef = useRef(navigate);
+  navigateRef.current = navigate;
 
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) return;
 
     const navigateToGitWorkshopUrl = (url: string) => {
       const path = getGitWorkshopPath(url);
-      if (path) navigate(path);
+      if (!path) return;
+      // appUrlOpen and getLaunchUrl can both report the same cold-start link;
+      // pushing it twice would double the history entry and flash the page.
+      const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+      if (path !== current) navigateRef.current(path);
     };
 
     const getInternalAnchorPath = (
@@ -92,7 +108,7 @@ function NativeGitWorkshopLinks() {
       if (!path) return;
 
       event.preventDefault();
-      navigate(path);
+      navigateRef.current(path);
     };
 
     document.addEventListener("click", handleDocumentClick);
@@ -113,7 +129,9 @@ function NativeGitWorkshopLinks() {
     // App Links delivered while Android cold-starts the activity are available
     // here even if appUrlOpen fired before React completed mounting.
     void App.getLaunchUrl().then((launchUrl) => {
-      if (!disposed && launchUrl) navigateToGitWorkshopUrl(launchUrl.url);
+      if (disposed || !launchUrl || launchUrlConsumed) return;
+      launchUrlConsumed = true;
+      navigateToGitWorkshopUrl(launchUrl.url);
     });
 
     return () => {
@@ -121,7 +139,7 @@ function NativeGitWorkshopLinks() {
       document.removeEventListener("click", handleDocumentClick);
       if (appUrlListener) void appUrlListener.remove();
     };
-  }, [navigate]);
+  }, []);
 
   return null;
 }
@@ -134,6 +152,10 @@ function NativeGitWorkshopLinks() {
 function NativeAndroidBackButton() {
   const navigate = useNavigate();
   const location = useLocation();
+  // Same ref pattern as NativeGitWorkshopLinks: keep one listener for the
+  // whole session instead of re-registering on every route change.
+  const navigateRef = useRef(navigate);
+  navigateRef.current = navigate;
   const locationRef = useRef(location);
   locationRef.current = location;
 
@@ -163,14 +185,14 @@ function NativeAndroidBackButton() {
       }
 
       if (canGoBack) {
-        navigate(-1);
+        navigateRef.current(-1);
         return;
       }
 
       if (locationRef.current.pathname !== "/") {
         // A cold-start deep link can be the first WebView entry. Returning to
         // the app root is safer than closing the app from that content page.
-        navigate("/", { replace: true });
+        navigateRef.current("/", { replace: true });
         return;
       }
 
@@ -187,7 +209,7 @@ function NativeAndroidBackButton() {
       disposed = true;
       if (backButtonListener) void backButtonListener.remove();
     };
-  }, [navigate]);
+  }, []);
 
   return null;
 }
