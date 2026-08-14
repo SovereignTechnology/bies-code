@@ -52,8 +52,10 @@ export class CIRun extends CIContextCast<CIRunEvent> {
 
   /** Addressable run attempt identifier (`d` tag). */
   get runId(): string | undefined {
-    return getOrComputeCachedValue(this.event, RunIdSymbol, () =>
-      getTagValue(this.event, "d"),
+    return getOrComputeCachedValue(
+      this.event,
+      RunIdSymbol,
+      () => this.workflowRunId,
     );
   }
 

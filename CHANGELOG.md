@@ -18,6 +18,7 @@
 
 ### Features
 
+- Discover live CI coordinators before the first workflow run, distinguish active and request-ready service, let maintainers request or stop standing CI, submit atomic NIP-44-encrypted repository secret updates, audit value-free secret inventories, and inspect maintainer-request, provider, allocation, artifact, and output provenance on workflow results.
 - Honor the optional NIP-34 pull-request target branch, including branch context and filtering in the UI plus target-aware comparisons and safe non-default-branch merges.
 - Replace cramped phone notification-row buttons with theme-aligned swipe cues: swipe left to toggle read state and right to archive or restore. Touch tablets retain persistent icon-only controls, while precise pointers reveal full actions on hover or focus.
 - Show inferred pull request stacks from repository-local Git topology, including historical updates, linked stack navigation, and clear ambiguity handling.
@@ -32,6 +33,8 @@
 
 ### Changes
 
+- Keep repository Actions focused with a compact coordinator summary, filter activity by coordinator relationship, include offline coordinators with request or workflow history in the directory, move service details and coordinator-filtered runs onto dedicated pages, and distinguish coordinators requested now, requested previously, or unassociated without rewriting each run's frozen request provenance.
+- Clarify coordinator service details with a single maintainer-trust summary, contextual Request/Stop controls, history only when present, amber offline and unrecognised states, complete secret names, and maintainer-only Nostr secret-inbox warnings.
 - Search issues and pull requests by full event ID, `nevent`, or short hexadecimal prefix, and reveal ID matches even when the active facets would otherwise hide them.
 - Write notification-state key envelopes with a purpose-specific field while continuing to read existing legacy envelopes.
 - Vendor NIP-82, published to Nostr by Fran (author of franzap) on April 11, 2026, document repository association and general-purpose release assets, and retain its established application ID tag for compatibility.

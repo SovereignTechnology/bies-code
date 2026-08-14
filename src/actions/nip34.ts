@@ -42,6 +42,8 @@ import {
   type InlineCommentLocation,
 } from "@/factories/InlineCommentFactory";
 import { CIManualTriggerFactory } from "@/factories/CIManualTriggerFactory";
+import { CIServiceControlFactory } from "@/factories/CIServiceControlFactory";
+import { CI_SERVICE_REQUEST_KIND, CI_SERVICE_STOP_KIND } from "@/lib/ci";
 
 import { pubkeyFromCoordinate, type IssueStatus } from "@/lib/nip34";
 import { outboxStore } from "@/services/outbox";
@@ -193,6 +195,34 @@ export function TriggerManualCI(workflowResult: NostrEvent): Action {
     eventStore.add(signed);
     outboxStore
       .publish(signed, buildGroupIds(self, repoCoords, [coordinatorPubkey]))
+      .catch(console.error);
+  };
+}
+
+/**
+ * Publish a standing CI Service Request or Stop for one repository perspective.
+ * The event reaches the repository relays and the coordinator's NIP-65 inbox.
+ */
+export function SetCIService(
+  enabled: boolean,
+  repositoryCoordinate: string,
+  coordinatorPubkey: string,
+  repositoryRelayHint?: string,
+): Action {
+  return async ({ signer, self }) => {
+    const signed = await CIServiceControlFactory.create(
+      enabled ? CI_SERVICE_REQUEST_KIND : CI_SERVICE_STOP_KIND,
+      repositoryCoordinate,
+      coordinatorPubkey,
+      repositoryRelayHint,
+    ).sign(signer);
+
+    eventStore.add(signed);
+    outboxStore
+      .publish(
+        signed,
+        buildGroupIds(self, [repositoryCoordinate], [coordinatorPubkey]),
+      )
       .catch(console.error);
   };
 }

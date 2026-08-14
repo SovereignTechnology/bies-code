@@ -13,6 +13,7 @@ import RepoBranchesPage from "./RepoBranchesPage";
 import RepoTagsPage from "./RepoTagsPage";
 import RepoComparePage from "./RepoComparePage";
 import RepoActionsPage from "./RepoActionsPage";
+import RepoCoordinatorsPage from "./RepoCoordinatorsPage";
 import RepoReleasesPage from "./RepoReleasesPage";
 import IssuePage from "@/pages/IssuePage";
 import PRPage from "@/pages/PRPage";
@@ -407,6 +408,7 @@ function RepoLayoutResolved({
     compareBaseRef,
     compareHeadRef,
     prCommitId,
+    coordinatorIdentifier,
     releaseId,
     releaseView,
   } = useMemo((): {
@@ -423,6 +425,7 @@ function RepoLayoutResolved({
       | "tags"
       | "compare"
       | "actions"
+      | "action-coordinators"
       | "releases"
       | "about"
       | "edit"
@@ -436,6 +439,7 @@ function RepoLayoutResolved({
     compareBaseRef?: string;
     compareHeadRef?: string;
     prCommitId?: string;
+    coordinatorIdentifier?: string;
     releaseId?: string;
     releaseView?: "releases" | "applications";
   } => {
@@ -533,6 +537,12 @@ function RepoLayoutResolved({
     }
 
     if (segments[0] === "actions") {
+      if (segments[1] === "coordinators") {
+        return {
+          subPage: "action-coordinators",
+          coordinatorIdentifier: segments[2],
+        };
+      }
       return { subPage: "actions" };
     }
 
@@ -846,6 +856,10 @@ function RepoLayoutResolved({
                 <RepoComparePage />
               ) : subPage === "actions" ? (
                 <RepoActionsPage />
+              ) : subPage === "action-coordinators" ? (
+                <RepoCoordinatorsPage
+                  coordinatorIdentifier={coordinatorIdentifier}
+                />
               ) : subPage === "releases" ? (
                 <RepoReleasesPage
                   eventId={releaseId}

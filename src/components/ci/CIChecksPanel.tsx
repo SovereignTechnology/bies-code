@@ -53,7 +53,10 @@ import {
   type CIWorkflowRun,
 } from "@/lib/ci";
 import type { CIRun } from "@/casts/CIRun";
-import type { CIManualTriggerRef } from "@/casts/CIContext";
+import type {
+  CIManualTriggerRef,
+  CIServiceRequestRef,
+} from "@/casts/CIContext";
 import type { PRCIChecks } from "@/hooks/useCI";
 import { runner } from "@/services/actions";
 import { TriggerManualCI } from "@/actions/nip34";
@@ -62,7 +65,7 @@ import { Button } from "@/components/ui/button";
 import { use$ } from "@/hooks/use$";
 import { useEventStore } from "@/hooks/useEventStore";
 import { resilientRequest } from "@/lib/resilientSubscription";
-import { CI_MANUAL_TRIGGER_KIND } from "@/lib/ci";
+import { CI_MANUAL_TRIGGER_KIND, CI_SERVICE_REQUEST_KIND } from "@/lib/ci";
 import { pool } from "@/services/nostr";
 import { mapEventsToStore } from "applesauce-core";
 import { onlyEvents } from "applesauce-relay";
@@ -212,14 +215,19 @@ function TimingPhase({
   );
 }
 
-/** Load the manual-trigger request quoted by a manual workflow result. */
-function useManualTriggerEvent(
+/** Load the exact maintainer request quoted by a workflow container. */
+function useRequestProvenanceEvent(
   manualTriggerRef: CIManualTriggerRef | undefined,
+  serviceRequestRef: CIServiceRequestRef | undefined,
 ): NostrEvent | undefined {
   const store = useEventStore();
-  const eventId = manualTriggerRef?.eventId;
-  const relay = manualTriggerRef?.relay;
-  const pubkey = manualTriggerRef?.pubkey;
+  const requestRef = manualTriggerRef ?? serviceRequestRef;
+  const eventId = requestRef?.eventId;
+  const relay = requestRef?.relay;
+  const pubkey = requestRef?.pubkey;
+  const kind = manualTriggerRef
+    ? CI_MANUAL_TRIGGER_KIND
+    : CI_SERVICE_REQUEST_KIND;
 
   use$(() => {
     if (!eventId || !relay || !pubkey) return undefined;
@@ -229,7 +237,7 @@ function useManualTriggerEvent(
       [
         {
           ids: [eventId],
-          kinds: [CI_MANUAL_TRIGGER_KIND],
+          kinds: [kind],
           authors: [pubkey],
         },
       ],
@@ -238,7 +246,7 @@ function useManualTriggerEvent(
       mapEventsToStore(store),
       catchError(() => EMPTY),
     );
-  }, [eventId, pubkey, relay, store]);
+  }, [eventId, kind, pubkey, relay, store]);
 
   return use$(
     () =>
@@ -253,7 +261,7 @@ function useManualTriggerEvent(
 
 function TimingConnector({ duration }: { duration: string | null }) {
   return (
-    <div className="relative flex w-12 shrink-0 items-center justify-center self-stretch sm:w-20">
+    <div className="relative hidden w-20 shrink-0 items-center justify-center self-stretch sm:flex">
       <div className="absolute inset-x-0 top-1/2 border-t border-border" />
       {duration && (
         <span className="relative bg-card px-1 text-[10px] text-muted-foreground">
@@ -312,13 +320,18 @@ function WorkflowTimingDetails({
   const executionDuration = formatCIDuration(
     startedAt === undefined ? undefined : executionEnd - startedAt,
   );
-  const manualTriggerEvent = useManualTriggerEvent(
-    run.workflowResult?.manualTriggerRef ?? run.pendingRun?.manualTriggerRef,
+  const manualTriggerRef =
+    run.workflowResult?.manualTriggerRef ?? run.pendingRun?.manualTriggerRef;
+  const serviceRequestRef =
+    run.workflowResult?.serviceRequestRef ?? run.pendingRun?.serviceRequestRef;
+  const requestEvent = useRequestProvenanceEvent(
+    manualTriggerRef,
+    serviceRequestRef,
   );
-  const manualTriggerDuration = formatCIDuration(
-    manualTriggerEvent
-      ? (queuedAt ?? startedAt ?? manualTriggerEvent.created_at) -
-          manualTriggerEvent.created_at
+  const requestDuration = formatCIDuration(
+    requestEvent
+      ? (queuedAt ?? startedAt ?? requestEvent.created_at) -
+          requestEvent.created_at
       : undefined,
   );
 
@@ -326,7 +339,7 @@ function WorkflowTimingDetails({
     queuedAt === undefined &&
     startedAt === undefined &&
     executionDuration === null &&
-    !manualTriggerEvent &&
+    !requestEvent &&
     !canRetry
   ) {
     return null;
@@ -334,22 +347,22 @@ function WorkflowTimingDetails({
 
   return (
     <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-2 py-1 text-xs">
-      <div className="flex items-center gap-2">
-        {manualTriggerEvent && (
+      <div className="flex flex-wrap items-center justify-center gap-2">
+        {requestEvent && (
           <>
             <TimingPhase
-              label="Triggered By"
+              label={manualTriggerRef ? "Manual replay" : "Service requested"}
               className="px-3 py-1.5"
               detail={
                 <span className="flex flex-col items-center">
                   <UserLink
-                    pubkey={manualTriggerEvent.pubkey}
+                    pubkey={requestEvent.pubkey}
                     avatarSize="xs"
                     nameClassName="max-w-20 truncate text-[11px]"
                   />
                   <span>
                     {formatDistanceToNow(
-                      new Date(manualTriggerEvent.created_at * 1000),
+                      new Date(requestEvent.created_at * 1000),
                       { addSuffix: true },
                     )}
                   </span>
@@ -357,7 +370,7 @@ function WorkflowTimingDetails({
               }
             />
             {(hasQueuePhase || startedAt !== undefined) && (
-              <TimingConnector duration={manualTriggerDuration} />
+              <TimingConnector duration={requestDuration} />
             )}
           </>
         )}
@@ -500,6 +513,8 @@ export function CIRunRow({
   canRetry = false,
   triggerContext,
   attributionIndicator,
+  trustIndicator,
+  maintainerRequestedOverride,
 }: {
   run: CIWorkflowRun;
   defaultOpen?: boolean;
@@ -512,6 +527,10 @@ export function CIRunRow({
   triggerContext?: ReactNode;
   /** Optional repository-attribution warning shown at the right edge. */
   attributionIndicator?: ReactNode;
+  /** Optional interactive trust indicator shown outside the row trigger. */
+  trustIndicator?: ReactNode;
+  /** Override quote-only provenance detection when the caller validated it. */
+  maintainerRequestedOverride?: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const nowSeconds = useCurrentUnixSeconds(run.status === "pending");
@@ -519,17 +538,33 @@ export function CIRunRow({
   const pendingStatus = run.pendingRun
     ? formatPendingRunStatus(run.pendingRun, nowSeconds)
     : undefined;
+  const status =
+    run.status === "pending" ? pendingStatus : formatCompletedRunStatus(run);
+  const compactStatus =
+    run.status === "pending"
+      ? pendingStatus
+      : formatDistanceToNow(new Date(run.createdAt * 1000), {
+          addSuffix: true,
+        });
   const primaryEvent =
     run.workflowResult?.event ??
     run.pendingRun?.event ??
     run.jobs[0]?.result.event;
+  const maintainerRequested =
+    maintainerRequestedOverride ??
+    !!(
+      run.workflowResult?.manualTriggerRef ||
+      run.pendingRun?.manualTriggerRef ||
+      run.workflowResult?.serviceRequestRef ||
+      run.pendingRun?.serviceRequestRef
+    );
 
   return (
     <li>
       <Collapsible open={open} onOpenChange={setOpen}>
-        <div className="flex items-center gap-2 px-4 py-2.5">
+        <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 gap-y-1 px-4 py-2.5 sm:flex">
           {/* Trigger area — UserLink stays outside to avoid nested anchors */}
-          <CollapsibleTrigger className="group flex flex-1 min-w-0 items-center gap-2 text-left">
+          <CollapsibleTrigger className="group flex min-w-0 flex-1 items-center gap-2 overflow-hidden text-left">
             <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-90" />
             <CIStatusIcon status={run.status} />
             <span className="truncate font-mono text-xs">
@@ -540,36 +575,49 @@ export function CIRunRow({
                 {run.trigger}
               </span>
             )}
+            {maintainerRequested && (
+              <Badge
+                variant="outline"
+                className="inline-flex h-5 shrink-0 border-border bg-muted/60 px-1.5 text-[10px] font-normal text-foreground"
+              >
+                <span className="hidden lg:inline">Maintainer requested</span>
+                <span className="lg:hidden">Requested</span>
+              </Badge>
+            )}
             <CITriggerRefBadge
               triggerRef={run.branchRef}
-              className="shrink-0"
+              className="hidden shrink-0 lg:inline-flex"
             />
             {run.commitId && (
-              <code className="hidden sm:inline shrink-0 font-mono text-[10px] text-muted-foreground">
+              <code className="hidden shrink-0 font-mono text-[10px] text-muted-foreground lg:inline">
                 {run.commitId.slice(0, 7)}
               </code>
             )}
           </CollapsibleTrigger>
 
           <div className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
-            {triggerContext}
-            <span className="hidden sm:inline shrink-0">
-              {run.status === "pending"
-                ? pendingStatus
-                : formatCompletedRunStatus(run)}
+            {trustIndicator}
+            <span className="hidden xl:contents">{triggerContext}</span>
+            <span className="hidden shrink-0 sm:inline lg:hidden">
+              {compactStatus}
             </span>
+            <span className="hidden shrink-0 lg:inline">{status}</span>
             <UserLink
               pubkey={run.pubkey}
               avatarSize="xs"
-              nameClassName="text-xs font-normal text-muted-foreground max-w-24 truncate"
+              nameClassName="hidden max-w-24 truncate text-xs font-normal text-muted-foreground xl:block"
             />
             {primaryEvent && <EventCardActions event={primaryEvent} />}
             {attributionIndicator}
           </div>
+
+          <span className="col-span-2 pl-10 text-[11px] text-muted-foreground sm:hidden">
+            {compactStatus}
+          </span>
         </div>
 
         <CollapsibleContent>
-          <div className="space-y-2 pb-3 pl-10 pr-4">
+          <div className="space-y-2 px-3 pb-3 sm:pl-10 sm:pr-4">
             <WorkflowTimingDetails
               run={run}
               nowSeconds={nowSeconds}
@@ -660,6 +708,8 @@ function CIJobRow({ job }: { job: CIJobResult }) {
   const { result } = job;
   const hasLog = result.log.trim().length > 0;
   const duration = formatCIDuration(result.duration);
+  const hasResultMetadata =
+    result.outputs.length > 0 || result.omittedOutputs.length > 0;
 
   return (
     <div className="rounded-md border border-border/60">
@@ -694,14 +744,42 @@ function CIJobRow({ job }: { job: CIJobResult }) {
         )}
         <EventCardActions event={result.event} />
       </div>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border/60 px-3 py-2 text-[11px] text-muted-foreground">
+        <span className="flex items-center gap-1.5">
+          Executed by
+          <UserLink
+            pubkey={result.pubkey}
+            avatarSize="xs"
+            nameClassName="max-w-28 truncate text-[11px]"
+          />
+        </span>
+        {result.allocationRef?.coordinatorPubkey && (
+          <span className="flex items-center gap-1.5">
+            allocated by
+            <UserLink
+              pubkey={result.allocationRef.coordinatorPubkey}
+              avatarSize="xs"
+              nameClassName="max-w-28 truncate text-[11px]"
+            />
+          </span>
+        )}
+        {result.runsOn.length > 0 && (
+          <span className="font-mono">{result.runsOn.join(" · ")}</span>
+        )}
+      </div>
       {result.artifacts.length > 0 && (
         <div className="border-t border-border/60 px-3 py-2">
           <table className="w-full table-fixed text-left text-xs">
             <thead className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
               <tr>
-                <th className="w-[42%] pb-1 font-medium">Artifact</th>
-                <th className="w-[28%] pb-1 font-medium">Name</th>
-                <th className="w-[30%] pb-1 font-medium">SHA-256</th>
+                <th className="w-[46%] pb-1 font-medium sm:w-[42%]">
+                  Artifact
+                </th>
+                <th className="w-[40%] pb-1 font-medium sm:w-[28%]">Name</th>
+                <th className="w-[14%] pb-1 font-medium sm:w-[30%]">
+                  <span className="sm:hidden">Hash</span>
+                  <span className="hidden sm:inline">SHA-256</span>
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -710,11 +788,42 @@ function CIJobRow({ job }: { job: CIJobResult }) {
                   key={`${artifact.url}-${artifact.filename ?? index}`}
                   url={artifact.url}
                   filename={artifact.filename}
-                  jobName={result.name}
+                  artifactName={artifact.name}
                 />
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+      {hasResultMetadata && (
+        <div className="border-t border-border/60 px-3 py-2 text-xs">
+          <p className="mb-1.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+            Public outputs
+          </p>
+          <dl className="space-y-1.5">
+            {result.outputs.map((output) => (
+              <div
+                key={output.name}
+                className="grid gap-1 sm:grid-cols-[minmax(8rem,0.35fr)_minmax(0,1fr)]"
+              >
+                <dt className="font-mono font-medium">{output.name}</dt>
+                <dd className="min-w-0 break-all font-mono text-muted-foreground">
+                  {output.value || <span className="italic">empty string</span>}
+                </dd>
+              </div>
+            ))}
+            {result.omittedOutputs.map((output) => (
+              <div
+                key={output.name}
+                className="grid gap-1 sm:grid-cols-[minmax(8rem,0.35fr)_minmax(0,1fr)]"
+              >
+                <dt className="font-mono font-medium">{output.name}</dt>
+                <dd className="text-muted-foreground">
+                  unavailable ({output.reason})
+                </dd>
+              </div>
+            ))}
+          </dl>
         </div>
       )}
       {hasLog && showLog && (
@@ -737,11 +846,11 @@ function getBlossomHash(url: string): string | undefined {
 function CIArtifactRow({
   url,
   filename,
-  jobName,
+  artifactName,
 }: {
   url: string;
   filename: string | undefined;
-  jobName: string | undefined;
+  artifactName: string | undefined;
 }) {
   const [copied, setCopied] = useState(false);
   const hash = getBlossomHash(url);
@@ -774,9 +883,9 @@ function CIArtifactRow({
       </td>
       <td
         className="truncate py-1.5 pr-2 text-muted-foreground"
-        title={jobName}
+        title={artifactName}
       >
-        {jobName ?? "—"}
+        {artifactName ?? "—"}
       </td>
       <td className="py-1.5">
         {hash ? (
@@ -787,7 +896,9 @@ function CIArtifactRow({
             title={copied ? "Copied!" : `Copy sha256:${hash}`}
             aria-label={copied ? "Artifact hash copied" : "Copy artifact hash"}
           >
-            <span className="truncate">sha256:{hash.slice(0, 12)}</span>
+            <span className="hidden truncate sm:inline">
+              sha256:{hash.slice(0, 12)}
+            </span>
             {copied ? (
               <Check className="h-3.5 w-3.5 shrink-0 text-green-500" />
             ) : (
