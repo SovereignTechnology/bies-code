@@ -2,6 +2,7 @@ import { useCallback, useMemo, useState } from "react";
 import { useActiveAccount } from "applesauce-react/hooks";
 import { formatDistanceToNow } from "date-fns";
 import {
+  Clock3,
   Eye,
   EyeOff,
   KeyRound,
@@ -35,7 +36,11 @@ import {
   isCISecretNameReserved,
 } from "@/factories/CIRepositorySecretUpdateFactory";
 import { CI_SECRETS_DECRYPTION_BUNKER_NAME } from "@/lib/ci";
-import { submitCIRepositorySecrets } from "@/services/ci";
+import {
+  submitCIRepositorySecrets,
+  type CIPendingSecretChange,
+  type SubmitCIRepositorySecretsResult,
+} from "@/services/ci";
 
 interface SecretRow {
   id: number;
@@ -48,6 +53,11 @@ interface CISecretsDialogProps {
   onOpenChange: (open: boolean) => void;
   coordinator: CICoordinatorSummary;
   repo: ResolvedRepo;
+  pendingChanges: readonly CIPendingSecretChange[];
+  onSubmitted: (
+    result: SubmitCIRepositorySecretsResult,
+    baselineStatusId: string | undefined,
+  ) => void;
 }
 
 function parseRemovalNames(value: string): string[] {
@@ -66,6 +76,8 @@ export function CISecretsDialog({
   onOpenChange,
   coordinator,
   repo,
+  pendingChanges,
+  onSubmitted,
 }: CISecretsDialogProps) {
   const account = useActiveAccount();
   const { toast } = useToast();
@@ -83,6 +95,13 @@ export function CISecretsDialog({
   const inventory = coordinator.repositoryStatus?.secrets ?? [];
   const bunkerBinding = inventory.find(
     ({ name }) => name === CI_SECRETS_DECRYPTION_BUNKER_NAME,
+  );
+  const pendingBunkerChange = pendingChanges.find(
+    ({ name }) => name === CI_SECRETS_DECRYPTION_BUNKER_NAME,
+  );
+  const pendingByName = useMemo(
+    () => new Map(pendingChanges.map((change) => [change.name, change])),
+    [pendingChanges],
   );
   const secretInventory = inventory.filter(
     ({ name }) => name !== CI_SECRETS_DECRYPTION_BUNKER_NAME,
@@ -236,6 +255,7 @@ export function CISecretsDialog({
 
     setSubmitting(true);
     try {
+      const baselineStatusId = coordinator.repositoryStatus?.event.id;
       const result = await submitCIRepositorySecrets({
         signer: account.signer,
         author: account.pubkey,
@@ -245,11 +265,12 @@ export function CISecretsDialog({
         set,
         remove: effectiveRemovals,
       });
+      onSubmitted(result, baselineStatusId);
       clearSensitiveState();
       onOpenChange(false);
       toast({
-        title: "Encrypted secret update delivered",
-        description: `${result.acceptedRelays.length} of ${result.attemptedRelays.length} secret inboxes accepted it. Values never entered the public event store.`,
+        title: "Secret update delivered; confirmation pending",
+        description: `${result.acceptedRelays.length} of ${result.attemptedRelays.length} inbox relays accepted it. Waiting for the coordinator to report the change in repository status.`,
       });
     } catch (error) {
       toast({
@@ -267,7 +288,9 @@ export function CISecretsDialog({
     account,
     clearSensitiveState,
     coordinator.advertisement,
+    coordinator.repositoryStatus?.event.id,
     onOpenChange,
+    onSubmitted,
     bunkerUri,
     removeBunker,
     removalNames,
@@ -304,9 +327,45 @@ export function CISecretsDialog({
             <p className="text-muted-foreground">
               Names and values are encrypted before signing and sent only to the
               coordinator&rsquo;s advertised inboxes. The temporary encryption
-              key is discarded immediately.
+              key is discarded immediately. A relay acknowledgement confirms
+              delivery only; repository status reports coordinator storage.
             </p>
           </div>
+
+          {pendingChanges.length > 0 && (
+            <section
+              className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3"
+              aria-live="polite"
+            >
+              <div className="flex items-start gap-2.5">
+                <Clock3 className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-300" />
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-sm font-medium text-amber-900 dark:text-amber-100">
+                    Awaiting coordinator confirmation
+                  </h3>
+                  <p className="mt-1 text-xs leading-relaxed text-amber-800 dark:text-amber-200">
+                    These changes reached an inbox relay but remain pending
+                    until a newer coordinator repository status reports them.
+                  </p>
+                  <ul className="mt-2 flex flex-wrap gap-1.5">
+                    {pendingChanges.map((change) => (
+                      <li key={`${change.eventId}:${change.name}`}>
+                        <Badge
+                          variant="outline"
+                          className="border-amber-500/30 bg-background/60 font-mono text-[9px] font-normal text-amber-800 dark:text-amber-200"
+                        >
+                          {change.operation === "set" ? "Set" : "Remove"}{" "}
+                          {change.name === CI_SECRETS_DECRYPTION_BUNKER_NAME
+                            ? "decryption bunker"
+                            : change.name}
+                        </Badge>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            </section>
+          )}
 
           <section className="overflow-hidden rounded-xl border border-violet-500/25 bg-gradient-to-br from-violet-500/10 via-background to-pink-500/5">
             <div className="space-y-4 p-4 sm:p-5">
@@ -316,24 +375,31 @@ export function CISecretsDialog({
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
-                    <h3 className="text-sm font-medium">At-rest protection</h3>
+                    <h3 className="text-sm font-medium">At-rest sealing</h3>
                     <Badge
                       variant="outline"
                       className={
-                        bunkerBinding
-                          ? "border-violet-500/30 bg-violet-500/10 text-[10px] text-violet-700 dark:text-violet-300"
-                          : "bg-background/60 text-[10px] font-normal text-muted-foreground"
+                        pendingBunkerChange
+                          ? "border-amber-500/30 bg-amber-500/10 text-[10px] text-amber-800 dark:text-amber-200"
+                          : bunkerBinding
+                            ? "border-violet-500/30 bg-violet-500/10 text-[10px] text-violet-700 dark:text-violet-300"
+                            : "bg-background/60 text-[10px] font-normal text-muted-foreground"
                       }
                     >
-                      {bunkerBinding
-                        ? "Decryption bunker configured"
-                        : "Coordinator-managed keys"}
+                      {pendingBunkerChange
+                        ? pendingBunkerChange.operation === "set"
+                          ? "Bunker update pending"
+                          : "Bunker removal pending"
+                        : bunkerBinding
+                          ? "Binding reported by coordinator"
+                          : "No maintainer bunker reported"}
                     </Badge>
                   </div>
                   <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                    Bind a NIP-46 bunker so the coordinator cannot decrypt
-                    stored values by itself. Authorized runs ask your bunker to
-                    unlock them once, immediately before execution.
+                    Supply a NIP-46 bunker so the coordinator can choose to
+                    store your secret values sealed against it. When it does,
+                    authorized runs ask your bunker to unlock them once per
+                    workflow, immediately before execution.
                   </p>
                 </div>
               </div>
@@ -469,6 +535,16 @@ export function CISecretsDialog({
                         {secret.name}
                       </code>
                       <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-1.5 text-[10px] text-muted-foreground">
+                        {pendingByName.has(secret.name) && (
+                          <Badge
+                            variant="outline"
+                            className="h-4 border-amber-500/30 bg-amber-500/10 px-1.5 text-[9px] font-normal text-amber-800 dark:text-amber-200"
+                          >
+                            {pendingByName.get(secret.name)?.operation === "set"
+                              ? "Update pending"
+                              : "Removal pending"}
+                          </Badge>
+                        )}
                         {secret.sealed && (
                           <Badge
                             variant="outline"

@@ -19,7 +19,7 @@
 
 ### Features
 
-- Let maintainers bind CI repository secrets to a NIP-46 decryption bunker, audit which values are sealed at rest, and safely replace or remove the binding from the coordinator secret controls.
+- Let maintainers bind CI repository secrets to a NIP-46 decryption bunker, audit which values the coordinator reports as sealed at rest, keep relay-delivered changes pending until coordinator status reports them, and safely replace or remove the binding from the secret controls.
 - Discover live CI coordinators before the first workflow run, distinguish active and request-ready service, let maintainers request or stop standing CI, submit atomic NIP-44-encrypted repository secret updates, audit value-free secret inventories, and inspect maintainer-request, provider, allocation, artifact, and output provenance on workflow results.
 - Honor the optional NIP-34 pull-request target branch, including branch context and filtering in the UI plus target-aware comparisons and safe non-default-branch merges.
 - Replace cramped phone notification-row buttons with theme-aligned swipe cues: swipe left to toggle read state and right to archive or restore. Touch tablets retain persistent icon-only controls, while precise pointers reveal full actions on hover or focus.
