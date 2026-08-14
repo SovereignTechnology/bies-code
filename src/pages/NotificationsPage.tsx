@@ -183,7 +183,7 @@ export default function NotificationsPage() {
             rootCount: group.rootIds.size,
             latestActivity: group.latestActivity,
             activities: [...group.activities.values()].sort(
-              (a, b) => b.event.created_at - a.event.created_at,
+              (a, b) => a.event.created_at - b.event.created_at,
             ),
           },
         }))
@@ -724,16 +724,31 @@ function NotificationUserGroupRow({
               if (expanded) setVisibleActivityCount(USER_ACTIVITY_PAGE_SIZE);
             }}
           >
-            {expanded ? (
-              <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
-            ) : (
-              <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
-            )}
+            <span
+              className={cn(
+                "flex h-10 w-4 shrink-0 flex-col items-center",
+                isUnread ? "justify-between py-0.5" : "justify-center",
+              )}
+            >
+              {isUnread && (
+                <span className="h-2 w-2 shrink-0 rounded-full bg-pink-500" />
+              )}
+              {expanded ? (
+                <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+              ) : (
+                <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+              )}
+            </span>
             <UserAvatar pubkey={group.pubkey} size="md" noHoverCard />
             <span className="min-w-0 flex-1">
               <UserName
                 pubkey={group.pubkey}
-                className="block truncate text-sm"
+                className={cn(
+                  "block truncate text-sm",
+                  isUnread
+                    ? "font-medium text-foreground"
+                    : "text-foreground/80",
+                )}
                 noHoverCard
               />
               <span className="mt-0.5 block text-xs text-muted-foreground">
@@ -805,7 +820,7 @@ function NotificationUserGroupRow({
       {expanded && (
         <ul
           id={activityListId}
-          className="divide-y divide-border/40 border-t border-border/40 bg-background/40 pl-3 sm:pl-6"
+          className="ml-4 divide-y divide-border/40 border-l border-t border-border/50 bg-background sm:ml-6"
         >
           {visibleActivities.map(({ item, event }) =>
             item.kind === "thread" ? (
@@ -816,6 +831,7 @@ function NotificationUserGroupRow({
                 actions={actions}
                 currentView={currentView}
                 resolvedMap={resolvedMap}
+                nested
               />
             ) : (
               <NotificationRow

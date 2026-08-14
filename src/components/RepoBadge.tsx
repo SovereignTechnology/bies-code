@@ -220,7 +220,7 @@ function RepoBadgeInner({
   const repoPath = `/${npub}/${dTag}`;
 
   const badgeClass = cn(
-    "inline-flex items-center gap-1 rounded-full bg-secondary px-2 py-0.5 text-xs text-secondary-foreground transition-colors",
+    "inline-flex min-w-0 max-w-full items-center gap-1 rounded-full bg-secondary px-2 py-0.5 text-xs text-secondary-foreground transition-colors",
     !asSpan && "hover:bg-secondary/80",
     className,
   );
@@ -242,7 +242,7 @@ function RepoBadgeInner({
           <span className="text-muted-foreground/40 font-normal">/</span>
         </>
       )}
-      <span className="font-medium">{name}</span>
+      <span className="min-w-0 truncate font-medium">{name}</span>
     </>
   );
 

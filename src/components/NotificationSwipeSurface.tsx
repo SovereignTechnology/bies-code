@@ -188,20 +188,17 @@ export function NotificationSwipeSurface({
 
       <div
         className={cn(
-          "relative z-10 border-l-2 bg-card transition-transform duration-200 ease-out motion-reduce:transition-none",
-          unread ? "border-l-pink-500" : "border-l-transparent",
+          "relative z-10 border-l-2 transition-transform duration-200 ease-out motion-reduce:transition-none",
+          unread
+            ? "border-l-pink-500 bg-card"
+            : "border-l-transparent bg-background",
           dragging && "select-none transition-none",
         )}
         style={{ transform: `translate3d(${offset}px, 0, 0)` }}
       >
         <div
           aria-hidden="true"
-          className={cn(
-            "pointer-events-none absolute inset-0 transition-colors",
-            unread
-              ? "bg-accent/30 group-hover/swipe:bg-accent/50"
-              : "bg-transparent group-hover/swipe:bg-accent/20",
-          )}
+          className="pointer-events-none absolute inset-0 bg-transparent transition-colors group-hover/swipe:bg-accent/20"
         />
         <div className="relative">{children}</div>
       </div>

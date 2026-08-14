@@ -7,7 +7,7 @@
  * The default (compact={false}) is the full notifications-page layout.
  */
 
-import { useMemo, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { useActiveAccount } from "applesauce-react/hooks";
 import {
@@ -23,6 +23,7 @@ import {
   ArchiveRestore,
   Eye,
   EyeOff,
+  ChevronRight,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -262,13 +263,14 @@ function ThreadNotificationRow({
   resolvedMap,
   eventScoped,
 }: {
-  item: NotificationItem;
+  item: ThreadNotificationItem;
   actions: NotificationActions;
   compact: boolean;
   currentView: ViewTab;
   resolvedMap?: Map<string, ResolvedIssueLite>;
   eventScoped: boolean;
 }) {
+  const [activityExpanded, setActivityExpanded] = useState(false);
   const activeAccount = useActiveAccount();
   const rootEvent = useRootEvent(item.rootId);
 
@@ -286,17 +288,15 @@ function ThreadNotificationRow({
   const nevent = eventIdToNevent(item.rootId);
   const linkPath = buildNotificationLink(nevent, item);
 
-  const unreadCommenters =
-    compact || !item.unread
-      ? []
-      : getCommenters({
-          ...item,
-          events: item.events.filter((event) =>
-            item.unreadEventIds.includes(event.id),
-          ),
-        });
+  const activityActors = compact ? [] : getCommenters(item);
   const lastActive = useRelativeTime(item.latestActivity);
   const eventIds = item.events.map((event) => event.id);
+  const chronologicalEvents = useMemo(
+    () => [...item.events].sort((a, b) => a.created_at - b.created_at),
+    [item.events],
+  );
+  const hasActivityDisclosure = item.events.length > 1;
+  const activityListId = `notification-activity-${item.rootId}`;
 
   const toggleRead = () =>
     item.unread
@@ -308,6 +308,41 @@ function ThreadNotificationRow({
         : actions.markAsUnread(item.rootId);
   const restoreFromArchive =
     currentView === "archived" || (currentView === "all" && item.archived);
+  const metadataContent = (
+    <>
+      {summary.purpose &&
+        (isNewRoot ? (
+          <RootPurposeBadge purpose={summary.purpose} isUnread={item.unread} />
+        ) : (
+          <span className="text-xs text-muted-foreground">
+            {summary.purpose}
+          </span>
+        ))}
+      {summary.unreadText && (
+        <UnreadSummaryBadge
+          summary={summary.unreadText}
+          hasMerge={summary.hasMerge}
+          hasClosed={summary.hasClosed}
+        />
+      )}
+      {repoCoord && (
+        <RepoBadge
+          coord={repoCoord}
+          repoNameOnly
+          asSpan
+          className="max-w-full md:hidden"
+        />
+      )}
+      {activityActors[0] && (
+        <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+          <ActivityActors pubkeys={activityActors} />
+        </span>
+      )}
+      <span className="whitespace-nowrap text-xs text-muted-foreground">
+        active {lastActive}
+      </span>
+    </>
+  );
 
   return (
     <li className="group min-w-0">
@@ -329,19 +364,26 @@ function ThreadNotificationRow({
         <div className="flex items-start">
           <Link
             to={linkPath}
-            className="flex items-start gap-3 min-w-0 flex-1 px-3 py-3"
+            className={cn(
+              "flex min-w-0 flex-1 items-start gap-3 px-3",
+              compact ? "py-3" : "pb-1 pt-3",
+            )}
             onClick={() =>
               eventScoped
                 ? actions.markEventsAsRead(eventIds)
                 : actions.markAsRead(item.rootId)
             }
           >
-            {/* Unread dot */}
-            <div className="w-2 pt-1.5 shrink-0">
-              {item.unread ? (
-                <div className="h-2 w-2 rounded-full bg-pink-500 shrink-0" />
-              ) : (
-                <div className="h-2 w-2 shrink-0" />
+            {/* Full mobile rows use the scan rail for unread state and place
+                disclosure below the type icon; desktop retains the gutter. */}
+            <div
+              className={cn(
+                "shrink-0",
+                compact ? "w-2 pt-1.5" : "hidden w-2 sm:block",
+              )}
+            >
+              {compact && item.unread && (
+                <div className="h-2 w-2 shrink-0 rounded-full bg-pink-500" />
               )}
             </div>
 
@@ -377,39 +419,20 @@ function ThreadNotificationRow({
                 {title.length > 70 ? `${title.slice(0, 67)}...` : title}
               </p>
 
-              {/* Latest activity author + root/unread state */}
-              <div className="flex items-center gap-2 mt-1 flex-wrap">
-                {summary.purpose &&
-                  (isNewRoot ? (
-                    <RootPurposeBadge
-                      purpose={summary.purpose}
-                      isUnread={item.unread}
-                    />
-                  ) : (
-                    <span className="text-xs text-muted-foreground">
-                      {summary.purpose}
-                    </span>
-                  ))}
-                {summary.unreadText && (
-                  <UnreadSummaryBadge
-                    summary={summary.unreadText}
-                    hasMerge={summary.hasMerge}
-                    hasClosed={summary.hasClosed}
-                  />
-                )}
-                {unreadCommenters[0] && (
-                  <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-                    <ActivityActors pubkeys={unreadCommenters} />
-                  </span>
-                )}
-                <span className="text-xs text-muted-foreground whitespace-nowrap">
-                  active {lastActive}
-                </span>
-              </div>
+              {compact && (
+                <div className="mt-1 flex flex-wrap items-center gap-2">
+                  {metadataContent}
+                </div>
+              )}
             </div>
 
             {/* Root context occupies the former activity-avatar position. */}
-            <div className="hidden items-center self-center shrink-0 text-right md:flex group-hover:hidden">
+            <div
+              className={cn(
+                "hidden items-center self-center shrink-0 text-right md:flex group-hover:hidden",
+                !compact && "translate-y-4",
+              )}
+            >
               {repoCoord && (
                 <RepoBadge
                   coord={repoCoord}
@@ -422,7 +445,12 @@ function ThreadNotificationRow({
 
           {/* Swipe gestures replace these buttons on phones. Coarse pointers
               keep icon actions visible; precise pointers reveal them on hover. */}
-          <div className="notification-row-actions items-center gap-1 self-center shrink-0 pr-2">
+          <div
+            className={cn(
+              "notification-row-actions items-center gap-1 self-center shrink-0 pr-2",
+              !compact && "translate-y-4",
+            )}
+          >
             {item.unread ? (
               <Button
                 variant="ghost"
@@ -506,7 +534,67 @@ function ThreadNotificationRow({
             )}
           </div>
         </div>
+
+        {!compact && (
+          <>
+            <div className="flex flex-wrap items-center gap-2 pb-3 pl-10 pr-3 sm:pl-16">
+              {metadataContent}
+            </div>
+            {hasActivityDisclosure ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="absolute bottom-0 left-2 z-10 h-7 w-6 rounded-md p-0 text-muted-foreground/60 hover:bg-transparent hover:text-muted-foreground sm:inset-y-0 sm:left-0 sm:h-auto sm:w-8 sm:rounded-none sm:hover:bg-accent/40"
+                onClick={() => setActivityExpanded((expanded) => !expanded)}
+                aria-expanded={activityExpanded}
+                aria-controls={activityListId}
+                aria-label={`${activityExpanded ? "Hide" : "Show"} ${item.events.length} ${currentView} activities`}
+                title={`${activityExpanded ? "Hide" : "Show"} activity`}
+              >
+                <span
+                  className={cn(
+                    "flex h-full w-full flex-col items-center justify-center",
+                    item.unread && "sm:justify-between sm:pb-2 sm:pt-4",
+                  )}
+                >
+                  {item.unread && (
+                    <span className="hidden h-2 w-2 shrink-0 rounded-full bg-pink-500 sm:block" />
+                  )}
+                  <ChevronRight
+                    className={cn(
+                      "h-3 w-3 shrink-0 transition-transform motion-reduce:transition-none",
+                      activityExpanded && "rotate-90",
+                    )}
+                  />
+                </span>
+              </Button>
+            ) : (
+              item.unread && (
+                <span className="absolute left-3 top-4 hidden h-2 w-2 rounded-full bg-pink-500 sm:block" />
+              )
+            )}
+          </>
+        )}
       </NotificationSwipeSurface>
+
+      {!compact && hasActivityDisclosure && activityExpanded && (
+        <ul
+          id={activityListId}
+          className="ml-4 divide-y divide-border/40 border-l border-t border-border/50 bg-background sm:ml-6"
+        >
+          {chronologicalEvents.map((event) => (
+            <NotificationActivityRow
+              key={event.id}
+              item={item}
+              event={event}
+              actions={actions}
+              currentView={currentView}
+              resolvedMap={resolvedMap}
+              nested
+            />
+          ))}
+        </ul>
+      )}
     </li>
   );
 }
@@ -980,15 +1068,17 @@ function RepoZapNotificationRow({
 // Ungrouped thread activity row
 // ---------------------------------------------------------------------------
 
-function activityVerb(event: NostrEvent): string {
+function activityVerb(event: NostrEvent, nested: boolean): string {
   if (event.kind === ZAP_RECEIPT_KIND) return "zapped";
   if (event.kind === COMMENT_KIND || event.kind === LEGACY_REPLY_KIND) {
-    return "commented on";
+    return nested ? "commented" : "commented on";
   }
   if (event.kind === PR_KIND) return "opened a pull request";
   if (event.kind === ISSUE_KIND) return "opened an issue";
   if (event.kind === PATCH_KIND) return "sent a patch";
-  if (event.kind === PR_UPDATE_KIND) return "pushed an update to";
+  if (event.kind === PR_UPDATE_KIND) {
+    return nested ? "pushed an update" : "pushed an update to";
+  }
   return "updated";
 }
 
@@ -1008,12 +1098,14 @@ export function NotificationActivityRow({
   actions,
   currentView,
   resolvedMap,
+  nested = false,
 }: {
   item: ThreadNotificationItem;
   event: NostrEvent;
   actions: NotificationActions;
   currentView: ViewTab;
   resolvedMap?: Map<string, ResolvedIssueLite>;
+  nested?: boolean;
 }) {
   const activeAccount = useActiveAccount();
   const rootEvent = useRootEvent(item.rootId);
@@ -1057,64 +1149,93 @@ export function NotificationActivityRow({
         <div className="flex items-start">
           <Link
             to={linkPath}
-            className="flex min-w-0 flex-1 items-start gap-3 px-3 py-3"
+            className={cn(
+              "flex min-w-0 flex-1 items-start px-3",
+              nested ? "gap-2 py-2" : "gap-3 py-3",
+            )}
             onClick={() => isUnread && actions.markEventAsRead(event.id)}
           >
-            <div className="w-2 shrink-0 pt-2.5">
+            <div className={cn("w-2 shrink-0", nested ? "pt-2" : "pt-2.5")}>
               {isUnread && <div className="h-2 w-2 rounded-full bg-pink-500" />}
             </div>
-            <UserAvatar pubkey={actorPubkey} size="md" noHoverCard />
-            <div className="min-w-0 flex-1">
-              <p className="text-sm leading-5">
+            <UserAvatar
+              pubkey={actorPubkey}
+              size={nested ? "sm" : "md"}
+              className={nested ? "h-6 w-6" : undefined}
+              noHoverCard
+            />
+            <div
+              className={cn(
+                "min-w-0 flex-1",
+                nested && "flex flex-wrap items-baseline gap-x-2 gap-y-0.5",
+              )}
+            >
+              <p
+                className={cn(
+                  "text-sm leading-5",
+                  nested && "text-xs leading-4",
+                )}
+              >
                 <UserName pubkey={actorPubkey} />{" "}
                 <span className="text-muted-foreground">
-                  {activityVerb(event)}
-                </span>{" "}
-                <span
-                  className={cn(
-                    isUnread
-                      ? "font-medium text-foreground"
-                      : "text-foreground/80",
-                  )}
-                >
-                  {title}
+                  {activityVerb(event, nested)}
                 </span>
+                {!nested && (
+                  <>
+                    {" "}
+                    <span
+                      className={cn(
+                        isUnread
+                          ? "font-medium text-foreground"
+                          : "text-foreground/80",
+                      )}
+                    >
+                      {title}
+                    </span>
+                  </>
+                )}
               </p>
-              <div className="mt-1 flex flex-wrap items-center gap-2">
+              {nested ? (
                 <span className="text-xs text-muted-foreground">
                   {lastActive}
                 </span>
-                <span className="text-xs text-muted-foreground/40">
-                  &middot;
-                </span>
-                {resolved ? (
-                  <StatusIcon
-                    status={resolved.status}
-                    variant={
-                      rootType === "patch"
-                        ? "patch"
-                        : rootType === "pr"
-                          ? "pr"
-                          : "issue"
-                    }
-                    className="h-4 w-4"
-                  />
-                ) : (
-                  <RootTypeIcon type={rootType} compact={false} />
-                )}
-                {repoCoord && (
-                  <>
-                    <span className="text-xs text-muted-foreground/40">
-                      &middot;
-                    </span>
-                    <RepoBadge
-                      coord={repoCoord}
-                      repoNameOnly={isOwnRepository}
-                      asSpan
+              ) : (
+                <div className="mt-1 flex flex-wrap items-center gap-2">
+                  <span className="text-xs text-muted-foreground">
+                    {lastActive}
+                  </span>
+                  <span className="text-xs text-muted-foreground/40">
+                    &middot;
+                  </span>
+                  {resolved ? (
+                    <StatusIcon
+                      status={resolved.status}
+                      variant={
+                        rootType === "patch"
+                          ? "patch"
+                          : rootType === "pr"
+                            ? "pr"
+                            : "issue"
+                      }
+                      className="h-4 w-4"
                     />
-                  </>
-                )}
-              </div>
+                  ) : (
+                    <RootTypeIcon type={rootType} compact={false} />
+                  )}
+                  {repoCoord && (
+                    <>
+                      <span className="text-xs text-muted-foreground/40">
+                        &middot;
+                      </span>
+                      <RepoBadge
+                        coord={repoCoord}
+                        repoNameOnly={isOwnRepository}
+                        asSpan
+                      />
+                    </>
+                  )}
+                </div>
+              )}
             </div>
           </Link>
           <div className="notification-row-actions shrink-0 items-center gap-1 self-center pr-2">
