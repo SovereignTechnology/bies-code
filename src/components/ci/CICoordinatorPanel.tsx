@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { format, formatDistanceToNow } from "date-fns";
 import { Link } from "react-router-dom";
 import { nip19 } from "nostr-tools";
@@ -6,9 +6,11 @@ import {
   ArrowRight,
   ChevronRight,
   CircleStop,
+  Clock3,
   Cpu,
   KeyRound,
   Loader2,
+  LockKeyhole,
   Play,
   RadioTower,
   ShieldAlert,
@@ -28,6 +30,7 @@ import type {
 } from "@/hooks/useCICoordinators";
 import type {
   CIExecutionPolicy,
+  CIRepositoryStatus,
   CIServiceControl,
 } from "@/casts/CICoordinator";
 import { runner } from "@/services/actions";
@@ -39,6 +42,11 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
+import { CI_SECRETS_DECRYPTION_BUNKER_NAME } from "@/lib/ci";
+import type {
+  CIPendingSecretChange,
+  SubmitCIRepositorySecretsResult,
+} from "@/services/ci";
 import { CISecretsDialog } from "./CISecretsDialog";
 
 const availabilityPresentation: Record<
@@ -119,6 +127,26 @@ function CoordinatorRelationshipBadge({
 
 function coordinatorPath(basePath: string, pubkey: string): string {
   return `${basePath}/actions/coordinators/${nip19.npubEncode(pubkey)}`;
+}
+
+function isPendingSecretChangeConfirmed(
+  change: CIPendingSecretChange,
+  status: CIRepositoryStatus,
+): boolean {
+  if (
+    status.event.id === change.baselineStatusId ||
+    status.event.created_at < change.createdAt
+  ) {
+    return false;
+  }
+
+  const item = status.secrets.find(({ name }) => name === change.name);
+  if (change.operation === "remove") return item === undefined;
+  return (
+    item?.sourcePubkey === change.author &&
+    item.createdAt !== undefined &&
+    item.createdAt >= change.createdAt
+  );
 }
 
 export function CICoordinatorSummaryBar({
@@ -440,6 +468,12 @@ export function CICoordinatorDetailsCard({
   controls: readonly CIServiceControl[];
 }) {
   const [secretDialogOpen, setSecretDialogOpen] = useState(false);
+  const [pendingSecretChanges, setPendingSecretChanges] = useState<
+    CIPendingSecretChange[]
+  >([]);
+  const pendingSecretChangeKey = pendingSecretChanges
+    .map(({ eventId, name, operation }) => `${eventId}:${name}:${operation}`)
+    .join("\u0000");
   const presentation = availabilityPresentation[summary.availability];
   const effectiveFamilies =
     summary.repositoryStatus?.runnerFamilies ??
@@ -451,8 +485,55 @@ export function CICoordinatorDetailsCard({
 
   const billing = billingLabel(summary);
   const workflowPaths = summary.repositoryStatus?.workflowPaths ?? [];
-  const inventory = [...(summary.repositoryStatus?.secrets ?? [])].sort(
-    (a, b) => a.name.localeCompare(b.name),
+  const fullInventory = summary.repositoryStatus?.secrets ?? [];
+  const hasBunkerBinding = fullInventory.some(
+    ({ name }) => name === CI_SECRETS_DECRYPTION_BUNKER_NAME,
+  );
+  const inventory = fullInventory
+    .filter(({ name }) => name !== CI_SECRETS_DECRYPTION_BUNKER_NAME)
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  useEffect(() => {
+    const status = summary.repositoryStatus;
+    if (!status) return;
+    setPendingSecretChanges((current) => {
+      const pending = current.filter(
+        (change) => !isPendingSecretChangeConfirmed(change, status),
+      );
+      return pending.length === current.length ? current : pending;
+    });
+  }, [pendingSecretChangeKey, summary.repositoryStatus]);
+
+  const recordPendingSecretChanges = useCallback(
+    (
+      result: SubmitCIRepositorySecretsResult,
+      baselineStatusId: string | undefined,
+    ) => {
+      const submitted: CIPendingSecretChange[] = [
+        ...result.setNames.map((name) => ({
+          eventId: result.eventId,
+          author: result.author,
+          createdAt: result.createdAt,
+          baselineStatusId,
+          name,
+          operation: "set" as const,
+        })),
+        ...result.removeNames.map((name) => ({
+          eventId: result.eventId,
+          author: result.author,
+          createdAt: result.createdAt,
+          baselineStatusId,
+          name,
+          operation: "remove" as const,
+        })),
+      ];
+      const submittedNames = new Set(submitted.map(({ name }) => name));
+      setPendingSecretChanges((current) => [
+        ...current.filter(({ name }) => !submittedNames.has(name)),
+        ...submitted,
+      ]);
+    },
+    [],
   );
 
   return (
@@ -565,10 +646,28 @@ export function CICoordinatorDetailsCard({
                     ? "Uses secrets"
                     : "Secrets in use"}
               </p>
+              {hasBunkerBinding && (
+                <Badge
+                  variant="outline"
+                  className="h-5 gap-1 border-violet-500/30 bg-violet-500/10 px-1.5 text-[9px] font-normal text-violet-700 dark:text-violet-300"
+                >
+                  <LockKeyhole className="h-2.5 w-2.5" />
+                  Bunker binding reported
+                </Badge>
+              )}
+              {pendingSecretChanges.length > 0 && (
+                <Badge
+                  variant="outline"
+                  className="h-5 gap-1 border-amber-500/30 bg-amber-500/10 px-1.5 text-[9px] font-normal text-amber-800 dark:text-amber-200"
+                >
+                  <Clock3 className="h-2.5 w-2.5" />
+                  {pendingSecretChanges.length} pending
+                </Badge>
+              )}
             </div>
             {isMaintainer && inventory.length > 0 ? (
               <ul className="grid gap-x-6 gap-y-1.5 sm:grid-cols-2">
-                {inventory.map(({ name }) => (
+                {inventory.map(({ name, sealed }) => (
                   <li key={name} className="flex min-w-0 items-baseline gap-2">
                     <span
                       className="h-1 w-1 shrink-0 rounded-full bg-muted-foreground/60"
@@ -577,6 +676,12 @@ export function CICoordinatorDetailsCard({
                     <code className="min-w-0 break-all text-[10px] text-muted-foreground">
                       {name}
                     </code>
+                    {sealed && (
+                      <LockKeyhole
+                        className="h-3 w-3 shrink-0 self-center text-violet-500"
+                        aria-label="Bunker-sealed"
+                      />
+                    )}
                   </li>
                 ))}
               </ul>
@@ -585,6 +690,31 @@ export function CICoordinatorDetailsCard({
                 No active secrets are reported for this repository.
               </p>
             ) : null}
+            {isMaintainer && pendingSecretChanges.length > 0 && (
+              <div
+                className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-2.5"
+                aria-live="polite"
+              >
+                <Clock3 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-300" />
+                <div>
+                  <p className="text-[11px] font-medium text-amber-900 dark:text-amber-100">
+                    Delivered to inbox relays; awaiting coordinator status
+                  </p>
+                  <p className="mt-0.5 text-[10px] text-amber-800 dark:text-amber-200">
+                    {pendingSecretChanges
+                      .map(
+                        ({ name, operation }) =>
+                          `${operation === "set" ? "Set" : "Remove"} ${
+                            name === CI_SECRETS_DECRYPTION_BUNKER_NAME
+                              ? "decryption bunker"
+                              : name
+                          }`,
+                      )
+                      .join(" · ")}
+                  </p>
+                </div>
+              </div>
+            )}
           </div>
 
           {isMaintainer && (
@@ -610,7 +740,7 @@ export function CICoordinatorDetailsCard({
                   </p>
                   <p className="mt-0.5 text-[11px] text-muted-foreground">
                     {acceptsSecretUpdates
-                      ? "Encrypted updates are delivered only to the inboxes in this live advertisement."
+                      ? "Relay delivery is shown as pending until coordinator repository status reports the change."
                       : "Update secrets in the coordinator directly."}
                   </p>
                 </div>
@@ -637,6 +767,8 @@ export function CICoordinatorDetailsCard({
           onOpenChange={setSecretDialogOpen}
           coordinator={summary}
           repo={repo}
+          pendingChanges={pendingSecretChanges}
+          onSubmitted={recordPendingSecretChanges}
         />
       )}
     </>

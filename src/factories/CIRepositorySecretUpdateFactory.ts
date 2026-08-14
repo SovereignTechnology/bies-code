@@ -1,7 +1,11 @@
 import { blankEventTemplate, EventFactory } from "applesauce-core/factories";
 import type { KnownEventTemplate } from "applesauce-core/helpers/event";
+import { NostrConnectSigner } from "applesauce-signers";
 import { generateSecretKey, getPublicKey, nip44 } from "nostr-tools";
-import { CI_REPOSITORY_SECRET_UPDATE_KIND } from "@/lib/ci";
+import {
+  CI_REPOSITORY_SECRET_UPDATE_KIND,
+  CI_SECRETS_DECRYPTION_BUNKER_NAME,
+} from "@/lib/ci";
 
 type CIRepositorySecretUpdateTemplate = KnownEventTemplate<
   typeof CI_REPOSITORY_SECRET_UPDATE_KIND
@@ -18,6 +22,7 @@ const CI_SECRET_RESERVED_NAMES = new Set([
   "DOCKER_HOST",
   "XDG_CONFIG_HOME",
   "XDG_CACHE_HOME",
+  CI_SECRETS_DECRYPTION_BUNKER_NAME,
 ]);
 const CI_SECRET_RESERVED_PREFIXES = [
   "GITHUB_",
@@ -32,6 +37,22 @@ export function isCISecretNameReserved(name: string): boolean {
     CI_SECRET_RESERVED_NAMES.has(normalized) ||
     CI_SECRET_RESERVED_PREFIXES.some((prefix) => normalized.startsWith(prefix))
   );
+}
+
+/** Validate the NIP-46 bunker URI accepted by ngit-ci's reserved binding. */
+export function isCISecretsDecryptionBunkerUri(value: string): boolean {
+  const uri = value.trim();
+  if (!uri.startsWith("bunker://")) return false;
+
+  try {
+    const { relays } = NostrConnectSigner.parseBunkerURI(uri);
+    return relays.every((relay) => {
+      const url = new URL(relay);
+      return url.protocol === "ws:" || url.protocol === "wss:";
+    });
+  } catch {
+    return false;
+  }
 }
 
 export interface CIRepositorySecretMutation {
@@ -75,7 +96,10 @@ function validateMutation({ set, remove }: CIRepositorySecretMutation): void {
         `${name || "Secret name"} must use uppercase letters, numbers, and underscores.`,
       );
     }
-    if (isCISecretNameReserved(name)) {
+    if (
+      isCISecretNameReserved(name) &&
+      name !== CI_SECRETS_DECRYPTION_BUNKER_NAME
+    ) {
       throw new Error(`${name} is reserved by the CI runtime.`);
     }
     if (seen.has(name)) {
@@ -90,6 +114,14 @@ function validateMutation({ set, remove }: CIRepositorySecretMutation): void {
       throw new Error(`${name} cannot have an empty value.`);
     if (valueBytes > CI_SECRET_VALUE_MAX_BYTES) {
       throw new Error(`${name} exceeds the 16 KiB value limit.`);
+    }
+    if (
+      name === CI_SECRETS_DECRYPTION_BUNKER_NAME &&
+      !isCISecretsDecryptionBunkerUri(value)
+    ) {
+      throw new Error(
+        "The secrets decryption bunker must be a valid bunker:// URI with at least one relay.",
+      );
     }
   }
 }

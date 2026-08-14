@@ -16,8 +16,21 @@ export interface SubmitCIRepositorySecretsOptions extends CIRepositorySecretMuta
 
 export interface SubmitCIRepositorySecretsResult {
   eventId: string;
+  author: string;
+  createdAt: number;
+  setNames: string[];
+  removeNames: string[];
   acceptedRelays: string[];
   attemptedRelays: string[];
+}
+
+export interface CIPendingSecretChange {
+  eventId: string;
+  author: string;
+  createdAt: number;
+  baselineStatusId: string | undefined;
+  name: string;
+  operation: "set" | "remove";
 }
 
 /**
@@ -97,6 +110,10 @@ export async function submitCIRepositorySecrets({
 
   return {
     eventId: signed.id,
+    author,
+    createdAt,
+    setNames: Object.keys(set),
+    removeNames: [...new Set(remove)],
     acceptedRelays,
     attemptedRelays: recipient.relays,
   };
