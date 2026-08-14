@@ -374,9 +374,14 @@ function ThreadNotificationRow({
                 : actions.markAsRead(item.rootId)
             }
           >
-            {/* Full rows distribute the unread dot and disclosure in one
-                gutter; compact rows retain the dot-only treatment. */}
-            <div className={cn("w-2 shrink-0", compact && "pt-1.5")}>
+            {/* Full mobile rows use the scan rail for unread state and place
+                disclosure below the type icon; desktop retains the gutter. */}
+            <div
+              className={cn(
+                "shrink-0",
+                compact ? "w-2 pt-1.5" : "hidden w-2 sm:block",
+              )}
+            >
               {compact && item.unread && (
                 <div className="h-2 w-2 shrink-0 rounded-full bg-pink-500" />
               )}
@@ -532,14 +537,14 @@ function ThreadNotificationRow({
 
         {!compact && (
           <>
-            <div className="flex flex-wrap items-center gap-2 pb-3 pl-16 pr-3">
+            <div className="flex flex-wrap items-center gap-2 pb-3 pl-10 pr-3 sm:pl-16">
               {metadataContent}
             </div>
             {hasActivityDisclosure ? (
               <Button
                 variant="ghost"
                 size="sm"
-                className="absolute inset-y-0 left-0 z-10 h-auto w-8 rounded-none p-0 text-muted-foreground/60 hover:bg-accent/40 hover:text-muted-foreground"
+                className="absolute bottom-0 left-2 z-10 h-7 w-6 rounded-md p-0 text-muted-foreground/60 hover:bg-transparent hover:text-muted-foreground sm:inset-y-0 sm:left-0 sm:h-auto sm:w-8 sm:rounded-none sm:hover:bg-accent/40"
                 onClick={() => setActivityExpanded((expanded) => !expanded)}
                 aria-expanded={activityExpanded}
                 aria-controls={activityListId}
@@ -548,14 +553,12 @@ function ThreadNotificationRow({
               >
                 <span
                   className={cn(
-                    "flex h-full w-full flex-col items-center",
-                    item.unread
-                      ? "justify-between pb-2 pt-4"
-                      : "justify-center",
+                    "flex h-full w-full flex-col items-center justify-center",
+                    item.unread && "sm:justify-between sm:pb-2 sm:pt-4",
                   )}
                 >
                   {item.unread && (
-                    <span className="h-2 w-2 shrink-0 rounded-full bg-pink-500" />
+                    <span className="hidden h-2 w-2 shrink-0 rounded-full bg-pink-500 sm:block" />
                   )}
                   <ChevronRight
                     className={cn(
@@ -567,7 +570,7 @@ function ThreadNotificationRow({
               </Button>
             ) : (
               item.unread && (
-                <span className="absolute left-3 top-4 h-2 w-2 rounded-full bg-pink-500" />
+                <span className="absolute left-3 top-4 hidden h-2 w-2 rounded-full bg-pink-500 sm:block" />
               )
             )}
           </>
