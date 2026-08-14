@@ -457,11 +457,15 @@ Secret controls appear only for confirmed maintainers and coordinators whose liv
 5. signs kind:29846 with exactly the protocol tags, without a client or `alt` tag;
 6. publishes directly to every advertised secret-inbox relay and requires at least one relay acknowledgement.
 
-The signed update is deliberately not added to the general EventStore or durable outbox. Secret names and values are encrypted together. A kind:39844 status may later disclose only effective names, source maintainer pubkeys, and update timestamps; the UI never expects or displays a value from public repository status.
+The signed update is deliberately not added to the general EventStore or durable outbox. Secret names and values are encrypted together. A kind:39844 status may later disclose only effective names, source maintainer pubkeys, update timestamps, and the optional `sealed` marker; the UI never expects or displays a value from public repository status.
+
+The reserved name `WORKFLOW_SECRETS_DECRYPTION_BUNKER` is managed through a dedicated control. Its value must be a NIP-46 `bunker://` URI and is never injected into jobs. It binds the maintainer's repository perspective to a remote signer that unwraps the coordinator's per-scope sealing key at job time. The client keeps the URI in a protected input, validates it with the same NIP-46 parser used for login, and submits or removes it through the ordinary atomic kind:29846 mutation. Replacing or removing the binding warns that values sealed to the previous bunker may need to be resubmitted.
 
 Secret updates use the active maintainer's own `30617:<author>:<repo-id>` perspective. This preserves the NIP's job-time authorization boundary: stored values remain usable only while that perspective is in the current confirmed maintainership.
 
-The client also rejects the coordinator/runner-owned names `PATH`, `HOME`, `CI`, `DOCKER_HOST`, `XDG_CONFIG_HOME`, and `XDG_CACHE_HOME`, plus the `GITHUB_`, `NGIT_CI_`, `RUNNER_`, and `ACTIONS_` namespaces, before encryption.
+The client also rejects the coordinator/runner-owned names `PATH`, `HOME`, `CI`, `DOCKER_HOST`, `XDG_CONFIG_HOME`, and `XDG_CACHE_HOME`, plus the `GITHUB_`, `NGIT_CI_`, `RUNNER_`, and `ACTIONS_` namespaces, before encryption. The bunker binding name is rejected from generic secret fields and accepted only through its dedicated control.
+
+For Nostr-provisioned inventory entries, gitworkshop accepts the optional fifth literal field in `["secret","<name>","<maintainer>","<created-at>","sealed"]` and labels that value as bunker-sealed. The reserved bunker binding is shown as at-rest configuration rather than as a workflow secret.
 
 ### Workflow and job interpretation
 

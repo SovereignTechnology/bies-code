@@ -9,6 +9,7 @@ import {
   Cpu,
   KeyRound,
   Loader2,
+  LockKeyhole,
   Play,
   RadioTower,
   ShieldAlert,
@@ -39,6 +40,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
+import { CI_SECRETS_DECRYPTION_BUNKER_NAME } from "@/lib/ci";
 import { CISecretsDialog } from "./CISecretsDialog";
 
 const availabilityPresentation: Record<
@@ -451,9 +453,13 @@ export function CICoordinatorDetailsCard({
 
   const billing = billingLabel(summary);
   const workflowPaths = summary.repositoryStatus?.workflowPaths ?? [];
-  const inventory = [...(summary.repositoryStatus?.secrets ?? [])].sort(
-    (a, b) => a.name.localeCompare(b.name),
+  const fullInventory = summary.repositoryStatus?.secrets ?? [];
+  const hasBunkerBinding = fullInventory.some(
+    ({ name }) => name === CI_SECRETS_DECRYPTION_BUNKER_NAME,
   );
+  const inventory = fullInventory
+    .filter(({ name }) => name !== CI_SECRETS_DECRYPTION_BUNKER_NAME)
+    .sort((a, b) => a.name.localeCompare(b.name));
 
   return (
     <>
@@ -565,10 +571,19 @@ export function CICoordinatorDetailsCard({
                     ? "Uses secrets"
                     : "Secrets in use"}
               </p>
+              {hasBunkerBinding && (
+                <Badge
+                  variant="outline"
+                  className="h-5 gap-1 border-violet-500/30 bg-violet-500/10 px-1.5 text-[9px] font-normal text-violet-700 dark:text-violet-300"
+                >
+                  <LockKeyhole className="h-2.5 w-2.5" />
+                  Bunker protected
+                </Badge>
+              )}
             </div>
             {isMaintainer && inventory.length > 0 ? (
               <ul className="grid gap-x-6 gap-y-1.5 sm:grid-cols-2">
-                {inventory.map(({ name }) => (
+                {inventory.map(({ name, sealed }) => (
                   <li key={name} className="flex min-w-0 items-baseline gap-2">
                     <span
                       className="h-1 w-1 shrink-0 rounded-full bg-muted-foreground/60"
@@ -577,6 +592,12 @@ export function CICoordinatorDetailsCard({
                     <code className="min-w-0 break-all text-[10px] text-muted-foreground">
                       {name}
                     </code>
+                    {sealed && (
+                      <LockKeyhole
+                        className="h-3 w-3 shrink-0 self-center text-violet-500"
+                        aria-label="Bunker-sealed"
+                      />
+                    )}
                   </li>
                 ))}
               </ul>

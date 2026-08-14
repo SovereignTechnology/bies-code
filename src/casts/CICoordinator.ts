@@ -37,6 +37,7 @@ export interface CISecretInventoryItem {
   name: string;
   sourcePubkey: string | undefined;
   createdAt: number | undefined;
+  sealed: boolean;
 }
 
 const ExpirationSymbol = Symbol.for("ci-coordinator-expiration");
@@ -299,12 +300,16 @@ export function isValidCIRepositoryStatus(
   const coordinates = tagsNamed(event, "a");
   const secrets = tagsNamed(event, "secret");
   const validSecrets = secrets.every(([, name, source, createdAt, ...rest]) => {
-    if (!name || !/^[A-Z_][A-Z0-9_]*$/.test(name) || rest.length > 0) {
+    if (!name || !/^[A-Z_][A-Z0-9_]*$/.test(name)) {
       return false;
     }
-    if (source === undefined) return createdAt === undefined;
+    if (source === undefined) {
+      return createdAt === undefined && rest.length === 0;
+    }
     return (
-      /^[0-9a-f]{64}$/.test(source) && parseInteger(createdAt) !== undefined
+      /^[0-9a-f]{64}$/.test(source) &&
+      parseInteger(createdAt) !== undefined &&
+      (rest.length === 0 || (rest.length === 1 && rest[0] === "sealed"))
     );
   });
   return (
@@ -385,7 +390,14 @@ export class CIRepositoryStatus extends EventCast<RepositoryStatusEvent> {
           ? tag[2]
           : undefined;
         const createdAt = sourcePubkey ? parseInteger(tag[3]) : undefined;
-        return [{ name, sourcePubkey, createdAt }];
+        return [
+          {
+            name,
+            sourcePubkey,
+            createdAt,
+            sealed: sourcePubkey !== undefined && tag[4] === "sealed",
+          },
+        ];
       }),
     );
   }

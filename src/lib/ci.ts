@@ -71,6 +71,10 @@ export const CI_NIX_JOB_ALLOCATION_KIND = 9845;
 /** Kind 29846 — ephemeral, encrypted repository-secret update. */
 export const CI_REPOSITORY_SECRET_UPDATE_KIND = 29846;
 
+/** Reserved kind:29846 name which binds a repository scope to a NIP-46 bunker. */
+export const CI_SECRETS_DECRYPTION_BUNKER_NAME =
+  "WORKFLOW_SECRETS_DECRYPTION_BUNKER";
+
 /** All ngit-ci event kinds. */
 export const CI_EVENT_KINDS = [
   CI_JOB_RESULT_KIND,

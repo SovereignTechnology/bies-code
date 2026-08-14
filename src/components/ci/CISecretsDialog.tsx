@@ -7,13 +7,16 @@ import {
   KeyRound,
   Loader2,
   LockKeyhole,
+  Link2Off,
   Plus,
+  ShieldCheck,
   Trash2,
 } from "lucide-react";
 import type { ResolvedRepo } from "@/lib/nip34";
 import type { CICoordinatorSummary } from "@/hooks/useCICoordinators";
 import { UserLink } from "@/components/UserAvatar";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
   DialogContent,
@@ -28,8 +31,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/useToast";
 import {
   CI_SECRET_NAME_PATTERN,
+  isCISecretsDecryptionBunkerUri,
   isCISecretNameReserved,
 } from "@/factories/CIRepositorySecretUpdateFactory";
+import { CI_SECRETS_DECRYPTION_BUNKER_NAME } from "@/lib/ci";
 import { submitCIRepositorySecrets } from "@/services/ci";
 
 interface SecretRow {
@@ -70,14 +75,25 @@ export function CISecretsDialog({
   ]);
   const [removeText, setRemoveText] = useState("");
   const [showValues, setShowValues] = useState(false);
+  const [bunkerUri, setBunkerUri] = useState("");
+  const [showBunkerUri, setShowBunkerUri] = useState(false);
+  const [removeBunker, setRemoveBunker] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
   const inventory = coordinator.repositoryStatus?.secrets ?? [];
+  const bunkerBinding = inventory.find(
+    ({ name }) => name === CI_SECRETS_DECRYPTION_BUNKER_NAME,
+  );
+  const secretInventory = inventory.filter(
+    ({ name }) => name !== CI_SECRETS_DECRYPTION_BUNKER_NAME,
+  );
   const removalNames = useMemo(
     () => parseRemovalNames(removeText),
     [removeText],
   );
   const hasChanges =
+    bunkerUri.trim().length > 0 ||
+    removeBunker ||
     removalNames.length > 0 ||
     rows.some((row) => row.name.trim().length > 0 || row.value.length > 0);
 
@@ -86,6 +102,9 @@ export function CISecretsDialog({
     setNextRowId(2);
     setRemoveText("");
     setShowValues(false);
+    setBunkerUri("");
+    setShowBunkerUri(false);
+    setRemoveBunker(false);
   }, []);
 
   const handleOpenChange = useCallback(
@@ -121,6 +140,20 @@ export function CISecretsDialog({
     if (!account) return;
 
     const set: Record<string, string> = {};
+    const trimmedBunkerUri = bunkerUri.trim();
+    if (trimmedBunkerUri) {
+      if (!isCISecretsDecryptionBunkerUri(trimmedBunkerUri)) {
+        toast({
+          title: "Check the decryption bunker URI",
+          description:
+            "Use a valid bunker:// URI containing a remote signer public key and at least one ws:// or wss:// relay.",
+          variant: "destructive",
+        });
+        return;
+      }
+      set[CI_SECRETS_DECRYPTION_BUNKER_NAME] = trimmedBunkerUri;
+    }
+
     for (const row of rows) {
       const name = row.name.trim().toUpperCase();
       const hasAnyValue = name.length > 0 || row.value.length > 0;
@@ -138,7 +171,9 @@ export function CISecretsDialog({
         toast({
           title: `${name} is reserved`,
           description:
-            "CI runtime and GitHub Actions environment names cannot be replaced by repository secrets.",
+            name === CI_SECRETS_DECRYPTION_BUNKER_NAME
+              ? "Use the decryption bunker control above to change this binding."
+              : "CI runtime and GitHub Actions environment names cannot be replaced by repository secrets.",
           variant: "destructive",
         });
         return;
@@ -162,7 +197,19 @@ export function CISecretsDialog({
       set[name] = row.value;
     }
 
-    const overlap = removalNames.find((name) => set[name] !== undefined);
+    if (removalNames.includes(CI_SECRETS_DECRYPTION_BUNKER_NAME)) {
+      toast({
+        title: "Use the decryption bunker control",
+        description:
+          "Remove the bunker binding from its protected control rather than the general secret-name field.",
+        variant: "destructive",
+      });
+      return;
+    }
+    const effectiveRemovals = removeBunker
+      ? [...removalNames, CI_SECRETS_DECRYPTION_BUNKER_NAME]
+      : removalNames;
+    const overlap = effectiveRemovals.find((name) => set[name] !== undefined);
     if (overlap) {
       toast({
         title: `${overlap} is both set and removed`,
@@ -171,9 +218,11 @@ export function CISecretsDialog({
       });
       return;
     }
-    const invalidRemoval = removalNames.find(
+    const invalidRemoval = effectiveRemovals.find(
       (name) =>
-        !CI_SECRET_NAME_PATTERN.test(name) || isCISecretNameReserved(name),
+        !CI_SECRET_NAME_PATTERN.test(name) ||
+        (isCISecretNameReserved(name) &&
+          name !== CI_SECRETS_DECRYPTION_BUNKER_NAME),
     );
     if (invalidRemoval) {
       toast({
@@ -194,7 +243,7 @@ export function CISecretsDialog({
         repositoryRelayHint: repo.relays[0],
         advertisement: coordinator.advertisement,
         set,
-        remove: removalNames,
+        remove: effectiveRemovals,
       });
       clearSensitiveState();
       onOpenChange(false);
@@ -219,6 +268,8 @@ export function CISecretsDialog({
     clearSensitiveState,
     coordinator.advertisement,
     onOpenChange,
+    bunkerUri,
+    removeBunker,
     removalNames,
     repo.dTag,
     repo.relays,
@@ -257,7 +308,149 @@ export function CISecretsDialog({
             </p>
           </div>
 
-          {inventory.length > 0 && (
+          <section className="overflow-hidden rounded-xl border border-violet-500/25 bg-gradient-to-br from-violet-500/10 via-background to-pink-500/5">
+            <div className="space-y-4 p-4 sm:p-5">
+              <div className="flex items-start gap-3">
+                <div className="rounded-lg border border-violet-500/20 bg-violet-500/10 p-2 text-violet-600 dark:text-violet-300">
+                  <ShieldCheck className="h-4 w-4" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h3 className="text-sm font-medium">At-rest protection</h3>
+                    <Badge
+                      variant="outline"
+                      className={
+                        bunkerBinding
+                          ? "border-violet-500/30 bg-violet-500/10 text-[10px] text-violet-700 dark:text-violet-300"
+                          : "bg-background/60 text-[10px] font-normal text-muted-foreground"
+                      }
+                    >
+                      {bunkerBinding
+                        ? "Decryption bunker configured"
+                        : "Coordinator-managed keys"}
+                    </Badge>
+                  </div>
+                  <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                    Bind a NIP-46 bunker so the coordinator cannot decrypt
+                    stored values by itself. Authorized runs ask your bunker to
+                    unlock them once, immediately before execution.
+                  </p>
+                </div>
+              </div>
+
+              {bunkerBinding && (
+                <div className="flex flex-wrap items-center gap-x-1.5 text-[10px] text-muted-foreground">
+                  <LockKeyhole className="h-3 w-3 text-violet-500" />
+                  <span>Binding supplied by</span>
+                  {bunkerBinding.sourcePubkey ? (
+                    <UserLink
+                      pubkey={bunkerBinding.sourcePubkey}
+                      avatarSize="xs"
+                      variant="inline"
+                      nameClassName="max-w-28 truncate text-[10px]"
+                    />
+                  ) : (
+                    <span>the coordinator operator</span>
+                  )}
+                  {bunkerBinding.createdAt && (
+                    <span>
+                      {formatDistanceToNow(
+                        new Date(bunkerBinding.createdAt * 1000),
+                        { addSuffix: true },
+                      )}
+                    </span>
+                  )}
+                </div>
+              )}
+
+              {removeBunker ? (
+                <div className="space-y-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3">
+                  <p className="text-xs leading-relaxed text-amber-800 dark:text-amber-200">
+                    This update will remove the bunker binding. Existing sealed
+                    values may be unavailable until you bind a bunker again and
+                    resubmit them.
+                  </p>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setRemoveBunker(false)}
+                    disabled={submitting}
+                  >
+                    Keep bunker binding
+                  </Button>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <Label htmlFor="ci-secrets-bunker-uri">
+                    {bunkerBinding
+                      ? "Replace decryption bunker"
+                      : "Decryption bunker URI"}
+                  </Label>
+                  <div className="flex gap-2">
+                    <Input
+                      id="ci-secrets-bunker-uri"
+                      type={showBunkerUri ? "text" : "password"}
+                      value={bunkerUri}
+                      onChange={(event) => setBunkerUri(event.target.value)}
+                      placeholder="bunker://<remote-pubkey>?relay=wss%3A%2F%2F…"
+                      autoCapitalize="none"
+                      autoComplete="new-password"
+                      spellCheck={false}
+                      disabled={submitting}
+                      className="min-w-0 font-mono text-xs"
+                      aria-describedby="ci-secrets-bunker-help"
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      className="h-10 w-10 shrink-0"
+                      aria-label={
+                        showBunkerUri ? "Hide bunker URI" : "Show bunker URI"
+                      }
+                      onClick={() => setShowBunkerUri((visible) => !visible)}
+                      disabled={submitting}
+                    >
+                      {showBunkerUri ? (
+                        <EyeOff className="h-4 w-4" />
+                      ) : (
+                        <Eye className="h-4 w-4" />
+                      )}
+                    </Button>
+                  </div>
+                  <p
+                    id="ci-secrets-bunker-help"
+                    className="text-[11px] leading-relaxed text-muted-foreground"
+                  >
+                    The URI contains connection credentials. It is encrypted in
+                    transit and is never injected into a workflow. Replacing a
+                    bunker may require resubmitting values sealed to the old
+                    one.
+                  </p>
+                  {bunkerBinding && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-8 gap-1.5 px-2 text-xs text-muted-foreground hover:text-destructive"
+                      onClick={() => {
+                        setBunkerUri("");
+                        setShowBunkerUri(false);
+                        setRemoveBunker(true);
+                      }}
+                      disabled={submitting}
+                    >
+                      <Link2Off className="h-3.5 w-3.5" />
+                      Remove bunker binding
+                    </Button>
+                  )}
+                </div>
+              )}
+            </div>
+          </section>
+
+          {secretInventory.length > 0 && (
             <section className="space-y-2">
               <div>
                 <h3 className="text-sm font-medium">Effective inventory</h3>
@@ -266,7 +459,7 @@ export function CISecretsDialog({
                 </p>
               </div>
               <div className="divide-y divide-border/60 overflow-hidden rounded-lg border">
-                {inventory.map((secret) => (
+                {secretInventory.map((secret) => (
                   <div
                     key={`${secret.name}:${secret.sourcePubkey ?? "operator"}`}
                     className="flex min-w-0 items-center gap-2 px-3 py-2"
@@ -276,6 +469,15 @@ export function CISecretsDialog({
                         {secret.name}
                       </code>
                       <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-1.5 text-[10px] text-muted-foreground">
+                        {secret.sealed && (
+                          <Badge
+                            variant="outline"
+                            className="h-4 gap-1 border-violet-500/30 bg-violet-500/10 px-1.5 text-[9px] font-normal text-violet-700 dark:text-violet-300"
+                          >
+                            <LockKeyhole className="h-2.5 w-2.5" />
+                            Bunker-sealed
+                          </Badge>
+                        )}
                         {secret.sourcePubkey ? (
                           <>
                             <span>from</span>
