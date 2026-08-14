@@ -17,7 +17,7 @@ export interface AuthoritativePRTargetBranch {
 }
 
 /** Git's check-ref-format rules that apply to a branch name. */
-function isValidGitBranchName(branchName: string): boolean {
+export function isValidGitBranchName(branchName: string): boolean {
   const hasForbiddenCharacter = Array.from(branchName).some((character) => {
     const codePoint = character.codePointAt(0) ?? 0;
     return (

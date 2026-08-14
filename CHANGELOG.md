@@ -4,6 +4,7 @@
 
 ### Fixes
 
+- Stop showing inferred stacked-PR relationships once the shared base commit is reachable from the PR's target branch, including fast-forwarded parents.
 - Show the repo Actions tab's coordinator-trust shields and repository-attribution warnings on pull request checks as well.
 - Keep repository tabs, inline diff comment threads, Git and relay status popovers, and profile and branch loading placeholders within phone-sized viewports.
 - Make file diffs swipeable on mobile with a compact contextual line-number gutter and hunk headers that remain visible while scrolling.

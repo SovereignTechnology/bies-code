@@ -43,6 +43,7 @@ import {
   getInferredPRChildren,
   getInferredPRStackLayer,
 } from "@/lib/inferredPRParents";
+import { useGitPool } from "@/hooks/useGitPool";
 
 const TYPE_OPTIONS: MultiSelectOption[] = [
   { value: "pr", label: "Pull Requests" },
@@ -52,11 +53,22 @@ const TYPE_OPTIONS: MultiSelectOption[] = [
 const DEFAULT_STATUS_FILTER: IssueStatus[] = ["open", "draft"];
 
 export default function RepoPRsPage() {
-  const { pubkey, repoId, resolved, prs, basePath, repoState } =
+  const { pubkey, repoId, resolved, prs, basePath, repoState, cloneUrls } =
     useRepoContext();
   const repo = resolved?.repo;
   const repoOwnerProfile = useProfile(pubkey);
-  const inferredParents = useInferredPRParents(repo?.allCoordinates);
+  const { pool: gitPool, poolState: gitPoolState } = useGitPool(cloneUrls, {
+    headRef: repoState?.headRef,
+    knownHeadCommit: repoState?.headCommitId,
+    stateRefs: repoState?.refs,
+    stateCreatedAt: repoState ? repoState.event.created_at : undefined,
+  });
+  const inferredParents = useInferredPRParents(
+    repo?.allCoordinates,
+    gitPool,
+    gitPoolState,
+    repoState,
+  );
 
   // Filters — all multi-select; status defaults to open+draft
   const [statusFilter, setStatusFilter] = useState<IssueStatus[]>(
