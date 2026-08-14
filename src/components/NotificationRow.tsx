@@ -291,6 +291,11 @@ function ThreadNotificationRow({
   const activityActors = compact ? [] : getCommenters(item);
   const lastActive = useRelativeTime(item.latestActivity);
   const eventIds = item.events.map((event) => event.id);
+  const chronologicalEvents = useMemo(
+    () => [...item.events].sort((a, b) => a.created_at - b.created_at),
+    [item.events],
+  );
+  const hasActivityDisclosure = item.events.length > 1;
   const activityListId = `notification-activity-${item.rootId}`;
 
   const toggleRead = () =>
@@ -530,43 +535,51 @@ function ThreadNotificationRow({
             <div className="flex flex-wrap items-center gap-2 pb-3 pl-16 pr-3">
               {metadataContent}
             </div>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="absolute inset-y-0 left-0 z-10 h-auto w-8 rounded-none p-0 text-muted-foreground/60 hover:bg-accent/40 hover:text-muted-foreground"
-              onClick={() => setActivityExpanded((expanded) => !expanded)}
-              aria-expanded={activityExpanded}
-              aria-controls={activityListId}
-              aria-label={`${activityExpanded ? "Hide" : "Show"} ${item.events.length} ${currentView} ${item.events.length === 1 ? "activity" : "activities"}`}
-              title={`${activityExpanded ? "Hide" : "Show"} activity`}
-            >
-              <span
-                className={cn(
-                  "flex h-full w-full flex-col items-center",
-                  item.unread ? "justify-between pb-2 pt-4" : "justify-center",
-                )}
+            {hasActivityDisclosure ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="absolute inset-y-0 left-0 z-10 h-auto w-8 rounded-none p-0 text-muted-foreground/60 hover:bg-accent/40 hover:text-muted-foreground"
+                onClick={() => setActivityExpanded((expanded) => !expanded)}
+                aria-expanded={activityExpanded}
+                aria-controls={activityListId}
+                aria-label={`${activityExpanded ? "Hide" : "Show"} ${item.events.length} ${currentView} activities`}
+                title={`${activityExpanded ? "Hide" : "Show"} activity`}
               >
-                {item.unread && (
-                  <span className="h-2 w-2 shrink-0 rounded-full bg-pink-500" />
-                )}
-                <ChevronRight
+                <span
                   className={cn(
-                    "h-3 w-3 shrink-0 transition-transform motion-reduce:transition-none",
-                    activityExpanded && "rotate-90",
+                    "flex h-full w-full flex-col items-center",
+                    item.unread
+                      ? "justify-between pb-2 pt-4"
+                      : "justify-center",
                   )}
-                />
-              </span>
-            </Button>
+                >
+                  {item.unread && (
+                    <span className="h-2 w-2 shrink-0 rounded-full bg-pink-500" />
+                  )}
+                  <ChevronRight
+                    className={cn(
+                      "h-3 w-3 shrink-0 transition-transform motion-reduce:transition-none",
+                      activityExpanded && "rotate-90",
+                    )}
+                  />
+                </span>
+              </Button>
+            ) : (
+              item.unread && (
+                <span className="absolute left-3 top-4 h-2 w-2 rounded-full bg-pink-500" />
+              )
+            )}
           </>
         )}
       </NotificationSwipeSurface>
 
-      {!compact && activityExpanded && (
+      {!compact && hasActivityDisclosure && activityExpanded && (
         <ul
           id={activityListId}
           className="ml-4 divide-y divide-border/40 border-l border-t border-border/50 bg-background sm:ml-6"
         >
-          {item.events.map((event) => (
+          {chronologicalEvents.map((event) => (
             <NotificationActivityRow
               key={event.id}
               item={item}

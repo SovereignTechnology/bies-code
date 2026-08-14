@@ -183,7 +183,7 @@ export default function NotificationsPage() {
             rootCount: group.rootIds.size,
             latestActivity: group.latestActivity,
             activities: [...group.activities.values()].sort(
-              (a, b) => b.event.created_at - a.event.created_at,
+              (a, b) => a.event.created_at - b.event.created_at,
             ),
           },
         }))
