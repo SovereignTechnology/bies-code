@@ -2,14 +2,67 @@
  * Shared Grasp utilities.
  */
 
-interface Nip11Document {
+export interface Nip11Document {
+  name?: string;
+  description?: string;
+  pubkey?: string;
+  self?: string;
+  supported_nips?: number[];
+  software?: string;
+  version?: string;
   supported_grasps?: string[];
-  [key: string]: unknown;
 }
 
 export interface ValidateGraspServerOptions {
   /** GRASP capabilities the server must advertise in its NIP-11 document. */
   requiredGrasps?: readonly string[];
+}
+
+/** Fetch a GRASP server's NIP-11 document for read-only presentation. */
+export async function fetchGraspServerInformation(
+  domain: string,
+  signal?: AbortSignal,
+): Promise<Nip11Document> {
+  const response = await fetch(`https://${normalizeGraspDomain(domain)}`, {
+    headers: { Accept: "application/nostr+json" },
+    signal: signal ?? AbortSignal.timeout(8000),
+  });
+  if (!response.ok) {
+    throw new Error(`Server returned HTTP ${response.status}`);
+  }
+
+  const raw: unknown = await response.json();
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("Server returned an invalid NIP-11 document");
+  }
+  const document = raw as Record<string, unknown>;
+  const stringField = (name: string) => {
+    const value = document[name];
+    return typeof value === "string" ? value : undefined;
+  };
+  const stringArray = (name: string) => {
+    const value = document[name];
+    return Array.isArray(value)
+      ? value.filter((item): item is string => typeof item === "string")
+      : undefined;
+  };
+  const numberArray = (name: string) => {
+    const value = document[name];
+    return Array.isArray(value)
+      ? value.filter((item): item is number => typeof item === "number")
+      : undefined;
+  };
+
+  return {
+    name: stringField("name"),
+    description: stringField("description"),
+    pubkey: stringField("pubkey"),
+    self: stringField("self"),
+    supported_nips: numberArray("supported_nips"),
+    software: stringField("software"),
+    version: stringField("version"),
+    supported_grasps: stringArray("supported_grasps"),
+  };
 }
 
 /** Normalize a pasted WebSocket URL or domain to a lowercase host[:port]. */

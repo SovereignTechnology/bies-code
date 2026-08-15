@@ -1,8 +1,9 @@
 import { useMemo } from "react";
 import { Link } from "react-router-dom";
+import { nip19 } from "nostr-tools";
 import { useActiveAccount } from "applesauce-react/hooks";
 import { useSeoMeta } from "@unhead/react";
-import { ArrowLeft, RadioTower } from "lucide-react";
+import { ArrowLeft, ArrowUpRight, RadioTower } from "lucide-react";
 import {
   CICoordinatorDetailsCard,
   CICoordinatorDirectory,
@@ -11,6 +12,7 @@ import {
 import { RepoActionsList } from "@/components/ci/RepoActionsList";
 import { UserLink } from "@/components/UserAvatar";
 import { Card, CardContent } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useCICoordinators } from "@/hooks/useCICoordinators";
 import { useRepoCI } from "@/hooks/useCI";
@@ -141,15 +143,28 @@ export default function RepoCoordinatorsPage({
         label="CI coordinators"
       />
 
-      <div className="mb-5">
-        <h1 className="text-2xl font-semibold tracking-tight">
-          {coordinatorPageHeading}
-        </h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          {coordinators === undefined || coordinator
-            ? "Service details and workflow activity for this coordinator."
-            : "Historical request and workflow activity from this offline coordinator."}
-        </p>
+      <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-start">
+        <div className="min-w-0 flex-1">
+          <h1 className="text-2xl font-semibold tracking-tight">
+            {coordinatorPageHeading}
+          </h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {coordinators === undefined || coordinator
+              ? "Service details and workflow activity for this coordinator."
+              : "Historical request and workflow activity from this offline coordinator."}
+          </p>
+        </div>
+        <Button
+          asChild
+          variant="outline"
+          size="sm"
+          className="gap-1.5 self-start"
+        >
+          <Link to={`/coordinator/${nip19.npubEncode(coordinatorPubkey)}`}>
+            Coordinator profile
+            <ArrowUpRight className="h-3.5 w-3.5" />
+          </Link>
+        </Button>
       </div>
 
       <section className="mb-7 space-y-4" aria-label="Coordinator details">
