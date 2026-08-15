@@ -137,6 +137,68 @@ function belongsToRepository(event: NostrEvent, coordinates: Set<string>) {
   );
 }
 
+/**
+ * Resolve PR roots whose root or authorised update advertised each commit.
+ *
+ * A historical update may be the event that introduced the matching `c` tag,
+ * so callers must not rely on the current root event alone.
+ */
+function getPRRootsByAdvertisedCommit(
+  roots: NostrEvent[],
+  candidates: NostrEvent[],
+  repoCoordinates: string[],
+): Map<string, Map<string, NostrEvent>> {
+  const coordinates = new Set(repoCoordinates);
+  const repoRoots = roots.filter(
+    (event) =>
+      event.kind === PR_KIND && belongsToRepository(event, coordinates),
+  );
+  const rootsById = new Map(repoRoots.map((event) => [event.id, event]));
+  const maintainers = new Set(
+    repoCoordinates.map((coord) => coord.split(":")[1]).filter(Boolean),
+  );
+  const byCommit = new Map<string, Map<string, NostrEvent>>();
+
+  for (const event of candidates) {
+    if (!belongsToRepository(event, coordinates)) continue;
+    const commit = event.tags.find(([name]) => name === "c")?.[1];
+    if (!commit) continue;
+    const rootId =
+      event.kind === PR_KIND
+        ? event.id
+        : event.kind === PR_UPDATE_KIND
+          ? event.tags.find(([name]) => name === "E")?.[1]
+          : undefined;
+    const root = rootId ? rootsById.get(rootId) : undefined;
+    if (!root) continue;
+    if (
+      event.kind === PR_UPDATE_KIND &&
+      !isItemEventAuthorised(event.pubkey, root.pubkey, maintainers)
+    )
+      continue;
+
+    const byRoot = byCommit.get(commit) ?? new Map<string, NostrEvent>();
+    byRoot.set(root.id, root);
+    byCommit.set(commit, byRoot);
+  }
+
+  return byCommit;
+}
+
+/** Return authoritative PR roots that have advertised an exact commit ID. */
+export function getPRRootsAdvertisingCommit(
+  roots: NostrEvent[],
+  candidates: NostrEvent[],
+  repoCoordinates: string[],
+  commit: string,
+): NostrEvent[] {
+  return [
+    ...(getPRRootsByAdvertisedCommit(roots, candidates, repoCoordinates)
+      .get(commit)
+      ?.values() ?? []),
+  ].sort((a, b) => a.id.localeCompare(b.id));
+}
+
 /** Latest authorised merge base for each repository PR root. */
 export function getEffectivePRMergeBases(
   roots: NostrEvent[],
@@ -213,29 +275,11 @@ export function resolveInferredPRParents(
     repoCoordinates,
   );
 
-  const authorisedUpdateIds = new Set(
-    authorisedUpdates.map((event) => event.id),
+  const candidateRootsByCommit = getPRRootsByAdvertisedCommit(
+    repoRoots,
+    candidates,
+    repoCoordinates,
   );
-
-  const candidateRootsByCommit = new Map<string, Map<string, NostrEvent>>();
-  for (const event of candidates) {
-    if (!belongsToRepository(event, coordinates)) continue;
-    const commit = event.tags.find(([name]) => name === "c")?.[1];
-    if (!commit) continue;
-    const rootId =
-      event.kind === PR_KIND
-        ? event.id
-        : event.kind === PR_UPDATE_KIND
-          ? event.tags.find(([name]) => name === "E")?.[1]
-          : undefined;
-    const root = rootId ? rootsById.get(rootId) : undefined;
-    if (!root) continue;
-    if (event.kind === PR_UPDATE_KIND && !authorisedUpdateIds.has(event.id))
-      continue;
-    const byRoot = candidateRootsByCommit.get(commit) ?? new Map();
-    byRoot.set(root.id, root);
-    candidateRootsByCommit.set(commit, byRoot);
-  }
 
   const result = new Map<string, InferredPRParentRelation>();
   for (const [childId, mergeBase] of latestMergeBase) {

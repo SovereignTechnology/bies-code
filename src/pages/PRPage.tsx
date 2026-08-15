@@ -259,6 +259,7 @@ export default function PRPage() {
     nip05,
     prCommitId,
     issues,
+    prs,
     basePath,
   } = useRepoContext();
   const location = useLocation();
@@ -1848,6 +1849,7 @@ export default function PRPage() {
                     defaultBranchHead={targetBranchHead}
                     targetIsDefaultBranch={targetIsDefaultBranch}
                     currentStateEvent={repoState?.event}
+                    prs={prs}
                     guessedBaseCommitId={guessedBaseCommitId}
                     analysis={mergeAnalysis}
                     prefetched={prefetchedMergeObjects}
