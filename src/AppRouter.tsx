@@ -19,6 +19,7 @@ import { LandingPage } from "./pages/LandingPage";
 import RepositoriesPage from "./pages/RepositoriesPage";
 import NotificationsPage from "./pages/NotificationsPage";
 import RelayPage from "./pages/RelayPage";
+import CICoordinatorPage from "./pages/CICoordinatorPage";
 import RepoLayout from "./pages/repo/RepoLayout";
 import Settings from "./pages/Settings";
 import OutboxPage from "./pages/OutboxPage";
@@ -424,6 +425,12 @@ function AppRouter() {
                  ws:// uses a slash-free encoded scheme. e.g. /relay/relay.ngit.dev
                  Must be declared before /:nip19 to avoid being swallowed. */}
             <Route path="/relay/:relaySegment" element={<RelayPage />} />
+            {/* Coordinator service profiles use an explicit prefix so npub
+                identifiers remain distinct from ordinary user profiles. */}
+            <Route
+              path="/coordinator/:coordinatorIdentifier"
+              element={<CICoordinatorPage />}
+            />
             {/* NIP-19 route for single-segment bech32 identifiers:
                 npub1…, nprofile1…, note1…, nevent1…, naddr1… */}
             <Route path="/:nip19" element={<NIP19Page />} />
