@@ -13,6 +13,7 @@ import { useUserGitAuthorFollows } from "@/hooks/useUserGitAuthorFollows";
 import { useUserStarredRepos } from "@/hooks/useUserStarredRepos";
 import { useUserActivity } from "@/hooks/useUserActivity";
 import { usePrefetchNip05 } from "@/hooks/usePrefetchNip05";
+import { useCICoordinatorAdvertisement } from "@/hooks/useCICoordinatorProfile";
 import { useDefaultRepoPath } from "@/hooks/useRepoPath";
 import { ActivityFeed } from "@/components/ActivityFeed";
 import { useIsFollowing } from "@/hooks/useIsFollowing";
@@ -52,6 +53,7 @@ import {
   GripVertical,
   ChevronDown,
   ChevronRight,
+  RadioTower,
 } from "lucide-react";
 import { useState, useCallback, type ReactNode } from "react";
 import {
@@ -157,6 +159,7 @@ export default function UserPage({ pubkey }: UserPageProps) {
   const starredRepos = useUserStarredRepos(pubkey);
   const pinnedCoords = useUserPinnedCoords(pubkey);
   const pinnedRepos = useUserPinnedRepos(pubkey);
+  const coordinatorAdvertisement = useCICoordinatorAdvertisement(pubkey);
 
   // Prefetch NIP-05 identity so useRepoPath resolves it from IDB on next visit
   usePrefetchNip05([pubkey]);
@@ -286,6 +289,19 @@ export default function UserPage({ pubkey }: UserPageProps) {
               {/* Npub copy + follow buttons */}
               <div className="mt-4 flex items-center gap-2 flex-wrap">
                 <CopyNpub npub={npub} />
+                {coordinatorAdvertisement && (
+                  <Button
+                    asChild
+                    variant="outline"
+                    size="sm"
+                    className="gap-1.5"
+                  >
+                    <Link to={`/coordinator/${npub}`}>
+                      <RadioTower className="h-3.5 w-3.5" />
+                      CI coordinator
+                    </Link>
+                  </Button>
+                )}
                 <GitAuthorFollowButton pubkey={pubkey} />
                 <FollowButton pubkey={pubkey} />
               </div>

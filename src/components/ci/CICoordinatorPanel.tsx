@@ -47,6 +47,7 @@ import type {
   CIPendingSecretChange,
   SubmitCIRepositorySecretsResult,
 } from "@/services/ci";
+import { CICoordinatorLink } from "./CICoordinatorLink";
 import { CISecretsDialog } from "./CISecretsDialog";
 
 const availabilityPresentation: Record<
@@ -543,7 +544,7 @@ export function CICoordinatorDetailsCard({
           <div className="flex min-w-0 items-start gap-3 p-4 sm:p-5">
             <div className="min-w-0 flex-1">
               <div className="flex min-w-0 flex-wrap items-center gap-2">
-                <UserLink
+                <CICoordinatorLink
                   pubkey={summary.pubkey}
                   avatarSize="md"
                   nameClassName="max-w-48 truncate"

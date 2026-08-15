@@ -18,7 +18,7 @@ import {
   CI_REPOSITORY_STATUS_KIND,
   CI_REQUEST_READINESS_KIND,
 } from "@/lib/ci";
-import { REPO_KIND, type ResolvedRepo } from "@/lib/nip34";
+import { parseRepoCoordinate, REPO_KIND, type ResolvedRepo } from "@/lib/nip34";
 import { normalizeUrl } from "@/lib/url";
 import { RepositoryListModel } from "@/models/RepositoryListModel";
 import { resilientSubscription } from "@/lib/resilientSubscription";
@@ -37,6 +37,7 @@ export interface CICoordinatorProfileState {
   outboxes: string[];
   inboxes: string[];
   hasRelayList: boolean;
+  targetedRepositories: ResolvedRepo[] | undefined;
 }
 
 function latestByCreatedAt<T extends { event: NostrEvent }>(
@@ -50,6 +51,54 @@ function latestByCreatedAt<T extends { event: NostrEvent }>(
   }, undefined);
 }
 
+/** Discover whether an identity has published a coordinator advertisement. */
+export function useCICoordinatorAdvertisement(
+  pubkey: string | undefined,
+): CICoordinatorAdvertisement | undefined {
+  const store = useEventStore();
+  const castStore = store as unknown as CastRefEventStore;
+  const indexRelays = use$(() => gitIndexRelays, []) ?? [];
+  const lookup = use$(() => lookupRelays, []) ?? [];
+  const relays = [...new Set([...indexRelays, ...lookup])];
+  const relayKey = relays.join(",");
+
+  use$(() => {
+    if (!pubkey || relays.length === 0) return undefined;
+    return resilientSubscription(pool, relays, [
+      {
+        kinds: [CI_COORDINATOR_ADVERTISEMENT_KIND],
+        authors: [pubkey],
+      } as Filter,
+    ]).pipe(
+      onlyEvents(),
+      mapEventsToStore(store),
+      catchError(() => EMPTY),
+    );
+  }, [pubkey, relayKey, store]);
+
+  return use$(() => {
+    if (!pubkey) return undefined;
+    return store
+      .timeline([
+        {
+          kinds: [CI_COORDINATOR_ADVERTISEMENT_KIND],
+          authors: [pubkey],
+        } as Filter,
+      ])
+      .pipe(
+        map((events) =>
+          latestByCreatedAt(
+            (events as NostrEvent[]).flatMap((event) =>
+              isValidCICoordinatorAdvertisement(event)
+                ? [new CICoordinatorAdvertisement(event, castStore)]
+                : [],
+            ),
+          ),
+        ),
+      );
+  }, [pubkey, store]);
+}
+
 function wasSeenOnOutbox(event: NostrEvent, outboxes: readonly string[]) {
   if (outboxes.length === 0) return false;
   const expected = new Set(outboxes.map(normalizeUrl));
@@ -58,13 +107,32 @@ function wasSeenOnOutbox(event: NostrEvent, outboxes: readonly string[]) {
   );
 }
 
+function wasSeenOnRepositoryRelay(
+  status: CIRepositoryStatus,
+  repositories: readonly ResolvedRepo[],
+): boolean {
+  const seenRelays = new Set(
+    [...(getSeenRelays(status.event) ?? [])].map(normalizeUrl),
+  );
+  if (seenRelays.size === 0) return false;
+
+  const statusCoordinates = new Set(status.repositoryCoordinates);
+  return repositories.some(
+    (repo) =>
+      repo.allCoordinates.some((coordinate) =>
+        statusCoordinates.has(coordinate),
+      ) && repo.relays.some((relay) => seenRelays.has(normalizeUrl(relay))),
+  );
+}
+
 /**
  * Load one coordinator's discovery events and repository status claims.
  *
  * Advertisements, readiness, and NIP-65 relay metadata are discovered on the
- * configured index/lookup relays. Repository status is deliberately fetched
- * from the coordinator's declared NIP-65 outboxes and accepted into this view
- * only after EventStore provenance confirms it was observed on one of them.
+ * configured index/lookup relays. Repository status is fetched from both the
+ * coordinator's declared NIP-65 outboxes and the relays declared by targeted
+ * repositories. A status is accepted only when EventStore provenance confirms
+ * it was observed on an appropriate outbox or matching repository relay.
  */
 export function useCICoordinatorProfile(
   pubkey: string | undefined,
@@ -125,7 +193,7 @@ export function useCICoordinatorProfile(
     );
   }, [pubkey, outboxKey, store]);
 
-  const state = use$(() => {
+  const discoveryState = use$(() => {
     if (!pubkey) return undefined;
     return combineLatest([
       store.timeline([
@@ -140,6 +208,81 @@ export function useCICoordinatorProfile(
           authors: [pubkey],
         } as Filter,
       ]),
+    ]).pipe(
+      map(([advertisementEvents, readinessEvents]) => ({
+        advertisement: latestByCreatedAt(
+          (advertisementEvents as NostrEvent[]).flatMap((event) =>
+            isValidCICoordinatorAdvertisement(event)
+              ? [new CICoordinatorAdvertisement(event, castStore)]
+              : [],
+          ),
+        ),
+        readiness: latestByCreatedAt(
+          (readinessEvents as NostrEvent[]).flatMap((event) =>
+            isValidCIRequestReadiness(event)
+              ? [new CIRequestReadiness(event, castStore)]
+              : [],
+          ),
+        ),
+      })),
+    );
+  }, [pubkey, store]);
+
+  const readinessPubkeys = discoveryState?.readiness?.repositoryPubkeys ?? [];
+  const readinessCoordinates =
+    discoveryState?.readiness?.repositoryCoordinates ?? [];
+  const targetedRepositories = useCITargetedRepositories(
+    readinessPubkeys,
+    readinessCoordinates,
+  );
+  const repositoryRelays = [
+    ...new Set(
+      (targetedRepositories ?? []).flatMap((repository) => repository.relays),
+    ),
+  ];
+  const repositoryCoordinates = [
+    ...new Set(
+      (targetedRepositories ?? []).flatMap(
+        (repository) => repository.allCoordinates,
+      ),
+    ),
+  ];
+  const repositoryStatusQueryKey = `${[...repositoryRelays].sort().join(",")}|${[
+    ...repositoryCoordinates,
+  ]
+    .sort()
+    .join(",")}`;
+
+  use$(() => {
+    if (
+      !pubkey ||
+      repositoryRelays.length === 0 ||
+      repositoryCoordinates.length === 0
+    ) {
+      return undefined;
+    }
+
+    return resilientSubscription(
+      pool,
+      repositoryRelays,
+      [
+        {
+          kinds: [CI_REPOSITORY_STATUS_KIND],
+          authors: [pubkey],
+          "#a": repositoryCoordinates,
+        } as Filter,
+      ],
+      { paginate: true },
+    ).pipe(
+      onlyEvents(),
+      mapEventsToStore(store),
+      catchError(() => EMPTY),
+    );
+  }, [pubkey, repositoryStatusQueryKey, store]);
+
+  const state = use$(() => {
+    if (!pubkey || !discoveryState) return undefined;
+    return combineLatest([
       store.timeline([
         {
           kinds: [CI_REPOSITORY_STATUS_KIND],
@@ -148,28 +291,18 @@ export function useCICoordinatorProfile(
       ]),
       timer(0, EXPIRATION_RECHECK_MS),
     ]).pipe(
-      map(([advertisementEvents, readinessEvents, statusEvents]) => {
-        const advertisement = latestByCreatedAt(
-          (advertisementEvents as NostrEvent[]).flatMap((event) =>
-            isValidCICoordinatorAdvertisement(event)
-              ? [new CICoordinatorAdvertisement(event, castStore)]
-              : [],
-          ),
-        );
-        const readiness = latestByCreatedAt(
-          (readinessEvents as NostrEvent[]).flatMap((event) =>
-            isValidCIRequestReadiness(event)
-              ? [new CIRequestReadiness(event, castStore)]
-              : [],
-          ),
-        );
+      map(([statusEvents]) => {
+        const { advertisement, readiness } = discoveryState;
         const now = Math.floor(Date.now() / 1000);
         const statuses = (statusEvents as NostrEvent[])
-          .flatMap((event) =>
-            isValidCIRepositoryStatus(event) && wasSeenOnOutbox(event, outboxes)
-              ? [new CIRepositoryStatus(event, castStore)]
-              : [],
-          )
+          .flatMap((event) => {
+            if (!isValidCIRepositoryStatus(event)) return [];
+            const status = new CIRepositoryStatus(event, castStore);
+            return wasSeenOnOutbox(event, outboxes) ||
+              wasSeenOnRepositoryRelay(status, targetedRepositories ?? [])
+              ? [status]
+              : [];
+          })
           .sort((a, b) => b.event.created_at - a.event.created_at);
         const advertisementIsLive =
           advertisement !== undefined && advertisement.expiration > now;
@@ -186,7 +319,14 @@ export function useCICoordinatorProfile(
         };
       }),
     );
-  }, [pubkey, outboxKey, store]);
+  }, [
+    pubkey,
+    discoveryState?.advertisement?.event.id,
+    discoveryState?.readiness?.event.id,
+    outboxKey,
+    repositoryStatusQueryKey,
+    store,
+  ]);
 
   if (!state) return undefined;
   return {
@@ -194,41 +334,66 @@ export function useCICoordinatorProfile(
     outboxes,
     inboxes,
     hasRelayList: mailboxes !== undefined,
+    targetedRepositories,
   };
 }
 
-/** Fetch and resolve repositories covered by pubkey-wide readiness entries. */
+/** Fetch and resolve repositories covered by readiness coordinates/pubkeys. */
 export function useCITargetedRepositories(
   pubkeys: readonly string[],
+  coordinates: readonly string[] = [],
 ): ResolvedRepo[] | undefined {
   const store = useEventStore();
   const pubkeyKey = [...pubkeys].sort().join(",");
+  const coordinateKey = [...coordinates].sort().join(",");
+  const coordinatePointers = coordinates.flatMap((coordinate) => {
+    const parsed = parseRepoCoordinate(coordinate);
+    return parsed ? [parsed] : [];
+  });
 
   use$(() => {
-    if (pubkeys.length === 0) return undefined;
-    return resilientSubscription(
-      pool,
-      gitIndexRelays,
-      [{ kinds: [REPO_KIND], authors: [...pubkeys] } as Filter],
-      { paginate: true },
-    ).pipe(
+    if (pubkeys.length === 0 && coordinatePointers.length === 0) {
+      return undefined;
+    }
+    const filters: Filter[] = [];
+    if (pubkeys.length > 0) {
+      filters.push({ kinds: [REPO_KIND], authors: [...pubkeys] } as Filter);
+    }
+    filters.push(
+      ...coordinatePointers.map(
+        ({ pubkey, identifier }) =>
+          ({
+            kinds: [REPO_KIND],
+            authors: [pubkey],
+            "#d": [identifier],
+          }) as Filter,
+      ),
+    );
+    return resilientSubscription(pool, gitIndexRelays, filters, {
+      paginate: true,
+    }).pipe(
       onlyEvents(),
       mapEventsToStore(store),
       catchError(() => EMPTY),
     );
-  }, [pubkeyKey, store]);
+  }, [pubkeyKey, coordinateKey, store]);
 
   return use$(() => {
-    if (pubkeys.length === 0) return undefined;
+    if (pubkeys.length === 0 && coordinates.length === 0) return undefined;
     const targetSet = new Set(pubkeys);
+    const coordinateSet = new Set(coordinates);
     return (
       store.model(RepositoryListModel) as unknown as Observable<ResolvedRepo[]>
     ).pipe(
       map((repositories) =>
-        repositories.filter((repo) =>
-          repo.announcements.some((event) => targetSet.has(event.pubkey)),
+        repositories.filter(
+          (repo) =>
+            repo.announcements.some((event) => targetSet.has(event.pubkey)) ||
+            repo.allCoordinates.some((coordinate) =>
+              coordinateSet.has(coordinate),
+            ),
         ),
       ),
     );
-  }, [pubkeyKey, store]);
+  }, [pubkeyKey, coordinateKey, store]);
 }
