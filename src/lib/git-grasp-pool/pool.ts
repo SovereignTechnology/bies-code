@@ -2176,7 +2176,9 @@ export class GitGraspPool {
    * {@link getPackableObjectsForCommitRange}; see `grasp-push.ts` for the
    * per-server semantics. Guards the signed Nostr state with a fast-forward
    * check before anything is sent. Resolves once at least one server
-   * accepted; throws when every server rejected.
+   * accepted — the rest keep syncing in the background, reporting through
+   * `options.onUpdate` and `summary.settled`. Throws when every server
+   * rejected.
    *
    * @param objects - All objects required for the primary update.
    * @param refUpdate - The primary ref update (consensus old hash → new hash).
@@ -2185,6 +2187,8 @@ export class GitGraspPool {
    * @param options.currentStateEvent - Current kind:30618 state; its refs form
    *   the post-push ref set every server is verified against.
    * @param options.fallbackUrls - Extra URLs for catch-up object fetches.
+   * @param options.onUpdate - Called with a fresh summary snapshot every time
+   *   a server settles, including background settles after resolution.
    */
   async pushRefUpdate(
     objects: PackableObject[],
@@ -2194,6 +2198,7 @@ export class GitGraspPool {
       currentStateEvent?: NostrEvent | null;
       fallbackUrls?: string[];
       signal?: AbortSignal;
+      onUpdate?: (summary: PushDeliverySummary) => void;
     },
   ): Promise<PushDeliverySummary> {
     const summary = await pushRefUpdateToGraspServers({
@@ -2201,6 +2206,12 @@ export class GitGraspPool {
       objects,
       refUpdate,
       currentStateEvent: options.currentStateEvent,
+      onUpdate: (snapshot) => {
+        // Once the last background push settles, revalidate info/refs again
+        // so late-syncing mirrors are reflected without waiting for a poll.
+        if (snapshot.pendingCount === 0) this.refreshAdvertisedRefs();
+        options.onUpdate?.(snapshot);
+      },
       fetchCatchUpObjects: async (
         tipCommitId,
         stopAtCommitId,
@@ -2243,8 +2254,10 @@ export class GitGraspPool {
 
     // The server-side refs have just changed, but info/refs is cached by the
     // pool. Revalidate immediately rather than waiting for the state-event
-    // backoff poll (or a full page reload) to notice this merge.
-    this.refreshAdvertisedRefs();
+    // backoff poll (or a full page reload) to notice this merge. When pushes
+    // are still settling in the background, the onUpdate wrapper above
+    // refreshes again once the last one lands.
+    if (summary.pendingCount > 0) this.refreshAdvertisedRefs();
 
     return summary;
   }

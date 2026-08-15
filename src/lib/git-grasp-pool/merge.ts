@@ -149,7 +149,9 @@ export interface GraspMergeTransports {
   publishStateToGrasp: (state: NostrEvent) => Promise<void>;
   /**
    * Push the packfile (the supplied objects) updating the ref from
-   * `oldHash` to `newHash`. Throw on failure.
+   * `oldHash` to `newHash`. Resolve once at least one Grasp server accepted
+   * — slower mirrors may keep catching up in the background while the
+   * sequence continues. Throw when no server accepted.
    */
   pushObjects: (
     objects: PackableObject[],

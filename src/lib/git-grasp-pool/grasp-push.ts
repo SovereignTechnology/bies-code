@@ -21,6 +21,10 @@
  * advance to a tip that does not descend from the current state tip.
  * Individual mirrors may be force-aligned; the signed state may not.
  *
+ * The fan-out resolves as soon as one server accepts; slow or unreachable
+ * mirrors keep syncing in the background and report through `onUpdate` /
+ * `summary.settled` rather than holding up the caller.
+ *
  * Extracted from `MergePanel` so it can run without React and be reused by
  * any flow that pushes browser-created objects to Grasp servers.
  */
@@ -44,6 +48,8 @@ export interface PushDeliveryOutcome {
   cloneUrl: string;
   ok: boolean;
   message: string;
+  /** True while the push to this server is still in flight. */
+  pending?: boolean;
 }
 
 /** Aggregate outcome of pushing to every Grasp server. */
@@ -51,6 +57,13 @@ export interface PushDeliverySummary {
   outcomes: PushDeliveryOutcome[];
   successCount: number;
   totalCount: number;
+  /** Servers whose push is still in flight (background catch-up). */
+  pendingCount: number;
+  /**
+   * Resolves with the final summary once every server has settled. Never
+   * rejects — per-server failures are reported in the outcomes.
+   */
+  settled: Promise<PushDeliverySummary>;
 }
 
 /** A ref the servers should advertise after the push completes. */
@@ -110,6 +123,12 @@ export interface PushRefUpdateParams {
   currentStateEvent?: NostrEvent | null;
   /** Fetches catch-up objects for lagging or fresh servers. */
   fetchCatchUpObjects: CatchUpObjectFetcher;
+  /**
+   * Called with a fresh summary snapshot every time a server settles,
+   * including servers that settle after the returned promise has already
+   * resolved with the first success.
+   */
+  onUpdate?: (summary: PushDeliverySummary) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -138,7 +157,10 @@ export function formatCloneUrlHost(cloneUrl: string): string {
 
 /** One-line human summary of a push delivery. */
 export function summarizePushDelivery(summary: PushDeliverySummary): string {
-  return `Pushed to ${summary.successCount}/${summary.totalCount} Grasp server${summary.totalCount !== 1 ? "s" : ""}.`;
+  const base = `Pushed to ${summary.successCount}/${summary.totalCount} Grasp server${summary.totalCount !== 1 ? "s" : ""}`;
+  return summary.pendingCount > 0
+    ? `${base} (${summary.pendingCount} still syncing).`
+    : `${base}.`;
 }
 
 // ---------------------------------------------------------------------------
@@ -489,8 +511,12 @@ export async function pushToGraspServer(
  * mirrors that lag or diverge are forced in line with the signed state (see
  * {@link pushToGraspServer}).
  *
- * Resolves with a per-server delivery summary once at least one server
- * accepted; throws when every server rejected.
+ * Resolves with a per-server delivery summary as soon as ONE server accepted
+ * — a slow or unreachable mirror must not hold up the rest of the merge
+ * sequence. The remaining pushes continue in the background: each settle
+ * invokes `onUpdate` with a fresh snapshot, and `summary.settled` resolves
+ * with the final summary once every server has settled. Throws only when
+ * every server rejected.
  */
 export async function pushRefUpdateToGraspServers(
   params: PushRefUpdateParams,
@@ -498,6 +524,13 @@ export async function pushRefUpdateToGraspServers(
   const { cloneUrls, objects, refUpdate, currentStateEvent } = params;
 
   assertFastForwardSafe(objects, refUpdate.oldHash, refUpdate.newHash);
+
+  if (cloneUrls.length === 0) {
+    throw new Error(
+      "Push failed: no Grasp servers to push to. " +
+        "The state event will expire from purgatory in 30 minutes.",
+    );
+  }
 
   const baseObjects = uniquePackableObjects(objects);
   const ctx: GraspPushContext = {
@@ -507,28 +540,70 @@ export async function pushRefUpdateToGraspServers(
     fetchCatchUpObjects: params.fetchCatchUpObjects,
   };
 
-  const outcomes = await Promise.all(
-    cloneUrls.map((cloneUrl) => pushToGraspServer(cloneUrl, refUpdate, ctx)),
-  );
-  const successCount = outcomes.filter((outcome) => outcome.ok).length;
-  const summary: PushDeliverySummary = {
-    outcomes,
-    successCount,
+  const outcomes: PushDeliveryOutcome[] = cloneUrls.map((cloneUrl) => ({
+    cloneUrl,
+    ok: false,
+    message: "still syncing",
+    pending: true,
+  }));
+
+  let resolveSettled!: (summary: PushDeliverySummary) => void;
+  const settled = new Promise<PushDeliverySummary>((resolve) => {
+    resolveSettled = resolve;
+  });
+
+  const snapshot = (): PushDeliverySummary => ({
+    outcomes: outcomes.map((outcome) => ({ ...outcome })),
+    successCount: outcomes.filter((outcome) => outcome.ok).length,
     totalCount: outcomes.length,
-  };
+    pendingCount: outcomes.filter((outcome) => outcome.pending).length,
+    settled,
+  });
 
-  if (successCount === 0) {
-    const reasons = outcomes
-      .map(
-        (outcome) =>
-          `${formatCloneUrlHost(outcome.cloneUrl)}: ${outcome.message}`,
-      )
-      .join("; ");
-    throw new Error(
-      `Push failed to all Grasp servers. ${reasons}. ` +
-        "The state event will expire from purgatory in 30 minutes.",
-    );
-  }
+  return new Promise<PushDeliverySummary>((resolve, reject) => {
+    let firstSettled = false;
 
-  return summary;
+    const recordOutcome = (index: number, outcome: PushDeliveryOutcome) => {
+      outcomes[index] = outcome;
+      const summary = snapshot();
+      params.onUpdate?.(summary);
+
+      if (!firstSettled && outcome.ok) {
+        firstSettled = true;
+        resolve(summary);
+      }
+
+      if (summary.pendingCount > 0) return;
+
+      if (!firstSettled) {
+        firstSettled = true;
+        const reasons = summary.outcomes
+          .map(
+            (each) => `${formatCloneUrlHost(each.cloneUrl)}: ${each.message}`,
+          )
+          .join("; ");
+        reject(
+          new Error(
+            `Push failed to all Grasp servers. ${reasons}. ` +
+              "The state event will expire from purgatory in 30 minutes.",
+          ),
+        );
+      }
+      resolveSettled(summary);
+    };
+
+    cloneUrls.forEach((cloneUrl, index) => {
+      pushToGraspServer(cloneUrl, refUpdate, ctx)
+        .catch(
+          (err): PushDeliveryOutcome => ({
+            cloneUrl,
+            ok: false,
+            message: err instanceof Error ? err.message : "push failed",
+          }),
+        )
+        .then((outcome) =>
+          recordOutcome(index, { ...outcome, pending: false }),
+        );
+    });
+  });
 }

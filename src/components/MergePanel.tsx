@@ -458,12 +458,17 @@ export function MergePanel({
           publishToGraspRelays(state, graspRelayUrls),
         pushObjects: async (objects, refUpdate) => {
           if (!gitPool) throw new Error("Git pool unavailable");
-          const summary = await gitPool.pushRefUpdate(objects, refUpdate, {
+          // Resolves once one server accepted; the rest keep syncing in the
+          // background and stream their outcomes through onUpdate, so the
+          // delivery summary keeps updating after the merge completes.
+          await gitPool.pushRefUpdate(objects, refUpdate, {
             targetCloneUrls: repo.graspCloneUrls,
             currentStateEvent,
+            onUpdate: (summary) => {
+              pushSummary = summary;
+              setPushDelivery(summary);
+            },
           });
-          pushSummary = summary;
-          setPushDelivery(summary);
           onSuccessfulPush?.();
         },
         publishStatusBroadly: (status) =>
@@ -1320,7 +1325,9 @@ function PushDeliverySummaryView({
                 key={outcome.cloneUrl}
                 className="flex items-start gap-2 text-muted-foreground"
               >
-                {outcome.ok ? (
+                {outcome.pending ? (
+                  <Loader2 className="mt-0.5 h-3 w-3 shrink-0 animate-spin text-muted-foreground" />
+                ) : outcome.ok ? (
                   <CheckCircle2 className="mt-0.5 h-3 w-3 shrink-0 text-green-600" />
                 ) : (
                   <XCircle className="mt-0.5 h-3 w-3 shrink-0 text-amber-600" />

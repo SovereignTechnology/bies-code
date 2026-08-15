@@ -44,12 +44,15 @@ export function makePoolTransports(
     publishStateToGrasp: (state) =>
       publishToRelays(state, relays, "state event"),
     pushObjects: async (objects: PackableObject[], refUpdate: RefUpdate) => {
-      pushSummary = await pool.pushRefUpdate(objects, refUpdate, {
+      const summary = await pool.pushRefUpdate(objects, refUpdate, {
         targetCloneUrls,
         currentStateEvent,
         fallbackUrls: options.fallbackUrls,
         signal: options.signal,
       });
+      // pushRefUpdate resolves at the first accepted server; wait for every
+      // server to settle so test assertions see the final delivery summary.
+      pushSummary = await summary.settled;
     },
     publishStatusBroadly: (status) =>
       publishToRelays(status, relays, "status event"),
