@@ -12,7 +12,7 @@ import { formatDistanceToNow, format } from "date-fns";
 import type { NostrEvent } from "nostr-tools";
 import { Link } from "react-router-dom";
 import { diffLines, type Change } from "diff";
-import { UserLink } from "@/components/UserAvatar";
+import { UserLink, UserName } from "@/components/UserAvatar";
 import { useUnreadHighlight } from "@/hooks/useUnreadHighlight";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -40,7 +40,16 @@ import { cn } from "@/lib/utils";
 import { OutboxStatusBadge } from "@/components/OutboxStatusStrip";
 import { StatusBadge, StatusIcon } from "@/components/StatusBadge";
 import { LabelBadge } from "@/components/LabelBadge";
-import type { IssueStatus } from "@/lib/nip34";
+import { CommitLink } from "@/components/CommitLink";
+import { useEmbeddedEventById } from "@/hooks/useEmbeddedEvent";
+import {
+  extractSubject,
+  ISSUE_KIND,
+  PATCH_KIND,
+  PR_KIND,
+  type IssueStatus,
+} from "@/lib/nip34";
+import { eventIdToNevent } from "@/lib/routeUtils";
 import { Button } from "@/components/ui/button";
 import {
   AlertDialog,
@@ -602,6 +611,25 @@ export function SubjectRenameCard({
 // StatusChangeCard
 // ---------------------------------------------------------------------------
 
+const HEX_EVENT_ID = /^[0-9a-f]{64}$/;
+const AUTO_RESOLUTION_ALT = "issue resolved from commit message";
+const GENERATED_RESOLUTION_SUFFIX =
+  /(?:^|\n\n)resolved by commit ([0-9a-f]{40})(?:, when merged in commit ([0-9a-f]{40}))?\s*$/i;
+
+function statusCommitContext(event: NostrEvent): {
+  triggeringCommit?: string;
+  mergeCommit?: string;
+} {
+  const generatedContext = event.content.match(GENERATED_RESOLUTION_SUFFIX);
+  return {
+    triggeringCommit:
+      event.tags.find(([name]) => name === "c")?.[1] ?? generatedContext?.[1],
+    mergeCommit:
+      event.tags.find(([name]) => name === "merge-commit")?.[1] ??
+      generatedContext?.[2],
+  };
+}
+
 export function StatusChangeCard({
   event,
   status,
@@ -622,6 +650,135 @@ export function StatusChangeCard({
 
   const activeAccount = useActiveAccount();
   const isOwn = !!activeAccount && activeAccount.pubkey === event.pubkey;
+  const relatedTag = event.tags.find(
+    ([name, value]) => name === "q" && HEX_EVENT_ID.test(value),
+  );
+  const relatedPointer = relatedTag
+    ? {
+        id: relatedTag[1],
+        relays: relatedTag[2] ? [relatedTag[2]] : undefined,
+        author: relatedTag[3] || undefined,
+      }
+    : undefined;
+  const relatedEvent = useEmbeddedEventById(relatedPointer);
+  const isAutomaticResolution =
+    event.tags.find(([name]) => name === "alt")?.[1] === AUTO_RESOLUTION_ALT;
+  const { triggeringCommit, mergeCommit } = statusCommitContext(event);
+
+  const relatedLabel = relatedEvent
+    ? relatedEvent.kind === PR_KIND
+      ? "PR"
+      : relatedEvent.kind === PATCH_KIND
+        ? "patch"
+        : relatedEvent.kind === ISSUE_KIND
+          ? "issue"
+          : "event"
+    : "event";
+  const relatedSubject = relatedEvent
+    ? extractSubject(relatedEvent) || `#${relatedEvent.id.slice(0, 8)}`
+    : relatedPointer
+      ? `#${relatedPointer.id.slice(0, 8)}`
+      : undefined;
+
+  const actions = (
+    <div className="flex items-center gap-0.5 shrink-0">
+      {isOwn && repoCoords && (
+        <DeleteEventButton
+          event={event}
+          repoCoords={repoCoords}
+          label="status change"
+        />
+      )}
+      <EventCardActions event={event} />
+    </div>
+  );
+
+  if (isAutomaticResolution) {
+    return (
+      <div className="relative my-2 ml-1 flex gap-3 rounded-lg border bg-muted/30 p-3">
+        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border bg-background shadow-sm">
+          {authorised ? (
+            <StatusIcon status={status} variant={variant} />
+          ) : (
+            <ShieldAlert className="h-3.5 w-3.5 text-muted-foreground" />
+          )}
+        </div>
+
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-sm font-semibold text-foreground">
+              {authorised ? "Automatically resolved" : "Resolution proposed"}
+            </span>
+            <StatusBadge status={status} variant={variant} />
+          </div>
+
+          {!authorised && (
+            <p className="mt-1 text-xs text-muted-foreground/60">
+              User is not a maintainer — status change not applied
+            </p>
+          )}
+
+          {(relatedPointer || triggeringCommit || mergeCommit) && (
+            <dl className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1.5 rounded-md border bg-background/70 px-3 py-2 text-xs">
+              {relatedPointer && relatedSubject && (
+                <>
+                  <dt className="text-muted-foreground">
+                    Related {relatedLabel}
+                  </dt>
+                  <dd className="min-w-0 break-words">
+                    <Link
+                      to={`/${eventIdToNevent(relatedPointer.id, relatedPointer.relays)}`}
+                      className="font-medium text-foreground hover:underline"
+                    >
+                      {relatedSubject}
+                    </Link>
+                  </dd>
+                </>
+              )}
+              {triggeringCommit && (
+                <>
+                  <dt className="text-muted-foreground">Trigger commit</dt>
+                  <dd className="min-w-0 break-all">
+                    <CommitLink
+                      hash={triggeringCommit}
+                      displayHash={triggeringCommit.slice(0, 7)}
+                    />
+                  </dd>
+                </>
+              )}
+              {mergeCommit && mergeCommit !== triggeringCommit && (
+                <>
+                  <dt className="text-muted-foreground">Merge commit</dt>
+                  <dd className="min-w-0 break-all">
+                    <CommitLink
+                      hash={mergeCommit}
+                      displayHash={mergeCommit.slice(0, 7)}
+                    />
+                  </dd>
+                </>
+              )}
+            </dl>
+          )}
+
+          <div className="mt-2 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-muted-foreground/60">
+            <span>Status event signed by</span>
+            <UserName
+              pubkey={event.pubkey}
+              linkToProfile
+              className="font-medium text-muted-foreground"
+            />
+            <span aria-hidden="true">·</span>
+            <span className="inline-flex items-center gap-1">
+              <Clock className="h-3 w-3" />
+              {timeAgo}
+            </span>
+          </div>
+        </div>
+
+        {actions}
+      </div>
+    );
+  }
 
   return (
     <div className="relative flex gap-3 py-1.5 pl-1">
@@ -654,18 +811,39 @@ export function StatusChangeCard({
             User is not a maintainer — status change not applied
           </p>
         )}
+        {(relatedPointer || triggeringCommit || mergeCommit) && (
+          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground/80">
+            {relatedPointer && relatedSubject && (
+              <span>
+                via{" "}
+                <Link
+                  to={`/${eventIdToNevent(relatedPointer.id, relatedPointer.relays)}`}
+                  className="font-medium text-foreground hover:underline"
+                >
+                  {relatedLabel} {relatedSubject}
+                </Link>
+              </span>
+            )}
+            {triggeringCommit && (
+              <span className="inline-flex items-center gap-1">
+                triggered by commit <CommitLink hash={triggeringCommit} />
+              </span>
+            )}
+            {mergeCommit && mergeCommit !== triggeringCommit && (
+              <span className="inline-flex items-center gap-1">
+                merged as <CommitLink hash={mergeCommit} />
+              </span>
+            )}
+          </div>
+        )}
+        {event.content.trim() && (
+          <p className="mt-1.5 text-sm text-foreground/80 whitespace-pre-wrap break-words">
+            {event.content.trim()}
+          </p>
+        )}
       </div>
 
-      <div className="flex items-center gap-0.5 shrink-0 pt-0.5">
-        {isOwn && repoCoords && (
-          <DeleteEventButton
-            event={event}
-            repoCoords={repoCoords}
-            label="status change"
-          />
-        )}
-        <EventCardActions event={event} />
-      </div>
+      <div className="pt-0.5">{actions}</div>
     </div>
   );
 }

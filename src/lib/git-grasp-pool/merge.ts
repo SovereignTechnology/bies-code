@@ -373,6 +373,10 @@ async function publishIssueResolutions(
         signerPubkey: params.signerPubkey,
         repoCoords: params.repoCoords,
         resolution,
+        relatedEvent: {
+          id: params.rootEventId,
+          pubkey: params.rootAuthorPubkey,
+        },
       });
       await publishIssueStatus(status, resolution.issue);
       params.onEvent?.(status);
