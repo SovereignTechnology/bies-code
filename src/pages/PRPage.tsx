@@ -83,6 +83,7 @@ import { usePRMergeBase } from "@/hooks/usePRMergeBase";
 import { usePatchMergeBase } from "@/hooks/usePatchMergeBase";
 import { MergePanel } from "@/components/MergePanel";
 import { useMergeAnalysis } from "@/hooks/useMergeAnalysis";
+import { usePrefetchedMergePushObjects } from "@/hooks/usePrefetchedMergePushObjects";
 import {
   CIChecksPanel,
   type CIRunTrustContext,
@@ -921,6 +922,49 @@ export default function PRPage() {
     prNevent: prNeventForMerge,
     enabled: showMergePanel,
     suppressDetection: keepMergePanelVisible,
+  });
+
+  // ── Merge push-object prefetch ───────────────────────────────────────────
+  // Once the merge button is on offer, fetch the objects the push will need
+  // in the background so clicking Merge is near-instant. Deferred while other
+  // page loads are in flight so the prefetch never competes with them.
+  const mergePrefetchBusy =
+    gitPoolState.loading ||
+    gitPoolState.pulling ||
+    computingMergeBase ||
+    prCommitHistory.loading ||
+    mergeAnalysis.detectingMergeCommit;
+
+  const issueScanNeeded =
+    targetIsDefaultBranch &&
+    (issues ?? []).some(
+      (issue) => issue.status === "open" || issue.status === "draft",
+    );
+
+  const mergeStatusReady =
+    pr?.itemType === "pr"
+      ? mergeAnalysis.prMergeability.status === "ready"
+      : mergeAnalysis.patchMergeability.status === "ready" ||
+        mergeAnalysis.patchMergeability.status === "ready-apply-only";
+
+  const prefetchedMergeObjects = usePrefetchedMergePushObjects({
+    gitPool,
+    effectiveCloneUrls,
+    enabled:
+      showMergePanel &&
+      // Browser merges are only offered on pure-Grasp repos.
+      !!repo &&
+      repo.graspCloneUrls.length > 0 &&
+      repo.additionalGitServerUrls.length === 0 &&
+      !mergeAnalysis.detectedMergeCommit &&
+      mergeStatusReady,
+    busy: mergePrefetchBusy,
+    prTipCommitId: pr?.itemType === "pr" ? pr.tip.commitId : undefined,
+    mergeBase: mergeAnalysis.prMergeability.result?.mergeBase,
+    issueScanNeeded,
+    currentStateEvent: repoState?.event ?? null,
+    defaultBranchName: targetBranchName ?? "main",
+    defaultBranchHead: targetBranchHead,
   });
 
   const prStatusOptions = useMemo<StatusOption[]>(() => {
@@ -1806,6 +1850,7 @@ export default function PRPage() {
                     currentStateEvent={repoState?.event}
                     guessedBaseCommitId={guessedBaseCommitId}
                     analysis={mergeAnalysis}
+                    prefetched={prefetchedMergeObjects}
                     issues={issues}
                     onSuccessfulPush={handleSuccessfulPush}
                   />
