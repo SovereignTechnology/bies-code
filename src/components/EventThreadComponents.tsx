@@ -705,59 +705,46 @@ export function StatusChangeCard({
         </div>
 
         <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-sm font-semibold text-foreground">
-              {authorised ? "Automatically resolved" : "Resolution proposed"}
-            </span>
+          <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm text-muted-foreground">
             <StatusBadge status={status} variant={variant} />
+            <span>
+              {authorised ? "automatically" : "proposed automatically"}
+            </span>
+            {triggeringCommit && (
+              <span className="inline-flex items-center gap-1">
+                by commit{" "}
+                <CommitLink
+                  hash={triggeringCommit}
+                  displayHash={triggeringCommit.slice(0, 7)}
+                />
+              </span>
+            )}
+            {relatedPointer && relatedSubject && (
+              <span>
+                via{" "}
+                <Link
+                  to={`/${eventIdToNevent(relatedPointer.id, relatedPointer.relays)}`}
+                  className="font-medium text-foreground hover:underline"
+                >
+                  {relatedLabel} {relatedSubject}
+                </Link>
+              </span>
+            )}
+            {mergeCommit && mergeCommit !== triggeringCommit && (
+              <span className="inline-flex items-center gap-1">
+                merged as{" "}
+                <CommitLink
+                  hash={mergeCommit}
+                  displayHash={mergeCommit.slice(0, 7)}
+                />
+              </span>
+            )}
           </div>
 
           {!authorised && (
             <p className="mt-1 text-xs text-muted-foreground/60">
               User is not a maintainer — status change not applied
             </p>
-          )}
-
-          {(relatedPointer || triggeringCommit || mergeCommit) && (
-            <dl className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1.5 rounded-md border bg-background/70 px-3 py-2 text-xs">
-              {relatedPointer && relatedSubject && (
-                <>
-                  <dt className="text-muted-foreground">
-                    Related {relatedLabel}
-                  </dt>
-                  <dd className="min-w-0 break-words">
-                    <Link
-                      to={`/${eventIdToNevent(relatedPointer.id, relatedPointer.relays)}`}
-                      className="font-medium text-foreground hover:underline"
-                    >
-                      {relatedSubject}
-                    </Link>
-                  </dd>
-                </>
-              )}
-              {triggeringCommit && (
-                <>
-                  <dt className="text-muted-foreground">Trigger commit</dt>
-                  <dd className="min-w-0 break-all">
-                    <CommitLink
-                      hash={triggeringCommit}
-                      displayHash={triggeringCommit.slice(0, 7)}
-                    />
-                  </dd>
-                </>
-              )}
-              {mergeCommit && mergeCommit !== triggeringCommit && (
-                <>
-                  <dt className="text-muted-foreground">Merge commit</dt>
-                  <dd className="min-w-0 break-all">
-                    <CommitLink
-                      hash={mergeCommit}
-                      displayHash={mergeCommit.slice(0, 7)}
-                    />
-                  </dd>
-                </>
-              )}
-            </dl>
           )}
 
           <div className="mt-2 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-muted-foreground/60">
