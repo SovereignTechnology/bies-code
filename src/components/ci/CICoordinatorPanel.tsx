@@ -36,7 +36,7 @@ import type {
 import { runner } from "@/services/actions";
 import { SetCIService } from "@/actions/nip34";
 import { useToast } from "@/hooks/useToast";
-import { UserAvatar, UserLink } from "@/components/UserAvatar";
+import { UserAvatar, UserLink, UserName } from "@/components/UserAvatar";
 import { EventCardActions } from "@/components/EventCardActions";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -392,9 +392,7 @@ export function CICoordinatorDirectory({
                 <UserAvatar pubkey={pubkey} size="md" noHoverCard />
                 <div className="min-w-0 flex-1">
                   <div className="flex min-w-0 flex-wrap items-center gap-2">
-                    <span className="truncate font-mono text-xs">
-                      {nip19.npubEncode(pubkey).slice(0, 16)}…
-                    </span>
+                    <UserName pubkey={pubkey} noHoverCard />
                     {summary?.advertisement.version && (
                       <span className="text-[10px] text-muted-foreground">
                         v{summary.advertisement.version}
