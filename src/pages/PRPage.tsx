@@ -82,6 +82,8 @@ import { useCommitHistory } from "@/hooks/useGitExplorer";
 import { usePRMergeBase } from "@/hooks/usePRMergeBase";
 import { usePatchMergeBase } from "@/hooks/usePatchMergeBase";
 import { MergePanel } from "@/components/MergePanel";
+import { useMergeAnalysis } from "@/hooks/useMergeAnalysis";
+import { usePrefetchedMergePushObjects } from "@/hooks/usePrefetchedMergePushObjects";
 import {
   CIChecksPanel,
   type CIRunTrustContext,
@@ -877,6 +879,93 @@ export default function PRPage() {
     if (!activeAccount || !repo) return false;
     return repo.confirmedMaintainers.includes(activeAccount.pubkey);
   }, [activeAccount, repo]);
+
+  // ── Merge analysis — page-level so results survive tab switches ─────────
+  // MergePanel (inside the conversation tab's TabsContent) unmounts whenever
+  // the user visits Commits or Files Changed; the mergeability checks and
+  // already-merged scan therefore run here and are handed down as a prop.
+  const prNeventForMerge = useMemo(() => {
+    if (pr?.itemType !== "pr") return undefined;
+    return nip19.neventEncode({
+      id: pr.rootEvent.id,
+      author: pr.pubkey,
+      relays: resolved?.repo?.relays?.slice(0, 3) ?? [],
+    });
+  }, [pr, resolved?.repo?.relays]);
+
+  const guessedBaseCommitId =
+    pr?.itemType === "patch" && patchMergeBase.isGuessed
+      ? patchMergeBase.baseCommitId
+      : undefined;
+
+  // Mirrors the MergePanel render condition below.
+  const showMergePanel = !!(
+    pr &&
+    repo &&
+    (repo.graspCloneUrls.length > 0 ||
+      repo.additionalGitServerUrls.length > 0) &&
+    isMaintainer &&
+    (pr.status === "open" || pr.status === "draft" || keepMergePanelVisible) &&
+    (pr.itemType === "pr"
+      ? !!pr.tip.commitId
+      : patchChain && patchChain.length > 0)
+  );
+
+  const mergeAnalysis = useMergeAnalysis({
+    pr,
+    repo,
+    patchChain,
+    gitPool,
+    effectiveCloneUrls,
+    defaultBranchHead: targetBranchHead,
+    guessedBaseCommitId,
+    prNevent: prNeventForMerge,
+    enabled: showMergePanel,
+    suppressDetection: keepMergePanelVisible,
+  });
+
+  // ── Merge push-object prefetch ───────────────────────────────────────────
+  // Once the merge button is on offer, fetch the objects the push will need
+  // in the background so clicking Merge is near-instant. Deferred while other
+  // page loads are in flight so the prefetch never competes with them.
+  const mergePrefetchBusy =
+    gitPoolState.loading ||
+    gitPoolState.pulling ||
+    computingMergeBase ||
+    prCommitHistory.loading ||
+    mergeAnalysis.detectingMergeCommit;
+
+  const issueScanNeeded =
+    targetIsDefaultBranch &&
+    (issues ?? []).some(
+      (issue) => issue.status === "open" || issue.status === "draft",
+    );
+
+  const mergeStatusReady =
+    pr?.itemType === "pr"
+      ? mergeAnalysis.prMergeability.status === "ready"
+      : mergeAnalysis.patchMergeability.status === "ready" ||
+        mergeAnalysis.patchMergeability.status === "ready-apply-only";
+
+  const prefetchedMergeObjects = usePrefetchedMergePushObjects({
+    gitPool,
+    effectiveCloneUrls,
+    enabled:
+      showMergePanel &&
+      // Browser merges are only offered on pure-Grasp repos.
+      !!repo &&
+      repo.graspCloneUrls.length > 0 &&
+      repo.additionalGitServerUrls.length === 0 &&
+      !mergeAnalysis.detectedMergeCommit &&
+      mergeStatusReady,
+    busy: mergePrefetchBusy,
+    prTipCommitId: pr?.itemType === "pr" ? pr.tip.commitId : undefined,
+    mergeBase: mergeAnalysis.prMergeability.result?.mergeBase,
+    issueScanNeeded,
+    currentStateEvent: repoState?.event ?? null,
+    defaultBranchName: targetBranchName ?? "main",
+    defaultBranchHead: targetBranchHead,
+  });
 
   const prStatusOptions = useMemo<StatusOption[]>(() => {
     const options: StatusOption[] = [
@@ -1745,48 +1834,27 @@ export default function PRPage() {
                 )}
 
                 {/* Merge panel — shown for PRs and patches on git-backed repos, for maintainers */}
-                {pr &&
-                  repo &&
-                  (repo.graspCloneUrls.length > 0 ||
-                    repo.additionalGitServerUrls.length > 0) &&
-                  isMaintainer &&
-                  (pr.status === "open" ||
-                    pr.status === "draft" ||
-                    keepMergePanelVisible) &&
-                  (pr.itemType === "pr"
-                    ? !!pr.tip.commitId
-                    : patchChain && patchChain.length > 0) && (
-                    <MergePanel
-                      pr={pr}
-                      repo={repo}
-                      patchChain={
-                        pr.itemType === "patch" ? patchChain : undefined
-                      }
-                      gitPool={gitPool}
-                      effectiveCloneUrls={effectiveCloneUrls}
-                      behindCount={behindCount}
-                      defaultBranchName={targetBranchName ?? "main"}
-                      defaultBranchHead={targetBranchHead}
-                      targetIsDefaultBranch={targetIsDefaultBranch}
-                      currentStateEvent={repoState?.event}
-                      guessedBaseCommitId={
-                        pr.itemType === "patch" && patchMergeBase.isGuessed
-                          ? patchMergeBase.baseCommitId
-                          : undefined
-                      }
-                      prNevent={
-                        pr.itemType === "pr"
-                          ? nip19.neventEncode({
-                              id: pr.rootEvent.id,
-                              author: pr.pubkey,
-                              relays: resolved?.repo?.relays?.slice(0, 3) ?? [],
-                            })
-                          : undefined
-                      }
-                      issues={issues}
-                      onSuccessfulPush={handleSuccessfulPush}
-                    />
-                  )}
+                {pr && repo && showMergePanel && (
+                  <MergePanel
+                    pr={pr}
+                    repo={repo}
+                    patchChain={
+                      pr.itemType === "patch" ? patchChain : undefined
+                    }
+                    gitPool={gitPool}
+                    effectiveCloneUrls={effectiveCloneUrls}
+                    behindCount={behindCount}
+                    defaultBranchName={targetBranchName ?? "main"}
+                    defaultBranchHead={targetBranchHead}
+                    targetIsDefaultBranch={targetIsDefaultBranch}
+                    currentStateEvent={repoState?.event}
+                    guessedBaseCommitId={guessedBaseCommitId}
+                    analysis={mergeAnalysis}
+                    prefetched={prefetchedMergeObjects}
+                    issues={issues}
+                    onSuccessfulPush={handleSuccessfulPush}
+                  />
+                )}
 
                 {/* Reply box — always shown; anonymous posting handled inside */}
                 {pr && (

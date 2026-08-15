@@ -14,10 +14,11 @@
  *     purgatory → push → status → broadcast orchestration (`merge.ts`).
  *   - `GitGraspPool.pushRefUpdate` — the multi-server Grasp push that
  *     tolerates lagging mirrors (`grasp-push.ts`).
- *   - `useDetectedMergeCommit` — best-effort "already merged?" history scan
- *     (`detect-merged.ts`).
  *
- * This component only wires those up with the app's account, outbox, relay
+ * The mergeability checks and the best-effort "already merged?" history scan
+ * run at the PR page level via `useMergeAnalysis` (so their results survive
+ * tab switches) and arrive here through the `analysis` prop. This component
+ * only wires the merge actions up with the app's account, outbox, relay
  * pool, and EventStore, and renders the states.
  */
 
@@ -55,16 +56,10 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/useToast";
-import { useMyProfile, useProfile } from "@/hooks/useProfile";
-import {
-  usePatchMergeability,
-  type MergeabilityStatus,
-} from "@/hooks/usePatchMergeability";
-import {
-  usePRMergeability,
-  type PRMergeabilityStatus,
-} from "@/hooks/usePRMergeability";
-import { useDetectedMergeCommit } from "@/hooks/useDetectedMergeCommit";
+import { useMyProfile } from "@/hooks/useProfile";
+import { type MergeabilityStatus } from "@/hooks/usePatchMergeability";
+import { type PRMergeabilityStatus } from "@/hooks/usePRMergeability";
+import type { MergeAnalysis } from "@/hooks/useMergeAnalysis";
 import {
   performMerge,
   performPRMerge,
@@ -88,15 +83,15 @@ import type { CommitPerson } from "@/lib/git-objects";
 import type { PackableObject } from "@/lib/git-packfile";
 import type { Patch } from "@/casts/Patch";
 import {
-  getStateRefs,
   type ResolvedRepo,
   type ResolvedPR,
   type ResolvedIssueLite,
 } from "@/lib/nip34";
-
-const PR_BRANCH_OBJECT_FETCH_TIMEOUT_MS = 90_000;
-const ISSUE_STATE_DELTA_FETCH_TIMEOUT_MS = 30_000;
-const ISSUE_STATE_DELTA_MAX_DEPTH = 500;
+import {
+  fetchPRBranchObjectsWithTimeout,
+  fetchIssueScanObjectsForStateDelta,
+} from "@/lib/merge-push-fetch";
+import type { PrefetchedMergePushObjects } from "@/hooks/usePrefetchedMergePushObjects";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -133,10 +128,17 @@ interface MergePanelProps {
    */
   guessedBaseCommitId?: string;
   /**
-   * NIP-19 nevent identifier for the PR event.
-   * Required for PR-type items (used in the merge commit message).
+   * Page-level merge analysis (mergeability checks + already-merged
+   * detection) from `useMergeAnalysis`. Hoisted to PRPage so results survive
+   * switching between the Conversation, Commits and Files Changed tabs.
    */
-  prNevent?: string;
+  analysis: MergeAnalysis;
+  /**
+   * Push objects prefetched in the background while the page was idle
+   * (usePrefetchedMergePushObjects). Parameters are re-verified at click
+   * time; on any mismatch the handlers fall back to a live fetch.
+   */
+  prefetched?: PrefetchedMergePushObjects;
   /**
    * The repo's known issues (from RepoContext). Used to auto-resolve issues
    * referenced by `closes/fixes/resolves/implements` keywords in the commit
@@ -230,86 +232,6 @@ async function publishToGraspRelays(
   }
 }
 
-async function fetchPRBranchObjectsWithTimeout(
-  gitPool: GitGraspPool,
-  tipCommitHash: string,
-  stopAtCommitHash: string,
-  fallbackUrls: string[],
-): Promise<PackableObject[] | null> {
-  const abort = new AbortController();
-  let timedOut = false;
-  const timeout = globalThis.setTimeout(() => {
-    timedOut = true;
-    abort.abort();
-  }, PR_BRANCH_OBJECT_FETCH_TIMEOUT_MS);
-
-  try {
-    const objects = await gitPool.getPackableObjectsForCommitRange(
-      tipCommitHash,
-      stopAtCommitHash,
-      abort.signal,
-      fallbackUrls,
-    );
-
-    if (timedOut) {
-      throw new Error(
-        "Timed out while fetching PR branch objects from the git server. " +
-          "Try again, or merge locally with ngit if the server remains slow.",
-      );
-    }
-
-    return objects;
-  } finally {
-    globalThis.clearTimeout(timeout);
-  }
-}
-
-async function fetchIssueScanObjectsForStateDelta(
-  gitPool: GitGraspPool,
-  currentStateEvent: NostrEvent | null | undefined,
-  defaultBranchName: string,
-  defaultBranchHead: string,
-  fallbackUrls: string[],
-): Promise<PackableObject[]> {
-  const oldStateHead = currentStateEvent
-    ? getStateRefs(currentStateEvent).find(
-        (ref) => ref.name === `refs/heads/${defaultBranchName}`,
-      )?.commitId
-    : undefined;
-  if (!oldStateHead || oldStateHead === defaultBranchHead) return [];
-
-  const abort = new AbortController();
-  const timeout = globalThis.setTimeout(
-    () => abort.abort(),
-    ISSUE_STATE_DELTA_FETCH_TIMEOUT_MS,
-  );
-
-  try {
-    const history = await gitPool.getCommitHistory(
-      defaultBranchHead,
-      ISSUE_STATE_DELTA_MAX_DEPTH,
-      abort.signal,
-      fallbackUrls,
-      oldStateHead,
-    );
-    if (!history?.some((commit) => commit.hash === oldStateHead)) return [];
-
-    return (
-      (await gitPool.getPackableObjectsForCommitRange(
-        defaultBranchHead,
-        oldStateHead,
-        abort.signal,
-        fallbackUrls,
-        ISSUE_STATE_DELTA_MAX_DEPTH,
-      )) ?? []
-    );
-  } catch {
-    return [];
-  } finally {
-    globalThis.clearTimeout(timeout);
-  }
-}
-
 const STEP_LABELS: Record<MergeStep, string> = {
   idle: "",
   building: "Building merge commit...",
@@ -337,7 +259,8 @@ export function MergePanel({
   targetIsDefaultBranch,
   currentStateEvent,
   guessedBaseCommitId,
-  prNevent,
+  analysis,
+  prefetched,
   issues,
   onSuccessfulPush,
 }: MergePanelProps) {
@@ -345,12 +268,9 @@ export function MergePanel({
   const profile = useMyProfile();
   const { toast } = useToast();
 
-  // The PR/patch author's profile — used for the `PR-Author:` trailer in the
-  // merge commit message. Only a real human name is surfaced (matching
-  // `ngit merge`); when none is known the trailer carries just the npub.
-  const authorProfile = useProfile(pr.pubkey);
-  const rootAuthorName =
-    authorProfile?.displayName || authorProfile?.name || undefined;
+  // The PR/patch author's display name — used for the `PR-Author:` trailer in
+  // the merge commit message (resolved by useMergeAnalysis).
+  const rootAuthorName = analysis.rootAuthorName;
 
   // Merge step tracking
   const [mergeStep, setMergeStep] = useState<MergeStep>("idle");
@@ -368,9 +288,10 @@ export function MergePanel({
     ? `This repository also lists ${gitServerName} as a git server, so gitworkshop can't safely update every advertised server.`
     : `This repository uses ${gitServerName}, so merging directly from gitworkshop isn't supported.`;
 
-  // Committer identity for browser-created commits. The memoised value feeds
-  // the mergeability hooks (which pre-build objects); the builder is called
-  // again at click time so pushed commits carry the actual merge time.
+  // Committer identity for browser-created commits. useMergeAnalysis feeds a
+  // memoised committer to the mergeability hooks (which pre-build objects);
+  // this builder is called again at click time so pushed commits carry the
+  // actual merge time.
   const buildCommitterNow = useCallback((): CommitPerson | undefined => {
     if (!account) return undefined;
     return createCommitPersonNow(
@@ -378,11 +299,6 @@ export function MergePanel({
       profile?.nip05 ?? `${nip19.npubEncode(account.pubkey)}@nostr`,
     );
   }, [account, profile]);
-
-  const maintainerCommitter = useMemo(
-    () => buildCommitterNow(),
-    [buildCommitterNow],
-  );
 
   const isPRType = pr.itemType === "pr";
 
@@ -412,46 +328,11 @@ export function MergePanel({
     return { issues: candidates, maintainers: repo.maintainerSet };
   }, [issues, repo.maintainerSet, targetIsDefaultBranch]);
 
-  const patchTipCommitId = useMemo(() => {
-    if (isPRType || !patchChain?.length) return undefined;
-    return patchChain[patchChain.length - 1]?.commitId;
-  }, [isPRType, patchChain]);
+  const { detectionStopCommitId } = analysis;
 
-  const detectionTipCommitId = isPRType ? pr.tip.commitId : patchTipCommitId;
-  const detectionStopCommitId = isPRType
-    ? pr.tip.explicitMergeBase
-    : patchChain?.[0]?.parentCommitId;
-
-  // Eagerly check mergeability — both strategies in parallel (patch-type only)
-  const patchMergeability = usePatchMergeability(
-    isPRType ? undefined : patchChain,
-    gitPool,
-    effectiveCloneUrls,
-    !isPRType,
-    guessedBaseCommitId,
-    defaultBranchHead,
-    maintainerCommitter,
-  );
-
-  // PR-type mergeability: fetch tip tree and pre-build merge commit
-  const coverNoteBody = pr.coverNote?.content || undefined;
-  const prBody = pr.body || undefined;
-  const prMergeability = usePRMergeability(
-    isPRType ? pr.tip.commitId : undefined,
-    defaultBranchHead,
-    maintainerCommitter,
-    pr.rootEvent.id,
-    pr.currentSubject || pr.originalSubject,
-    prNevent ?? "",
-    pr.pubkey,
-    rootAuthorName,
-    coverNoteBody,
-    prBody,
-    gitPool,
-    effectiveCloneUrls,
-    isPRType,
-    pr.tip.explicitMergeBase,
-  );
+  // Mergeability results — computed at the PR page level by useMergeAnalysis
+  // so the check runs once per PR context and survives tab switches.
+  const { patchMergeability, prMergeability } = analysis;
 
   // Unified mergeability view for the render logic
   const mergeability = isPRType
@@ -475,32 +356,18 @@ export function MergePanel({
         mergeBaseMismatch: null,
       };
 
-  const shouldScanForMissingMergedStatus =
-    mergeStep === "idle" &&
-    (pr.status === "open" || pr.status === "draft") &&
-    (mergeability.status === "ready" ||
-      mergeability.status === "already-merged" ||
-      mergeability.status === "ready-apply-only" ||
-      mergeability.status === "conflicts" ||
-      (!supportsBrowserMerge && mergeability.status !== "loading"));
-
   // Best-effort scan for an ngit-style merge commit whose kind:1631 merged
-  // status never made it to the relays.
-  const {
-    detectedMergeCommit,
-    scanResult: detectedMergeScanResult,
-    detecting: detectingMergeCommit,
-    lookBackFurther,
-    lookbackStep,
-  } = useDetectedMergeCommit({
-    gitPool,
-    defaultBranchHead,
-    rootEventId: pr.rootEvent.id,
-    fallbackUrls: effectiveCloneUrls,
-    enabled: shouldScanForMissingMergedStatus,
-    tipCommitId: detectionTipCommitId,
-    stopAtCommitId: detectionStopCommitId,
-  });
+  // status never made it to the relays. The scan itself runs at the page
+  // level (useMergeAnalysis); while a merge from this panel is in flight the
+  // results are hidden, matching the previous behaviour of disabling the
+  // scan whenever mergeStep left "idle".
+  const detectedMergeCommit =
+    mergeStep === "idle" ? analysis.detectedMergeCommit : null;
+  const detectedMergeScanResult =
+    mergeStep === "idle" ? analysis.detectedMergeScanResult : null;
+  const detectingMergeCommit =
+    mergeStep === "idle" ? analysis.detectingMergeCommit : false;
+  const { lookBackFurther, lookbackStep } = analysis;
 
   const mergeabilityCheckWillStart =
     supportsBrowserMerge &&
@@ -639,6 +506,40 @@ export function MergePanel({
     [toast],
   );
 
+  /**
+   * Objects for the issue auto-resolution commit-message scan. Uses the
+   * background-prefetched state-delta objects when they match the current
+   * branch head + state event, otherwise fetches live.
+   */
+  const resolveIssueScanObjects = useCallback(async (): Promise<
+    PackableObject[]
+  > => {
+    if (!issueAutoResolve || !gitPool || !defaultBranchHead) return [];
+    const pf = prefetched?.issueScan;
+    if (
+      pf &&
+      pf.defaultBranchHead === defaultBranchHead &&
+      pf.stateEventId === (currentStateEvent?.id ?? null)
+    ) {
+      return pf.objects;
+    }
+    return fetchIssueScanObjectsForStateDelta(
+      gitPool,
+      currentStateEvent,
+      defaultBranchName,
+      defaultBranchHead,
+      effectiveCloneUrls,
+    );
+  }, [
+    issueAutoResolve,
+    gitPool,
+    defaultBranchHead,
+    prefetched,
+    currentStateEvent,
+    defaultBranchName,
+    effectiveCloneUrls,
+  ]);
+
   const publishMergedStatus = useCallback(
     async (mergeCommitHash: string): Promise<void> => {
       if (!account) return;
@@ -707,15 +608,7 @@ export function MergePanel({
       const { transports, getPushSummary } = createMergeTransports(
         account.pubkey,
       );
-      const issueScanObjects = issueAutoResolve
-        ? await fetchIssueScanObjectsForStateDelta(
-            gitPool,
-            currentStateEvent,
-            defaultBranchName,
-            defaultBranchHead,
-            effectiveCloneUrls,
-          )
-        : [];
+      const issueScanObjects = await resolveIssueScanObjects();
 
       const { mergeCommit, issueStatuses } = await performMerge({
         signer: account.signer,
@@ -761,7 +654,6 @@ export function MergePanel({
     defaultBranchName,
     targetIsDefaultBranch,
     gitPool,
-    effectiveCloneUrls,
     pr,
     patchEventIds,
     issueAutoResolve,
@@ -770,6 +662,7 @@ export function MergePanel({
     beginMerge,
     buildCommitterNow,
     createMergeTransports,
+    resolveIssueScanObjects,
     failMerge,
     toast,
   ]);
@@ -792,15 +685,7 @@ export function MergePanel({
       const { transports, getPushSummary } = createMergeTransports(
         account.pubkey,
       );
-      const issueScanObjects = issueAutoResolve
-        ? await fetchIssueScanObjectsForStateDelta(
-            gitPool,
-            currentStateEvent,
-            defaultBranchName,
-            defaultBranchHead,
-            effectiveCloneUrls,
-          )
-        : [];
+      const issueScanObjects = await resolveIssueScanObjects();
 
       const { newTipCommitHash, issueStatuses } = await performApplyToTip({
         signer: account.signer,
@@ -838,7 +723,6 @@ export function MergePanel({
     defaultBranchName,
     targetIsDefaultBranch,
     gitPool,
-    effectiveCloneUrls,
     pr,
     patchChain,
     patchEventIds,
@@ -846,6 +730,7 @@ export function MergePanel({
     repo,
     beginMerge,
     createMergeTransports,
+    resolveIssueScanObjects,
     failMerge,
     toast,
   ]);
@@ -869,15 +754,7 @@ export function MergePanel({
       const { transports, getPushSummary } = createMergeTransports(
         account.pubkey,
       );
-      const issueScanObjects = issueAutoResolve
-        ? await fetchIssueScanObjectsForStateDelta(
-            gitPool,
-            currentStateEvent,
-            defaultBranchName,
-            defaultBranchHead,
-            effectiveCloneUrls,
-          )
-        : [];
+      const issueScanObjects = await resolveIssueScanObjects();
 
       const { mergeCommit, issueStatuses } = await performPRMerge({
         signer: account.signer,
@@ -896,13 +773,25 @@ export function MergePanel({
         rootAuthorPubkey: pr.pubkey,
         issueScanObjects,
         issueAutoResolve,
-        fetchBranchObjects: (tipCommitHash, stopAtCommitHash) =>
-          fetchPRBranchObjectsWithTimeout(
+        fetchBranchObjects: (tipCommitHash, stopAtCommitHash) => {
+          // Use the branch pack prefetched while the page was idle when it
+          // matches the exact range being pushed; otherwise fetch live.
+          const pf = prefetched?.branchObjects;
+          if (
+            pf &&
+            pf.tipCommitId === tipCommitHash &&
+            pf.stopAtCommitId === stopAtCommitHash &&
+            pf.objects
+          ) {
+            return Promise.resolve(pf.objects);
+          }
+          return fetchPRBranchObjectsWithTimeout(
             gitPool,
             tipCommitHash,
             stopAtCommitHash,
             effectiveCloneUrls,
-          ),
+          );
+        },
         ...transports,
       });
 
@@ -926,8 +815,10 @@ export function MergePanel({
     pr,
     issueAutoResolve,
     repo,
+    prefetched,
     beginMerge,
     createMergeTransports,
+    resolveIssueScanObjects,
     failMerge,
     toast,
   ]);
