@@ -9,8 +9,8 @@ import {
   CICoordinatorDirectory,
   CIServiceControlPanel,
 } from "@/components/ci/CICoordinatorPanel";
+import { CICoordinatorLink } from "@/components/ci/CICoordinatorLink";
 import { RepoActionsList } from "@/components/ci/RepoActionsList";
-import { UserLink } from "@/components/UserAvatar";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -188,7 +188,7 @@ export default function RepoCoordinatorsPage({
           <Card className="border-amber-500/30 bg-amber-500/[0.06]">
             <CardContent className="space-y-4 p-5">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-                <UserLink pubkey={coordinatorPubkey} avatarSize="md" />
+                <CICoordinatorLink pubkey={coordinatorPubkey} avatarSize="md" />
                 <p className="text-sm text-muted-foreground sm:ml-auto">
                   This coordinator is offline; no unexpired service
                   advertisement is available.

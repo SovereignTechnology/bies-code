@@ -500,9 +500,11 @@ Job Results are rendered only inside a Workflow Result or Progress event which q
 // Acting coordinator state, on repository relays
 { "kinds": [39844], "#a": ["30617:<pubkey>:<repo-id>", "..."] }
 
-// Coordinator profile discovery, followed by acting state from its own outbox
+// Coordinator profile discovery, followed by author-filtered acting state
+// from its own outbox and the relays of readiness-targeted repositories
 { "kinds": [10002, 19843, 19844], "authors": ["<coordinator-pubkey>"] }
 { "kinds": [39844], "authors": ["<coordinator-pubkey>"] }
+{ "kinds": [39844], "authors": ["<coordinator-pubkey>"], "#a": ["<target-repository-coordinate>", "..."] }
 
 // Trust-bearing standing controls, author-filtered on repository relays
 { "kinds": [9843, 9844], "authors": ["<confirmed-maintainer>", "..."], "#a": ["30617:<selected-maintainer>:<repo-id>"] }
@@ -517,7 +519,7 @@ Job Results are rendered only inside a Workflow Result or Progress event which q
 
 All relay reads use the resilient subscription/request layer. PR events continue to ride the pre-wired NIP-22 loaders; commit queries use the singleton batched `#c` loader; repo-wide result/log history loads only on the Actions page. A live Coordinator Advertisement also makes the Actions tab visible before the repository's first run.
 
-The coordinator profile discovers kind:10002, Advertisement, and Request-Readiness events on Git index and lookup relays, then fetches Repository Status only from the coordinator's declared NIP-65 write relays. A status is included only when EventStore provenance confirms it was observed on one of those outboxes. Unexpired status with a live Advertisement is shown as current activity; expired status is retained separately as history. Exact readiness `a` entries are resolved as repository coordinates, while `p` entries load announcements authored by that pubkey; repositories already covered by a live status are excluded from the readiness-only list.
+The coordinator profile discovers kind:10002, Advertisement, and Request-Readiness events on Git index and lookup relays. It fetches Repository Status from the coordinator's declared NIP-65 write relays and from the relays declared by every readiness-targeted repository, with an author filter fixed to the coordinator. A status is included only when EventStore provenance confirms it was observed on an outbox or on a matching target repository relay. This repository-relay path preserves acting-state discovery before a coordinator publishes NIP-65 metadata. Unexpired status with a live Advertisement is shown as current activity; expired status is retained separately as history. Exact readiness `a` entries and pubkey-wide `p` entries are resolved to repositories before querying their relay sets; all maintainer coordinates are treated as the same repository when excluding active repositories from the readiness-only list.
 
 When the coordinator publishes a NIP-05 identity, the profile resolves it back to the coordinator pubkey before requesting the domain's NIP-11 document. The page reports advertised GRASP capabilities and whether the NIP-11 operator `pubkey` matches the coordinator signer. This is identity and infrastructure evidence, not repository authority.
 

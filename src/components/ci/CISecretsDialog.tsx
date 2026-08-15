@@ -16,6 +16,7 @@ import {
 import type { ResolvedRepo } from "@/lib/nip34";
 import type { CICoordinatorSummary } from "@/hooks/useCICoordinators";
 import { UserLink } from "@/components/UserAvatar";
+import { CICoordinatorLink } from "./CICoordinatorLink";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -311,7 +312,7 @@ export function CISecretsDialog({
           <DialogDescription className="text-left">
             Send one atomic, end-to-end encrypted update to
             <span className="mx-1 inline-flex align-middle">
-              <UserLink
+              <CICoordinatorLink
                 pubkey={coordinator.pubkey}
                 avatarSize="xs"
                 variant="inline"

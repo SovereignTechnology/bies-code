@@ -4,6 +4,7 @@
 
 ### Fixes
 
+- Discover coordinator repository status on readiness-targeted repository relays when no NIP-65 outbox is available, and route coordinator identity links in CI surfaces to the coordinator profile.
 - Stop the Android app from repeatedly re-opening a cold-start gitworkshop.dev link, which blocked navigating away from the opened page and caused visible flashing.
 - Stop showing inferred stacked-PR relationships once the shared base commit is reachable from the PR's target branch, including fast-forwarded parents.
 - Show the repo Actions tab's coordinator-trust shields and repository-attribution warnings on pull request checks as well.

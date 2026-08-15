@@ -33,7 +33,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { use$ } from "@/hooks/use$";
 import {
   useCICoordinatorProfile,
-  useCITargetedRepositories,
   type CICoordinatorProfileState,
 } from "@/hooks/useCICoordinatorProfile";
 import { useDnsIdentity } from "@/hooks/useDnsIdentity";
@@ -81,11 +80,20 @@ export default function CICoordinatorPage() {
     () => (readinessIsLive ? (state?.readiness?.repositoryPubkeys ?? []) : []),
     [readinessIsLive, state?.readiness],
   );
-  const targetedRepositories = useCITargetedRepositories(readinessPubkeys);
+  const targetedRepositories = state?.targetedRepositories;
   const targetCoordinates = useMemo(() => {
     if (!readinessIsLive || !state?.readiness) return [];
     const activeCoordinates = new Set(
       state.activeStatuses.flatMap((status) => status.repositoryCoordinates),
+    );
+    const activeRepositories = new Set(
+      (targetedRepositories ?? [])
+        .filter((repo) =>
+          repo.allCoordinates.some((coordinate) =>
+            activeCoordinates.has(coordinate),
+          ),
+        )
+        .map((repo) => repo.selectedCoordinate),
     );
     const targetPubkeys = new Set(readinessPubkeys);
     const coordinates = [
@@ -94,9 +102,15 @@ export default function CICoordinatorPage() {
         coordinatorRepoCoordinate(repo, targetPubkeys),
       ),
     ];
-    return [...new Set(coordinates)].filter(
-      (coordinate) => !activeCoordinates.has(coordinate),
-    );
+    return [...new Set(coordinates)].filter((coordinate) => {
+      if (activeCoordinates.has(coordinate)) return false;
+      const repository = targetedRepositories?.find((repo) =>
+        repo.allCoordinates.includes(coordinate),
+      );
+      return (
+        !repository || !activeRepositories.has(repository.selectedCoordinate)
+      );
+    });
   }, [readinessIsLive, readinessPubkeys, state, targetedRepositories]);
 
   const npub = pubkey ? nip19.npubEncode(pubkey) : undefined;
@@ -211,14 +225,14 @@ export default function CICoordinatorPage() {
 
             <RepositorySection
               title="Acting now"
-              description="Live repository status claims found in this coordinator's NIP-65 outbox."
+              description="Live repository status claims found on the coordinator's outboxes or targeted repository relays."
               icon={<RadioTower className="h-5 w-5 text-emerald-500" />}
               statuses={state?.activeStatuses}
               loading={state === undefined}
               emptyMessage={
                 state?.outboxes.length
-                  ? "No unexpired acting claims were found in the coordinator's outbox."
-                  : "No NIP-65 outbox is published yet, so acting claims cannot be discovered from the coordinator."
+                  ? "No unexpired acting claims were found in the coordinator's outboxes or targeted repository relays."
+                  : "No unexpired acting claims were found on targeted repository relays. The coordinator has not published a NIP-65 outbox yet."
               }
             />
 
@@ -229,7 +243,10 @@ export default function CICoordinatorPage() {
               coordinates={targetCoordinates}
               loading={
                 state === undefined ||
-                (readinessPubkeys.length > 0 &&
+                ((readinessPubkeys.length > 0 ||
+                  (readinessIsLive &&
+                    (state?.readiness?.repositoryCoordinates.length ?? 0) >
+                      0)) &&
                   targetedRepositories === undefined)
               }
               emptyMessage="This coordinator is not currently targeting any additional repositories."
@@ -237,7 +254,7 @@ export default function CICoordinatorPage() {
 
             <RepositorySection
               title="Previously reported"
-              description="Expired acting claims retained in the coordinator's outbox."
+              description="Expired acting claims found on coordinator outboxes or targeted repository relays."
               icon={<Clock3 className="h-5 w-5 text-amber-500" />}
               statuses={state?.historicalStatuses}
               historical

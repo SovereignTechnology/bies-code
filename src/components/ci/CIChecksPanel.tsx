@@ -83,6 +83,7 @@ import { CI_MANUAL_TRIGGER_KIND, CI_SERVICE_REQUEST_KIND } from "@/lib/ci";
 import { pool } from "@/services/nostr";
 import { mapEventsToStore } from "applesauce-core";
 import { onlyEvents } from "applesauce-relay";
+import { CICoordinatorLink } from "./CICoordinatorLink";
 
 /**
  * Repository trust inputs for per-run warnings. `repo` alone enables the
@@ -705,7 +706,7 @@ export function CIRunRow({
               {compactStatus}
             </span>
             <span className="hidden shrink-0 lg:inline">{status}</span>
-            <UserLink
+            <CICoordinatorLink
               pubkey={run.pubkey}
               avatarSize="xs"
               nameClassName="hidden max-w-24 truncate text-xs font-normal text-muted-foreground xl:block"
@@ -859,7 +860,7 @@ function CIJobRow({ job }: { job: CIJobResult }) {
         {result.allocationRef?.coordinatorPubkey && (
           <span className="flex items-center gap-1.5">
             allocated by
-            <UserLink
+            <CICoordinatorLink
               pubkey={result.allocationRef.coordinatorPubkey}
               avatarSize="xs"
               nameClassName="max-w-28 truncate text-[11px]"
