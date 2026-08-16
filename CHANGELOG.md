@@ -26,6 +26,8 @@
 
 ### Features
 
+- Show a prominent, caution-labelled nsite preview link on pull requests when
+  a successful CI job publishes an `nsite` or `nsite_*` public output.
 - Preserve the PR, triggering commit, and merge commit when a merged change resolves an issue, and show that provenance in the issue timeline.
 - Add coordinator-centric CI service profiles with signed capability details, current and historical outbox-backed repository activity, readiness targets, NIP-65 relay posture, and NIP-05/NIP-11 GRASP identity checks, linked from repository coordinator pages.
 - Let maintainers bind CI repository secrets to a NIP-46 decryption bunker, audit which values the coordinator reports as sealed at rest, keep relay-delivered changes pending until coordinator status reports them, and safely replace or remove the binding from the secret controls.

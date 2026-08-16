@@ -88,6 +88,7 @@ import {
   CIChecksPanel,
   type CIRunTrustContext,
 } from "@/components/ci/CIChecksPanel";
+import { PRNsitePreview } from "@/components/ci/PRNsitePreview";
 import { useCIForPR } from "@/hooks/useCI";
 import { useCICoordinators } from "@/hooks/useCICoordinators";
 import { classifyCICoordinatorRelationships } from "@/lib/ciCoordinatorRelationship";
@@ -1827,11 +1828,14 @@ export default function PRPage() {
                 {/* CI checks — shown to everyone whenever any CI runner has
                     published workflow runs/results for this PR */}
                 {pr && ciChecks && ciChecks.runs.length > 0 && (
-                  <CIChecksPanel
-                    checks={ciChecks}
-                    canRetry={isMaintainer}
-                    trustContext={ciTrustContext}
-                  />
+                  <>
+                    <PRNsitePreview checks={ciChecks} />
+                    <CIChecksPanel
+                      checks={ciChecks}
+                      canRetry={isMaintainer}
+                      trustContext={ciTrustContext}
+                    />
+                  </>
                 )}
 
                 {/* Merge panel — shown for PRs and patches on git-backed repos, for maintainers */}
