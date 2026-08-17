@@ -393,6 +393,7 @@ export default function RepoCodePage() {
               currentPath={currentPath}
               currentRef={currentRef}
               treeUrl={treeUrl}
+              pool={pool}
             />
           )}
 
@@ -409,6 +410,7 @@ export default function RepoCodePage() {
                     currentRef={currentRef}
                     treeUrl={treeUrl}
                     activeFile={pathSegments[pathSegments.length - 1]}
+                    pool={pool}
                   />
                 )}
                 <FileContentViewer
@@ -895,12 +897,14 @@ function GoToFileSearch({
   currentRef,
   treeUrl,
   pulling,
+  pool,
   compact = false,
 }: {
   fullFileTree: FullFileTreeState & { triggerFetch: () => void };
   currentRef: string;
   treeUrl: (ref: string, path?: string) => string;
   pulling: boolean;
+  pool: GitGraspPool | null;
   compact?: boolean;
 }) {
   const isMobile = useIsMobile();
@@ -912,6 +916,7 @@ function GoToFileSearch({
   const inputRef = useRef<HTMLInputElement>(null);
   const triggerRef = useRef<HTMLDivElement>(null);
   const [activeIndex, setActiveIndex] = useState(0);
+  const [openingPath, setOpeningPath] = useState<string | null>(null);
 
   // Reset query and open state when the user switches branches/tags so the
   // input doesn't show a stale query string typed against a different ref.
@@ -965,17 +970,35 @@ function GoToFileSearch({
     }
     if (e.key === "Enter" && results[activeIndex]) {
       e.preventDefault();
-      navigateTo(results[activeIndex]);
+      void navigateTo(results[activeIndex]);
       return;
     }
   }
 
   const navigate = useNavigate();
 
-  function navigateTo(entry: FlatFileEntry) {
-    setOpen(false);
-    setQuery("");
-    navigate(treeUrl(currentRef, entry.path));
+  async function navigateTo(entry: FlatFileEntry) {
+    const url = treeUrl(currentRef, entry.path);
+    if (entry.type !== "file" || !entry.hash || !pool) {
+      setOpen(false);
+      setQuery("");
+      navigate(url);
+      return;
+    }
+
+    setOpeningPath(entry.path);
+    try {
+      if (await downloadIfBinary(pool, entry.name, entry.hash)) {
+        setOpen(false);
+        setQuery("");
+      } else {
+        navigate(url);
+      }
+    } catch {
+      navigate(url);
+    } finally {
+      setOpeningPath(null);
+    }
   }
 
   function handleFocus() {
@@ -1088,14 +1111,16 @@ function GoToFileSearch({
                   onMouseEnter={() => setActiveIndex(i)}
                   onMouseDown={(e) => {
                     e.preventDefault(); // prevent input blur before click
-                    navigateTo(entry);
+                    void navigateTo(entry);
                   }}
                   className={cn(
                     "flex items-start gap-2 px-3 py-2 cursor-pointer text-sm",
                     i === activeIndex ? "bg-accent" : "hover:bg-accent/50",
                   )}
                 >
-                  {entry.type === "directory" ? (
+                  {openingPath === entry.path ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground shrink-0 mt-0.5" />
+                  ) : entry.type === "directory" ? (
                     <Folder className="h-3.5 w-3.5 text-blue-500 shrink-0 mt-0.5" />
                   ) : (
                     <FileText className="h-3.5 w-3.5 text-muted-foreground shrink-0 mt-0.5" />
@@ -1312,6 +1337,7 @@ function CodeBar({
             currentRef={currentRef}
             treeUrl={treeUrl}
             pulling={pulling}
+            pool={pool}
             compact={compactSearch}
           />
         )}
@@ -1431,6 +1457,7 @@ function FileTreeTable({
   currentRef,
   treeUrl,
   activeFile,
+  pool,
 }: {
   loading: boolean;
   entries: FileEntry[] | null;
@@ -1438,6 +1465,7 @@ function FileTreeTable({
   currentRef: string;
   treeUrl: (ref: string, path?: string) => string;
   activeFile?: string;
+  pool: GitGraspPool | null;
 }) {
   const parentPath = currentPath
     ? currentPath.split("/").slice(0, -1).join("/")
@@ -1490,6 +1518,7 @@ function FileTreeTable({
               currentRef={currentRef}
               treeUrl={treeUrl}
               isActive={activeFile === entry.name && entry.type === "file"}
+              pool={pool}
             />
           ))}
         </div>
@@ -1503,24 +1532,63 @@ function FileTreeRow({
   currentRef,
   treeUrl,
   isActive,
+  pool,
 }: {
   entry: FileEntry;
   currentRef: string;
   treeUrl: (ref: string, path?: string) => string;
   isActive?: boolean;
+  pool: GitGraspPool | null;
 }) {
   const isDir = entry.type === "directory";
   const isReadme = entry.name.toLowerCase().startsWith("readme");
+  const navigate = useNavigate();
+  const [opening, setOpening] = useState(false);
+  const url = treeUrl(currentRef, entry.path);
+
+  const handleClick = useCallback(
+    async (event: React.MouseEvent<HTMLAnchorElement>) => {
+      if (
+        entry.type !== "file" ||
+        !pool ||
+        opening ||
+        event.button !== 0 ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.shiftKey ||
+        event.altKey
+      ) {
+        return;
+      }
+
+      event.preventDefault();
+      setOpening(true);
+      try {
+        if (!(await downloadIfBinary(pool, entry.name, entry.hash))) {
+          navigate(url);
+        }
+      } catch {
+        navigate(url);
+      } finally {
+        setOpening(false);
+      }
+    },
+    [entry, navigate, opening, pool, url],
+  );
 
   return (
     <Link
-      to={treeUrl(currentRef, entry.path)}
+      to={url}
+      onClick={handleClick}
+      aria-busy={opening}
       className={cn(
         "flex items-center gap-3 px-4 py-2.5 hover:bg-muted/30 transition-colors group",
         isActive && "bg-muted/50",
       )}
     >
-      {isDir ? (
+      {opening ? (
+        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground shrink-0" />
+      ) : isDir ? (
         <Folder className="h-4 w-4 text-blue-500 shrink-0" />
       ) : (
         <FileText
@@ -1644,6 +1712,41 @@ function LatestReleaseSidebar() {
 
 type ViewMode = "rendered" | "text";
 
+function downloadFile(
+  filename: string,
+  fileBytes: Uint8Array,
+  mediaType: ReturnType<typeof getFileMediaType>,
+) {
+  const mime =
+    mediaType && "mime" in mediaType
+      ? mediaType.mime
+      : mediaType?.kind === "svg"
+        ? "image/svg+xml"
+        : "application/octet-stream";
+  const blob = new Blob([fileBytes.slice().buffer], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
+async function downloadIfBinary(
+  pool: GitGraspPool,
+  filename: string,
+  hash: string,
+): Promise<boolean> {
+  const fileBytes = await pool.getBlob(hash, new AbortController().signal);
+  if (!fileBytes) return false;
+
+  const mediaType = getFileMediaType(filename, fileBytes);
+  if (mediaType?.kind !== "binary") return false;
+
+  downloadFile(filename, fileBytes, mediaType);
+  return true;
+}
+
 function FileContentViewer({
   filename,
   filePath,
@@ -1659,12 +1762,16 @@ function FileContentViewer({
   cloneUrls: string[];
   commitHash: string | null;
 }) {
-  const mediaType = getFileMediaType(filename);
+  const mediaType = useMemo(
+    () => getFileMediaType(filename, fileBytes ?? undefined),
+    [filename, fileBytes],
+  );
   const isBinaryMedia =
     mediaType?.kind === "image" ||
     mediaType?.kind === "video" ||
     mediaType?.kind === "audio" ||
-    mediaType?.kind === "svg";
+    mediaType?.kind === "svg" ||
+    mediaType?.kind === "binary";
 
   // Default view mode: rendered for markdown/svg/images, text for everything else
   const defaultMode: ViewMode =
@@ -1685,19 +1792,7 @@ function FileContentViewer({
 
   const handleDownload = useCallback(() => {
     if (!fileBytes) return;
-    const mime =
-      mediaType && "mime" in mediaType
-        ? mediaType.mime
-        : mediaType?.kind === "svg"
-          ? "image/svg+xml"
-          : "application/octet-stream";
-    const blob = new Blob([fileBytes.buffer as ArrayBuffer], { type: mime });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadFile(filename, fileBytes, mediaType);
   }, [fileBytes, filename, mediaType]);
 
   const [copiedText, setCopiedText] = useState(false);
@@ -1905,6 +2000,7 @@ function FileContentViewer({
           viewMode={viewMode}
           cloneUrls={cloneUrls}
           commitHash={commitHash}
+          onDownload={handleDownload}
         />
       </CardContent>
     </Card>
@@ -1920,6 +2016,7 @@ function FileContentBody({
   viewMode,
   cloneUrls,
   commitHash,
+  onDownload,
 }: {
   filename: string;
   filePath: string;
@@ -1929,6 +2026,7 @@ function FileContentBody({
   viewMode: ViewMode;
   cloneUrls: string[];
   commitHash: string | null;
+  onDownload: () => void;
 }) {
   // Image (raster)
   if (mediaType?.kind === "image" && fileBytes) {
@@ -1990,6 +2088,28 @@ function FileContentBody({
           />
           Your browser does not support the audio tag.
         </audio>
+      </div>
+    );
+  }
+
+  // A direct URL or modified click can still open a binary in the viewer.
+  // Keep the pane useful without decoding the bytes as source text.
+  if (mediaType?.kind === "binary" && fileBytes) {
+    return (
+      <div className="flex flex-col items-center gap-4 px-6 py-12 text-center">
+        <div className="rounded-full bg-muted p-3">
+          <Download className="h-6 w-6 text-muted-foreground" />
+        </div>
+        <div className="space-y-1">
+          <p className="font-medium">Binary file</p>
+          <p className="text-sm text-muted-foreground">
+            This file cannot be previewed in the browser.
+          </p>
+        </div>
+        <Button variant="outline" onClick={onDownload}>
+          <Download className="mr-2 h-4 w-4" />
+          Download {filename}
+        </Button>
       </div>
     );
   }
