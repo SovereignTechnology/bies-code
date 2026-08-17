@@ -2355,35 +2355,37 @@ function RepoSettingsForm({
           </section>
 
           {/* ── Error / actions ────────────────────────────────────────── */}
-          {saveError && (
-            <div className="rounded-lg border border-red-500/20 bg-red-500/5 p-3">
-              <div className="flex items-start gap-2">
-                <AlertTriangle className="h-4 w-4 text-red-500 mt-0.5 shrink-0" />
-                <p className="text-sm text-red-600 dark:text-red-400">
-                  {saveError}
-                </p>
+          <div className="sticky bottom-0 z-20 -mx-4 space-y-3 border-t bg-background/95 px-4 py-4 shadow-lg backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:mx-0 sm:rounded-t-xl sm:border-x">
+            {saveError && (
+              <div className="rounded-lg border border-red-500/20 bg-red-500/5 p-3">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle className="h-4 w-4 text-red-500 mt-0.5 shrink-0" />
+                  <p className="text-sm text-red-600 dark:text-red-400">
+                    {saveError}
+                  </p>
+                </div>
               </div>
-            </div>
-          )}
+            )}
 
-          <div className="flex items-center gap-3 pt-2">
-            <Button
-              onClick={() => void handleSave()}
-              disabled={!canSave}
-              className="bg-pink-600 hover:bg-pink-700 text-white"
-            >
-              {isSaving ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Saving…
-                </>
-              ) : (
-                "Save changes"
-              )}
-            </Button>
-            <Button asChild variant="ghost">
-              <Link to={`${basePath}/about`}>Cancel</Link>
-            </Button>
+            <div className="flex items-center gap-3">
+              <Button
+                onClick={() => void handleSave()}
+                disabled={!canSave}
+                className="bg-pink-600 hover:bg-pink-700 text-white"
+              >
+                {isSaving ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Saving…
+                  </>
+                ) : (
+                  "Save changes"
+                )}
+              </Button>
+              <Button asChild variant="ghost">
+                <Link to={`${basePath}/about`}>Cancel</Link>
+              </Button>
+            </div>
           </div>
         </div>
       </div>
