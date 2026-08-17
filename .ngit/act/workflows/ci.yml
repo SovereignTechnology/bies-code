@@ -155,10 +155,8 @@ jobs:
             wss://relay.primal.net
             wss://nsite.run
           servers: |
-            https://cdn.hzrd149.com
-            https://cdn.sovbit.host
-            https://nostr.download
-            https://nsite.run
+            https://blossom.primal.net
+            https://blossom.ditto.pub
 
       # ngit-ci publishes this declared scalar on the signed Job Result. It is
       # deliberately written only after nsyte reports a successful deploy.
@@ -169,7 +167,7 @@ jobs:
         run: |
           set -eu
           : "${PREVIEW_NPUB:?The ephemeral preview npub is missing.}"
-          printf 'url=https://%s.nsite.lol/\n' "$PREVIEW_NPUB" >> "$GITHUB_OUTPUT"
+          printf 'url=https://%s.nsite.cloud/\n' "$PREVIEW_NPUB" >> "$GITHUB_OUTPUT"
 
   deploy-netlify:
     runs-on: ubuntu-latest
