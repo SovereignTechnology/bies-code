@@ -4,6 +4,7 @@
 
 ### Fixes
 
+- Parse Git packfiles in bounded typed-array chunks so large pull requests no longer freeze Chrome while preparing merge objects.
 - Continue the merge flow as soon as one Grasp server accepts the push instead of waiting for the slowest server; remaining servers keep syncing in the background with live delivery status.
 - Explain stale PR merge bases as already-merged stack parents when the computed commit belongs to a resolved PR.
 - Keep the pull request merge check alive while switching between the Conversation, Commits and Files Changed tabs instead of restarting it on every return.

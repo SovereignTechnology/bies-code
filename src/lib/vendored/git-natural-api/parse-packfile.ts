@@ -5,7 +5,8 @@
  * Local modifications (already applied):
  *  - Removed debug console.log calls
  *  - Renamed internal `deflate` helper to `inflate` for clarity
- *  - Cleaned up BigBatchError handling comments
+ *  - Inflate compressed objects in bounded chunks and use fflate's pending
+ *    input to locate the zlib checksum without byte-at-a-time pushes
  */
 
 import { sha1 } from "@noble/hashes/legacy.js";
@@ -313,81 +314,80 @@ function decompress(
   currentPos: number,
   decompressedSize: number,
 ): [decompressedData: Uint8Array, newPos: number] {
-  try {
-    return inflate(data, currentPos, decompressedSize, [0.25, 0.2, 0.15, 0.1]);
-  } catch (err) {
-    if (err instanceof BigBatchError) {
-      return inflate(
-        data,
-        currentPos,
-        decompressedSize,
-        err.goodBatch ? [err.goodBatch] : [],
-      );
-    }
-    throw err;
-  }
+  return inflate(data, currentPos, decompressedSize);
 }
 
-class BigBatchError extends Error {
-  goodBatch: number;
-
-  constructor(goodBatch: number) {
-    super("we tried to decompress too much data at the same time");
-    this.goodBatch = goodBatch;
-  }
+/**
+ * fflate deliberately keeps unconsumed input private, but it is the only
+ * precise indication of where a raw DEFLATE stream ended after a chunk also
+ * contained the following pack object. Keep this small structural view local
+ * to the vendored parser.
+ */
+interface InflateWithPendingInput {
+  p: unknown;
 }
+
+const INFLATE_CHUNK_BYTES = 64 * 1024;
+const ZLIB_CHECKSUM_SEARCH_BYTES = 24;
 
 function inflate(
   data: Uint8Array,
   currentPos: number,
   decompressedSize: number,
-  batches: number[],
 ): [decompressedData: Uint8Array, newPos: number] {
   let decompressedSoFar = 0;
   let done = false;
   const decompressed = new Uint8Array(decompressedSize);
   const inflater = new Inflate((chunk) => {
-    if (chunk.length) {
+    if (chunk.length > 0) {
       decompressed.set(chunk, decompressedSoFar);
       decompressedSoFar += chunk.length;
-      if (decompressedSoFar === decompressedSize) {
-        done = true;
-      }
     }
+    done = decompressedSoFar === decompressedSize;
   });
 
   let pos = currentPos;
   pos += zlibPrefix(data.subarray(pos));
 
-  for (let b = 0; b < batches.length; b++) {
-    const batchSize = Math.round(decompressedSize * batches[b]);
-    inflater.push(data.subarray(pos, pos + batchSize));
-    pos += batchSize;
-
-    if (done) {
-      const goodBatch = batches.slice(0, b).reduce((acc, v) => acc + v, 0);
-      throw new BigBatchError(goodBatch);
-    }
+  while (!done && pos < data.length) {
+    const chunkEnd = Math.min(pos + INFLATE_CHUNK_BYTES, data.length);
+    inflater.push(data.subarray(pos, chunkEnd));
+    pos = chunkEnd;
   }
 
   if (!done) {
-    for (; pos < data.length; pos += 4) {
-      if (done) break;
-      inflater.push(data.subarray(pos, pos + 4));
+    throw new Error(
+      "compressed object ended before reaching its declared size",
+    );
+  }
+
+  // Inflate is a raw-DEFLATE stream. Its pending buffer contains the bytes it
+  // did not consume after the final block, beginning at the final partial byte
+  // (if any), followed by the zlib checksum and potentially the next pack
+  // object. Searching this narrow boundary avoids both over-reading and the
+  // previous four-byte push loop, which repeatedly copied fflate's buffers.
+  const pendingInput = (inflater as unknown as InflateWithPendingInput).p;
+  if (!(pendingInput instanceof Uint8Array)) {
+    throw new Error("fflate pending input is unavailable");
+  }
+  const deflateEnd = pos - pendingInput.length;
+  const expectedChecksum = adler32(decompressed);
+  const lastChecksumStart = Math.min(
+    deflateEnd + ZLIB_CHECKSUM_SEARCH_BYTES,
+    data.length - 4,
+  );
+
+  for (
+    let checksumStart = Math.max(currentPos, deflateEnd);
+    checksumStart <= lastChecksumStart;
+    checksumStart++
+  ) {
+    if (readUint32(data, checksumStart) === expectedChecksum) {
+      return [decompressed, checksumStart + 4];
     }
   }
 
-  // Check adler32 checksum — scan forward until it matches
-  let i: number;
-  for (i = 0; i < 24; i++) {
-    if (adler32(decompressed) === readUint32(data, pos - 4)) break;
-    pos++;
-  }
-  if (i == 24) {
-    throw new Error("checksum never validated");
-  }
-
-  return [decompressed, pos];
+  throw new Error("checksum never validated");
 }
 
 function adler32(data: Uint8Array): number {
