@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useId, useMemo } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useActiveAccount } from "applesauce-react/hooks";
 import { useSeoMeta } from "@unhead/react";
 import { useNotifications } from "@/hooks/useNotifications";
@@ -56,6 +57,39 @@ const USER_ACTIVITY_PAGE_SIZE = 10;
 
 type GroupingMode = "root" | "user" | "activity";
 
+interface NotificationLocationState {
+  view: ViewTab;
+  group: GroupingMode;
+  page: number;
+}
+
+function notificationViewFromParam(value: string | null): ViewTab {
+  switch (value) {
+    case "unread":
+    case "archived":
+    case "all":
+      return value;
+    default:
+      return "inbox";
+  }
+}
+
+function groupingModeFromParam(value: string | null): GroupingMode {
+  switch (value) {
+    case "user":
+    case "activity":
+      return value;
+    default:
+      return "root";
+  }
+}
+
+function pageFromParam(value: string | null): number {
+  if (!value) return 1;
+  const page = Number(value);
+  return Number.isSafeInteger(page) && page > 0 ? page : 1;
+}
+
 interface UserNotificationGroup {
   pubkey: string;
   eventIds: string[];
@@ -76,9 +110,36 @@ type NotificationDisplayEntry =
 export default function NotificationsPage() {
   const activeAccount = useActiveAccount();
   const { items, unreadCount, actions, history } = useNotifications();
-  const [currentView, setCurrentView] = useState<ViewTab>("inbox");
-  const [currentPage, setCurrentPage] = useState(1);
-  const [groupingMode, setGroupingMode] = useState<GroupingMode>("root");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const currentView = notificationViewFromParam(searchParams.get("view"));
+  const groupingMode = groupingModeFromParam(searchParams.get("group"));
+  const currentPage = pageFromParam(searchParams.get("page"));
+
+  const updateLocationState = useCallback(
+    (
+      updates: Partial<NotificationLocationState>,
+      options?: { replace?: boolean },
+    ) => {
+      const next = new URLSearchParams(searchParams);
+      const view = updates.view ?? currentView;
+      const group = updates.group ?? groupingMode;
+      const page = updates.page ?? currentPage;
+
+      if (view === "inbox") next.delete("view");
+      else next.set("view", view);
+
+      if (group === "root") next.delete("group");
+      else next.set("group", group);
+
+      if (page === 1) next.delete("page");
+      else next.set("page", String(page));
+
+      if (next.toString() !== searchParams.toString()) {
+        setSearchParams(next, { replace: options?.replace });
+      }
+    },
+    [currentPage, currentView, groupingMode, searchParams, setSearchParams],
+  );
 
   useSeoMeta({
     title:
@@ -244,8 +305,10 @@ export default function NotificationsPage() {
     : 1;
   const safePage = Math.min(currentPage, totalPages);
   useEffect(() => {
-    if (currentPage > totalPages) setCurrentPage(totalPages);
-  }, [currentPage, totalPages]);
+    if (displayEntries && currentPage > totalPages) {
+      updateLocationState({ page: totalPages }, { replace: true });
+    }
+  }, [currentPage, displayEntries, totalPages, updateLocationState]);
   const pageEntries = displayEntries?.slice(
     (safePage - 1) * ITEMS_PER_PAGE,
     safePage * ITEMS_PER_PAGE,
@@ -266,15 +329,20 @@ export default function NotificationsPage() {
   );
 
   // Reset page when switching tabs
-  const handleTabChange = useCallback((tab: ViewTab) => {
-    setCurrentView(tab);
-    setCurrentPage(1);
-  }, []);
+  const handleTabChange = useCallback(
+    (tab: ViewTab) => updateLocationState({ view: tab, page: 1 }),
+    [updateLocationState],
+  );
 
-  const handleGroupingModeChange = useCallback((mode: GroupingMode) => {
-    setGroupingMode(mode);
-    setCurrentPage(1);
-  }, []);
+  const handleGroupingModeChange = useCallback(
+    (mode: GroupingMode) => updateLocationState({ group: mode, page: 1 }),
+    [updateLocationState],
+  );
+
+  const handlePageChange = useCallback(
+    (page: number) => updateLocationState({ page }),
+    [updateLocationState],
+  );
 
   if (!activeAccount) {
     return (
@@ -601,7 +669,7 @@ export default function NotificationsPage() {
             size="icon"
             className="h-7 w-7"
             disabled={safePage === 1}
-            onClick={() => setCurrentPage(1)}
+            onClick={() => handlePageChange(1)}
           >
             <ChevronsLeft className="h-3.5 w-3.5" />
           </Button>
@@ -610,7 +678,7 @@ export default function NotificationsPage() {
             size="icon"
             className="h-7 w-7"
             disabled={safePage === 1}
-            onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+            onClick={() => handlePageChange(Math.max(1, safePage - 1))}
           >
             <ChevronLeft className="h-3.5 w-3.5" />
           </Button>
@@ -628,7 +696,7 @@ export default function NotificationsPage() {
                 variant={p === safePage ? "default" : "ghost"}
                 size="sm"
                 className="h-7 w-7 p-0 text-xs"
-                onClick={() => setCurrentPage(p)}
+                onClick={() => handlePageChange(p)}
               >
                 {p}
               </Button>
@@ -639,7 +707,7 @@ export default function NotificationsPage() {
             size="icon"
             className="h-7 w-7"
             disabled={safePage === totalPages}
-            onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+            onClick={() => handlePageChange(Math.min(totalPages, safePage + 1))}
           >
             <ChevronRight className="h-3.5 w-3.5" />
           </Button>
@@ -648,7 +716,7 @@ export default function NotificationsPage() {
             size="icon"
             className="h-7 w-7"
             disabled={safePage === totalPages}
-            onClick={() => setCurrentPage(totalPages)}
+            onClick={() => handlePageChange(totalPages)}
           >
             <ChevronsRight className="h-3.5 w-3.5" />
           </Button>
