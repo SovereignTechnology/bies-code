@@ -1239,7 +1239,7 @@ function RepoSettingsForm({
   // ---------------------------------------------------------------------------
 
   return (
-    <div className="container max-w-screen-xl px-4 md:px-8 py-6">
+    <div className="container max-w-screen-xl px-4 py-6 md:px-8">
       <div className="max-w-2xl">
         {/* Back link */}
         <Link
@@ -1252,7 +1252,7 @@ function RepoSettingsForm({
 
         <h1 className="text-xl font-semibold mb-6">{title}</h1>
 
-        <div className="space-y-8">
+        <div className="space-y-8 pb-8">
           {/* ── Basic info ─────────────────────────────────────────────── */}
           <section className="space-y-4">
             <div className="space-y-2">
@@ -2355,35 +2355,42 @@ function RepoSettingsForm({
           </section>
 
           {/* ── Error / actions ────────────────────────────────────────── */}
-          {saveError && (
-            <div className="rounded-lg border border-red-500/20 bg-red-500/5 p-3">
-              <div className="flex items-start gap-2">
-                <AlertTriangle className="h-4 w-4 text-red-500 mt-0.5 shrink-0" />
-                <p className="text-sm text-red-600 dark:text-red-400">
-                  {saveError}
-                </p>
-              </div>
-            </div>
-          )}
+        </div>
+      </div>
 
-          <div className="flex items-center gap-3 pt-2">
-            <Button
-              onClick={() => void handleSave()}
-              disabled={!canSave}
-              className="bg-pink-600 hover:bg-pink-700 text-white"
-            >
-              {isSaving ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Saving…
-                </>
-              ) : (
-                "Save changes"
-              )}
-            </Button>
-            <Button asChild variant="ghost">
-              <Link to={`${basePath}/about`}>Cancel</Link>
-            </Button>
+      <div className="sticky bottom-0 z-20 ml-[calc(50%_-_50vw)] w-screen border-y border-pink-200/70 bg-pink-50/95 py-4 backdrop-blur dark:border-pink-900/60 dark:bg-pink-950/40">
+        <div className="container max-w-screen-xl px-4 md:px-8">
+          <div className="max-w-2xl space-y-3">
+            {saveError && (
+              <div className="rounded-lg border border-red-500/20 bg-red-500/5 p-3">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle className="h-4 w-4 text-red-500 mt-0.5 shrink-0" />
+                  <p className="text-sm text-red-600 dark:text-red-400">
+                    {saveError}
+                  </p>
+                </div>
+              </div>
+            )}
+
+            <div className="flex items-center gap-3">
+              <Button
+                onClick={() => void handleSave()}
+                disabled={!canSave}
+                className="bg-pink-600 hover:bg-pink-700 text-white"
+              >
+                {isSaving ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Saving…
+                  </>
+                ) : (
+                  "Save changes"
+                )}
+              </Button>
+              <Button asChild variant="ghost">
+                <Link to={`${basePath}/about`}>Cancel</Link>
+              </Button>
+            </div>
           </div>
         </div>
       </div>
