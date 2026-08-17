@@ -40,11 +40,18 @@ export interface GitRef {
   rawTagOid?: string;
 }
 
-export interface FileEntry {
-  name: string;
-  path: string; // full path from repo root
-  type: "file" | "directory";
-}
+export type FileEntry =
+  | {
+      name: string;
+      path: string; // full path from repo root
+      type: "file";
+      hash: string;
+    }
+  | {
+      name: string;
+      path: string; // full path from repo root
+      type: "directory";
+    };
 
 /**
  * Structured reason for why the file tree couldn't be loaded, used by the UI
@@ -123,7 +130,12 @@ function treeToEntries(tree: Tree, dirPath: string): FileEntry[] {
   }
   for (const file of tree.files) {
     const fullPath = dirPath ? `${dirPath}/${file.name}` : file.name;
-    entries.push({ name: file.name, path: fullPath, type: "file" });
+    entries.push({
+      name: file.name,
+      path: fullPath,
+      type: "file",
+      hash: file.hash,
+    });
   }
 
   // Directories first, then files, both alphabetical
@@ -1518,6 +1530,8 @@ export interface FlatFileEntry {
   type: "file" | "directory";
   /** Lowercase file extension including the dot, e.g. ".ts". Empty string for directories. */
   extension: string;
+  /** Git blob hash. Present for files, absent for directories. */
+  hash?: string;
 }
 
 /**
@@ -1548,7 +1562,13 @@ export function flattenTree(
     const fullPath = basePath ? `${basePath}/${file.name}` : file.name;
     const dotIdx = file.name.lastIndexOf(".");
     const extension = dotIdx > 0 ? file.name.slice(dotIdx).toLowerCase() : "";
-    entries.push({ name: file.name, path: fullPath, type: "file", extension });
+    entries.push({
+      name: file.name,
+      path: fullPath,
+      type: "file",
+      extension,
+      hash: file.hash,
+    });
   }
 
   return entries;

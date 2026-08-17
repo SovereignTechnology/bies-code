@@ -51,10 +51,17 @@ const AUDIO_EXTS: Record<string, string> = {
 };
 
 /**
- * Detect the media type of a file from its filename/extension.
- * Returns `null` for unknown types (caller should treat as text or binary).
+ * Detect the media type of a file from its filename/extension and, when the
+ * bytes are available, distinguish unknown binary files from text.
+ *
+ * Known media types take precedence over content sniffing so images, audio,
+ * and video remain previewable. Unknown files use the same null-byte heuristic
+ * as Git: a null byte in the first 8 KiB means the file is binary.
  */
-export function getFileMediaType(filename: string): FileMediaType | null {
+export function getFileMediaType(
+  filename: string,
+  bytes?: Uint8Array,
+): FileMediaType | null {
   const ext = filename.split(".").pop()?.toLowerCase() ?? "";
   if (!ext) return null;
 
@@ -70,7 +77,18 @@ export function getFileMediaType(filename: string): FileMediaType | null {
   const audioMime = AUDIO_EXTS[ext];
   if (audioMime) return { kind: "audio", mime: audioMime };
 
+  if (bytes && isBinaryContent(bytes)) return { kind: "binary" };
+
   return null;
+}
+
+/** Return whether Git would treat these bytes as binary content. */
+export function isBinaryContent(bytes: Uint8Array): boolean {
+  const limit = Math.min(bytes.length, 8192);
+  for (let i = 0; i < limit; i++) {
+    if (bytes[i] === 0) return true;
+  }
+  return false;
 }
 
 /**
