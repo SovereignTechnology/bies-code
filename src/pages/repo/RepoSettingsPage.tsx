@@ -1239,7 +1239,7 @@ function RepoSettingsForm({
   // ---------------------------------------------------------------------------
 
   return (
-    <div className="container max-w-screen-xl px-4 md:px-8 py-6">
+    <div className="container max-w-screen-xl px-4 py-6 md:px-8">
       <div className="max-w-2xl">
         {/* Back link */}
         <Link
@@ -1252,7 +1252,7 @@ function RepoSettingsForm({
 
         <h1 className="text-xl font-semibold mb-6">{title}</h1>
 
-        <div className="space-y-8">
+        <div className="space-y-8 pb-8">
           {/* ── Basic info ─────────────────────────────────────────────── */}
           <section className="space-y-4">
             <div className="space-y-2">
@@ -2355,7 +2355,12 @@ function RepoSettingsForm({
           </section>
 
           {/* ── Error / actions ────────────────────────────────────────── */}
-          <div className="sticky bottom-0 z-20 -mx-4 space-y-3 border-t bg-background/95 px-4 py-4 shadow-lg backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:mx-0 sm:rounded-t-xl sm:border-x">
+        </div>
+      </div>
+
+      <div className="sticky bottom-0 z-20 ml-[calc(50%_-_50vw)] w-screen border-y border-pink-200/70 bg-pink-50/95 py-4 backdrop-blur dark:border-pink-900/60 dark:bg-pink-950/40">
+        <div className="container max-w-screen-xl px-4 md:px-8">
+          <div className="max-w-2xl space-y-3">
             {saveError && (
               <div className="rounded-lg border border-red-500/20 bg-red-500/5 p-3">
                 <div className="flex items-start gap-2">
