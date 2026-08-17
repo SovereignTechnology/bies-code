@@ -27,6 +27,8 @@
 
 ### Features
 
+- Publish pull request web builds as credential-free NIP-5A previews under a
+  fresh identity per run and expose their URL as a public CI job output.
 - Show a prominent, caution-labelled nsite preview link on pull requests when
   a successful CI job publishes an `nsite` or `nsite_*` public output.
 - Preserve the PR, triggering commit, and merge commit when a merged change resolves an issue, and show that provenance in the issue timeline.
