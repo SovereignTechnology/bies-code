@@ -4,6 +4,7 @@
 
 ### Fixes
 
+- Reconcile issue and pull-request descendants across repository and mailbox relays, and persist verified deletion tombstones before cache hydration so split-relay deletions remain authoritative after reloads.
 - Complete repository-relay issue and pull-request thread loading across every `e`, `E`, and `q` descendant so reactions, revisions, and deletion requests are not lost at batch or delivery-order boundaries.
 - Parse Git packfiles in bounded typed-array chunks so large pull requests no longer freeze Chrome while preparing merge objects.
 - Continue the merge flow as soon as one Grasp server accepts the push instead of waiting for the slowest server; remaining servers keep syncing in the background with live delivery status.

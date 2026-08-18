@@ -32,7 +32,13 @@ import {
   timeout,
 } from "rxjs/operators";
 import { MailboxesModel } from "applesauce-core/models";
-import { cacheRequest, saveEvents } from "./cache";
+import {
+  cacheRequest,
+  loadDeletionEvents,
+  saveDeletionEvent,
+  saveEvents,
+} from "./cache";
+import { PersistentDeleteManager } from "./persistentDeleteManager";
 import { nip05IdbCache, loadAllNip05FromIdb } from "./nip05IdbCache";
 import { setHintEventStore } from "@/factories/hints";
 import {
@@ -70,10 +76,20 @@ import { loadEventReferenceClosure } from "@/lib/eventReferenceClosure";
  * Global EventStore instance for all Nostr events.
  * This is the central state container for the application.
  */
+const deleteManager = new PersistentDeleteManager({
+  load: loadDeletionEvents,
+  save: saveDeletionEvent,
+  verify: verifyEvent,
+  onError: (operation, error) => {
+    console.warn(`[cache] Failed to ${operation} deletion tombstones:`, error);
+  },
+});
+
 export const eventStore = new EventStore({
   keepDeleted: false, // Don't keep deleted events
   keepExpired: false, // Don't keep expired events
   keepOldVersions: false, // Only keep latest version of replaceable events
+  deleteManager,
 });
 
 // Verify events when they are added to the store
@@ -81,6 +97,13 @@ eventStore.verifyEvent = verifyEvent;
 
 // Persist events to the local nostrdb
 persistEventsToCache(eventStore, saveEvents);
+
+/**
+ * Resolves after durable deletion state has been restored. main.tsx waits for
+ * this before rendering so a stale cached original cannot precede its
+ * tombstone into the EventStore.
+ */
+export const deletionCacheReady = deleteManager.hydrate();
 
 // Register this store as the source for factory relay-hint resolution. Done
 // here (rather than `hints.ts` importing this module) so the factory layer has
