@@ -94,6 +94,7 @@ import {
   fetchIssueScanObjectsForStateDelta,
 } from "@/lib/merge-push-fetch";
 import type { PrefetchedMergePushObjects } from "@/hooks/usePrefetchedMergePushObjects";
+import { relayMatchesGraspService } from "@/lib/grasp";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -176,19 +177,6 @@ type MergePanelStatus =
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/**
- * Returns true if a relay URL's hostname matches one of the Grasp server domains.
- */
-function isGraspRelay(relayUrl: string, graspDomains: string[]): boolean {
-  if (!graspDomains.length) return false;
-  try {
-    const hostname = new URL(relayUrl).hostname;
-    return graspDomains.includes(hostname);
-  } catch {
-    return false;
-  }
-}
 
 function formatGitServerName(cloneUrls: string[]): string {
   const hostname = cloneUrls
@@ -394,10 +382,13 @@ export function MergePanel({
       ? "loading"
       : mergeability.status;
 
-  // Grasp relay URLs: repo relays whose hostname matches a Grasp server domain
+  // GRASP relay URLs: repo relays matching an exact service address.
   const graspRelayUrls = useMemo(
-    () => repo.relays.filter((r) => isGraspRelay(r, repo.graspServerDomains)),
-    [repo.relays, repo.graspServerDomains],
+    () =>
+      repo.relays.filter((relay) =>
+        relayMatchesGraspService(relay, repo.graspServerAddresses),
+      ),
+    [repo.relays, repo.graspServerAddresses],
   );
 
   // Can we show the merge button?

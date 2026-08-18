@@ -369,6 +369,21 @@ export function relayUrlToSegment(url: string): string {
 }
 
 /**
+ * Encode a relay URL for a `nostr://` clone URL.
+ *
+ * Unlike browser routes, ngit accepts the complete percent-encoded `ws://`
+ * form. Relay mount paths must be encoded so they remain one relay-hint
+ * segment rather than being mistaken for part of the repository path.
+ */
+export function relayUrlToNostrUrlSegment(url: string): string {
+  const normalized = normalizeUrl(url);
+  const hint = normalized.startsWith("wss://")
+    ? normalized.slice(6)
+    : normalized;
+  return encodeURIComponent(hint);
+}
+
+/**
  * Normalise a relay hint segment back to a full wss:// URL.
  * The hint is stored without the scheme (wss:// stripped when generating).
  */
@@ -456,4 +471,19 @@ export function repoToPath(
     return `/${identity}/${relayUrlToSegment(relay)}/${encodedRepoId}`;
   }
   return `/${identity}/${encodedRepoId}`;
+}
+
+/** Build an ngit-compatible `nostr://` clone URL for a repository. */
+export function repoToNostrCloneUrl(
+  pubkey: string,
+  repoId: string,
+  relays: string[],
+  nip05?: string,
+): string {
+  const identity = pubkeyToIdentity(pubkey, nip05);
+  const encodedRepoId = encodeURIComponent(repoId);
+  const relay = relays[0];
+  return relay
+    ? `nostr://${identity}/${relayUrlToNostrUrlSegment(relay)}/${encodedRepoId}`
+    : `nostr://${identity}/${encodedRepoId}`;
 }

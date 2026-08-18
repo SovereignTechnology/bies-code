@@ -45,6 +45,7 @@ import { useGraspServers, type GraspServer } from "@/hooks/useGraspServers";
 import { useRepoPath } from "@/hooks/useRepoPath";
 import { usePublish } from "@/hooks/usePublish";
 import { GraspServerSelector } from "@/components/GraspServerSelector";
+import { graspServerFromAddress } from "@/lib/grasp";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -199,9 +200,9 @@ export function CreateRepoDialog({ isOpen, onClose }: CreateRepoDialogProps) {
 
   // Advanced section state
   const [advancedOpen, setAdvancedOpen] = useState(false);
-  // selectedDomains: the set of domains the user has chosen for this repo.
+  // selectedAddresses: the GRASP service endpoints chosen for this repo.
   // Initialised from resolvedServers once they load.
-  const [selectedDomains, setSelectedDomains] = useState<string[]>([]);
+  const [selectedAddresses, setSelectedAddresses] = useState<string[]>([]);
   // Whether to save these servers as the user's default grasp list
   const [saveAsDefaults, setSaveAsDefaults] = useState(false);
 
@@ -212,28 +213,35 @@ export function CreateRepoDialog({ isOpen, onClose }: CreateRepoDialogProps) {
     [name, identifier],
   );
 
-  // Build the effective GraspServer list from selectedDomains
+  // Build the effective GraspServer list from selectedAddresses.
   const selectedServers = useMemo<GraspServer[]>(() => {
-    return selectedDomains.map((domain) => {
+    return selectedAddresses.flatMap((address) => {
       // Prefer the wsUrl from resolvedServers if available
-      const existing = resolvedServers.find((s) => s.domain === domain);
-      return existing ?? { domain, wsUrl: `wss://${domain}` };
+      const existing = resolvedServers.find(
+        (server) => server.serviceAddress === address,
+      );
+      const server = existing ?? graspServerFromAddress(address);
+      return server ? [server] : [];
     });
-  }, [selectedDomains, resolvedServers]);
+  }, [selectedAddresses, resolvedServers]);
 
-  // Initialise selectedDomains when servers load or dialog opens
+  // Initialise selectedAddresses when servers load or the dialog opens.
   useEffect(() => {
-    if (resolvedServers.length > 0 && selectedDomains.length === 0) {
-      setSelectedDomains(resolvedServers.map((s) => s.domain));
+    if (resolvedServers.length > 0 && selectedAddresses.length === 0) {
+      setSelectedAddresses(
+        resolvedServers.map((server) => server.serviceAddress),
+      );
     }
-  }, [resolvedServers, selectedDomains.length]);
+  }, [resolvedServers, selectedAddresses.length]);
 
   // Reset form when dialog opens
   useEffect(() => {
     if (isOpen) {
       setName("");
       setDescription("");
-      setSelectedDomains(resolvedServers.map((s) => s.domain));
+      setSelectedAddresses(
+        resolvedServers.map((server) => server.serviceAddress),
+      );
       setSaveAsDefaults(false);
       setAdvancedOpen(false);
       reset();
@@ -242,10 +250,12 @@ export function CreateRepoDialog({ isOpen, onClose }: CreateRepoDialogProps) {
   }, [isOpen, reset]);
 
   // When resolvedServers change (e.g. after load) and we haven't customised yet,
-  // sync selectedDomains to the new resolved list.
+  // sync selectedAddresses to the new resolved list.
   useEffect(() => {
     if (!advancedOpen) {
-      setSelectedDomains(resolvedServers.map((s) => s.domain));
+      setSelectedAddresses(
+        resolvedServers.map((server) => server.serviceAddress),
+      );
     }
   }, [resolvedServers, advancedOpen]);
 
@@ -329,20 +339,22 @@ export function CreateRepoDialog({ isOpen, onClose }: CreateRepoDialogProps) {
 
   // Whether the current selection differs from the resolved defaults
   const hasCustomSelection = useMemo(() => {
-    const resolvedDomains = resolvedServers.map((s) => s.domain).sort();
-    const current = [...selectedDomains].sort();
+    const resolvedAddresses = resolvedServers
+      .map((server) => server.serviceAddress)
+      .sort();
+    const current = [...selectedAddresses].sort();
     return (
-      current.length !== resolvedDomains.length ||
-      current.some((d, i) => d !== resolvedDomains[i])
+      current.length !== resolvedAddresses.length ||
+      current.some((address, index) => address !== resolvedAddresses[index])
     );
-  }, [resolvedServers, selectedDomains]);
+  }, [resolvedServers, selectedAddresses]);
 
   // Label for the advanced trigger
   const advancedLabel = useMemo(() => {
-    if (selectedDomains.length === 0) return "No servers selected";
-    if (selectedDomains.length === 1) return selectedDomains[0];
-    return `${selectedDomains.length} servers`;
-  }, [selectedDomains]);
+    if (selectedAddresses.length === 0) return "No servers selected";
+    if (selectedAddresses.length === 1) return selectedAddresses[0];
+    return `${selectedAddresses.length} servers`;
+  }, [selectedAddresses]);
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && handleClose()}>
@@ -465,8 +477,8 @@ export function CreateRepoDialog({ isOpen, onClose }: CreateRepoDialogProps) {
                 ) : (
                   <>
                     <GraspServerSelector
-                      selectedDomains={selectedDomains}
-                      onSelectedDomainsChange={setSelectedDomains}
+                      selectedAddresses={selectedAddresses}
+                      onSelectedAddressesChange={setSelectedAddresses}
                       resolvedServers={resolvedServers}
                       isFromUserList={isFromUserList}
                       showTitle={false}
@@ -527,7 +539,10 @@ export function CreateRepoDialog({ isOpen, onClose }: CreateRepoDialogProps) {
                     {key === "pushing" && selectedServers.length > 0 && (
                       <span className="text-muted-foreground">
                         {" "}
-                        to {selectedServers.map((s) => s.domain).join(", ")}
+                        to{" "}
+                        {selectedServers
+                          .map((server) => server.serviceAddress)
+                          .join(", ")}
                       </span>
                     )}
                   </span>

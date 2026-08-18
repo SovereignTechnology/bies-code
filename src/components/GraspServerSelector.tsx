@@ -7,20 +7,20 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import type { GraspServer } from "@/hooks/useGraspServers";
 import {
-  isValidGraspDomain,
-  normalizeGraspDomain,
-  uniqueGraspDomains,
+  isValidGraspServiceAddress,
+  normalizeGraspServiceAddress,
+  uniqueGraspServiceAddresses,
   validateGraspServer,
 } from "@/lib/grasp";
 import { DEFAULT_GRASP_SERVERS } from "@/services/settings";
 
 interface GraspServerSelectorProps {
-  selectedDomains: string[];
-  onSelectedDomainsChange(domains: string[]): void;
+  selectedAddresses: string[];
+  onSelectedAddressesChange(addresses: string[]): void;
   resolvedServers: GraspServer[];
   isFromUserList: boolean;
-  additionalDomains?: readonly string[];
-  currentDomains?: readonly string[];
+  additionalAddresses?: readonly string[];
+  currentAddresses?: readonly string[];
   requiredGrasps?: readonly string[];
   disabled?: boolean;
   showTitle?: boolean;
@@ -34,64 +34,66 @@ interface GraspServerSelectorProps {
  * this component so they apply identical normalization and NIP-11 validation.
  */
 export function GraspServerSelector({
-  selectedDomains,
-  onSelectedDomainsChange,
+  selectedAddresses,
+  onSelectedAddressesChange,
   resolvedServers,
   isFromUserList,
-  additionalDomains = [],
-  currentDomains = [],
+  additionalAddresses = [],
+  currentAddresses = [],
   requiredGrasps = ["GRASP-01"],
   disabled = false,
   showTitle = true,
   emptyMessage = "Select at least one GRASP server to continue.",
 }: GraspServerSelectorProps) {
   const id = useId();
-  const [customDomain, setCustomDomain] = useState("");
-  const [customDomainError, setCustomDomainError] = useState<
+  const [customAddress, setCustomAddress] = useState("");
+  const [customAddressError, setCustomAddressError] = useState<
     string | undefined
   >();
-  const [validatingDomain, setValidatingDomain] = useState(false);
+  const [validatingAddress, setValidatingAddress] = useState(false);
 
-  const allKnownDomains = uniqueGraspDomains([
-    ...resolvedServers.map((server) => server.domain),
-    ...additionalDomains,
-    ...selectedDomains,
-    ...currentDomains,
+  const allKnownAddresses = uniqueGraspServiceAddresses([
+    ...resolvedServers.map((server) => server.serviceAddress),
+    ...additionalAddresses,
+    ...selectedAddresses,
+    ...currentAddresses,
   ]);
 
-  const toggleServer = (domain: string) => {
-    onSelectedDomainsChange(
-      selectedDomains.includes(domain)
-        ? selectedDomains.filter((candidate) => candidate !== domain)
-        : [...selectedDomains, domain],
+  const toggleServer = (address: string) => {
+    onSelectedAddressesChange(
+      selectedAddresses.includes(address)
+        ? selectedAddresses.filter((candidate) => candidate !== address)
+        : [...selectedAddresses, address],
     );
   };
 
-  const addCustomDomain = async () => {
-    const domain = normalizeGraspDomain(customDomain);
-    if (!domain) return;
-    if (!isValidGraspDomain(domain)) {
-      setCustomDomainError("Enter a valid domain (e.g. relay.example.com)");
+  const addCustomAddress = async () => {
+    const address = normalizeGraspServiceAddress(customAddress);
+    if (!address) return;
+    if (!isValidGraspServiceAddress(address)) {
+      setCustomAddressError(
+        "Enter a valid service address (e.g. relay.example.com/grasp)",
+      );
       return;
     }
-    if (selectedDomains.includes(domain)) {
-      setCustomDomainError("Already in the list");
+    if (selectedAddresses.includes(address)) {
+      setCustomAddressError("Already in the list");
       return;
     }
 
-    setValidatingDomain(true);
-    setCustomDomainError(undefined);
-    const validationError = await validateGraspServer(domain, {
+    setValidatingAddress(true);
+    setCustomAddressError(undefined);
+    const validationError = await validateGraspServer(address, {
       requiredGrasps,
     });
-    setValidatingDomain(false);
+    setValidatingAddress(false);
     if (validationError) {
-      setCustomDomainError(validationError);
+      setCustomAddressError(validationError);
       return;
     }
 
-    onSelectedDomainsChange([...selectedDomains, domain]);
-    setCustomDomain("");
+    onSelectedAddressesChange([...selectedAddresses, address]);
+    setCustomAddress("");
   };
 
   return (
@@ -99,28 +101,28 @@ export function GraspServerSelector({
       {showTitle && <p className="text-sm font-medium">GRASP servers</p>}
 
       <div className="space-y-1.5">
-        {allKnownDomains.map((domain) => {
-          const checked = selectedDomains.includes(domain);
-          const isCurrent = currentDomains.includes(domain);
+        {allKnownAddresses.map((address) => {
+          const checked = selectedAddresses.includes(address);
+          const isCurrent = currentAddresses.includes(address);
           const isUserList =
             isFromUserList &&
-            resolvedServers.some((server) => server.domain === domain);
-          const isDefault = DEFAULT_GRASP_SERVERS.includes(domain);
+            resolvedServers.some((server) => server.serviceAddress === address);
+          const isDefault = DEFAULT_GRASP_SERVERS.includes(address);
 
           return (
             <label
-              key={domain}
+              key={address}
               className="flex cursor-pointer items-center gap-2.5 rounded-md px-2.5 py-1.5 transition-colors hover:bg-muted/40"
             >
               <Checkbox
-                id={`${id}-${domain}`}
+                id={`${id}-${address}`}
                 checked={checked}
-                disabled={disabled || validatingDomain}
-                onCheckedChange={() => toggleServer(domain)}
+                disabled={disabled || validatingAddress}
+                onCheckedChange={() => toggleServer(address)}
               />
               <Server className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
               <span className="min-w-0 flex-1 truncate font-mono text-sm">
-                {domain}
+                {address}
               </span>
               {isCurrent ? (
                 <Badge
@@ -152,18 +154,18 @@ export function GraspServerSelector({
       <div className="space-y-1.5">
         <div className="flex gap-2">
           <Input
-            aria-label="New GRASP server domain"
-            placeholder="relay.example.com"
-            value={customDomain}
-            disabled={disabled || validatingDomain}
+            aria-label="New GRASP service address"
+            placeholder="relay.example.com/grasp"
+            value={customAddress}
+            disabled={disabled || validatingAddress}
             onChange={(event) => {
-              setCustomDomain(event.target.value);
-              setCustomDomainError(undefined);
+              setCustomAddress(event.target.value);
+              setCustomAddressError(undefined);
             }}
             onKeyDown={(event) => {
               if (event.key === "Enter") {
                 event.preventDefault();
-                void addCustomDomain();
+                void addCustomAddress();
               }
             }}
             className="h-8 font-mono text-sm"
@@ -173,23 +175,23 @@ export function GraspServerSelector({
             variant="outline"
             size="sm"
             aria-label="Add GRASP server"
-            onClick={() => void addCustomDomain()}
-            disabled={disabled || validatingDomain}
+            onClick={() => void addCustomAddress()}
+            disabled={disabled || validatingAddress}
             className="h-8 shrink-0 px-2.5"
           >
-            {validatingDomain ? (
+            {validatingAddress ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
             ) : (
               <Plus className="h-3.5 w-3.5" />
             )}
           </Button>
         </div>
-        {customDomainError && (
-          <p className="px-0.5 text-xs text-red-500">{customDomainError}</p>
+        {customAddressError && (
+          <p className="px-0.5 text-xs text-red-500">{customAddressError}</p>
         )}
       </div>
 
-      {selectedDomains.length === 0 && (
+      {selectedAddresses.length === 0 && (
         <p className="px-0.5 text-xs text-amber-600 dark:text-amber-400">
           {emptyMessage}
         </p>

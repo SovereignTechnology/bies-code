@@ -73,7 +73,7 @@ import {
 import { RepoContext, type RepoContextValue } from "./RepoContext";
 import {
   getRepoCloneUrls,
-  graspCloneUrlDomain,
+  graspCloneUrlServiceAddress,
   hasAcceptedRepositoryReference,
   repoCoordinate,
   type RepoQueryOptions,
@@ -101,7 +101,9 @@ import { catchError } from "rxjs/operators";
 import { useToast } from "@/hooks/useToast";
 import { GraspServerSelector } from "@/components/GraspServerSelector";
 import {
-  selectGraspDomainsWithBackfill,
+  graspRepositoryCloneUrl,
+  graspServerFromAddress,
+  selectGraspServiceAddressesWithBackfill,
   validateGraspServer,
 } from "@/lib/grasp";
 import { DEFAULT_GRASP_SERVERS } from "@/services/settings";
@@ -934,39 +936,39 @@ function getDefaultPersonalInfrastructure(
   const npub = nip19.npubEncode(accountPubkey);
   const encodedDTag = encodeURIComponent(dTag);
   return {
-    cloneUrls: graspServers.map(
-      ({ domain }) => `https://${domain}/${npub}/${encodedDTag}.git`,
+    cloneUrls: graspServers.map(({ serviceAddress }) =>
+      graspRepositoryCloneUrl(serviceAddress, npub, encodedDTag),
     ),
     relayUrls: graspServers.map(({ wsUrl }) => wsUrl),
   };
 }
 
-function getAnnouncementGraspDomains(
+function getAnnouncementGraspAddresses(
   announcement: NostrEvent | undefined,
 ): string[] {
   if (!announcement) return [];
   return Array.from(
     new Set(
       getRepoCloneUrls(announcement)
-        .map(graspCloneUrlDomain)
-        .filter((domain): domain is string => !!domain),
+        .map(graspCloneUrlServiceAddress)
+        .filter((address): address is string => !!address),
     ),
   );
 }
 
-function getInvitationDefaultGraspDomains(
+function getInvitationDefaultGraspAddresses(
   repo: ResolvedRepo,
   ownAnnouncement: NostrEvent | undefined,
   graspServers: GraspServer[],
   graspServersFromUserList: boolean,
 ): string[] {
-  return selectGraspDomainsWithBackfill(
+  return selectGraspServiceAddressesWithBackfill(
     [
-      getAnnouncementGraspDomains(ownAnnouncement),
+      getAnnouncementGraspAddresses(ownAnnouncement),
       graspServersFromUserList
-        ? graspServers.map((server) => server.domain)
+        ? graspServers.map((server) => server.serviceAddress)
         : [],
-      repo.graspServerDomains,
+      repo.graspServerAddresses,
     ],
     DEFAULT_GRASP_SERVERS,
   );
@@ -1212,8 +1214,8 @@ function MaintainerAcceptanceControls({
   const [publishing, setPublishing] = useState(false);
   const [selectedMaintainers, setSelectedMaintainers] =
     useState<string[]>(defaults);
-  const [selectedDomains, setSelectedDomains] = useState<string[]>(() =>
-    getInvitationDefaultGraspDomains(
+  const [selectedAddresses, setSelectedAddresses] = useState<string[]>(() =>
+    getInvitationDefaultGraspAddresses(
       repo,
       ownAnnouncement,
       graspServers,
@@ -1225,14 +1227,14 @@ function MaintainerAcceptanceControls({
   }, [openInitially]);
   const selectedGraspServers = useMemo<GraspServer[]>(
     () =>
-      selectedDomains.map(
-        (domain) =>
-          graspServers.find((server) => server.domain === domain) ?? {
-            domain,
-            wsUrl: `wss://${domain}`,
-          },
-      ),
-    [graspServers, selectedDomains],
+      selectedAddresses.flatMap((address) => {
+        const server =
+          graspServers.find(
+            (candidate) => candidate.serviceAddress === address,
+          ) ?? graspServerFromAddress(address);
+        return server ? [server] : [];
+      }),
+    [graspServers, selectedAddresses],
   );
   const { cloneUrls, relayUrls } = useMemo(
     () =>
@@ -1255,9 +1257,9 @@ function MaintainerAcceptanceControls({
     setPublishing(true);
     try {
       const validationResults = await Promise.all(
-        selectedDomains.map(async (domain) => ({
-          domain,
-          error: await validateGraspServer(domain, {
+        selectedAddresses.map(async (address) => ({
+          address,
+          error: await validateGraspServer(address, {
             requiredGrasps: ["GRASP-01", "GRASP-02"],
           }),
         })),
@@ -1266,7 +1268,7 @@ function MaintainerAcceptanceControls({
       if (invalidServers.length > 0) {
         throw new Error(
           invalidServers
-            .map(({ domain, error }) => `${domain}: ${error}`)
+            .map(({ address, error }) => `${address}: ${error}`)
             .join("; "),
         );
       }
@@ -1371,12 +1373,12 @@ function MaintainerAcceptanceControls({
               </p>
             </div>
             <GraspServerSelector
-              selectedDomains={selectedDomains}
-              onSelectedDomainsChange={setSelectedDomains}
+              selectedAddresses={selectedAddresses}
+              onSelectedAddressesChange={setSelectedAddresses}
               resolvedServers={graspServers}
               isFromUserList={graspServersFromUserList}
-              additionalDomains={repo.graspServerDomains}
-              currentDomains={getAnnouncementGraspDomains(ownAnnouncement)}
+              additionalAddresses={repo.graspServerAddresses}
+              currentAddresses={getAnnouncementGraspAddresses(ownAnnouncement)}
               requiredGrasps={["GRASP-01", "GRASP-02"]}
               disabled={publishing}
               showTitle={false}
@@ -1441,7 +1443,7 @@ function MaintainerAcceptanceControls({
               disabled={
                 publishing ||
                 selectedMaintainers.length === 0 ||
-                selectedDomains.length === 0
+                selectedAddresses.length === 0
               }
               className="bg-pink-600 text-white hover:bg-pink-700"
             >

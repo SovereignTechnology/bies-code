@@ -73,7 +73,12 @@ import {
   getReplaceableAddress,
 } from "applesauce-core/helpers";
 import { cn } from "@/lib/utils";
-import { relayUrlToSegment, repoToPath } from "@/lib/routeUtils";
+import {
+  relayUrlToSegment,
+  repoToNostrCloneUrl,
+  repoToPath,
+} from "@/lib/routeUtils";
+import { relayMatchesGraspService } from "@/lib/grasp";
 import { format } from "date-fns";
 import { useRepoContext } from "@/pages/repo/RepoContext";
 import { useActiveAccount } from "applesauce-react/hooks";
@@ -131,15 +136,9 @@ function shortenNip19InUrl(url: string): string {
   return shortened;
 }
 
-/** Returns true if a relay URL's hostname matches one of the Grasp server domains. */
-function isGraspRelay(relayUrl: string, graspDomains: string[]): boolean {
-  if (!graspDomains.length) return false;
-  try {
-    const hostname = new URL(relayUrl).hostname;
-    return graspDomains.includes(hostname);
-  } catch {
-    return false;
-  }
+/** Returns true if a relay URL is one of the repository's GRASP services. */
+function isGraspRelay(relayUrl: string, serviceAddresses: string[]): boolean {
+  return relayMatchesGraspService(relayUrl, serviceAddresses);
 }
 
 function npubToPubkey(npub: string): string | undefined {
@@ -378,12 +377,12 @@ export interface RepoAboutPanelProps {
 export function RepoAboutPanel({ repo, variant }: RepoAboutPanelProps) {
   const isSidebar = variant === "sidebar";
 
-  // Build the nostr:// clone URL for ngit
-  let npub: string | undefined;
+  // Build the nostr:// clone URL for ngit.
+  let maintainerNpub: string | undefined;
   try {
-    npub = nip19.npubEncode(repo.selectedMaintainer);
+    maintainerNpub = nip19.npubEncode(repo.selectedMaintainer);
   } catch {
-    npub = undefined;
+    maintainerNpub = undefined;
   }
 
   // Prefer the NIP-05 address from the route (already verified by RepoLayoutNip05)
@@ -394,18 +393,14 @@ export function RepoAboutPanel({ repo, variant }: RepoAboutPanelProps) {
     ? routeNip05.startsWith("_@")
       ? routeNip05.slice(2)
       : routeNip05
-    : npub;
-
-  // Extract a bare domain relay hint from the first declared relay (strip wss:// / ws://)
-  const relayHint = repo.relays[0]
-    ? repo.relays[0].replace(/^wss?:\/\//, "").replace(/\/$/, "")
-    : undefined;
-  // Percent-encode the identifier per NIP-34 §nostr:// clone URL spec
-  const encodedDTag = encodeURIComponent(repo.dTag);
+    : maintainerNpub;
   const nostrCloneUrl = identitySegment
-    ? relayHint
-      ? `nostr://${identitySegment}/${relayHint}/${encodedDTag}`
-      : `nostr://${identitySegment}/${encodedDTag}`
+    ? repoToNostrCloneUrl(
+        repo.selectedMaintainer,
+        repo.dTag,
+        repo.relays,
+        routeNip05,
+      )
     : undefined;
   const hasAnyCloneUrl =
     repo.graspCloneUrls.length > 0 || repo.additionalGitServerUrls.length > 0;
@@ -562,7 +557,7 @@ function SidebarVariant({
 
           {/* Grasp server relays */}
           {repo.relays.some((r) =>
-            isGraspRelay(r, repo.graspServerDomains),
+            isGraspRelay(r, repo.graspServerAddresses),
           ) && (
             <div className="space-y-2">
               <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
@@ -571,7 +566,7 @@ function SidebarVariant({
               </p>
               <div className="flex flex-wrap gap-1">
                 {repo.relays
-                  .filter((r) => isGraspRelay(r, repo.graspServerDomains))
+                  .filter((r) => isGraspRelay(r, repo.graspServerAddresses))
                   .map((relay) => (
                     <Link
                       key={relay}
@@ -588,20 +583,20 @@ function SidebarVariant({
 
           {/* Other relays (non-Grasp) */}
           {repo.relays.some(
-            (r) => !isGraspRelay(r, repo.graspServerDomains),
+            (r) => !isGraspRelay(r, repo.graspServerAddresses),
           ) && (
             <div className="space-y-2">
               <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
                 <Radio className="h-3 w-3" />
                 {repo.relays.some((r) =>
-                  isGraspRelay(r, repo.graspServerDomains),
+                  isGraspRelay(r, repo.graspServerAddresses),
                 )
                   ? "Other Relays"
                   : "Relays"}
               </p>
               <div className="flex flex-wrap gap-1">
                 {repo.relays
-                  .filter((r) => !isGraspRelay(r, repo.graspServerDomains))
+                  .filter((r) => !isGraspRelay(r, repo.graspServerAddresses))
                   .map((relay) => (
                     <Link
                       key={relay}
@@ -848,7 +843,7 @@ function FullVariant({
       </section>
 
       {/* Grasp Server relays */}
-      {repo.relays.some((r) => isGraspRelay(r, repo.graspServerDomains)) && (
+      {repo.relays.some((r) => isGraspRelay(r, repo.graspServerAddresses)) && (
         <section className="space-y-2">
           <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
             <GraspLogo className="h-3.5 w-3.5 text-pink-500" />
@@ -857,14 +852,14 @@ function FullVariant({
           {/* Own announcement's Grasp relays */}
           {repo.relays.some(
             (r) =>
-              isGraspRelay(r, repo.graspServerDomains) &&
+              isGraspRelay(r, repo.graspServerAddresses) &&
               !unionOnlyRelayUrls.has(r),
           ) && (
             <div className="flex flex-wrap gap-1.5">
               {repo.relays
                 .filter(
                   (r) =>
-                    isGraspRelay(r, repo.graspServerDomains) &&
+                    isGraspRelay(r, repo.graspServerAddresses) &&
                     !unionOnlyRelayUrls.has(r),
                 )
                 .map((relay) => (
@@ -882,13 +877,13 @@ function FullVariant({
           {/* Union relays from accepted or invited repositories */}
           {repo.relays.some(
             (r) =>
-              isGraspRelay(r, repo.graspServerDomains) &&
+              isGraspRelay(r, repo.graspServerAddresses) &&
               unionOnlyRelayUrls.has(r),
           ) && (
             <UnionRelayGroup
               relays={repo.relays.filter(
                 (r) =>
-                  isGraspRelay(r, repo.graspServerDomains) &&
+                  isGraspRelay(r, repo.graspServerAddresses) &&
                   unionOnlyRelayUrls.has(r),
               )}
               getContributor={(r) => getContributorPubkey(r, false)}
@@ -899,25 +894,25 @@ function FullVariant({
       )}
 
       {/* Other Relays (non-Grasp) */}
-      {repo.relays.some((r) => !isGraspRelay(r, repo.graspServerDomains)) && (
+      {repo.relays.some((r) => !isGraspRelay(r, repo.graspServerAddresses)) && (
         <section className="space-y-2">
           <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
             <Radio className="h-3.5 w-3.5" />
-            {repo.relays.some((r) => isGraspRelay(r, repo.graspServerDomains))
+            {repo.relays.some((r) => isGraspRelay(r, repo.graspServerAddresses))
               ? "Other Relays"
               : "Relays"}
           </h3>
           {/* Own announcement's non-Grasp relays */}
           {repo.relays.some(
             (r) =>
-              !isGraspRelay(r, repo.graspServerDomains) &&
+              !isGraspRelay(r, repo.graspServerAddresses) &&
               !unionOnlyRelayUrls.has(r),
           ) && (
             <div className="flex flex-wrap gap-1.5">
               {repo.relays
                 .filter(
                   (r) =>
-                    !isGraspRelay(r, repo.graspServerDomains) &&
+                    !isGraspRelay(r, repo.graspServerAddresses) &&
                     !unionOnlyRelayUrls.has(r),
                 )
                 .map((relay) => (
@@ -935,13 +930,13 @@ function FullVariant({
           {/* Union relays from accepted or invited repositories */}
           {repo.relays.some(
             (r) =>
-              !isGraspRelay(r, repo.graspServerDomains) &&
+              !isGraspRelay(r, repo.graspServerAddresses) &&
               unionOnlyRelayUrls.has(r),
           ) && (
             <UnionRelayGroup
               relays={repo.relays.filter(
                 (r) =>
-                  !isGraspRelay(r, repo.graspServerDomains) &&
+                  !isGraspRelay(r, repo.graspServerAddresses) &&
                   unionOnlyRelayUrls.has(r),
               )}
               getContributor={(r) => getContributorPubkey(r, false)}
