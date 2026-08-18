@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { use$ } from "./use$";
 import { useEventStore } from "./useEventStore";
 import {
@@ -7,17 +7,18 @@ import {
   type RelayGroupSpec,
 } from "./useEventSearch";
 import type { SearchTarget } from "@/lib/searchForEvent";
-import type { RelayGroup } from "applesauce-relay";
+import { RelayGroup } from "applesauce-relay";
 import type { NostrEvent } from "nostr-tools";
 import { ignoreUnhealthyRelaysOnPointers } from "applesauce-relay/operators";
 import { includeMailboxes } from "applesauce-core";
-import { of, merge } from "rxjs";
+import { of, merge, Subscription } from "rxjs";
 import { map } from "rxjs/operators";
 import {
   liveness,
   nip34ListLoader,
   nip34ThreadItemLoader,
   eventStore as globalEventStore,
+  pool,
 } from "@/services/nostr";
 import {
   gitIndexRelays,
@@ -61,6 +62,78 @@ export interface Nip34ItemLoaderOptions {
    * Default: false.
    */
   includeAuthorNip65?: boolean;
+  /**
+   * Supplemental relay group whose events must participate in the same
+   * item-reference closure as the repository relays. In outbox mode this is
+   * the maintainer mailbox delta group.
+   */
+  supplementalRelayGroup?: RelayGroup;
+  /**
+   * User-activated search groups whose relays must join the existing item
+   * closure without restarting it.
+   */
+  additionalThreadRelayGroups?: RelayGroupSpec[];
+}
+
+/** Add normalized URLs to a RelayGroup without disturbing existing relays. */
+function addRelayUrls(group: RelayGroup, urls: string[]): void {
+  for (const url of urls) {
+    const relay = pool.relay(normalizeUrl(url));
+    if (!group.has(relay)) group.add(relay);
+  }
+}
+
+/**
+ * Build one stable, item-scoped relay union for the recursive thread closure.
+ *
+ * RelayGroup.add() and loadEventReferenceClosure are both additive: a newly
+ * discovered relay gets subscriptions for the IDs already in the closure,
+ * while subscriptions on existing relays remain open. The group is recreated
+ * only when the item, repository, or curation scope changes.
+ */
+function useAdditiveThreadRelayGroup(
+  itemScopeKey: string,
+  repoRelayGroup: RelayGroup | undefined,
+  supplementalRelayGroup: RelayGroup | undefined,
+  additionalGroups: RelayGroupSpec[] | undefined,
+  authorInboxDelta: string[],
+  enabled: boolean,
+): RelayGroup | undefined {
+  const group = useMemo(
+    () => (enabled ? new RelayGroup([]) : undefined),
+    // itemScopeKey and repoRelayGroup intentionally define this resource's
+    // lifetime even though the new group does not read their values.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [itemScopeKey, repoRelayGroup, enabled],
+  );
+
+  useEffect(() => {
+    if (!group) return;
+
+    const subscriptions = new Subscription();
+    const relaySources = [
+      relayGroupUrls$(repoRelayGroup),
+      ...(supplementalRelayGroup
+        ? [relayGroupUrls$(supplementalRelayGroup)]
+        : []),
+      ...(additionalGroups?.map(({ relays$ }) => relays$) ?? []),
+    ];
+
+    for (const source of relaySources) {
+      subscriptions.add(source.subscribe((urls) => addRelayUrls(group, urls)));
+    }
+
+    return () => subscriptions.unsubscribe();
+  }, [group, repoRelayGroup, supplementalRelayGroup, additionalGroups]);
+
+  const authorInboxDeltaKey = authorInboxDelta.join(",");
+  useEffect(() => {
+    if (group) addRelayUrls(group, authorInboxDelta);
+    // The stable key avoids rerunning this effect for an equivalent array.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [group, authorInboxDeltaKey]);
+
+  return group;
 }
 
 /**
@@ -119,7 +192,7 @@ function useAuthorInboxDeltaRelays(
 /**
  * Triggers loading for a single NIP-34 item (issue, patch, or PR).
  *
- * Two non-additive levels:
+ * Two loading levels:
  *
  *   list (always) — essentials (status, labels, deletions) + comments.
  *     Fires nip34ListLoader. Merges automatically with nip34RepoLoader
@@ -132,8 +205,8 @@ function useAuthorInboxDeltaRelays(
  *
  * NIP-65 author inbox relays: when includeAuthorNip65 is true, both levels
  * are also fired against the delta inbox relays (those not already covered
- * by the group). This is a separate observable with its own subscription —
- * the shared relay group is never mutated.
+ * by the group). Thread loading uses one item-scoped union so an ID discovered
+ * on any source is queried on every other source, including repository relays.
  *
  * @param itemId         - The event ID of the issue / patch / PR
  * @param repoRelayGroup - The base relay group from useResolvedRepository
@@ -159,14 +232,6 @@ export function useNip34ItemLoader(
     return nip34ListLoader(itemId, repoRelays);
   }, [itemId, repoRelayKey]);
 
-  // Thread level: reactions + zaps on root + recursively on comments.
-  // Pass the reactive relays$ observable so the loader handles new relays
-  // additively without needing to be torn down and recreated.
-  use$(() => {
-    if (!itemId || repoRelays.length === 0 || !includeThread) return undefined;
-    return nip34ThreadItemLoader(itemId, relayGroupUrls$(repoRelayGroup));
-  }, [itemId, repoRelayKey, includeThread, repoRelayGroup]);
-
   // ── NIP-65 author inbox relay loaders ─────────────────────────────────────
   const authorPubkey = use$(() => {
     if (!itemId || !options?.includeAuthorNip65) return of(undefined);
@@ -187,12 +252,21 @@ export function useNip34ItemLoader(
     return nip34ListLoader(itemId, authorInboxDelta);
   }, [itemId, inboxDeltaKey]);
 
-  // Thread level on inbox delta relays
+  // Thread level across one additive union. Neither author-inbox discovery nor
+  // RelayGroup growth tears down subscriptions that are already live.
+  const threadRelayGroup = useAdditiveThreadRelayGroup(
+    `${itemId ?? ""}:${options?.includeAuthorNip65 ? "outbox" : "curated"}`,
+    repoRelayGroup,
+    options?.supplementalRelayGroup,
+    options?.additionalThreadRelayGroups,
+    authorInboxDelta,
+    includeThread,
+  );
+
   use$(() => {
-    if (!itemId || authorInboxDelta.length === 0 || !includeThread)
-      return undefined;
-    return nip34ThreadItemLoader(itemId, authorInboxDelta);
-  }, [itemId, inboxDeltaKey, includeThread]);
+    if (!itemId || !includeThread || !threadRelayGroup) return undefined;
+    return nip34ThreadItemLoader(itemId, relayGroupUrls$(threadRelayGroup));
+  }, [itemId, includeThread, threadRelayGroup]);
 }
 
 // ---------------------------------------------------------------------------
@@ -231,19 +305,6 @@ export function useNip34ItemLoaderBatch(
     return merge(...itemIds.map((id) => nip34ListLoader(id, repoRelays)));
   }, [idsKey, repoRelayKey]);
 
-  // Thread level: reactions + zaps for all IDs.
-  // Pass the reactive relays$ observable so each loader handles new relays
-  // additively without needing to be torn down and recreated.
-  use$(() => {
-    if (itemIds.length === 0 || repoRelays.length === 0 || !includeThread)
-      return undefined;
-    return merge(
-      ...itemIds.map((id) =>
-        nip34ThreadItemLoader(id, relayGroupUrls$(repoRelayGroup)),
-      ),
-    );
-  }, [idsKey, repoRelayKey, includeThread, repoRelayGroup]);
-
   // NIP-65 author inbox relay loading per item
   // (Only fires when includeAuthorNip65 is true — resolves each item's author
   // from the store and loads their inbox delta relays.)
@@ -279,14 +340,25 @@ export function useNip34ItemLoaderBatch(
     return merge(...itemIds.map((id) => nip34ListLoader(id, authorInboxDelta)));
   }, [idsKey, inboxDeltaKey]);
 
-  // Thread level on inbox delta relays
+  // Thread level across one additive union for the whole revision batch.
+  const threadRelayGroup = useAdditiveThreadRelayGroup(
+    `${idsKey}:${options?.includeAuthorNip65 ? "outbox" : "curated"}`,
+    repoRelayGroup,
+    options?.supplementalRelayGroup,
+    options?.additionalThreadRelayGroups,
+    authorInboxDelta,
+    includeThread,
+  );
+
   use$(() => {
-    if (itemIds.length === 0 || authorInboxDelta.length === 0 || !includeThread)
+    if (itemIds.length === 0 || !includeThread || !threadRelayGroup)
       return undefined;
     return merge(
-      ...itemIds.map((id) => nip34ThreadItemLoader(id, authorInboxDelta)),
+      ...itemIds.map((id) =>
+        nip34ThreadItemLoader(id, relayGroupUrls$(threadRelayGroup)),
+      ),
     );
-  }, [idsKey, inboxDeltaKey, includeThread]);
+  }, [idsKey, includeThread, threadRelayGroup]);
 }
 
 // ---------------------------------------------------------------------------
@@ -466,6 +538,11 @@ export function useNip34ItemDetailLoader(
   useNip34ItemLoader(itemId, repoRelayGroup, {
     includeThread: true,
     includeAuthorNip65: curationMode === "outbox",
+    supplementalRelayGroup:
+      curationMode === "outbox"
+        ? extraRelaysForMaintainerMailboxCoverage
+        : undefined,
+    additionalThreadRelayGroups: extraSearchGroups,
   });
 
   const maintainerKey = maintainers
