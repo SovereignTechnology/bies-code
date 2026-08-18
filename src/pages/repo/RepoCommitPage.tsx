@@ -10,6 +10,7 @@ import { CIChecksPanel } from "@/components/ci/CIChecksPanel";
 import { isNonHttpUrl } from "@/lib/git-grasp-pool";
 import { IncompatibleProtocolError } from "@/components/IncompatibleProtocolError";
 import { useActiveAccount } from "applesauce-react/hooks";
+import { useRepositoryCITrust } from "@/hooks/useRepositoryCITrust";
 
 export default function RepoCommitPage() {
   const { cloneUrls, commitId, resolved, pubkey, repoId, basePath } =
@@ -35,6 +36,11 @@ export default function RepoCommitPage() {
   // CI checks (ngit-ci kinds 9841/9842) for this commit — shown between the
   // commit header and the diff.
   const ci = useCIForCommit(commitId, resolved?.repoRelayGroup);
+  const { coordinatorState, trust } = useRepositoryCITrust(
+    repo,
+    ci?.runs,
+    resolved?.repoRelayGroup,
+  );
 
   if (!commitId) {
     return (
@@ -83,6 +89,15 @@ export default function RepoCommitPage() {
                 status: ci.status,
               }}
               canRetry={isMaintainer}
+              trustContext={
+                repo
+                  ? {
+                      repo,
+                      trust,
+                      serviceControls: coordinatorState?.serviceControls,
+                    }
+                  : undefined
+              }
             />
           ) : undefined
         }

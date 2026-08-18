@@ -20,6 +20,7 @@ import RepositoriesPage from "./pages/RepositoriesPage";
 import NotificationsPage from "./pages/NotificationsPage";
 import RelayPage from "./pages/RelayPage";
 import CICoordinatorPage from "./pages/CICoordinatorPage";
+import CIProviderPage from "./pages/CIProviderPage";
 import RepoLayout from "./pages/repo/RepoLayout";
 import Settings from "./pages/Settings";
 import OutboxPage from "./pages/OutboxPage";
@@ -430,6 +431,10 @@ function AppRouter() {
             <Route
               path="/coordinator/:coordinatorIdentifier"
               element={<CICoordinatorPage />}
+            />
+            <Route
+              path="/provider/:providerIdentifier"
+              element={<CIProviderPage />}
             />
             {/* NIP-19 route for single-segment bech32 identifiers:
                 npub1…, nprofile1…, note1…, nevent1…, naddr1… */}

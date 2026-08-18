@@ -10,6 +10,7 @@ export interface CICoordinatorRelationship {
   level: CICoordinatorRelationshipLevel;
   manualRunCount: number;
   serviceRunCount: number;
+  requesterPubkeys: string[];
 }
 
 export type CIRunMaintainerLink = "manual" | "service" | undefined;
@@ -86,6 +87,7 @@ export function classifyCICoordinatorRelationships(
   confirmedMaintainers: readonly string[],
   requestedCoordinatorPubkeys: ReadonlySet<string>,
   previouslyRequestedCoordinatorPubkeys: ReadonlySet<string>,
+  serviceControls: readonly CIServiceControl[],
 ): Map<string, CICoordinatorRelationship> {
   const relationships = new Map<string, CICoordinatorRelationship>();
 
@@ -94,14 +96,46 @@ export function classifyCICoordinatorRelationships(
       level: "unassociated" as const,
       manualRunCount: 0,
       serviceRunCount: 0,
+      requesterPubkeys: [],
     };
     const link = getCIRunMaintainerLink(run, confirmedMaintainers);
     if (link) {
       current.level = "previously-requested";
       if (link === "manual") current.manualRunCount += 1;
       if (link === "service") current.serviceRunCount += 1;
+      const requesterPubkey =
+        link === "manual"
+          ? (run.workflowResult?.manualTriggerRef?.pubkey ??
+            run.pendingRun?.manualTriggerRef?.pubkey)
+          : (run.workflowResult?.serviceRequestRef?.pubkey ??
+            run.pendingRun?.serviceRequestRef?.pubkey);
+      if (
+        requesterPubkey &&
+        !current.requesterPubkeys.includes(requesterPubkey)
+      ) {
+        current.requesterPubkeys.push(requesterPubkey);
+      }
     }
     relationships.set(run.pubkey, current);
+  }
+
+  for (const control of serviceControls) {
+    if (
+      !control.isRequest ||
+      !confirmedMaintainers.includes(control.event.pubkey)
+    ) {
+      continue;
+    }
+    const current = relationships.get(control.coordinatorPubkey) ?? {
+      level: "unassociated" as const,
+      manualRunCount: 0,
+      serviceRunCount: 0,
+      requesterPubkeys: [],
+    };
+    if (!current.requesterPubkeys.includes(control.event.pubkey)) {
+      current.requesterPubkeys.push(control.event.pubkey);
+    }
+    relationships.set(control.coordinatorPubkey, current);
   }
 
   for (const pubkey of previouslyRequestedCoordinatorPubkeys) {
@@ -109,6 +143,7 @@ export function classifyCICoordinatorRelationships(
       level: "unassociated" as const,
       manualRunCount: 0,
       serviceRunCount: 0,
+      requesterPubkeys: [],
     };
     current.level = "previously-requested";
     relationships.set(pubkey, current);
@@ -119,6 +154,7 @@ export function classifyCICoordinatorRelationships(
       level: "unassociated" as const,
       manualRunCount: 0,
       serviceRunCount: 0,
+      requesterPubkeys: [],
     };
     current.level = "requested";
     relationships.set(pubkey, current);
@@ -136,6 +172,7 @@ export function getCICoordinatorRelationship(
       level: "unassociated",
       manualRunCount: 0,
       serviceRunCount: 0,
+      requesterPubkeys: [],
     }
   );
 }

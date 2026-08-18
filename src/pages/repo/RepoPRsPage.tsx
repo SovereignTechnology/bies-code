@@ -30,9 +30,17 @@ import {
   type ResolvedRepo,
   type PRItemType,
 } from "@/lib/nip34";
-import { useCIForPR } from "@/hooks/useCI";
+import { useCIForPR, useRepoCI } from "@/hooks/useCI";
 import { CIStatusIcon } from "@/components/ci/CIStatusIcon";
 import { ciStatusLabel } from "@/lib/ci";
+import { CITrustContextLabel } from "@/components/ci/CITrustContextLabel";
+import { useRepositoryCITrust } from "@/hooks/useRepositoryCITrust";
+import type { CIServiceControl } from "@/casts/CICoordinator";
+import {
+  getCIRunTrustResolution,
+  summarizeCIRunTrust,
+  type CITrustContextState,
+} from "@/lib/ciTrustContext";
 import {
   RepoItemAttributionIndicator,
   RepoItemAttributionWarning,
@@ -68,6 +76,12 @@ export default function RepoPRsPage() {
     gitPool,
     gitPoolState,
     repoState,
+  );
+  const ciRuns = useRepoCI(repo?.allCoordinates, resolved?.repoRelayGroup);
+  const { coordinatorState, trust } = useRepositoryCITrust(
+    repo,
+    ciRuns,
+    resolved?.repoRelayGroup,
   );
 
   // Filters — all multi-select; status defaults to open+draft
@@ -395,6 +409,8 @@ export default function RepoPRsPage() {
                 repoPath={basePath}
                 repoRelays={repo?.relays ?? []}
                 repo={repo}
+                ciTrust={trust}
+                ciServiceControls={coordinatorState?.serviceControls}
                 inferredParent={inferredParents?.get(pr.id)}
                 stackLayer={
                   inferredParents
@@ -431,6 +447,8 @@ export default function RepoPRsPage() {
                   repoPath={basePath}
                   repoRelays={repo.relays}
                   repo={repo}
+                  ciTrust={trust}
+                  ciServiceControls={coordinatorState?.serviceControls}
                   inferredParent={inferredParents?.get(pr.id)}
                   stackLayer={
                     inferredParents
@@ -466,6 +484,8 @@ function PRRow({
   repoPath,
   repoRelays,
   repo,
+  ciTrust,
+  ciServiceControls = [],
   inferredParent,
   stackLayer,
   hasStackBranches,
@@ -474,6 +494,8 @@ function PRRow({
   repoPath: string;
   repoRelays: string[];
   repo: ResolvedRepo | undefined;
+  ciTrust?: CITrustContextState;
+  ciServiceControls?: readonly CIServiceControl[];
   inferredParent: InferredPRParentRelation | undefined;
   stackLayer: { position: number; size: number } | undefined;
   hasStackBranches: boolean;
@@ -486,6 +508,16 @@ function PRRow({
   // only — kind:9842 results ride along with the #E comments loader and
   // kind:9841 running markers with the repo-level #a meta subscription.
   const ci = useCIForPR(pr.id);
+  const trustResolution = summarizeCIRunTrust(
+    (ci?.currentRuns ?? []).map((run) =>
+      getCIRunTrustResolution(
+        ciTrust,
+        run,
+        repo?.confirmedMaintainers ?? [],
+        ciServiceControls,
+      ),
+    ),
+  );
 
   const nevent = eventIdToNevent(pr.id, repoRelays.slice(0, 1));
   const needsAttributionCheck =
@@ -517,6 +549,12 @@ function PRRow({
               >
                 <CIStatusIcon status={ci.status} className="h-3.5 w-3.5" />
               </span>
+            )}
+            {ci && ci.currentRuns.length > 0 && (
+              <CITrustContextLabel
+                resolution={trustResolution}
+                visibility="exceptions-only"
+              />
             )}
             {(stackLayer ||
               hasStackBranches ||

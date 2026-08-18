@@ -7,8 +7,8 @@
  *
  * No trust filtering is applied — the signing runner identity is shown on
  * every row so users can judge results for themselves. When the caller
- * supplies a trust context (resolved repo plus coordinator relationships),
- * rows additionally carry the same coordinator-trust shields and
+ * supplies a trust context (resolved repo plus settled evidence),
+ * rows additionally carry the same settled trust-context labels and
  * repository-attribution warnings as the repo Actions tab.
  */
 
@@ -21,7 +21,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type { NostrEvent } from "nostr-tools";
+import { nip19, type NostrEvent } from "nostr-tools";
 import { formatDistanceToNow } from "date-fns";
 import { EMPTY } from "rxjs";
 import { catchError } from "rxjs/operators";
@@ -57,17 +57,17 @@ import {
   type CIWorkflowRun,
 } from "@/lib/ci";
 import {
-  getCICoordinatorRelationship,
-  getCIRunMaintainerLink,
-  wasCIServiceRequestedWhenRunStarted,
-  type CICoordinatorRelationship,
-} from "@/lib/ciCoordinatorRelationship";
+  getCIJobTrustResolution,
+  getCIRunTrustResolution,
+  type CITrustContextState,
+  type CITrustResolution,
+} from "@/lib/ciTrustContext";
 import { hasAcceptedRepositoryReference, type ResolvedRepo } from "@/lib/nip34";
 import { findNsitePreview, parsePublicOutputUrl } from "@/lib/ciOutputs";
 import { NsitePreviewLink } from "./PRNsitePreview";
 import type { CIServiceControl } from "@/casts/CICoordinator";
 import { RepoItemAttributionIndicator } from "@/components/RepoItemAttributionWarning";
-import { CoordinatorTrustIndicator } from "./CoordinatorTrustIndicator";
+import { CITrustContextLabel } from "./CITrustContextLabel";
 import type { CIRun } from "@/casts/CIRun";
 import type {
   CIManualTriggerRef,
@@ -84,17 +84,18 @@ import { resilientRequest } from "@/lib/resilientSubscription";
 import { CI_MANUAL_TRIGGER_KIND, CI_SERVICE_REQUEST_KIND } from "@/lib/ci";
 import { pool } from "@/services/nostr";
 import { mapEventsToStore } from "applesauce-core";
+import { getSeenRelays } from "applesauce-core/helpers";
 import { onlyEvents } from "applesauce-relay";
 import { CICoordinatorLink } from "./CICoordinatorLink";
 
 /**
  * Repository trust inputs for per-run warnings. `repo` alone enables the
- * attribution warning; relationships and service controls (assembled the same
- * way as on the repo Actions tab) additionally enable the trust shields.
+ * attribution warning; trust evidence and service controls additionally
+ * enable the shared classification labels.
  */
 export interface CIRunTrustContext {
   repo: ResolvedRepo;
-  coordinatorRelationships?: ReadonlyMap<string, CICoordinatorRelationship>;
+  trust: CITrustContextState;
   serviceControls?: readonly CIServiceControl[];
 }
 
@@ -544,8 +545,6 @@ export function CIChecksPanel({
   );
 }
 
-const EMPTY_RELATIONSHIPS: ReadonlyMap<string, CICoordinatorRelationship> =
-  new Map();
 const EMPTY_SERVICE_CONTROLS: readonly CIServiceControl[] = [];
 
 /**
@@ -567,13 +566,17 @@ function TrustAwareRunRow({
     return <CIRunRow run={run} canRetry={canRetry} defaultOpen={defaultOpen} />;
   }
 
-  const { repo, coordinatorRelationships, serviceControls } = trustContext;
-  const showCoordinatorTrust = coordinatorRelationships !== undefined;
-  const maintainerLink = getCIRunMaintainerLink(run, repo.confirmedMaintainers);
+  const { repo, trust, serviceControls } = trustContext;
   const repoCoords = workflowRunRepoCoords(run);
   const needsAttributionCheck = !hasAcceptedRepositoryReference(
     repoCoords,
     repo,
+  );
+  const trustResolution = getCIRunTrustResolution(
+    trust,
+    run,
+    repo.confirmedMaintainers,
+    serviceControls ?? EMPTY_SERVICE_CONTROLS,
   );
 
   return (
@@ -581,24 +584,15 @@ function TrustAwareRunRow({
       run={run}
       canRetry={canRetry}
       defaultOpen={defaultOpen}
-      maintainerRequestedOverride={
-        showCoordinatorTrust ? false : maintainerLink !== undefined
-      }
+      maintainerRequestedOverride={false}
       trustIndicator={
-        showCoordinatorTrust ? (
-          <CoordinatorTrustIndicator
-            maintainerLink={maintainerLink}
-            relationship={getCICoordinatorRelationship(
-              coordinatorRelationships ?? EMPTY_RELATIONSHIPS,
-              run.pubkey,
-            )}
-            serviceRequestedAtRun={wasCIServiceRequestedWhenRunStarted(
-              run,
-              serviceControls ?? EMPTY_SERVICE_CONTROLS,
-            )}
-          />
-        ) : undefined
+        <CITrustContextLabel
+          resolution={trustResolution}
+          visibility="exceptions-only"
+        />
       }
+      expandedTrustResolution={trustResolution}
+      providerTrust={trust}
       attributionIndicator={
         needsAttributionCheck ? (
           <RepoItemAttributionIndicator
@@ -620,7 +614,9 @@ export function CIRunRow({
   triggerContext,
   attributionIndicator,
   trustIndicator,
+  expandedTrustResolution,
   maintainerRequestedOverride,
+  providerTrust,
 }: {
   run: CIWorkflowRun;
   defaultOpen?: boolean;
@@ -635,8 +631,12 @@ export function CIRunRow({
   attributionIndicator?: ReactNode;
   /** Optional interactive trust indicator shown outside the row trigger. */
   trustIndicator?: ReactNode;
+  /** Full trust classification shown once the workflow is expanded. */
+  expandedTrustResolution?: CITrustResolution;
   /** Override quote-only provenance detection when the caller validated it. */
   maintainerRequestedOverride?: boolean;
+  /** Settled identity context used for provider labels inside expanded jobs. */
+  providerTrust?: CITrustContextState;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const nowSeconds = useCurrentUnixSeconds(run.status === "pending");
@@ -733,6 +733,12 @@ export function CIRunRow({
 
         <CollapsibleContent>
           <div className="space-y-2 px-3 pb-3 sm:pl-10 sm:pr-4">
+            {expandedTrustResolution && (
+              <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+                <span>Trust context</span>
+                <CITrustContextLabel resolution={expandedTrustResolution} />
+              </div>
+            )}
             <WorkflowTimingDetails
               run={run}
               nowSeconds={nowSeconds}
@@ -753,7 +759,15 @@ export function CIRunRow({
               </div>
             )}
             {run.jobs.map((job) => (
-              <CIJobRow key={job.jobId} job={job} />
+              <CIJobRow
+                key={job.jobId}
+                job={job}
+                trustResolution={
+                  providerTrust
+                    ? getCIJobTrustResolution(providerTrust, run, job)
+                    : undefined
+                }
+              />
             ))}
             {run.inProgressJobs.map((jobId) => (
               <div
@@ -818,13 +832,32 @@ function ManualRetryButton({ workflowResult }: { workflowResult: NostrEvent }) {
   );
 }
 
-function CIJobRow({ job }: { job: CIJobResult }) {
+function CIJobRow({
+  job,
+  trustResolution,
+}: {
+  job: CIJobResult;
+  trustResolution?: CITrustResolution;
+}) {
   const [showLog, setShowLog] = useState(false);
   const { result } = job;
   const hasLog = result.log.trim().length > 0;
   const duration = formatCIDuration(result.duration);
   const hasResultMetadata =
     result.outputs.length > 0 || result.omittedOutputs.length > 0;
+  const providerPath = (() => {
+    const path = `/provider/${nip19.npubEncode(result.pubkey)}`;
+    const relays = [
+      ...new Set([
+        ...(getSeenRelays(result.event) ?? []),
+        ...(result.allocationRef?.relay ? [result.allocationRef.relay] : []),
+      ]),
+    ].slice(0, 3);
+    if (relays.length === 0) return path;
+    const search = new URLSearchParams();
+    for (const relay of relays) search.append("relay", relay);
+    return `${path}?${search.toString()}`;
+  })();
 
   return (
     <div className="rounded-md border border-border/60">
@@ -866,7 +899,14 @@ function CIJobRow({ job }: { job: CIJobResult }) {
             pubkey={result.pubkey}
             avatarSize="xs"
             nameClassName="max-w-28 truncate text-[11px]"
+            profilePath={providerPath}
           />
+          {trustResolution && (
+            <CITrustContextLabel
+              resolution={trustResolution}
+              visibility="exceptions-only"
+            />
+          )}
         </span>
         {result.allocationRef?.coordinatorPubkey && (
           <span className="flex items-center gap-1.5">

@@ -28,7 +28,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { UserAvatar, UserLink, UserName } from "@/components/UserAvatar";
+import { UserAvatar, UserName } from "@/components/UserAvatar";
+import { UserGroup } from "@/components/UserGroup";
 import { RepoBadge } from "@/components/RepoBadge";
 import { cn } from "@/lib/utils";
 import { useRootEvent } from "@/hooks/useRootEvent";
@@ -200,57 +201,6 @@ function RootPurposeBadge({
   );
 }
 
-function ActivityActors({ pubkeys }: { pubkeys: string[] }) {
-  if (pubkeys.length === 0) return null;
-
-  const actor = (pubkey: string) => (
-    <UserLink
-      key={pubkey}
-      pubkey={pubkey}
-      noLink
-      className="inline-flex rounded-full bg-muted/70 py-0.5 pl-0.5 pr-2 text-foreground"
-      nameClassName="text-xs"
-    />
-  );
-
-  if (pubkeys.length === 1) return actor(pubkeys[0]);
-  if (pubkeys.length === 2) {
-    return (
-      <>
-        {actor(pubkeys[0])} <span>and</span> {actor(pubkeys[1])}
-      </>
-    );
-  }
-  if (pubkeys.length === 3) {
-    return (
-      <>
-        {actor(pubkeys[0])}, {actor(pubkeys[1])} <span>and</span>{" "}
-        {actor(pubkeys[2])}
-      </>
-    );
-  }
-
-  const avatarPubkeys = pubkeys.slice(2, 6);
-  const remainingCount = pubkeys.length - avatarPubkeys.length - 2;
-  return (
-    <>
-      {actor(pubkeys[0])}, {actor(pubkeys[1])} <span>and</span>
-      <span className="inline-flex -space-x-1.5 align-middle">
-        {avatarPubkeys.map((pubkey) => (
-          <UserAvatar
-            key={pubkey}
-            pubkey={pubkey}
-            size="sm"
-            className="h-5 w-5 border border-background text-[8px]"
-            noHoverCard
-          />
-        ))}
-      </span>
-      {remainingCount > 0 && <span>+{remainingCount}</span>}
-    </>
-  );
-}
-
 // ---------------------------------------------------------------------------
 // Thread notification row
 // ---------------------------------------------------------------------------
@@ -335,7 +285,7 @@ function ThreadNotificationRow({
       )}
       {activityActors[0] && (
         <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-          <ActivityActors pubkeys={activityActors} />
+          <UserGroup pubkeys={activityActors} />
         </span>
       )}
       <span className="whitespace-nowrap text-xs text-muted-foreground">
@@ -693,7 +643,7 @@ function SocialNotificationRow({
               <div className="flex items-center gap-1.5 flex-wrap">
                 {actorPubkeys[0] && (
                   <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-                    <ActivityActors pubkeys={actorPubkeys} />
+                    <UserGroup pubkeys={actorPubkeys} />
                   </span>
                 )}
                 <span

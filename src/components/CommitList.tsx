@@ -16,6 +16,14 @@ import type { Commit } from "@/lib/vendored/git-natural-api";
 import { CIStatusIcon } from "@/components/ci/CIStatusIcon";
 import { summarizeRuns } from "@/lib/ci";
 import type { CommitCIChecks } from "@/hooks/useCI";
+import { CITrustContextLabel } from "@/components/ci/CITrustContextLabel";
+import type { CIServiceControl } from "@/casts/CICoordinator";
+import type { ResolvedRepo } from "@/lib/nip34";
+import {
+  getCIRunTrustResolution,
+  summarizeCIRunTrust,
+  type CITrustContextState,
+} from "@/lib/ciTrustContext";
 
 // ---------------------------------------------------------------------------
 // CommitList — grouped by date
@@ -28,6 +36,9 @@ export function CommitList({
   loadingMore = false,
   onLoadMore,
   ciChecks,
+  ciTrust,
+  ciRepo,
+  ciServiceControls = [],
 }: {
   commits: Commit[];
   /** Prefix for commit links — links become `<basePath>/commit/<hash>`. */
@@ -40,6 +51,10 @@ export function CommitList({
   onLoadMore?: () => void;
   /** CI checks per commit hash (from useCIForCommits) — shows a status tick. */
   ciChecks?: Map<string, CommitCIChecks>;
+  /** Shared trust evidence for the CI signers shown in this list. */
+  ciTrust?: CITrustContextState;
+  ciRepo?: ResolvedRepo;
+  ciServiceControls?: readonly CIServiceControl[];
 }) {
   const grouped = useMemo(() => {
     const groups: { date: string; commits: Commit[] }[] = [];
@@ -96,6 +111,9 @@ export function CommitList({
                   commit={commit}
                   basePath={basePath}
                   ci={ciChecks?.get(commit.hash)}
+                  ciTrust={ciTrust}
+                  ciRepo={ciRepo}
+                  ciServiceControls={ciServiceControls}
                 />
               ))}
             </div>
@@ -126,11 +144,17 @@ export function CommitRow({
   commit,
   basePath,
   ci,
+  ciTrust,
+  ciRepo,
+  ciServiceControls = [],
 }: {
   commit: Commit;
   basePath: string;
   /** CI checks for this commit — shows a status tick next to the hash. */
   ci?: CommitCIChecks;
+  ciTrust?: CITrustContextState;
+  ciRepo?: ResolvedRepo;
+  ciServiceControls?: readonly CIServiceControl[];
 }) {
   const subject = commit.message.split("\n")[0];
   const body = commit.message.split("\n").slice(1).join("\n").trim();
@@ -138,6 +162,16 @@ export function CommitRow({
   const relativeTime = safeFormatDistanceToNow(
     commit.committer?.timestamp ?? commit.author.timestamp,
     { addSuffix: true },
+  );
+  const trustResolution = summarizeCIRunTrust(
+    (ci?.runs ?? []).map((run) =>
+      getCIRunTrustResolution(
+        ciTrust,
+        run,
+        ciRepo?.confirmedMaintainers ?? [],
+        ciServiceControls,
+      ),
+    ),
   );
 
   return (
@@ -171,16 +205,24 @@ export function CommitRow({
             </span>
           </div>
         </div>
-        <Link
-          to={`${basePath}/commit/${commit.hash}`}
-          className="shrink-0 flex items-center gap-1.5 font-mono text-xs bg-muted hover:bg-muted/70 px-2 py-1 rounded text-muted-foreground hover:text-foreground transition-colors"
-          title={ci?.status ? `CI: ${summarizeRuns(ci.runs)}` : undefined}
-        >
-          {ci?.status && (
-            <CIStatusIcon status={ci.status} className="h-3.5 w-3.5" />
+        <div className="flex shrink-0 items-center gap-2">
+          {ci && ci.runs.length > 0 && (
+            <CITrustContextLabel
+              resolution={trustResolution}
+              visibility="exceptions-only"
+            />
           )}
-          {shortHash}
-        </Link>
+          <Link
+            to={`${basePath}/commit/${commit.hash}`}
+            className="flex items-center gap-1.5 rounded bg-muted px-2 py-1 font-mono text-xs text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground"
+            title={ci?.status ? `CI: ${summarizeRuns(ci.runs)}` : undefined}
+          >
+            {ci?.status && (
+              <CIStatusIcon status={ci.status} className="h-3.5 w-3.5" />
+            )}
+            {shortHash}
+          </Link>
+        </div>
       </div>
     </div>
   );

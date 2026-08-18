@@ -1,12 +1,12 @@
 # CI Trust Context
 
-**Status:** Draft for review
+**Status:** Implemented reference
 
 **Purpose:** Define the evidence gitworkshop can use when describing trust in
 CI coordinators, compute providers, and their results
 
-**Scope:** Trust semantics and language only; UI presentation, ranking, and
-filtering are deliberately out of scope
+**Scope:** Trust semantics, canonical language, and resolution state only; page
+layout, visual treatment, ranking, and filtering are deliberately out of scope
 
 ---
 
@@ -66,6 +66,20 @@ The levels are ordered by how directly they connect a result to the repository
 or the viewer. Multiple levels may apply at the same time. The strongest level
 does not erase the supporting evidence from the others.
 
+Implementations represent these as semantic classifications rather than a
+numeric score:
+
+```text
+MaintainerDirected
+OperationallyAssociated
+SociallyCorroborated
+NoKnownContext
+```
+
+`NoKnownContext` is an absence-of-evidence state, not a fourth positive trust
+level and not a statement that the signer is unsafe. Its canonical human label
+is **No known context**.
+
 ### Level 1: Maintainer-Directed
 
 **Meaning:** A repository maintainer explicitly requested the coordinator's
@@ -95,8 +109,9 @@ Recommended language:
 - **Maintainer requested**
 - **Requested by a repository maintainer**
 - **Covered by a maintainer's service request when this run started**
-- **Previously maintainer requested**, when describing historical coordinator
-  relationships rather than a particular covered run
+- **Earlier maintainer direction**, when grouping historical coordinator
+  relationships; the evidence should distinguish manual runs from a stopped
+  standing request and identify the request signer when available
 
 This is the only level that may claim the maintainer requested CI. The other
 levels can coexist with the narrower statement **Not maintainer-requested**.
@@ -135,12 +150,17 @@ repository evidence even when multiple announcements contribute different
 servers.
 
 A coordinator or provider qualifies for repository infrastructure association
-when:
+when either:
 
-1. the signer publishes a NIP-05 identifier;
-2. the NIP-05 identifier resolves back to that signer pubkey; and
-3. the NIP-05 domain has an exact or qualified relationship to a GRASP domain
-   in the resolved repository's clone URLs.
+1. the signer publishes a NIP-05 identifier, it resolves back to that signer
+   pubkey, and its domain has an exact or qualified relationship to a GRASP
+   domain in the resolved repository's clone URLs; or
+2. the root NIP-05 identifier (`_@grasp.example`) of a GRASP domain in the
+   resolved repository's clone URLs resolves directly to the signer pubkey.
+
+The second path does not require the signer to duplicate `_@grasp.example` in
+its kind:0 profile. The repository already names the domain and the domain's
+NIP-05 document independently names its root key.
 
 For a root NIP-05 identity, a matching NIP-11 operator pubkey strengthens the
 association by showing that the GRASP server also identifies the root signer
@@ -356,6 +376,27 @@ Recommended temporal language:
 - **Was requested when this run started**
 - **Has started CI for repositories maintained by N people you follow**
 - **Current identity mapping matches**
+
+## Resolution and Coverage
+
+Trust context MUST remain unresolved while any relevant initial query is still
+loading. A client must not temporarily classify a signer as **No known
+context** merely because repository relationships, profiles, NIP-05 mappings,
+or viewer-relative social evidence have not settled yet.
+
+The resolution state is independent from the classification:
+
+```text
+loading
+settled + complete coverage
+settled + partial coverage
+```
+
+A relay failure or bounded identity-resolution failure counts as settled so a
+client cannot wait forever, but it produces partial coverage. The canonical
+partial-coverage label is **Context incomplete**. Known positive evidence may
+still be described, but missing evidence paths must not be presented as a
+final negative conclusion.
 
 ## What Trust Context Does Not Prove
 

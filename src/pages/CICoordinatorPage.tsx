@@ -17,7 +17,6 @@ import {
   KeyRound,
   RadioTower,
   Server,
-  ShieldQuestion,
 } from "lucide-react";
 import type {
   CICoordinatorAdvertisement,
@@ -26,6 +25,7 @@ import type {
 import { EventCardActions } from "@/components/EventCardActions";
 import { RepoBadge } from "@/components/RepoBadge";
 import { UserAvatar } from "@/components/UserAvatar";
+import { UserGroup } from "@/components/UserGroup";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -46,6 +46,20 @@ import { decodePubkeyIdentifier, standardizeNip05 } from "@/lib/routeUtils";
 import { cn } from "@/lib/utils";
 import { RepositoryModel } from "@/models/RepositoryModel";
 import NotFound from "@/pages/NotFound";
+import { CITrustContextLabel } from "@/components/ci/CITrustContextLabel";
+import { useCITrustContext } from "@/hooks/useCITrustContext";
+import { useCIRepositoryCoordinatorRelationship } from "@/hooks/useCIRepositoryCoordinatorRelationship";
+import {
+  useCICoordinatorViewerContext,
+  type CICoordinatorViewerContext,
+} from "@/hooks/useCICoordinatorViewerContext";
+import {
+  CITrustClassification,
+  getCITrustResolution,
+  settledCITrustResolution,
+  type CITrustEvidence,
+  type CITrustResolution,
+} from "@/lib/ciTrustContext";
 
 function humanize(value: string | undefined): string {
   return value?.replaceAll("-", " ") ?? "Not advertised";
@@ -63,12 +77,77 @@ function coordinatorRepoCoordinate(
   );
 }
 
+function coordinatorProfileTrustResolution(
+  context: CICoordinatorViewerContext,
+  coordinatorSettled: boolean,
+  coordinatorPartial: boolean,
+): CITrustResolution {
+  if (context.phase === "loading" || !coordinatorSettled) {
+    return { phase: "loading" };
+  }
+
+  const evidence: CITrustEvidence[] = [];
+  if (context.viewerRequestedRepositoryCount > 0) {
+    evidence.unshift({
+      kind: "maintainer-request",
+      classification: CITrustClassification.MaintainerDirected,
+      summary: "Requested on repositories you maintain",
+      detail: `You currently request this coordinator on ${context.viewerRequestedRepositoryCount} ${context.viewerRequestedRepositoryCount === 1 ? "repository" : "repositories"} you maintain.`,
+      scope: "current",
+    });
+  }
+  if (context.viewerGraspRepositoryCount > 0 && context.verifiedGraspDomain) {
+    evidence.push({
+      kind: "repository-domain",
+      classification: CITrustClassification.OperationallyAssociated,
+      summary: "Listed by repositories you maintain",
+      detail: `You list ${context.verifiedGraspDomain} as a GRASP service on ${context.viewerGraspRepositoryCount} ${context.viewerGraspRepositoryCount === 1 ? "repository" : "repositories"} you maintain.`,
+      scope: "current",
+    });
+  }
+  if (context.requestedByContactsRepositoryCount > 0) {
+    evidence.push({
+      kind: "contact-request",
+      classification: CITrustClassification.SociallyCorroborated,
+      summary: "Requested by people you follow",
+      detail: `${context.requestedByContacts.length} ${context.requestedByContacts.length === 1 ? "person you follow has" : "people you follow have"} signed a standing or run-specific request for this coordinator across ${context.requestedByContactsRepositoryCount} ${context.requestedByContactsRepositoryCount === 1 ? "repository" : "repositories"} they maintain.`,
+      scope: "historical",
+    });
+  }
+  if (context.activeForContactsRepositoryCount > 0) {
+    evidence.push({
+      kind: "social-activity",
+      classification: CITrustClassification.SociallyCorroborated,
+      summary: "Used near your follow graph",
+      detail: `Signed coordinator status or started CI activity was observed on ${context.activeForContactsRepositoryCount} ${context.activeForContactsRepositoryCount === 1 ? "repository" : "repositories"} maintained by ${context.activeForContacts.length} ${context.activeForContacts.length === 1 ? "person" : "people"} you follow. This does not mean they requested or endorsed it.`,
+      scope: "historical",
+    });
+  }
+
+  return settledCITrustResolution(
+    evidence,
+    context.coverage === "partial" || coordinatorPartial
+      ? "partial"
+      : "complete",
+  );
+}
+
 export default function CICoordinatorPage() {
   const { coordinatorIdentifier = "" } = useParams();
   const pubkey = decodePubkeyIdentifier(coordinatorIdentifier);
   useLoadProfile(pubkey);
   const profile = useProfile(pubkey);
   const state = useCICoordinatorProfile(pubkey);
+  const viewerContext = useCICoordinatorViewerContext(
+    pubkey ?? "",
+    state?.activeStatuses,
+    profile?.nip05,
+  );
+  const profileTrust = coordinatorProfileTrustResolution(
+    viewerContext,
+    state?.settled === true,
+    state?.partial === true,
+  );
   const now = Math.floor(Date.now() / 1000);
   const advertisementIsLive =
     state?.advertisement !== undefined && state.advertisement.expiration > now;
@@ -186,6 +265,7 @@ export default function CICoordinatorPage() {
                       ? "Live coordinator"
                       : "Offline coordinator"}
                   </Badge>
+                  <CITrustContextLabel resolution={profileTrust} />
                 </div>
                 <p className="mt-2 text-lg text-muted-foreground">
                   Signed CI service capabilities and repository activity.
@@ -193,7 +273,9 @@ export default function CICoordinatorPage() {
                 <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
                   {profile?.nip05 && (
                     <span className="font-medium text-pink-600 dark:text-pink-400">
-                      {profile.nip05}
+                      {profile.nip05.startsWith("_@")
+                        ? profile.nip05.slice(2)
+                        : profile.nip05}
                     </span>
                   )}
                   <Link
@@ -224,6 +306,7 @@ export default function CICoordinatorPage() {
             />
 
             <RepositorySection
+              coordinatorPubkey={pubkey}
               title="Acting now"
               description="Live repository status claims found on the coordinator's outboxes or targeted repository relays."
               icon={<RadioTower className="h-5 w-5 text-emerald-500" />}
@@ -237,6 +320,7 @@ export default function CICoordinatorPage() {
             />
 
             <RepositorySection
+              coordinatorPubkey={pubkey}
               title="Ready to serve"
               description="Repositories targeted by the live request-readiness list, excluding those already acting."
               icon={<GitBranch className="h-5 w-5 text-violet-500" />}
@@ -253,6 +337,7 @@ export default function CICoordinatorPage() {
             />
 
             <RepositorySection
+              coordinatorPubkey={pubkey}
               title="Previously reported"
               description="Expired acting claims found on coordinator outboxes or targeted repository relays."
               icon={<Clock3 className="h-5 w-5 text-amber-500" />}
@@ -269,23 +354,11 @@ export default function CICoordinatorPage() {
               state={state}
               nip05={profile?.nip05}
             />
-            <Card className="border-dashed">
-              <CardContent className="p-5">
-                <div className="flex items-start gap-3">
-                  <ShieldQuestion className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" />
-                  <div>
-                    <h2 className="font-semibold">
-                      Signed claims, not authority
-                    </h2>
-                    <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
-                      Advertisements, readiness lists, and repository statuses
-                      describe what this coordinator claims to offer. They do
-                      not make it a repository maintainer or a trusted runner.
-                    </p>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
+            <CoordinatorTrustContextCard
+              resolution={profileTrust}
+              context={viewerContext}
+              coordinatorSettled={state?.settled === true}
+            />
           </aside>
         </div>
       </div>
@@ -328,6 +401,171 @@ function CoordinatorStats({
         </div>
       ))}
     </dl>
+  );
+}
+
+function CoordinatorTrustContextCard({
+  resolution,
+  context,
+  coordinatorSettled,
+}: {
+  resolution: CITrustResolution;
+  context: CICoordinatorViewerContext;
+  coordinatorSettled: boolean;
+}) {
+  if (
+    resolution.phase === "loading" ||
+    context.phase === "loading" ||
+    !coordinatorSettled
+  ) {
+    return (
+      <Card className="border-dashed">
+        <CardContent
+          className="space-y-3 p-5"
+          aria-label="Loading CI trust context"
+        >
+          <div className="flex items-center gap-2">
+            <Skeleton className="h-5 w-28" />
+            <Skeleton className="h-5 w-24" />
+          </div>
+          <Skeleton className="h-4 w-full" />
+          <Skeleton className="h-4 w-5/6" />
+          <Skeleton className="h-12 w-full" />
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const hasRepositoryEvidence =
+    context.viewerRequestedRepositoryCount > 0 ||
+    context.viewerActiveRepositoryCount > 0 ||
+    context.viewerGraspRepositoryCount > 0 ||
+    context.requestedByContacts.length > 0 ||
+    context.activeForContacts.length > 0;
+
+  return (
+    <Card className="border-dashed">
+      <CardContent className="p-5">
+        <div className="flex flex-wrap items-center gap-2">
+          <h2 className="font-semibold">CI trust context</h2>
+          <CITrustContextLabel resolution={resolution} />
+        </div>
+
+        {!context.signedIn ? (
+          <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
+            Log in to compare this coordinator with repositories you maintain
+            and with signed requests from people you follow.
+          </p>
+        ) : hasRepositoryEvidence ? (
+          <div className="mt-4 space-y-3 text-sm">
+            {(context.viewerRequestedRepositoryCount > 0 ||
+              context.viewerActiveRepositoryCount > 0 ||
+              context.viewerGraspRepositoryCount > 0) && (
+              <ul className="space-y-2">
+                {context.viewerRequestedRepositoryCount > 0 && (
+                  <li className="flex items-start gap-2">
+                    <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                    <span>
+                      Requested on{" "}
+                      <strong className="font-semibold text-foreground">
+                        {context.viewerRequestedRepositoryCount}
+                      </strong>{" "}
+                      of your repositories.
+                    </span>
+                  </li>
+                )}
+                {context.viewerActiveRepositoryCount > 0 && (
+                  <li className="flex items-start gap-2">
+                    <RadioTower className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                    <span>
+                      Running against{" "}
+                      <strong className="font-semibold text-foreground">
+                        {context.viewerActiveRepositoryCount}
+                      </strong>{" "}
+                      of your repositories.
+                    </span>
+                  </li>
+                )}
+                {context.viewerGraspRepositoryCount > 0 &&
+                  context.verifiedGraspDomain && (
+                    <li className="flex items-start gap-2">
+                      <Server className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                      <span>
+                        You list{" "}
+                        <span className="font-medium text-foreground">
+                          {context.verifiedGraspDomain}
+                        </span>{" "}
+                        on{" "}
+                        <strong className="font-semibold text-foreground">
+                          {context.viewerGraspRepositoryCount}
+                        </strong>{" "}
+                        {context.viewerGraspRepositoryCount === 1
+                          ? "repository"
+                          : "repositories"}
+                        .
+                      </span>
+                    </li>
+                  )}
+              </ul>
+            )}
+
+            {context.requestedByContacts.length > 0 && (
+              <p className="border-t border-border/60 pt-3 leading-relaxed text-muted-foreground">
+                Requested by{" "}
+                <UserGroup
+                  pubkeys={context.requestedByContacts.map(
+                    ({ pubkey }) => pubkey,
+                  )}
+                />{" "}
+                on{" "}
+                <strong className="font-semibold text-foreground">
+                  {context.requestedByContactsRepositoryCount}
+                </strong>{" "}
+                {context.requestedByContactsRepositoryCount === 1
+                  ? "repository"
+                  : "repositories"}
+                .
+              </p>
+            )}
+
+            {context.activeForContacts.length > 0 && (
+              <p className="border-t border-border/60 pt-3 leading-relaxed text-muted-foreground">
+                Used by{" "}
+                <UserGroup
+                  pubkeys={context.activeForContacts.map(
+                    ({ pubkey }) => pubkey,
+                  )}
+                />{" "}
+                on{" "}
+                <strong className="font-semibold text-foreground">
+                  {context.activeForContactsRepositoryCount}
+                </strong>{" "}
+                {context.activeForContactsRepositoryCount === 1
+                  ? "repository"
+                  : "repositories"}
+                .
+              </p>
+            )}
+          </div>
+        ) : (
+          <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
+            No repository-scoped use was found among repositories you maintain
+            or those maintained by people you follow.
+          </p>
+        )}
+
+        {context.coverage === "partial" && (
+          <p className="mt-3 border-t border-border/60 pt-3 text-xs leading-relaxed text-muted-foreground">
+            Some relay or identity queries could not be completed. Known
+            evidence is shown, but this context may be incomplete.
+          </p>
+        )}
+        <p className="mt-3 border-t border-border/60 pt-3 text-xs leading-relaxed text-muted-foreground">
+          Requested means signed maintainer direction. Used means signed
+          coordinator activity; it is not itself a request or endorsement.
+        </p>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -451,6 +689,7 @@ function CoordinatorAdvertisementCard({
 }
 
 function RepositorySection({
+  coordinatorPubkey,
   title,
   description,
   icon,
@@ -460,6 +699,7 @@ function RepositorySection({
   loading,
   emptyMessage,
 }: {
+  coordinatorPubkey: string;
   title: string;
   description: string;
   icon: ReactNode;
@@ -514,6 +754,7 @@ function RepositorySection({
           {entries.map(({ coordinate, status }) => (
             <CoordinatorRepositoryRow
               key={`${coordinate}:${status?.event.id ?? "target"}`}
+              coordinatorPubkey={coordinatorPubkey}
               coordinate={coordinate}
               status={status}
               historical={historical}
@@ -532,10 +773,12 @@ function RepositorySection({
 }
 
 function CoordinatorRepositoryRow({
+  coordinatorPubkey,
   coordinate,
   status,
   historical,
 }: {
+  coordinatorPubkey: string;
   coordinate: string;
   status?: CIRepositoryStatus;
   historical: boolean;
@@ -551,6 +794,21 @@ function CoordinatorRepositoryRow({
     ) as unknown as Observable<ResolvedRepo | undefined>;
   }, [parsed?.pubkey, parsed?.identifier, store]);
   const repoPath = useDefaultRepoCoordPath(coordinate);
+  const relationshipState = useCIRepositoryCoordinatorRelationship(
+    repo,
+    coordinatorPubkey,
+  );
+  const relationships = useMemo(
+    () =>
+      new Map([[coordinatorPubkey, relationshipState.relationship] as const]),
+    [coordinatorPubkey, relationshipState.relationship],
+  );
+  const trust = useCITrustContext({
+    repo,
+    coordinatorRelationships: relationships,
+    repositoryRelationshipState: relationshipState,
+    extraIdentities: [coordinatorPubkey],
+  });
 
   return (
     <Card className="transition-colors hover:border-pink-500/25">
@@ -585,6 +843,13 @@ function CoordinatorRepositoryRow({
                     : "Acting"
                   : "Targeted"}
               </Badge>
+              <CITrustContextLabel
+                resolution={
+                  repo
+                    ? getCITrustResolution(trust, coordinatorPubkey)
+                    : { phase: "loading" }
+                }
+              />
             </div>
             {repo?.description && (
               <p className="mt-2 line-clamp-2 text-sm leading-relaxed text-muted-foreground">

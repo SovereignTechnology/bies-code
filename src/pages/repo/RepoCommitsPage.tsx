@@ -23,6 +23,7 @@ import { AlertCircle, GitCommit, Loader2 } from "lucide-react";
 import { safeFormatDistanceToNow } from "@/lib/utils";
 import { isNonHttpUrl } from "@/lib/git-grasp-pool";
 import { IncompatibleProtocolError } from "@/components/IncompatibleProtocolError";
+import { useRepositoryCITrust } from "@/hooks/useRepositoryCITrust";
 
 export default function RepoCommitsPage() {
   const {
@@ -97,6 +98,16 @@ export default function RepoCommitsPage() {
     [history.commits],
   );
   const ciChecks = useCIForCommits(commitIds, resolved?.repoRelayGroup);
+  const ciRuns = useMemo(
+    () =>
+      ciChecks ? [...ciChecks.values()].flatMap((checks) => checks.runs) : [],
+    [ciChecks],
+  );
+  const { coordinatorState, trust } = useRepositoryCITrust(
+    repo,
+    ciRuns,
+    resolved?.repoRelayGroup,
+  );
 
   useSeoMeta({
     title: repo
@@ -261,6 +272,9 @@ export default function RepoCommitsPage() {
           loadingMore={history.loadingMore}
           onLoadMore={history.loadMore}
           ciChecks={ciChecks}
+          ciTrust={trust}
+          ciRepo={repo}
+          ciServiceControls={coordinatorState?.serviceControls}
         />
       )}
 

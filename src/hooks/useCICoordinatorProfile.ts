@@ -3,7 +3,7 @@ import { mapEventsToStore } from "applesauce-core";
 import { getSeenRelays, type Filter } from "applesauce-core/helpers";
 import { onlyEvents } from "applesauce-relay";
 import type { NostrEvent } from "nostr-tools";
-import { combineLatest, EMPTY, timer, type Observable } from "rxjs";
+import { combineLatest, EMPTY, of, timer, type Observable } from "rxjs";
 import { catchError, map } from "rxjs/operators";
 import {
   CICoordinatorAdvertisement,
@@ -22,6 +22,7 @@ import { parseRepoCoordinate, REPO_KIND, type ResolvedRepo } from "@/lib/nip34";
 import { normalizeUrl } from "@/lib/url";
 import { RepositoryListModel } from "@/models/RepositoryListModel";
 import { resilientSubscription } from "@/lib/resilientSubscription";
+import { loadRelayQueryUntilSettled } from "@/lib/relayQuerySettlement";
 import { pool } from "@/services/nostr";
 import { gitIndexRelays, lookupRelays } from "@/services/settings";
 import { use$ } from "@/hooks/use$";
@@ -38,6 +39,8 @@ export interface CICoordinatorProfileState {
   inboxes: string[];
   hasRelayList: boolean;
   targetedRepositories: ResolvedRepo[] | undefined;
+  settled: boolean;
+  partial: boolean;
 }
 
 function latestByCreatedAt<T extends { event: NostrEvent }>(
@@ -51,10 +54,16 @@ function latestByCreatedAt<T extends { event: NostrEvent }>(
   }, undefined);
 }
 
+export interface CICoordinatorAdvertisementState {
+  advertisement: CICoordinatorAdvertisement | undefined;
+  settled: boolean;
+  partial: boolean;
+}
+
 /** Discover whether an identity has published a coordinator advertisement. */
 export function useCICoordinatorAdvertisement(
   pubkey: string | undefined,
-): CICoordinatorAdvertisement | undefined {
+): CICoordinatorAdvertisementState {
   const store = useEventStore();
   const castStore = store as unknown as CastRefEventStore;
   const indexRelays = use$(() => gitIndexRelays, []) ?? [];
@@ -62,21 +71,24 @@ export function useCICoordinatorAdvertisement(
   const relays = [...new Set([...indexRelays, ...lookup])];
   const relayKey = relays.join(",");
 
-  use$(() => {
-    if (!pubkey || relays.length === 0) return undefined;
-    return resilientSubscription(pool, relays, [
-      {
-        kinds: [CI_COORDINATOR_ADVERTISEMENT_KIND],
-        authors: [pubkey],
-      } as Filter,
-    ]).pipe(
-      onlyEvents(),
-      mapEventsToStore(store),
-      catchError(() => EMPTY),
+  const query = use$(() => {
+    if (!pubkey) {
+      return of({ settled: true, relayCount: 0, failedRelayCount: 0 });
+    }
+    return loadRelayQueryUntilSettled(
+      pool,
+      relays,
+      [
+        {
+          kinds: [CI_COORDINATOR_ADVERTISEMENT_KIND],
+          authors: [pubkey],
+        } as Filter,
+      ],
+      store,
     );
   }, [pubkey, relayKey, store]);
 
-  return use$(() => {
+  const advertisement = use$(() => {
     if (!pubkey) return undefined;
     return store
       .timeline([
@@ -97,6 +109,14 @@ export function useCICoordinatorAdvertisement(
         ),
       );
   }, [pubkey, store]);
+
+  return {
+    advertisement,
+    settled: query?.settled === true,
+    partial:
+      (query?.failedRelayCount ?? 0) > 0 ||
+      (query?.settled === true && (query.relayCount ?? 0) === 0),
+  };
 }
 
 function wasSeenOnOutbox(event: NostrEvent, outboxes: readonly string[]) {
@@ -144,21 +164,24 @@ export function useCICoordinatorProfile(
   const discoveryRelays = [...new Set([...indexRelays, ...lookup])];
   const discoveryRelayKey = discoveryRelays.join(",");
 
-  use$(() => {
-    if (!pubkey || discoveryRelays.length === 0) return undefined;
-    return resilientSubscription(pool, discoveryRelays, [
-      {
-        kinds: [
-          10002,
-          CI_COORDINATOR_ADVERTISEMENT_KIND,
-          CI_REQUEST_READINESS_KIND,
-        ],
-        authors: [pubkey],
-      } as Filter,
-    ]).pipe(
-      onlyEvents(),
-      mapEventsToStore(store),
-      catchError(() => EMPTY),
+  const discoveryQuery = use$(() => {
+    if (!pubkey) {
+      return of({ settled: true, relayCount: 0, failedRelayCount: 0 });
+    }
+    return loadRelayQueryUntilSettled(
+      pool,
+      discoveryRelays,
+      [
+        {
+          kinds: [
+            10002,
+            CI_COORDINATOR_ADVERTISEMENT_KIND,
+            CI_REQUEST_READINESS_KIND,
+          ],
+          authors: [pubkey],
+        } as Filter,
+      ],
+      store,
     );
   }, [pubkey, discoveryRelayKey, store]);
 
@@ -170,9 +193,17 @@ export function useCICoordinatorProfile(
   const inboxes = mailboxes?.inboxes ?? [];
   const outboxKey = [...outboxes].sort().join(",");
 
-  use$(() => {
-    if (!pubkey || outboxes.length === 0) return undefined;
-    return resilientSubscription(
+  const outboxQuery = use$(() => {
+    if (!pubkey) {
+      return of({ settled: true, relayCount: 0, failedRelayCount: 0 });
+    }
+    if (!discoveryQuery?.settled) {
+      return of({ settled: false, relayCount: 0, failedRelayCount: 0 });
+    }
+    if (outboxes.length === 0) {
+      return of({ settled: true, relayCount: 0, failedRelayCount: 0 });
+    }
+    return loadRelayQueryUntilSettled(
       pool,
       outboxes,
       [
@@ -185,13 +216,10 @@ export function useCICoordinatorProfile(
           authors: [pubkey],
         } as Filter,
       ],
+      store,
       { paginate: true },
-    ).pipe(
-      onlyEvents(),
-      mapEventsToStore(store),
-      catchError(() => EMPTY),
     );
-  }, [pubkey, outboxKey, store]);
+  }, [pubkey, discoveryQuery?.settled, outboxKey, store]);
 
   const discoveryState = use$(() => {
     if (!pubkey) return undefined;
@@ -252,17 +280,24 @@ export function useCICoordinatorProfile(
   ]
     .sort()
     .join(",")}`;
+  const hasReadinessTargets =
+    readinessPubkeys.length > 0 || readinessCoordinates.length > 0;
 
-  use$(() => {
-    if (
-      !pubkey ||
-      repositoryRelays.length === 0 ||
-      repositoryCoordinates.length === 0
-    ) {
-      return undefined;
+  const repositoryStatusQuery = use$(() => {
+    if (!pubkey) {
+      return of({ settled: true, relayCount: 0, failedRelayCount: 0 });
+    }
+    if (!discoveryQuery?.settled) {
+      return of({ settled: false, relayCount: 0, failedRelayCount: 0 });
+    }
+    if (hasReadinessTargets && targetedRepositories === undefined) {
+      return of({ settled: false, relayCount: 0, failedRelayCount: 0 });
+    }
+    if (repositoryRelays.length === 0 || repositoryCoordinates.length === 0) {
+      return of({ settled: true, relayCount: 0, failedRelayCount: 0 });
     }
 
-    return resilientSubscription(
+    return loadRelayQueryUntilSettled(
       pool,
       repositoryRelays,
       [
@@ -272,13 +307,17 @@ export function useCICoordinatorProfile(
           "#a": repositoryCoordinates,
         } as Filter,
       ],
+      store,
       { paginate: true },
-    ).pipe(
-      onlyEvents(),
-      mapEventsToStore(store),
-      catchError(() => EMPTY),
     );
-  }, [pubkey, repositoryStatusQueryKey, store]);
+  }, [
+    pubkey,
+    discoveryQuery?.settled,
+    hasReadinessTargets,
+    repositoryStatusQueryKey,
+    targetedRepositories !== undefined,
+    store,
+  ]);
 
   const state = use$(() => {
     if (!pubkey || !discoveryState) return undefined;
@@ -329,12 +368,22 @@ export function useCICoordinatorProfile(
   ]);
 
   if (!state) return undefined;
+  const settled =
+    discoveryQuery?.settled === true &&
+    outboxQuery?.settled === true &&
+    repositoryStatusQuery?.settled === true;
   return {
     ...state,
     outboxes,
     inboxes,
     hasRelayList: mailboxes !== undefined,
     targetedRepositories,
+    settled,
+    partial:
+      (discoveryQuery?.failedRelayCount ?? 0) > 0 ||
+      (outboxQuery?.failedRelayCount ?? 0) > 0 ||
+      (repositoryStatusQuery?.failedRelayCount ?? 0) > 0 ||
+      (settled && (discoveryQuery?.relayCount ?? 0) === 0),
   };
 }
 

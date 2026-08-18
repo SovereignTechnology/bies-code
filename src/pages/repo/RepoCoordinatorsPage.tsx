@@ -14,17 +14,12 @@ import { RepoActionsList } from "@/components/ci/RepoActionsList";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useCICoordinators } from "@/hooks/useCICoordinators";
 import { useRepoCI } from "@/hooks/useCI";
-import {
-  classifyCICoordinatorRelationships,
-  getCICoordinatorRelationship,
-} from "@/lib/ciCoordinatorRelationship";
+import { getCICoordinatorRelationship } from "@/lib/ciCoordinatorRelationship";
+import { useRepositoryCITrust } from "@/hooks/useRepositoryCITrust";
 import { decodePubkeyIdentifier } from "@/lib/routeUtils";
 import NotFound from "@/pages/NotFound";
 import { useRepoContext } from "./RepoContext";
-
-const EMPTY_PUBKEYS: ReadonlySet<string> = new Set();
 
 export default function RepoCoordinatorsPage({
   coordinatorIdentifier,
@@ -37,33 +32,13 @@ export default function RepoCoordinatorsPage({
   const coordinatorPubkey = coordinatorIdentifier
     ? decodePubkeyIdentifier(coordinatorIdentifier)
     : undefined;
-  const coordinatorState = useCICoordinators(
-    repo?.allCoordinates,
-    repo?.selectedCoordinate,
-    repo?.confirmedMaintainers,
-    resolved?.repoRelayGroup,
-  );
-  const coordinators = coordinatorState?.coordinators;
   const runs = useRepoCI(repo?.allCoordinates, resolved?.repoRelayGroup);
-  const requestedCoordinatorPubkeys =
-    coordinatorState?.currentlyRequestedCoordinatorPubkeys ?? EMPTY_PUBKEYS;
-  const previouslyRequestedCoordinatorPubkeys =
-    coordinatorState?.previouslyRequestedCoordinatorPubkeys ?? EMPTY_PUBKEYS;
-  const coordinatorRelationships = useMemo(
-    () =>
-      classifyCICoordinatorRelationships(
-        runs ?? [],
-        repo?.confirmedMaintainers ?? [],
-        requestedCoordinatorPubkeys,
-        previouslyRequestedCoordinatorPubkeys,
-      ),
-    [
-      previouslyRequestedCoordinatorPubkeys,
-      repo?.confirmedMaintainers,
-      requestedCoordinatorPubkeys,
-      runs,
-    ],
-  );
+  const {
+    coordinatorState,
+    relationships: coordinatorRelationships,
+    trust,
+  } = useRepositoryCITrust(repo, runs, resolved?.repoRelayGroup);
+  const coordinators = coordinatorState?.coordinators;
   const coordinator = coordinators?.find(
     ({ pubkey }) => pubkey === coordinatorPubkey,
   );
@@ -126,6 +101,7 @@ export default function RepoCoordinatorsPage({
           runs={runs}
           basePath={basePath}
           relationships={coordinatorRelationships}
+          trust={trust}
         />
       </div>
     );
@@ -183,6 +159,7 @@ export default function RepoCoordinatorsPage({
             isMaintainer={isMaintainer}
             relationship={coordinatorRelationship}
             controls={coordinatorControls ?? []}
+            trust={trust}
           />
         ) : (
           <Card className="border-amber-500/30 bg-amber-500/[0.06]">
@@ -207,6 +184,7 @@ export default function RepoCoordinatorsPage({
                   executionPolicy={undefined}
                   relationship={coordinatorRelationship}
                   availability={undefined}
+                  trust={trust}
                 />
               )}
             </CardContent>
@@ -223,6 +201,7 @@ export default function RepoCoordinatorsPage({
         coordinatorRelationships={coordinatorRelationships}
         serviceControls={coordinatorState?.serviceControls}
         showCoordinatorTrust
+        trust={trust}
       />
     </div>
   );

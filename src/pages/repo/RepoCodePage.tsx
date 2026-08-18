@@ -64,6 +64,12 @@ import { IncompatibleProtocolError } from "@/components/IncompatibleProtocolErro
 import { useCIForCommit } from "@/hooks/useCI";
 import { CIStatusIcon } from "@/components/ci/CIStatusIcon";
 import { summarizeRuns } from "@/lib/ci";
+import { CITrustContextLabel } from "@/components/ci/CITrustContextLabel";
+import { useRepositoryCITrust } from "@/hooks/useRepositoryCITrust";
+import {
+  getCIRunTrustResolution,
+  summarizeCIRunTrust,
+} from "@/lib/ciTrustContext";
 
 const MarkdownContent = lazy(() => import("@/components/MarkdownContent"));
 import { CodeBlock } from "@/components/CodeBlock";
@@ -1249,6 +1255,21 @@ function CodeBar({
     commitHash ?? undefined,
     resolved?.repoRelayGroup,
   );
+  const { coordinatorState, trust } = useRepositoryCITrust(
+    resolved?.repo,
+    headCommitCI?.runs,
+    resolved?.repoRelayGroup,
+  );
+  const headCommitTrust = summarizeCIRunTrust(
+    (headCommitCI?.runs ?? []).map((run) =>
+      getCIRunTrustResolution(
+        trust,
+        run,
+        resolved?.repo.confirmedMaintainers ?? [],
+        coordinatorState?.serviceControls ?? [],
+      ),
+    ),
+  );
 
   // Compute the full ref name for the pool's refStatus lookup
   const currentRefObj = refs.find((r) => r.name === currentRef);
@@ -1396,6 +1417,12 @@ function CodeBar({
                   className="h-3.5 w-3.5"
                 />
               </span>
+            )}
+            {headCommitCI && headCommitCI.runs.length > 0 && (
+              <CITrustContextLabel
+                resolution={headCommitTrust}
+                visibility="exceptions-only"
+              />
             )}
             <code className="text-xs font-mono bg-muted px-1.5 py-0.5 rounded text-muted-foreground shrink-0">
               {commitHash?.slice(0, 8)}

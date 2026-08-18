@@ -10,6 +10,11 @@ import {
   type CIRunMaintainerLink,
   wasCIServiceRequestedWhenRunStarted,
 } from "@/lib/ciCoordinatorRelationship";
+import {
+  getCIRunTrustResolution,
+  type CITrustContextState,
+  type CITrustResolution,
+} from "@/lib/ciTrustContext";
 import type { CIServiceControl } from "@/casts/CICoordinator";
 import type { ResolvedRepo } from "@/lib/nip34";
 import { hasAcceptedRepositoryReference } from "@/lib/nip34";
@@ -32,7 +37,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { CIRunRow, CITriggerRefBadge } from "./CIChecksPanel";
-import { CoordinatorTrustIndicator } from "./CoordinatorTrustIndicator";
+import { CITrustContextLabel } from "./CITrustContextLabel";
 
 const ALL = "__all__";
 const RELATED = "__related__";
@@ -57,6 +62,7 @@ interface RepoActionsListProps {
   >;
   adaptiveCoordinatorFilter?: boolean;
   showCoordinatorTrust?: boolean;
+  trust?: CITrustContextState;
 }
 
 export function RepoActionsList({
@@ -70,6 +76,7 @@ export function RepoActionsList({
   coordinatorAvailability,
   adaptiveCoordinatorFilter = false,
   showCoordinatorTrust = false,
+  trust,
 }: RepoActionsListProps) {
   const [coordinatorFilter, setCoordinatorFilter] = useState<string>(ALL);
   const [workflowFilter, setWorkflowFilter] = useState<string>(ALL);
@@ -91,12 +98,21 @@ export function RepoActionsList({
           coordinatorRelationships,
           run.pubkey,
         ),
+        trustResolution: trust
+          ? getCIRunTrustResolution(
+              trust,
+              run,
+              repo?.confirmedMaintainers ?? [],
+              serviceControls,
+            )
+          : undefined,
       })),
     [
       coordinatorRelationships,
       repo?.confirmedMaintainers,
       runs,
       serviceControls,
+      trust,
     ],
   );
   const coordinatorOptions = useMemo(() => {
@@ -440,24 +456,19 @@ export function RepoActionsList({
         <div className="overflow-hidden rounded-lg border border-border">
           <ul className="divide-y divide-border">
             {visibleAcceptedRuns.map(
-              ({
-                run,
-                maintainerLink,
-                relationship,
-                serviceRequestedAtRun,
-              }) => (
+              ({ run, maintainerLink, trustResolution }) => (
                 <RepoActionRunRow
                   key={run.key}
                   run={run}
                   maintainerLink={maintainerLink}
-                  relationship={relationship}
-                  serviceRequestedAtRun={serviceRequestedAtRun}
+                  trustResolution={trustResolution}
                   showCoordinatorTrust={
                     showCoordinatorTrust || adaptiveCoordinatorFilter
                   }
                   repo={repo}
                   basePath={basePath}
                   canRetry={canRetry}
+                  trust={trust}
                 />
               ),
             )}
@@ -478,24 +489,19 @@ export function RepoActionsList({
           <div className="overflow-hidden rounded-b-lg border border-t-0 border-amber-500/40">
             <ul className="divide-y divide-border">
               {visibleUnconfirmedRuns.map(
-                ({
-                  run,
-                  maintainerLink,
-                  relationship,
-                  serviceRequestedAtRun,
-                }) => (
+                ({ run, maintainerLink, trustResolution }) => (
                   <RepoActionRunRow
                     key={run.key}
                     run={run}
                     maintainerLink={maintainerLink}
-                    relationship={relationship}
-                    serviceRequestedAtRun={serviceRequestedAtRun}
+                    trustResolution={trustResolution}
                     showCoordinatorTrust={
                       showCoordinatorTrust || adaptiveCoordinatorFilter
                     }
                     repo={repo}
                     basePath={basePath}
                     canRetry={canRetry}
+                    trust={trust}
                   />
                 ),
               )}
@@ -525,30 +531,29 @@ function coordinatorAvailabilityLabel(
 function RepoActionRunRow({
   run,
   maintainerLink,
-  relationship,
-  serviceRequestedAtRun,
+  trustResolution,
   showCoordinatorTrust,
   repo,
   basePath,
   canRetry,
+  trust,
 }: {
   run: CIWorkflowRun;
   maintainerLink: CIRunMaintainerLink;
-  relationship: CICoordinatorRelationship;
-  serviceRequestedAtRun: boolean | undefined;
+  trustResolution: CITrustResolution | undefined;
   showCoordinatorTrust: boolean;
   repo: ResolvedRepo | undefined;
   basePath: string;
   canRetry: boolean;
+  trust: CITrustContextState | undefined;
 }) {
   const repoCoords = workflowRunRepoCoords(run);
   const needsAttributionCheck =
     repo !== undefined && !hasAcceptedRepositoryReference(repoCoords, repo);
-  const trustIndicator = showCoordinatorTrust ? (
-    <CoordinatorTrustIndicator
-      maintainerLink={maintainerLink}
-      relationship={relationship}
-      serviceRequestedAtRun={serviceRequestedAtRun}
+  const trustIndicator = trustResolution ? (
+    <CITrustContextLabel
+      resolution={trustResolution}
+      visibility="exceptions-only"
     />
   ) : undefined;
 
@@ -560,6 +565,8 @@ function RepoActionRunRow({
         showCoordinatorTrust ? false : maintainerLink !== undefined
       }
       trustIndicator={trustIndicator}
+      expandedTrustResolution={trustResolution}
+      providerTrust={trust}
       attributionIndicator={
         needsAttributionCheck ? (
           <RepoItemAttributionIndicator
