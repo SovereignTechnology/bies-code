@@ -47,8 +47,10 @@ export class CIManualTriggerFactory extends EventFactory<
     const isPullRequestRun = workflowResult.tags.some(([name]) => name === "E");
     const contextTags = workflowResult.tags
       .filter(
-        ([name]) =>
-          RETRY_CONTEXT_TAGS.has(name) && (name !== "p" || isPullRequestRun),
+        ([name, value]) =>
+          RETRY_CONTEXT_TAGS.has(name) &&
+          (name !== "p" || isPullRequestRun) &&
+          (name !== "r" || value?.startsWith("refs/")),
       )
       .map((tag) => [...tag]);
 
