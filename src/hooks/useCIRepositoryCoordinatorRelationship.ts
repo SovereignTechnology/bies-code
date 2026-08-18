@@ -114,6 +114,13 @@ export function useCIRepositoryCoordinatorRelationship(
           : "unassociated",
       manualRunCount: 0,
       serviceRunCount: 0,
+      requesterPubkeys: [
+        ...new Set(
+          matching
+            .filter((control) => control.isRequest)
+            .map((control) => control.event.pubkey),
+        ),
+      ],
     };
   }, [controls, coordinatorPubkey]);
 

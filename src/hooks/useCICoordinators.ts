@@ -276,6 +276,7 @@ export function useCICoordinators(
           for (const [pubkey, advertisement] of advertisementByPubkey) {
             const repositoryStatus = statusByPubkey.get(pubkey);
             const ready = readinessByPubkey.get(pubkey);
+            if (!repositoryStatus && !ready) continue;
             const control = controlsByCoordinator.get(pubkey);
             result.push({
               pubkey,

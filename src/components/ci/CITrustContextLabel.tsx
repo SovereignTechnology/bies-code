@@ -5,6 +5,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
+import { UserGroup } from "@/components/UserGroup";
 import {
   Tooltip,
   TooltipContent,
@@ -142,6 +143,11 @@ function CITrustExplanation({
               <p className="mt-0.5 leading-relaxed text-muted-foreground">
                 {evidence.detail}
               </p>
+              {!!evidence.authors?.length && (
+                <p className="mt-1 leading-relaxed text-muted-foreground">
+                  Signed by <UserGroup pubkeys={evidence.authors} />
+                </p>
+              )}
             </li>
           ))}
         </ul>

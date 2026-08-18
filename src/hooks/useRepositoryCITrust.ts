@@ -27,6 +27,7 @@ export function useRepositoryCITrust(
         coordinatorState?.currentlyRequestedCoordinatorPubkeys ?? EMPTY_PUBKEYS,
         coordinatorState?.previouslyRequestedCoordinatorPubkeys ??
           EMPTY_PUBKEYS,
+        coordinatorState?.serviceControls ?? [],
       ),
     [coordinatorState, repo?.confirmedMaintainers, runs],
   );

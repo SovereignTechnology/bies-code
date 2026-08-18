@@ -29,6 +29,8 @@ export interface CITrustEvidence {
   >;
   summary: string;
   detail: string;
+  /** Pubkeys that signed the request or activity supporting this evidence. */
+  authors?: readonly string[];
   /** Current standing maintainer requests do not retroactively cover old runs. */
   scope: "current" | "historical" | "run";
 }
@@ -137,21 +139,29 @@ export function getCIRunTrustResolution(
   );
 
   if (maintainerLink === "manual") {
+    const requester =
+      run.workflowResult?.manualTriggerRef?.pubkey ??
+      run.pendingRun?.manualTriggerRef?.pubkey;
     evidence.unshift({
       kind: "maintainer-request",
       classification: CITrustClassification.MaintainerDirected,
       summary: "Requested by a maintainer",
       detail:
         "A confirmed repository maintainer manually requested this workflow run.",
+      authors: requester ? [requester] : undefined,
       scope: "run",
     });
   } else if (maintainerLink === "service" || serviceRequestedAtRun === true) {
+    const requester =
+      run.workflowResult?.serviceRequestRef?.pubkey ??
+      run.pendingRun?.serviceRequestRef?.pubkey;
     evidence.unshift({
       kind: "maintainer-request",
       classification: CITrustClassification.MaintainerDirected,
       summary: "Covered by a maintainer request",
       detail:
         "A confirmed repository maintainer's service request was active when this workflow run started.",
+      authors: requester ? [requester] : undefined,
       scope: "run",
     });
   }

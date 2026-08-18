@@ -52,9 +52,15 @@ import { mapEventsToStore } from "applesauce-core";
 import { onlyEvents } from "applesauce-relay";
 import { relayGroupUrls$ } from "@/models/RepositoryRelayGroup";
 import { gitIndexRelays } from "@/services/settings";
-import { isValidCICoordinatorAdvertisement } from "@/casts/CICoordinator";
+import {
+  CICoordinatorAdvertisement,
+  CIRequestReadiness,
+  isValidCICoordinatorAdvertisement,
+  isValidCIRequestReadiness,
+} from "@/casts/CICoordinator";
 import {
   CI_COORDINATOR_ADVERTISEMENT_KIND,
+  CI_REQUEST_READINESS_KIND,
   CI_RUN_KIND,
   CI_RESULT_KIND,
   CI_JOB_RESULT_KIND,
@@ -313,7 +319,6 @@ export function useRepoCI(
 
   // Stable key — re-subscribes only when the coordinate set actually changes
   const coordsKey = repoCoords ? [...repoCoords].sort().join(",") : "";
-
   // Reactive relay list — re-fires the subscription when the group gains relays
   const relays =
     use$(() => relayGroupUrls$(repoRelayGroup), [repoRelayGroup]) ?? [];
@@ -382,6 +387,15 @@ export function useRepoHasCI(
   const store = useEventStore();
 
   const coordsKey = repoCoords ? [...repoCoords].sort().join(",") : "";
+  const repoMaintainers = [
+    ...new Set(
+      (repoCoords ?? []).flatMap((coordinate) => {
+        const pubkey = coordinate.split(":")[1];
+        return /^[0-9a-f]{64}$/.test(pubkey ?? "") ? [pubkey] : [];
+      }),
+    ),
+  ];
+  const maintainerKey = [...repoMaintainers].sort().join(",");
 
   const relays =
     use$(() => relayGroupUrls$(repoRelayGroup), [repoRelayGroup]) ?? [];
@@ -406,19 +420,32 @@ export function useRepoHasCI(
     );
   }, [coordsKey, relayKey, store]);
 
-  // A live coordinator makes the Actions surface useful before a repository's
-  // first run. Keep this subscription live because advertisements expire and
-  // are replaced every few minutes.
+  // A coordinator that explicitly targets this repository makes the Actions
+  // surface useful before its first run. A global capability advertisement by
+  // itself is not repository-specific evidence.
   use$(() => {
     if (indexRelays.length === 0) return undefined;
-    return resilientSubscription(pool, indexRelays, [
+    const filters: Filter[] = [
       { kinds: [CI_COORDINATOR_ADVERTISEMENT_KIND] } as Filter,
-    ]).pipe(
+    ];
+    if (repoCoords?.length) {
+      filters.push({
+        kinds: [CI_REQUEST_READINESS_KIND],
+        "#a": repoCoords,
+      } as Filter);
+    }
+    if (repoMaintainers.length) {
+      filters.push({
+        kinds: [CI_REQUEST_READINESS_KIND],
+        "#p": repoMaintainers,
+      } as Filter);
+    }
+    return resilientSubscription(pool, indexRelays, filters).pipe(
       onlyEvents(),
       mapEventsToStore(store),
       catchError(() => EMPTY),
     );
-  }, [indexRelayKey, store]);
+  }, [coordsKey, indexRelayKey, maintainerKey, store]);
 
   const hasCI = use$(() => {
     if (!repoCoords || repoCoords.length === 0) return undefined;
@@ -429,22 +456,48 @@ export function useRepoHasCI(
       store.timeline([
         { kinds: [CI_COORDINATOR_ADVERTISEMENT_KIND] } as Filter,
       ]),
+      store.timeline([
+        {
+          kinds: [CI_REQUEST_READINESS_KIND],
+          "#a": repoCoords,
+        } as Filter,
+        ...(repoMaintainers.length
+          ? [
+              {
+                kinds: [CI_REQUEST_READINESS_KIND],
+                "#p": repoMaintainers,
+              } as Filter,
+            ]
+          : []),
+      ]),
       timer(0, EXPIRY_RECHECK_INTERVAL_MS),
     ]).pipe(
-      map(([events, advertisements]) => {
+      map(([events, advertisements, readinessEvents]) => {
         if (events.length > 0) return true;
         const now = Math.floor(Date.now() / 1000);
-        return (advertisements as NostrEvent[]).some((event) => {
-          if (!isValidCICoordinatorAdvertisement(event)) return false;
-          const expiration = Number.parseInt(
-            event.tags.find(([name]) => name === "expiration")?.[1] ?? "",
-            10,
+        const castStore = store as unknown as CastRefEventStore;
+        const liveAdvertisements = new Set(
+          (advertisements as NostrEvent[]).flatMap((event) => {
+            if (!isValidCICoordinatorAdvertisement(event)) return [];
+            const advertisement = new CICoordinatorAdvertisement(
+              event,
+              castStore,
+            );
+            return advertisement.expiration > now ? [advertisement.pubkey] : [];
+          }),
+        );
+        return (readinessEvents as NostrEvent[]).some((event) => {
+          if (!isValidCIRequestReadiness(event)) return false;
+          const readiness = new CIRequestReadiness(event, castStore);
+          return (
+            readiness.expiration > now &&
+            liveAdvertisements.has(readiness.pubkey) &&
+            readiness.supportsRepository(repoCoords, repoMaintainers)
           );
-          return expiration > now;
         });
       }),
     );
-  }, [coordsKey, store]);
+  }, [coordsKey, maintainerKey, store]);
 
   return hasCI ?? false;
 }

@@ -113,33 +113,69 @@ async function resolveIdentity(
   }
 }
 
-function useVerifiedCIIdentities(pubkeys: readonly string[]): {
+async function resolveIdentities(
+  rawNip05: string | undefined,
+  pubkey: string,
+  repositoryDomains: readonly string[],
+): Promise<VerifiedIdentity[]> {
+  const candidates = [
+    rawNip05,
+    ...repositoryDomains.map((domain) => `_@${domain}`),
+  ];
+  const uniqueCandidates = [
+    ...new Set(
+      candidates
+        .map((candidate) => parseNip05(candidate)?.nip05)
+        .filter((candidate): candidate is string => !!candidate),
+    ),
+  ];
+  const identities = await Promise.all(
+    uniqueCandidates.map((candidate) => resolveIdentity(candidate, pubkey)),
+  );
+  return identities.filter(
+    (identity): identity is VerifiedIdentity => identity !== undefined,
+  );
+}
+
+function useVerifiedCIIdentities(
+  pubkeys: readonly string[],
+  repositoryDomains: readonly string[],
+): {
   settled: boolean;
   partial: boolean;
-  identities: ReadonlyMap<string, VerifiedIdentity | undefined>;
+  identities: ReadonlyMap<string, readonly VerifiedIdentity[]>;
 } {
   const store = useEventStore();
   const pubkeyKey = [...pubkeys].sort().join(",");
+  const repositoryDomainKey = [...repositoryDomains].sort().join(",");
+  const stablePubkeys = useMemo(
+    () => (pubkeyKey ? pubkeyKey.split(",") : []),
+    [pubkeyKey],
+  );
+  const stableRepositoryDomains = useMemo(
+    () => (repositoryDomainKey ? repositoryDomainKey.split(",") : []),
+    [repositoryDomainKey],
+  );
   const lookup = use$(() => lookupRelays, []) ?? [];
   const indexes = use$(() => gitIndexRelays, []) ?? [];
   const relays = [...new Set([...lookup, ...indexes])];
   const relayKey = relays.join(",");
   const profileQuery = use$(() => {
-    if (pubkeys.length === 0) {
+    if (stablePubkeys.length === 0) {
       return of({ settled: true, relayCount: 0, failedRelayCount: 0 });
     }
     return loadRelayQueryUntilSettled(
       pool,
       relays,
-      [{ kinds: [0], authors: [...pubkeys] } as Filter],
+      [{ kinds: [0], authors: stablePubkeys } as Filter],
       store,
     );
   }, [pubkeyKey, relayKey, store]);
 
   const profileRevision = use$(() => {
-    if (pubkeys.length === 0) return of("");
+    if (stablePubkeys.length === 0) return of("");
     return combineLatest(
-      pubkeys.map((pubkey) => store.replaceable(0, pubkey)),
+      stablePubkeys.map((pubkey) => store.replaceable(0, pubkey)),
     ).pipe(map((events) => events.map((event) => event?.id ?? "").join(",")));
   }, [pubkeyKey, store]);
 
@@ -147,17 +183,17 @@ function useVerifiedCIIdentities(pubkeys: readonly string[]): {
     key: string;
     settled: boolean;
     partial: boolean;
-    identities: ReadonlyMap<string, VerifiedIdentity | undefined>;
+    identities: ReadonlyMap<string, readonly VerifiedIdentity[]>;
   }>({
     key: "",
-    settled: pubkeys.length === 0,
+    settled: stablePubkeys.length === 0,
     partial: false,
     identities: new Map(),
   });
-  const resolutionKey = `${pubkeyKey}|${profileRevision ?? ""}|${profileQuery?.settled ?? false}`;
+  const resolutionKey = `${pubkeyKey}|${repositoryDomainKey}|${profileRevision ?? ""}|${profileQuery?.settled ?? false}`;
 
   useEffect(() => {
-    if (pubkeys.length === 0) {
+    if (stablePubkeys.length === 0) {
       setState({
         key: resolutionKey,
         settled: true,
@@ -179,10 +215,14 @@ function useVerifiedCIIdentities(pubkeys: readonly string[]): {
     let disposed = false;
     setState((current) => ({ ...current, key: resolutionKey, settled: false }));
     void Promise.all(
-      pubkeys.map(async (pubkey) => {
+      stablePubkeys.map(async (pubkey) => {
         const profile = profileContent(store.getReplaceable(0, pubkey));
-        const identity = await resolveIdentity(profile?.nip05, pubkey);
-        return [pubkey, identity] as const;
+        const identities = await resolveIdentities(
+          profile?.nip05,
+          pubkey,
+          stableRepositoryDomains,
+        );
+        return [pubkey, identities] as const;
       }),
     ).then((entries) => {
       if (disposed) return;
@@ -193,15 +233,27 @@ function useVerifiedCIIdentities(pubkeys: readonly string[]): {
         partial:
           ((profileQuery.failedRelayCount > 0 ||
             profileQuery.relayCount === 0) &&
-            pubkeys.some((pubkey) => !store.getReplaceable(0, pubkey))) ||
-          entries.some(([, identity]) => identity?.failed),
+            stablePubkeys.some((pubkey) => !store.getReplaceable(0, pubkey))) ||
+          entries.some(([, identities]) =>
+            identities.some((identity) => identity.failed),
+          ),
         identities,
       });
     });
     return () => {
       disposed = true;
     };
-  }, [profileQuery, pubkeyKey, profileRevision, pubkeys, resolutionKey, store]);
+  }, [
+    profileQuery?.failedRelayCount,
+    profileQuery?.relayCount,
+    profileQuery?.settled,
+    pubkeyKey,
+    profileRevision,
+    resolutionKey,
+    stablePubkeys,
+    stableRepositoryDomains,
+    store,
+  ]);
 
   if (state.key !== resolutionKey) {
     return { settled: false, partial: false, identities: new Map() };
@@ -552,18 +604,25 @@ function relationshipEvidence(
         summary: "Requested by repository maintainers",
         detail:
           "A confirmed repository maintainer currently asks this coordinator to run CI for this repository.",
+        authors: relationship.requesterPubkeys,
         scope: "current",
       },
     ];
   }
   if (relationship.level === "previously-requested") {
+    const manualDirection = relationship.manualRunCount > 0;
+    const serviceDirection = relationship.serviceRunCount > 0;
     return [
       {
         kind: "historical-maintainer-request",
         classification: CITrustClassification.OperationallyAssociated,
-        summary: "Previously requested by maintainers",
-        detail:
-          "Repository maintainers requested this coordinator in the past, but there is no active standing request now.",
+        summary: "Earlier maintainer direction",
+        detail: manualDirection
+          ? `A confirmed repository maintainer manually requested ${relationship.manualRunCount} ${relationship.manualRunCount === 1 ? "run" : "runs"} from this coordinator.${serviceDirection ? " Earlier runs also cite a maintainer service request." : " This does not establish a standing service request."}`
+          : serviceDirection
+            ? "Earlier runs cite a maintainer service request, but there is no active standing request now."
+            : "A confirmed repository maintainer previously signed a service request for this coordinator, but there is no active standing request now.",
+        authors: relationship.requesterPubkeys,
         scope: "historical",
       },
     ];
@@ -572,34 +631,43 @@ function relationshipEvidence(
 }
 
 function domainEvidence(
-  identity: VerifiedIdentity | undefined,
+  identities: readonly VerifiedIdentity[],
   repositoryDomains: readonly string[],
 ): CITrustEvidence[] {
-  if (!identity?.verified) return [];
-  const match = classifyCIDomainRelationship(
-    identity.domain,
-    repositoryDomains,
+  const evidence = identities.flatMap((identity): CITrustEvidence[] => {
+    if (!identity.verified) return [];
+    const match = classifyCIDomainRelationship(
+      identity.domain,
+      repositoryDomains,
+    );
+    if (!match.relationship || !match.repositoryDomain) return [];
+    const displayIdentity =
+      identity.localPart === "_" ? identity.domain : identity.nip05;
+    return [
+      match.relationship === "exact"
+        ? {
+            kind: "repository-domain",
+            classification: CITrustClassification.OperationallyAssociated,
+            summary: "Uses repository-listed infrastructure",
+            detail: `${displayIdentity} resolves to this signer and is a GRASP domain listed by the resolved repository graph.`,
+            scope: "current",
+          }
+        : {
+            kind: "repository-subdomain",
+            classification: CITrustClassification.OperationallyAssociated,
+            summary: "Related repository infrastructure",
+            detail: `${displayIdentity} is verified on a parent or child domain of repository-listed ${match.repositoryDomain}. Subdomains may have separate operators, so this is weaker evidence than an exact match.`,
+            scope: "current",
+          },
+    ];
+  });
+  return evidence.filter(
+    (item, index) =>
+      evidence.findIndex(
+        (candidate) =>
+          candidate.kind === item.kind && candidate.detail === item.detail,
+      ) === index,
   );
-  if (!match.relationship || !match.repositoryDomain) return [];
-  const displayIdentity =
-    identity.localPart === "_" ? identity.domain : identity.nip05;
-  return [
-    match.relationship === "exact"
-      ? {
-          kind: "repository-domain",
-          classification: CITrustClassification.OperationallyAssociated,
-          summary: "Uses repository-listed infrastructure",
-          detail: `${displayIdentity} is a verified NIP-05 identity on ${match.repositoryDomain}, a GRASP domain listed by the resolved repository graph.`,
-          scope: "current",
-        }
-      : {
-          kind: "repository-subdomain",
-          classification: CITrustClassification.OperationallyAssociated,
-          summary: "Related repository infrastructure",
-          detail: `${displayIdentity} is verified on a parent or child domain of repository-listed ${match.repositoryDomain}. Subdomains may have separate operators, so this is weaker evidence than an exact match.`,
-          scope: "current",
-        },
-  ];
 }
 
 export function useCITrustContext({
@@ -617,6 +685,10 @@ export function useCITrustContext({
   repositoryRelationshipState?: { settled: boolean; partial: boolean };
   extraIdentities?: readonly string[];
 }): CITrustContextState {
+  const repositoryDomains = useMemo(
+    () => repo?.graspServerDomains ?? [],
+    [repo?.graspServerDomains],
+  );
   const identityKey = [
     ...new Set([
       ...extraIdentities,
@@ -634,7 +706,7 @@ export function useCITrustContext({
     () => (identityKey ? identityKey.split(",") : []),
     [identityKey],
   );
-  const verified = useVerifiedCIIdentities(identityPubkeys);
+  const verified = useVerifiedCIIdentities(identityPubkeys, repositoryDomains);
   const social = useCISocialEvidence(identityPubkeys);
   const relationshipQueryState =
     coordinatorState ?? repositoryRelationshipState;
@@ -661,7 +733,7 @@ export function useCITrustContext({
       evidenceByPubkey.set(pubkey, [
         ...relationshipEvidence(coordinatorRelationships?.get(pubkey)),
         ...domainEvidence(
-          verified.identities.get(pubkey),
+          verified.identities.get(pubkey) ?? [],
           repo?.graspServerDomains ?? [],
         ),
         ...(social.evidence.get(pubkey) ?? []),

@@ -31,7 +31,8 @@
 - Classify CI coordinators and providers with settled maintainer-directed,
   operationally associated, socially corroborated, or no-known-context
   evidence across Actions, pull requests, commits, refs, coordinator pages,
-  and provider profiles, with concise popovers and incomplete-query handling.
+  and provider profiles, with concise popovers, request-signer attribution,
+  recent signed provider-job history, and incomplete-query handling.
 - Publish pull request web builds as credential-free NIP-5A previews under a
   fresh identity per run and expose their URL as a public CI job output.
 - Show a prominent, caution-labelled nsite preview link on pull requests when
@@ -57,7 +58,7 @@
 
 ### Changes
 
-- Keep repository Actions focused with a compact coordinator summary, filter activity by coordinator relationship, include offline coordinators with request or workflow history in the directory, move service details and coordinator-filtered runs onto dedicated pages, and distinguish coordinators requested now, requested previously, or unassociated without rewriting each run's frozen request provenance.
+- Keep repository Actions focused with a compact coordinator summary, filter activity by coordinator relationship, show live coordinators only when they are acting on or explicitly targeting the repository, include offline coordinators with request or workflow history in the directory, move service details and coordinator-filtered runs onto dedicated pages, and distinguish coordinators requested now, requested previously, or unassociated without rewriting each run's frozen request provenance.
 - Clarify coordinator service details with a single maintainer-trust summary, contextual Request/Stop controls, history only when present, amber offline and unrecognised states, complete secret names, and maintainer-only Nostr secret-inbox warnings.
 - Search issues and pull requests by full event ID, `nevent`, or short hexadecimal prefix, and reveal ID matches even when the active facets would otherwise hide them.
 - Write notification-state key envelopes with a purpose-specific field while continuing to read existing legacy envelopes.

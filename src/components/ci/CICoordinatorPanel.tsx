@@ -297,8 +297,8 @@ export function CICoordinatorSummaryBar({
                     )}
                     {(trustCounts?.previouslyRequested ?? 0) > 0 && (
                       <span className="inline-flex items-center gap-1 text-muted-foreground">
-                        {trustCounts?.previouslyRequested} previously maintainer
-                        requested
+                        {trustCounts?.previouslyRequested} with earlier
+                        maintainer direction
                       </span>
                     )}
                     {(trustCounts?.operational ?? 0) > 0 && (

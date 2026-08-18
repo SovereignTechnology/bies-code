@@ -54,10 +54,16 @@ function latestByCreatedAt<T extends { event: NostrEvent }>(
   }, undefined);
 }
 
+export interface CICoordinatorAdvertisementState {
+  advertisement: CICoordinatorAdvertisement | undefined;
+  settled: boolean;
+  partial: boolean;
+}
+
 /** Discover whether an identity has published a coordinator advertisement. */
 export function useCICoordinatorAdvertisement(
   pubkey: string | undefined,
-): CICoordinatorAdvertisement | undefined {
+): CICoordinatorAdvertisementState {
   const store = useEventStore();
   const castStore = store as unknown as CastRefEventStore;
   const indexRelays = use$(() => gitIndexRelays, []) ?? [];
@@ -65,21 +71,24 @@ export function useCICoordinatorAdvertisement(
   const relays = [...new Set([...indexRelays, ...lookup])];
   const relayKey = relays.join(",");
 
-  use$(() => {
-    if (!pubkey || relays.length === 0) return undefined;
-    return resilientSubscription(pool, relays, [
-      {
-        kinds: [CI_COORDINATOR_ADVERTISEMENT_KIND],
-        authors: [pubkey],
-      } as Filter,
-    ]).pipe(
-      onlyEvents(),
-      mapEventsToStore(store),
-      catchError(() => EMPTY),
+  const query = use$(() => {
+    if (!pubkey) {
+      return of({ settled: true, relayCount: 0, failedRelayCount: 0 });
+    }
+    return loadRelayQueryUntilSettled(
+      pool,
+      relays,
+      [
+        {
+          kinds: [CI_COORDINATOR_ADVERTISEMENT_KIND],
+          authors: [pubkey],
+        } as Filter,
+      ],
+      store,
     );
   }, [pubkey, relayKey, store]);
 
-  return use$(() => {
+  const advertisement = use$(() => {
     if (!pubkey) return undefined;
     return store
       .timeline([
@@ -100,6 +109,14 @@ export function useCICoordinatorAdvertisement(
         ),
       );
   }, [pubkey, store]);
+
+  return {
+    advertisement,
+    settled: query?.settled === true,
+    partial:
+      (query?.failedRelayCount ?? 0) > 0 ||
+      (query?.settled === true && (query.relayCount ?? 0) === 0),
+  };
 }
 
 function wasSeenOnOutbox(event: NostrEvent, outboxes: readonly string[]) {

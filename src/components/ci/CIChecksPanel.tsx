@@ -84,6 +84,7 @@ import { resilientRequest } from "@/lib/resilientSubscription";
 import { CI_MANUAL_TRIGGER_KIND, CI_SERVICE_REQUEST_KIND } from "@/lib/ci";
 import { pool } from "@/services/nostr";
 import { mapEventsToStore } from "applesauce-core";
+import { getSeenRelays } from "applesauce-core/helpers";
 import { onlyEvents } from "applesauce-relay";
 import { CICoordinatorLink } from "./CICoordinatorLink";
 
@@ -844,6 +845,19 @@ function CIJobRow({
   const duration = formatCIDuration(result.duration);
   const hasResultMetadata =
     result.outputs.length > 0 || result.omittedOutputs.length > 0;
+  const providerPath = (() => {
+    const path = `/provider/${nip19.npubEncode(result.pubkey)}`;
+    const relays = [
+      ...new Set([
+        ...(getSeenRelays(result.event) ?? []),
+        ...(result.allocationRef?.relay ? [result.allocationRef.relay] : []),
+      ]),
+    ].slice(0, 3);
+    if (relays.length === 0) return path;
+    const search = new URLSearchParams();
+    for (const relay of relays) search.append("relay", relay);
+    return `${path}?${search.toString()}`;
+  })();
 
   return (
     <div className="rounded-md border border-border/60">
@@ -885,7 +899,7 @@ function CIJobRow({
             pubkey={result.pubkey}
             avatarSize="xs"
             nameClassName="max-w-28 truncate text-[11px]"
-            profilePath={`/provider/${nip19.npubEncode(result.pubkey)}`}
+            profilePath={providerPath}
           />
           {trustResolution && (
             <CITrustContextLabel
