@@ -11,6 +11,76 @@ export interface Nip11Document {
   software?: string;
   version?: string;
   supported_grasps?: string[];
+  repo_acceptance_criteria?: string;
+}
+
+export type GraspAccessMode = "private" | "curated" | "public" | "unknown";
+
+export interface GraspAccessSummary {
+  mode: GraspAccessMode;
+  title: string;
+  description: string;
+  criteria: string | undefined;
+}
+
+/** Describe a service's advertised repository-admission policy conservatively. */
+export function getGraspAccessSummary(
+  document: Nip11Document,
+): GraspAccessSummary {
+  const criteria = document.repo_acceptance_criteria?.trim() || undefined;
+  const normalizedCriteria = criteria?.toLowerCase() ?? "";
+  const grasps = new Set(
+    (document.supported_grasps ?? []).map((value) => value.toUpperCase()),
+  );
+
+  if (grasps.has("GRASP-08")) {
+    return {
+      mode: "private",
+      title: "Private service",
+      description:
+        "Nostr authentication and membership in the service whitelist are required.",
+      criteria,
+    };
+  }
+
+  if (
+    /^(none|no restrictions?|open|public|anyone|all repositories?)$/i.test(
+      normalizedCriteria,
+    ) ||
+    /\b(anyone|publicly available|no (approval|restriction|allowlist|white.?list))\b/i.test(
+      normalizedCriteria,
+    )
+  ) {
+    return {
+      mode: "public",
+      title: "Public hosting",
+      description:
+        "Anyone can announce a repository and use the service under its normal GRASP authorization rules.",
+      criteria,
+    };
+  }
+
+  if (
+    /\b(allowlist|white.?list|invite|approval|approved|curated|selected)\b/i.test(
+      normalizedCriteria,
+    )
+  ) {
+    return {
+      mode: "curated",
+      title: "Approval required",
+      description:
+        "This service only accepts repositories selected by its operator.",
+      criteria,
+    };
+  }
+
+  return {
+    mode: "unknown",
+    title: "Access policy unknown",
+    description:
+      "The operator has not published an access policy this client can classify safely.",
+    criteria,
+  };
 }
 
 export interface ValidateGraspServerOptions {
@@ -62,6 +132,7 @@ export async function fetchGraspServerInformation(
     software: stringField("software"),
     version: stringField("version"),
     supported_grasps: stringArray("supported_grasps"),
+    repo_acceptance_criteria: stringField("repo_acceptance_criteria"),
   };
 }
 

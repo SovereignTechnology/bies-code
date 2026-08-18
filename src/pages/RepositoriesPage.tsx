@@ -226,10 +226,14 @@ export default function RepositoriesPage({
               <p className="text-muted-foreground text-lg">
                 {committedQuery
                   ? "No repositories match your search"
-                  : "No repositories found on this relay"}
+                  : relayOverride
+                    ? "Search repositories on this relay"
+                    : "No repositories found"}
               </p>
               <p className="text-muted-foreground/60 text-sm mt-1">
-                Try a different search or check back later
+                {!committedQuery && relayOverride
+                  ? "Enter a repository or maintainer name above"
+                  : "Try a different search or check back later"}
               </p>
             </CardContent>
           </Card>
