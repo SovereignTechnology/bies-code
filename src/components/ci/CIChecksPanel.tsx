@@ -63,6 +63,8 @@ import {
   type CICoordinatorRelationship,
 } from "@/lib/ciCoordinatorRelationship";
 import { hasAcceptedRepositoryReference, type ResolvedRepo } from "@/lib/nip34";
+import { findNsitePreview, parsePublicOutputUrl } from "@/lib/ciOutputs";
+import { NsitePreviewLink } from "./PRNsitePreview";
 import type { CIServiceControl } from "@/casts/CICoordinator";
 import { RepoItemAttributionIndicator } from "@/components/RepoItemAttributionWarning";
 import { CoordinatorTrustIndicator } from "./CoordinatorTrustIndicator";
@@ -662,6 +664,7 @@ export function CIRunRow({
       run.workflowResult?.serviceRequestRef ||
       run.pendingRun?.serviceRequestRef
     );
+  const nsitePreview = findNsitePreview([run]);
 
   return (
     <li>
@@ -701,6 +704,14 @@ export function CIRunRow({
 
           <div className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
             {trustIndicator}
+            {nsitePreview && (
+              <NsitePreviewLink
+                preview={nsitePreview}
+                className="shrink-0 text-[11px]"
+              >
+                nsite preview
+              </NsitePreviewLink>
+            )}
             <span className="hidden xl:contents">{triggerContext}</span>
             <span className="hidden shrink-0 sm:inline lg:hidden">
               {compactStatus}
@@ -912,7 +923,27 @@ function CIJobRow({ job }: { job: CIJobResult }) {
               >
                 <dt className="font-mono font-medium">{output.name}</dt>
                 <dd className="min-w-0 break-all font-mono text-muted-foreground">
-                  {output.value || <span className="italic">empty string</span>}
+                  {(() => {
+                    if (!output.value)
+                      return <span className="italic">empty string</span>;
+                    const url = parsePublicOutputUrl(output.value);
+                    return url ? (
+                      <a
+                        href={url.toString()}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-start gap-1 text-foreground underline-offset-2 hover:text-pink-600 hover:underline dark:hover:text-pink-400"
+                      >
+                        <span>{output.value}</span>
+                        <ExternalLink
+                          className="mt-0.5 h-3 w-3 shrink-0"
+                          aria-hidden="true"
+                        />
+                      </a>
+                    ) : (
+                      output.value
+                    );
+                  })()}
                 </dd>
               </div>
             ))}

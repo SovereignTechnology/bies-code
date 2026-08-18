@@ -89,6 +89,7 @@ import {
   type CIRunTrustContext,
 } from "@/components/ci/CIChecksPanel";
 import { PRNsitePreview } from "@/components/ci/PRNsitePreview";
+import { indexNsitePreviewsByCommit } from "@/lib/ciOutputs";
 import { useCIForPR } from "@/hooks/useCI";
 import { useCICoordinators } from "@/hooks/useCICoordinators";
 import { classifyCICoordinatorRelationships } from "@/lib/ciCoordinatorRelationship";
@@ -389,6 +390,10 @@ export default function PRPage() {
   // Store-read only — 9842 results arrive via the #E comments loader and
   // 9841 running markers via the repo-level #a meta subscription.
   const ciChecks = useCIForPR(pr?.rootEvent.id, pr?.tip.commitId);
+  const nsitePreviewsByCommit = useMemo(
+    () => indexNsitePreviewsByCommit(ciChecks?.runs ?? []),
+    [ciChecks?.runs],
+  );
 
   // Coordinator relationships + immutable service-control history give the
   // checks panel the same per-run trust shields and attribution warnings as
@@ -1524,6 +1529,9 @@ export default function PRPage() {
             <div className="space-y-4 min-w-0">
               {/* Conversation tab */}
               <TabsContent value="conversation" className="space-y-4 mt-0">
+                {/* The current-tip preview is the primary review artifact. */}
+                {ciChecks && <PRNsitePreview checks={ciChecks} />}
+
                 {/* Cover note — pinned note from author/maintainer */}
                 {coverNoteEditing && pr ? (
                   <CoverNoteBox
@@ -1627,6 +1635,11 @@ export default function PRPage() {
                     (pr.itemType === "patch" &&
                       pr.firstRevisionInlined === true &&
                       pr.revisions.length > 1)
+                  }
+                  commitPreview={
+                    originalPRTipCommitId
+                      ? nsitePreviewsByCommit.get(originalPRTipCommitId)
+                      : undefined
                   }
                   commitsLatestHref={
                     (pr.itemType === "pr" && hasRevisions && prBasePath
@@ -1745,6 +1758,13 @@ export default function PRPage() {
                                   repoCoords={repoAllCoords ?? pr.repoCoords}
                                   previousTipCommitId={prevTip}
                                   latestCommitIds={latestPRCommitIds}
+                                  nsitePreview={
+                                    node.revision.tipCommitId
+                                      ? nsitePreviewsByCommit.get(
+                                          node.revision.tipCommitId,
+                                        )
+                                      : undefined
+                                  }
                                 />
                               );
                             }
@@ -1828,14 +1848,11 @@ export default function PRPage() {
                 {/* CI checks — shown to everyone whenever any CI runner has
                     published workflow runs/results for this PR */}
                 {pr && ciChecks && ciChecks.runs.length > 0 && (
-                  <>
-                    <PRNsitePreview checks={ciChecks} />
-                    <CIChecksPanel
-                      checks={ciChecks}
-                      canRetry={isMaintainer}
-                      trustContext={ciTrustContext}
-                    />
-                  </>
+                  <CIChecksPanel
+                    checks={ciChecks}
+                    canRetry={isMaintainer}
+                    trustContext={ciTrustContext}
+                  />
                 )}
 
                 {/* Merge panel — shown for PRs and patches on git-backed repos, for maintainers */}

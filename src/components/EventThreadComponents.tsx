@@ -82,6 +82,8 @@ import { runner } from "@/services/actions";
 import { parseInlineCommentLocation } from "@/lib/inlineComment";
 import { ReactionsBar } from "@/components/ReactionsBar";
 import { ZapsBar } from "@/components/zap/ZapsBar";
+import { NsitePreviewLink } from "@/components/ci/PRNsitePreview";
+import type { NsitePreview } from "@/lib/ciOutputs";
 
 const MarkdownContent = lazy(() => import("@/components/MarkdownContent"));
 
@@ -105,6 +107,8 @@ interface EventBodyCardProps {
   content?: string;
   /** Optional list of commits to display below the body (for PRs). */
   commits?: CommitEntry[];
+  /** Successful nsite preview produced for the last commit in this revision. */
+  commitPreview?: NsitePreview;
   /**
    * When true, the commits section is dimmed and labelled "outdated" to
    * indicate that a later revision has replaced this patch set.
@@ -132,6 +136,7 @@ export function EventBodyCard({
   event,
   content,
   commits,
+  commitPreview,
   commitsSuperseded,
   commitsLatestHref,
   hasCoverLetter,
@@ -289,6 +294,9 @@ export function EventBodyCard({
                   );
                 })}
               </div>
+              {commitPreview && (
+                <NsitePreviewLink preview={commitPreview} className="mt-2" />
+              )}
             </div>
           )}
           <div className="flex flex-wrap items-center gap-3 pt-1 empty:hidden">

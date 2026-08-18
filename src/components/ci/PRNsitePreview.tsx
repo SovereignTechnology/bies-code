@@ -1,8 +1,9 @@
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
 import { ExternalLink, Globe2, ShieldAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import type { PRCIChecks } from "@/hooks/useCI";
+import { findNsitePreview, type NsitePreview } from "@/lib/ciOutputs";
 import { cn } from "@/lib/utils";
 
 interface PRNsitePreviewProps {
@@ -10,51 +11,39 @@ interface PRNsitePreviewProps {
   className?: string;
 }
 
-interface NsitePreview {
-  name: string;
-  url: string;
-  hostname: string;
-}
-
-const NSITE_OUTPUT_NAME_RE = /^nsite(?:_|$)/;
-
-/** Find the newest successful nsite output for the current PR tip. */
-function findNsitePreview(checks: PRCIChecks): NsitePreview | undefined {
-  for (const run of checks.currentRuns) {
-    for (const { result } of run.jobs) {
-      if (result.status !== "success") continue;
-
-      for (const output of result.outputs) {
-        if (!NSITE_OUTPUT_NAME_RE.test(output.name)) continue;
-
-        try {
-          const url = new URL(output.value);
-          if (
-            url.protocol !== "https:" ||
-            url.username.length > 0 ||
-            url.password.length > 0
-          ) {
-            continue;
-          }
-
-          return {
-            name: output.name,
-            url: url.toString(),
-            hostname: url.hostname,
-          };
-        } catch {
-          // Public outputs are untrusted strings; ignore malformed URLs.
-        }
-      }
-    }
-  }
-
-  return undefined;
+/** Compact external link used beside commits and collapsed workflow rows. */
+export function NsitePreviewLink({
+  preview,
+  children = "Open nsite preview",
+  className,
+}: {
+  preview: NsitePreview;
+  children?: ReactNode;
+  className?: string;
+}) {
+  return (
+    <a
+      href={preview.url}
+      target="_blank"
+      rel="noopener noreferrer"
+      data-ci-output={preview.name}
+      className={cn(
+        "inline-flex items-center gap-1 text-xs font-medium text-pink-600 underline-offset-2 hover:text-pink-700 hover:underline dark:text-pink-400 dark:hover:text-pink-300",
+        className,
+      )}
+    >
+      {children}
+      <ExternalLink className="h-3 w-3 shrink-0" aria-hidden="true" />
+    </a>
+  );
 }
 
 /** Prominent PR-level link for an nsite published by the latest successful CI. */
 export function PRNsitePreview({ checks, className }: PRNsitePreviewProps) {
-  const preview = useMemo(() => findNsitePreview(checks), [checks]);
+  const preview = useMemo(
+    () => findNsitePreview(checks.currentRuns),
+    [checks.currentRuns],
+  );
   if (!preview) return null;
 
   return (
