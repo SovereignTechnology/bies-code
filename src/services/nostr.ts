@@ -43,7 +43,6 @@ import {
 } from "./settings";
 import {
   ISSUE_KIND,
-  PATCH_KIND,
   PR_ROOT_KINDS,
   LEGACY_REPLY_KINDS,
   COVER_NOTE_KIND,
@@ -65,6 +64,7 @@ import {
   buildStackCandidateFilter,
   getEffectivePRMergeBases,
 } from "@/lib/inferredPRParents";
+import { loadEventReferenceClosure } from "@/lib/eventReferenceClosure";
 
 /**
  * Global EventStore instance for all Nostr events.
@@ -1173,33 +1173,25 @@ function nip34ThreadLoadAll(
 /**
  * Thread-level loader for a single item (detail pages only).
  *
- * Fetches ALL events that reference the root item or any of its comments
- * via #e, #E, or #q tags — no kind restriction. This includes reactions,
- * zaps, deletions, quotes, and any other referencing events.
+ * Fetches the complete closure of events that reference the root item or any
+ * event discovered beneath it via #e, #E, or #q tags — no kind restriction.
+ * This includes comments, reactions, zaps, deletions, quotes, revisions, and
+ * events that target any of those descendants.
  *
  * Does NOT re-fire essentials or comments — those are handled separately
  * by nip34ListLoader (already called at the repo/list level). The no-kind
  * thread loaders will return some of the same events (the EventStore
  * deduplicates on receipt).
  *
- * For each comment discovered by nip34CommentsLoader, all three thread
- * loaders are fired recursively so child events on individual comments
- * (reactions, zaps, deletions, etc.) are also fetched.
- *
- * For each revision root patch (kind:1617 with t:root-revision) discovered
- * by nip34ThreadReplyLoader on the root item, all three thread loaders are
- * also fired so the individual commit patches in the revision (which reference
- * the revision root via #e, not the original root) are fetched.
- *
- * A seenIds set prevents duplicate loader calls within the same subscription
- * lifetime across both recursion paths. Because the thread loaders are
- * singleton batching loaders, all per-comment/per-revision calls within their
- * bufferTime window are collapsed into a single relay subscription per tag name.
+ * Every discovered event ID is queued exactly once per relay. This makes the
+ * traversal insensitive to relay delivery order (for example, a parent
+ * comment arriving after its reaction) while the singleton tag loaders still
+ * collapse each discovery wave into one subscription per tag and relay.
  *
  * Reactive relay list: accepts Observable<string[]> | string[]. When the
  * observable emits new relay URLs, loaders are re-fired for all already-seen
- * comment IDs against only the new relays — existing subscriptions are
- * untouched. New comments are always fetched against all current relays.
+ * event IDs against only the new relays — existing subscriptions are
+ * untouched. New descendants are always fetched against all current relays.
  *
  * @param itemId - The event ID of the issue / patch / PR
  * @param relays - Relay URLs to query (reactive or static)
@@ -1208,106 +1200,5 @@ export function nip34ThreadItemLoader(
   itemId: string,
   relays: Observable<string[]> | string[],
 ): Observable<PaginatedTagValueResponse> {
-  return new Observable<PaginatedTagValueResponse>((subscriber) => {
-    // seenIds: all comment IDs discovered so far (root item + comments)
-    const seenIds = new Set<string>();
-    // knownRelayUrls: relay URLs we have already fired loaders against
-    const knownRelayUrls = new Set<string>();
-
-    // Fire all three thread loaders for an item against a specific relay list.
-    // Results are forwarded to the outer subscriber and also inspected by
-    // handleRevisionRootEvent so revision root patches trigger recursion.
-    function fireThreadLoaders(id: string, relayList: string[]): void {
-      nip34ThreadLoadAll(id, relayList).subscribe({
-        next: (msg) => {
-          subscriber.next(msg);
-          handleRevisionRootEvent(msg);
-        },
-      });
-    }
-
-    // Subscribe to relay list changes. When new relay URLs appear, re-fire
-    // loaders for all already-seen IDs against only the new relays.
-    const relays$ = Array.isArray(relays)
-      ? (new Observable<string[]>((sub) => {
-          sub.next(relays);
-          sub.complete();
-        }) as Observable<string[]>)
-      : relays;
-
-    // Shared handler: when a comment (kind:1111/1619) is discovered, fire
-    // thread loaders for it recursively so its own children are fetched.
-    function handleCommentEvent(msg: PaginatedTagValueResponse): void {
-      if (msg === "EOSE") return;
-      const event = msg as NostrEvent;
-      if (!seenIds.has(event.id)) {
-        seenIds.add(event.id);
-        fireThreadLoaders(event.id, [...knownRelayUrls]);
-      }
-    }
-
-    // Shared handler: when a revision root patch (kind:1617 with
-    // t:root-revision / t:revision-root) is discovered via #e, fire thread
-    // loaders for it so its child commit patches are fetched.
-    function handleRevisionRootEvent(msg: PaginatedTagValueResponse): void {
-      if (msg === "EOSE") return;
-      const event = msg as NostrEvent;
-      if (event.kind !== PATCH_KIND) return;
-      const isRevisionRoot = event.tags.some(
-        ([name, val]) =>
-          name === "t" && (val === "root-revision" || val === "revision-root"),
-      );
-      if (!isRevisionRoot) return;
-      if (!seenIds.has(event.id)) {
-        seenIds.add(event.id);
-        fireThreadLoaders(event.id, [...knownRelayUrls]);
-      }
-    }
-
-    // Fire recursive loaders (comments only) for a given item ID against a
-    // specific relay list. nip34ThreadReplyLoader is NOT called here — it is
-    // already called inside fireThreadLoaders (via nip34ThreadLoadAll) and its
-    // results are piped through handleRevisionRootEvent there. Calling it again
-    // here would duplicate relay requests.
-    function fireRecursiveLoaders(id: string, relayList: string[]): void {
-      nip34CommentsLoader({ value: id, relays: relayList }).subscribe({
-        next: handleCommentEvent,
-      });
-    }
-
-    const relaySub = relays$
-      .pipe(
-        map((urls) => urls.map(normalizeUrl)),
-        distinctUntilChanged(
-          (a, b) =>
-            a.length === b.length && a.every((url) => knownRelayUrls.has(url)),
-        ),
-      )
-      .subscribe((currentUrls) => {
-        const newUrls = currentUrls.filter((url) => !knownRelayUrls.has(url));
-        for (const url of newUrls) knownRelayUrls.add(url);
-        if (newUrls.length === 0) return;
-
-        // Re-fire thread loaders and recursive loaders for all already-seen
-        // IDs against only the new relays.
-        // createPaginatedTagValueLoader batches these into one REQ per relay.
-        for (const id of seenIds) {
-          fireThreadLoaders(id, newUrls);
-          fireRecursiveLoaders(id, newUrls);
-        }
-      });
-
-    // Fire thread loaders for the root item — uses all currently known relays
-    // (relaySub fires synchronously above since relays$ emits immediately).
-    seenIds.add(itemId);
-    fireThreadLoaders(itemId, [...knownRelayUrls]);
-
-    // Fire recursive loaders for the root item against the initial relay set.
-    // New relays arriving later are handled in relaySub above.
-    fireRecursiveLoaders(itemId, [...knownRelayUrls]);
-
-    return () => {
-      relaySub.unsubscribe();
-    };
-  });
+  return loadEventReferenceClosure(itemId, relays, nip34ThreadLoadAll);
 }
