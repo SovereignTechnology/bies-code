@@ -441,8 +441,17 @@ function useCISocialEvidence(
               (coord) => coordinateSet.has(coord),
             );
             if (matchingCoordinates.length === 0) continue;
+            const matchingRepositories = (socialRepositories ?? []).filter(
+              (repository) =>
+                repository.allCoordinates.some((coord) =>
+                  matchingCoordinates.includes(coord),
+                ),
+            );
             if (
               followed.has(event.pubkey) &&
+              matchingRepositories.some((repository) =>
+                repository.confirmedMaintainers.includes(event.pubkey),
+              ) &&
               (isValidCIServiceControl(event) ||
                 isValidSocialManualTrigger(event))
             ) {
@@ -458,15 +467,9 @@ function useCISocialEvidence(
             ) {
               const maintainers =
                 activity.get(event.pubkey) ?? new Set<string>();
-              for (const repository of socialRepositories ?? []) {
-                if (
-                  repository.allCoordinates.some((coord) =>
-                    matchingCoordinates.includes(coord),
-                  )
-                ) {
-                  for (const maintainer of repository.confirmedMaintainers) {
-                    if (followed.has(maintainer)) maintainers.add(maintainer);
-                  }
+              for (const repository of matchingRepositories) {
+                for (const maintainer of repository.confirmedMaintainers) {
+                  if (followed.has(maintainer)) maintainers.add(maintainer);
                 }
               }
               activity.set(event.pubkey, maintainers);

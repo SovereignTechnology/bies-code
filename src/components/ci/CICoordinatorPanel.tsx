@@ -46,6 +46,7 @@ import type {
   SubmitCIRepositorySecretsResult,
 } from "@/services/ci";
 import {
+  CITrustClassification,
   getCITrustResolution,
   type CITrustContextState,
 } from "@/lib/ciTrustContext";
@@ -341,74 +342,92 @@ export function CICoordinatorDirectory({
           const presentation = summary
             ? availabilityPresentation[summary.availability]
             : undefined;
+          const trustResolution = getCITrustResolution(trust, pubkey);
+          const trustLabel =
+            trustResolution.phase === "settled" &&
+            trustResolution.classification ===
+              CITrustClassification.MaintainerDirected
+              ? "Maintainer requested"
+              : undefined;
           return (
             <li
               key={pubkey}
-              className="group flex min-w-0 items-center transition-colors hover:bg-accent/40"
+              className="group flex min-w-0 items-center gap-3 px-4 py-3 transition-colors hover:bg-accent/40 sm:pl-5 sm:pr-4"
             >
               <Link
                 to={coordinatorPath(basePath, pubkey)}
-                className="flex min-w-0 flex-1 items-center gap-3 px-4 py-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:pl-5 sm:pr-3"
+                className="shrink-0 rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
               >
                 <UserAvatar pubkey={pubkey} size="md" noHoverCard />
-                <div className="min-w-0 flex-1">
-                  <div className="flex min-w-0 flex-wrap items-center gap-2">
-                    <UserName pubkey={pubkey} noHoverCard />
-                    {summary?.advertisement.version && (
-                      <span className="text-[10px] text-muted-foreground">
-                        v{summary.advertisement.version}
-                      </span>
-                    )}
-                  </div>
-                  <div className="mt-1 flex flex-wrap items-center gap-2">
-                    {presentation ? (
-                      <Badge
-                        variant="outline"
-                        className={cn(
-                          "h-5 gap-1.5 px-1.5 text-[10px] font-normal",
-                          presentation.className,
-                        )}
-                      >
-                        <span
-                          className={cn(
-                            "h-1.5 w-1.5 rounded-full",
-                            presentation.dot,
-                          )}
-                        />
-                        {presentation.label}
-                      </Badge>
-                    ) : (
-                      <Badge
-                        variant="outline"
-                        className="h-5 gap-1.5 border-amber-500/30 bg-amber-500/10 px-1.5 text-[10px] font-normal text-amber-700 dark:text-amber-300"
-                      >
-                        <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
-                        Offline
-                      </Badge>
-                    )}
-                    <span className="text-[10px] text-muted-foreground sm:hidden">
-                      {runCount} run{runCount === 1 ? "" : "s"}
-                    </span>
-                  </div>
-                </div>
-                <span className="hidden text-xs text-muted-foreground sm:inline">
-                  {runCount} run{runCount === 1 ? "" : "s"}
-                  {summary && (
-                    <>
-                      {" · "}
-                      {summary.advertisement.runnerSelectors.length} runner
-                      {summary.advertisement.runnerSelectors.length === 1
-                        ? " profile"
-                        : " profiles"}
-                    </>
-                  )}
-                </span>
               </Link>
-              <CITrustContextLabel
-                resolution={getCITrustResolution(trust, pubkey)}
-                className="mx-2"
-              />
-              <ChevronRight className="mr-4 h-4 w-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 sm:mr-5" />
+              <div className="min-w-0 flex-1">
+                <div className="flex min-w-0 flex-wrap items-center gap-2">
+                  <Link
+                    to={coordinatorPath(basePath, pubkey)}
+                    className="min-w-0 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    <UserName pubkey={pubkey} noHoverCard />
+                  </Link>
+                  <CITrustContextLabel
+                    resolution={trustResolution}
+                    displayLabel={trustLabel}
+                  />
+                  {summary?.advertisement.version && (
+                    <span className="text-[10px] text-muted-foreground">
+                      v{summary.advertisement.version}
+                    </span>
+                  )}
+                </div>
+                <div className="mt-1 flex flex-wrap items-center gap-2">
+                  {presentation ? (
+                    <Badge
+                      variant="outline"
+                      className={cn(
+                        "h-5 gap-1.5 px-1.5 text-[10px] font-normal",
+                        presentation.className,
+                      )}
+                    >
+                      <span
+                        className={cn(
+                          "h-1.5 w-1.5 rounded-full",
+                          presentation.dot,
+                        )}
+                      />
+                      {presentation.label}
+                    </Badge>
+                  ) : (
+                    <Badge
+                      variant="outline"
+                      className="h-5 gap-1.5 border-amber-500/30 bg-amber-500/10 px-1.5 text-[10px] font-normal text-amber-700 dark:text-amber-300"
+                    >
+                      <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+                      Offline
+                    </Badge>
+                  )}
+                  <span className="text-[10px] text-muted-foreground sm:hidden">
+                    {runCount} run{runCount === 1 ? "" : "s"}
+                  </span>
+                </div>
+              </div>
+              <span className="hidden text-xs text-muted-foreground sm:inline">
+                {runCount} run{runCount === 1 ? "" : "s"}
+                {summary && (
+                  <>
+                    {" · "}
+                    {summary.advertisement.runnerSelectors.length} runner
+                    {summary.advertisement.runnerSelectors.length === 1
+                      ? " profile"
+                      : " profiles"}
+                  </>
+                )}
+              </span>
+              <Link
+                to={coordinatorPath(basePath, pubkey)}
+                aria-label="Open coordinator"
+                className="shrink-0 rounded p-1 text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <ChevronRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
+              </Link>
             </li>
           );
         })}

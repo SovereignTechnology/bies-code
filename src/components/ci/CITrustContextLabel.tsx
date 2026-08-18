@@ -19,10 +19,12 @@ import { cn } from "@/lib/utils";
 export function CITrustContextLabel({
   resolution,
   visibility = "always",
+  displayLabel,
   className,
 }: {
   resolution: CITrustResolution;
   visibility?: "always" | "exceptions-only";
+  displayLabel?: string;
   className?: string;
 }) {
   if (resolution.phase === "loading") {
@@ -57,7 +59,9 @@ export function CITrustContextLabel({
   const hasPositiveEvidence =
     resolution.classification !== CITrustClassification.NoKnownContext;
   const label =
-    incomplete && !hasPositiveEvidence ? "Context incomplete" : copy.label;
+    incomplete && !hasPositiveEvidence
+      ? "Context incomplete"
+      : (displayLabel ?? copy.label);
 
   const content = <CITrustExplanation resolution={resolution} label={label} />;
 

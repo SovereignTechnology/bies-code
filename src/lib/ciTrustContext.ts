@@ -72,7 +72,7 @@ export const CI_TRUST_CLASSIFICATION_COPY: Record<
   [CITrustClassification.SociallyCorroborated]: {
     label: "Socially corroborated",
     description:
-      "This identity has prior CI activity on repositories maintained by people you follow.",
+      "A confirmed maintainer you follow currently requests this CI identity, or it has CI activity on a repository they maintain.",
   },
   [CITrustClassification.NoKnownContext]: {
     label: "No known context",
