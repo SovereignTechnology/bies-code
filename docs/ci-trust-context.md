@@ -1,12 +1,12 @@
 # CI Trust Context
 
-**Status:** Draft for review
+**Status:** Implemented reference
 
 **Purpose:** Define the evidence gitworkshop can use when describing trust in
 CI coordinators, compute providers, and their results
 
-**Scope:** Trust semantics and language only; UI presentation, ranking, and
-filtering are deliberately out of scope
+**Scope:** Trust semantics, canonical language, and resolution state only; page
+layout, visual treatment, ranking, and filtering are deliberately out of scope
 
 ---
 
@@ -65,6 +65,20 @@ one identity or silently transfer every property of one signer to another.
 The levels are ordered by how directly they connect a result to the repository
 or the viewer. Multiple levels may apply at the same time. The strongest level
 does not erase the supporting evidence from the others.
+
+Implementations represent these as semantic classifications rather than a
+numeric score:
+
+```text
+MaintainerDirected
+OperationallyAssociated
+SociallyCorroborated
+NoKnownContext
+```
+
+`NoKnownContext` is an absence-of-evidence state, not a fourth positive trust
+level and not a statement that the signer is unsafe. Its canonical human label
+is **No known context**.
 
 ### Level 1: Maintainer-Directed
 
@@ -356,6 +370,27 @@ Recommended temporal language:
 - **Was requested when this run started**
 - **Has started CI for repositories maintained by N people you follow**
 - **Current identity mapping matches**
+
+## Resolution and Coverage
+
+Trust context MUST remain unresolved while any relevant initial query is still
+loading. A client must not temporarily classify a signer as **No known
+context** merely because repository relationships, profiles, NIP-05 mappings,
+or viewer-relative social evidence have not settled yet.
+
+The resolution state is independent from the classification:
+
+```text
+loading
+settled + complete coverage
+settled + partial coverage
+```
+
+A relay failure or bounded identity-resolution failure counts as settled so a
+client cannot wait forever, but it produces partial coverage. The canonical
+partial-coverage label is **Context incomplete**. Known positive evidence may
+still be described, but missing evidence paths must not be presented as a
+final negative conclusion.
 
 ## What Trust Context Does Not Prove
 

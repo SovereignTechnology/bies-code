@@ -91,8 +91,7 @@ import {
 import { PRNsitePreview } from "@/components/ci/PRNsitePreview";
 import { indexNsitePreviewsByCommit } from "@/lib/ciOutputs";
 import { useCIForPR } from "@/hooks/useCI";
-import { useCICoordinators } from "@/hooks/useCICoordinators";
-import { classifyCICoordinatorRelationships } from "@/lib/ciCoordinatorRelationship";
+import { useRepositoryCITrust } from "@/hooks/useRepositoryCITrust";
 import { CommitDetailView } from "@/components/CommitDetailView";
 import { PatchCommitDetailView } from "@/components/PatchCommitDetailView";
 import { useEventStore } from "@/hooks/useEventStore";
@@ -395,31 +394,23 @@ export default function PRPage() {
     [ciChecks?.runs],
   );
 
-  // Coordinator relationships + immutable service-control history give the
-  // checks panel the same per-run trust shields and attribution warnings as
-  // the repo Actions tab. Coordinator state is only fetched once this PR
-  // actually has CI runs.
+  // Coordinator relationships, infrastructure identities, social context,
+  // and immutable service-control history use the same trust model as the
+  // repository Actions page.
   const hasCIRuns = !!ciChecks && ciChecks.runs.length > 0;
-  const coordinatorState = useCICoordinators(
-    hasCIRuns ? repo?.allCoordinates : undefined,
-    hasCIRuns ? repo?.selectedCoordinate : undefined,
-    hasCIRuns ? repo?.confirmedMaintainers : undefined,
+  const { coordinatorState, trust } = useRepositoryCITrust(
+    hasCIRuns ? repo : undefined,
+    ciChecks?.runs,
     resolved?.repoRelayGroup,
   );
   const ciTrustContext = useMemo<CIRunTrustContext | undefined>(() => {
     if (!repo) return undefined;
-    if (!coordinatorState) return { repo };
     return {
       repo,
-      coordinatorRelationships: classifyCICoordinatorRelationships(
-        ciChecks?.runs ?? [],
-        repo.confirmedMaintainers,
-        coordinatorState.currentlyRequestedCoordinatorPubkeys,
-        coordinatorState.previouslyRequestedCoordinatorPubkeys,
-      ),
-      serviceControls: coordinatorState.serviceControls,
+      trust,
+      serviceControls: coordinatorState?.serviceControls,
     };
-  }, [repo, coordinatorState, ciChecks?.runs]);
+  }, [repo, coordinatorState?.serviceControls, trust]);
 
   // Ordered priority pubkeys for @ mention autocomplete:
   // parent author first, then participants, then maintainers (deduped).
@@ -1530,7 +1521,9 @@ export default function PRPage() {
               {/* Conversation tab */}
               <TabsContent value="conversation" className="space-y-4 mt-0">
                 {/* The current-tip preview is the primary review artifact. */}
-                {ciChecks && <PRNsitePreview checks={ciChecks} />}
+                {ciChecks && (
+                  <PRNsitePreview checks={ciChecks} trust={trust} />
+                )}
 
                 {/* Cover note — pinned note from author/maintainer */}
                 {coverNoteEditing && pr ? (

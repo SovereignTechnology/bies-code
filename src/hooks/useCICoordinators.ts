@@ -1,11 +1,9 @@
 import type { CastRefEventStore } from "applesauce-common/casts/cast";
-import { mapEventsToStore } from "applesauce-core";
 import type { Filter } from "applesauce-core/helpers";
 import type { RelayGroup } from "applesauce-relay";
-import { onlyEvents } from "applesauce-relay";
 import type { NostrEvent } from "nostr-tools";
-import { combineLatest, EMPTY, of, timer } from "rxjs";
-import { catchError, map } from "rxjs/operators";
+import { combineLatest, of, timer } from "rxjs";
+import { map } from "rxjs/operators";
 import {
   CICoordinatorAdvertisement,
   CIRepositoryStatus,
@@ -24,7 +22,7 @@ import {
   CI_SERVICE_STOP_KIND,
 } from "@/lib/ci";
 import { relayGroupUrls$ } from "@/models/RepositoryRelayGroup";
-import { resilientSubscription } from "@/lib/resilientSubscription";
+import { loadRelayQueryUntilSettled } from "@/lib/relayQuerySettlement";
 import { pool } from "@/services/nostr";
 import { gitIndexRelays } from "@/services/settings";
 import { use$ } from "@/hooks/use$";
@@ -53,6 +51,10 @@ export interface CICoordinatorState {
   serviceControls: readonly CIServiceControl[];
   currentlyRequestedCoordinatorPubkeys: ReadonlySet<string>;
   previouslyRequestedCoordinatorPubkeys: ReadonlySet<string>;
+  /** True once both discovery and repository trust queries have settled. */
+  settled: boolean;
+  /** True when one or more relevant relay queries could not be completed. */
+  partial: boolean;
 }
 
 function isLaterControl(a: CIServiceControl, b: CIServiceControl): boolean {
@@ -100,9 +102,7 @@ export function useCICoordinators(
   const repoRelayKey = repoRelays.join(",");
 
   // Coordinator discovery and repository-readiness hints live on index relays.
-  use$(() => {
-    if (indexRelays.length === 0) return undefined;
-
+  const indexQuery = use$(() => {
     const filters: Filter[] = [
       { kinds: [CI_COORDINATOR_ADVERTISEMENT_KIND] } as Filter,
     ];
@@ -119,18 +119,14 @@ export function useCICoordinators(
       } as Filter);
     }
 
-    return resilientSubscription(pool, indexRelays, filters).pipe(
-      onlyEvents(),
-      mapEventsToStore(store),
-      catchError(() => EMPTY),
-    );
+    return loadRelayQueryUntilSettled(pool, indexRelays, filters, store);
   }, [coordinatesKey, maintainersKey, indexRelayKey, store]);
 
   // Repository status is public coordinator state. Service controls are
   // trust-bearing and therefore fetched only from current confirmed maintainers.
-  use$(() => {
-    if (repoRelays.length === 0 || !repositoryCoordinates?.length) {
-      return undefined;
+  const repoQuery = use$(() => {
+    if (!repositoryCoordinates?.length) {
+      return of({ settled: true, relayCount: 0, failedRelayCount: 0 });
     }
 
     const filters: Filter[] = [
@@ -147,11 +143,7 @@ export function useCICoordinators(
       } as Filter);
     }
 
-    return resilientSubscription(pool, repoRelays, filters).pipe(
-      onlyEvents(),
-      mapEventsToStore(store),
-      catchError(() => EMPTY),
-    );
+    return loadRelayQueryUntilSettled(pool, repoRelays, filters, store);
   }, [coordinatesKey, maintainersKey, repoRelayKey, selectedCoordinate, store]);
 
   const summaries = use$(() => {
@@ -322,5 +314,16 @@ export function useCICoordinators(
     );
   }, [coordinatesKey, maintainersKey, selectedCoordinate, store]);
 
-  return summaries;
+  if (!summaries) return undefined;
+  const settled = indexQuery?.settled === true && repoQuery?.settled === true;
+  return {
+    ...summaries,
+    settled,
+    partial:
+      (indexQuery?.failedRelayCount ?? 0) > 0 ||
+      (repoQuery?.failedRelayCount ?? 0) > 0 ||
+      (settled &&
+        ((indexQuery?.relayCount ?? 0) === 0 ||
+          (repoQuery?.relayCount ?? 0) === 0)),
+  };
 }

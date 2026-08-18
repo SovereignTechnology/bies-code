@@ -14,6 +14,7 @@ import { useUserStarredRepos } from "@/hooks/useUserStarredRepos";
 import { useUserActivity } from "@/hooks/useUserActivity";
 import { usePrefetchNip05 } from "@/hooks/usePrefetchNip05";
 import { useCICoordinatorAdvertisement } from "@/hooks/useCICoordinatorProfile";
+import { useCIProviderAdvertisement } from "@/hooks/useCIProviderAdvertisement";
 import { useDefaultRepoPath } from "@/hooks/useRepoPath";
 import { ActivityFeed } from "@/components/ActivityFeed";
 import { useIsFollowing } from "@/hooks/useIsFollowing";
@@ -54,6 +55,7 @@ import {
   ChevronDown,
   ChevronRight,
   RadioTower,
+  Cpu,
 } from "lucide-react";
 import { useState, useCallback, type ReactNode } from "react";
 import {
@@ -160,6 +162,7 @@ export default function UserPage({ pubkey }: UserPageProps) {
   const pinnedCoords = useUserPinnedCoords(pubkey);
   const pinnedRepos = useUserPinnedRepos(pubkey);
   const coordinatorAdvertisement = useCICoordinatorAdvertisement(pubkey);
+  const providerAdvertisement = useCIProviderAdvertisement(pubkey);
 
   // Prefetch NIP-05 identity so useRepoPath resolves it from IDB on next visit
   usePrefetchNip05([pubkey]);
@@ -244,7 +247,9 @@ export default function UserPage({ pubkey }: UserPageProps) {
                   <div className="flex items-center gap-4 flex-wrap">
                     {profile.nip05 && (
                       <span className="text-sm text-pink-600 dark:text-pink-400 font-medium">
-                        {profile.nip05}
+                        {profile.nip05.startsWith("_@")
+                          ? profile.nip05.slice(2)
+                          : profile.nip05}
                       </span>
                     )}
 
@@ -299,6 +304,19 @@ export default function UserPage({ pubkey }: UserPageProps) {
                     <Link to={`/coordinator/${npub}`}>
                       <RadioTower className="h-3.5 w-3.5" />
                       CI coordinator
+                    </Link>
+                  </Button>
+                )}
+                {providerAdvertisement.advertisement && (
+                  <Button
+                    asChild
+                    variant="outline"
+                    size="sm"
+                    className="gap-1.5"
+                  >
+                    <Link to={`/provider/${npub}`}>
+                      <Cpu className="h-3.5 w-3.5" />
+                      CI provider
                     </Link>
                   </Button>
                 )}

@@ -17,7 +17,6 @@ import {
   KeyRound,
   RadioTower,
   Server,
-  ShieldQuestion,
 } from "lucide-react";
 import type {
   CICoordinatorAdvertisement,
@@ -46,6 +45,9 @@ import { decodePubkeyIdentifier, standardizeNip05 } from "@/lib/routeUtils";
 import { cn } from "@/lib/utils";
 import { RepositoryModel } from "@/models/RepositoryModel";
 import NotFound from "@/pages/NotFound";
+import { CITrustContextLabel } from "@/components/ci/CITrustContextLabel";
+import { useCITrustContext } from "@/hooks/useCITrustContext";
+import { getCITrustResolution } from "@/lib/ciTrustContext";
 
 function humanize(value: string | undefined): string {
   return value?.replaceAll("-", " ") ?? "Not advertised";
@@ -69,6 +71,9 @@ export default function CICoordinatorPage() {
   useLoadProfile(pubkey);
   const profile = useProfile(pubkey);
   const state = useCICoordinatorProfile(pubkey);
+  const trust = useCITrustContext({
+    extraIdentities: pubkey ? [pubkey] : [],
+  });
   const now = Math.floor(Date.now() / 1000);
   const advertisementIsLive =
     state?.advertisement !== undefined && state.advertisement.expiration > now;
@@ -186,6 +191,9 @@ export default function CICoordinatorPage() {
                       ? "Live coordinator"
                       : "Offline coordinator"}
                   </Badge>
+                  <CITrustContextLabel
+                    resolution={getCITrustResolution(trust, pubkey)}
+                  />
                 </div>
                 <p className="mt-2 text-lg text-muted-foreground">
                   Signed CI service capabilities and repository activity.
@@ -193,7 +201,9 @@ export default function CICoordinatorPage() {
                 <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
                   {profile?.nip05 && (
                     <span className="font-medium text-pink-600 dark:text-pink-400">
-                      {profile.nip05}
+                      {profile.nip05.startsWith("_@")
+                        ? profile.nip05.slice(2)
+                        : profile.nip05}
                     </span>
                   )}
                   <Link
@@ -271,19 +281,23 @@ export default function CICoordinatorPage() {
             />
             <Card className="border-dashed">
               <CardContent className="p-5">
-                <div className="flex items-start gap-3">
-                  <ShieldQuestion className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" />
-                  <div>
-                    <h2 className="font-semibold">
-                      Signed claims, not authority
-                    </h2>
-                    <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
-                      Advertisements, readiness lists, and repository statuses
-                      describe what this coordinator claims to offer. They do
-                      not make it a repository maintainer or a trusted runner.
-                    </p>
-                  </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="font-semibold">CI trust context</h2>
+                  <CITrustContextLabel
+                    resolution={getCITrustResolution(trust, pubkey)}
+                  />
                 </div>
+                <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+                  This global view uses independently verified infrastructure
+                  and viewer-relative social history. Repository-specific
+                  maintainer direction appears when this coordinator is viewed
+                  in a repository context.
+                </p>
+                <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                  Advertisements, readiness lists, and repository statuses are
+                  signed claims. Trust context does not make this identity a
+                  repository maintainer or guarantee its CI results.
+                </p>
               </CardContent>
             </Card>
           </aside>

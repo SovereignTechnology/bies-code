@@ -13,7 +13,7 @@
 - Discover coordinator repository status on readiness-targeted repository relays when no NIP-65 outbox is available, and route coordinator identity links in CI surfaces to the coordinator profile.
 - Stop the Android app from repeatedly re-opening a cold-start gitworkshop.dev link, which blocked navigating away from the opened page and caused visible flashing.
 - Stop showing inferred stacked-PR relationships once the shared base commit is reachable from the PR's target branch, including fast-forwarded parents.
-- Show the repo Actions tab's coordinator-trust shields and repository-attribution warnings on pull request checks as well.
+- Show the repo Actions tab's CI trust-context labels and repository-attribution warnings on pull request checks as well.
 - Keep repository tabs, inline diff comment threads, Git and relay status popovers, and profile and branch loading placeholders within phone-sized viewports.
 - Make file diffs swipeable on mobile with a compact contextual line-number gutter and hunk headers that remain visible while scrolling.
 - Keep composer edit controls visible while previewing, show live attachment-upload progress, and disable conflicting actions until uploads finish.
@@ -28,6 +28,10 @@
 
 ### Features
 
+- Classify CI coordinators and providers with settled maintainer-directed,
+  operationally associated, socially corroborated, or no-known-context
+  evidence across Actions, pull requests, commits, refs, coordinator pages,
+  and provider profiles, with concise popovers and incomplete-query handling.
 - Publish pull request web builds as credential-free NIP-5A previews under a
   fresh identity per run and expose their URL as a public CI job output.
 - Show a prominent, caution-labelled nsite preview link on pull requests when

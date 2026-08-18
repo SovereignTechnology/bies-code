@@ -4,6 +4,8 @@ export interface NsitePreview {
   name: string;
   url: string;
   hostname: string;
+  run: CIWorkflowRun;
+  job: CIWorkflowRun["jobs"][number];
 }
 
 const NSITE_OUTPUT_NAME_RE = /^nsite(?:_|$)/;
@@ -30,7 +32,8 @@ export function findNsitePreview(
   runs: readonly CIWorkflowRun[],
 ): NsitePreview | undefined {
   for (const run of runs) {
-    for (const { result } of run.jobs) {
+    for (const job of run.jobs) {
+      const { result } = job;
       if (result.status !== "success") continue;
 
       for (const output of result.outputs) {
@@ -43,6 +46,8 @@ export function findNsitePreview(
           name: output.name,
           url: url.toString(),
           hostname: url.hostname,
+          run,
+          job,
         };
       }
     }

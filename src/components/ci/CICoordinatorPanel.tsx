@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 import { nip19 } from "nostr-tools";
 import {
   ArrowRight,
+  Check,
   ChevronRight,
   CircleStop,
   Clock3,
@@ -13,9 +14,6 @@ import {
   LockKeyhole,
   Play,
   RadioTower,
-  ShieldAlert,
-  ShieldCheck,
-  ShieldQuestion,
   Sparkles,
 } from "lucide-react";
 import type { ResolvedRepo } from "@/lib/nip34";
@@ -47,8 +45,14 @@ import type {
   CIPendingSecretChange,
   SubmitCIRepositorySecretsResult,
 } from "@/services/ci";
+import {
+  getCITrustResolution,
+  summarizeCIRunTrust,
+  type CITrustContextState,
+} from "@/lib/ciTrustContext";
 import { CICoordinatorLink } from "./CICoordinatorLink";
 import { CISecretsDialog } from "./CISecretsDialog";
+import { CITrustContextLabel } from "./CITrustContextLabel";
 
 const availabilityPresentation: Record<
   CICoordinatorAvailability,
@@ -84,48 +88,6 @@ function billingLabel(summary: CICoordinatorSummary): string | undefined {
   }
 }
 
-function relationshipLabel(relationship: CICoordinatorRelationship): string {
-  if (relationship.level === "requested") return "Maintainer requested";
-  if (relationship.level === "previously-requested") {
-    if (relationship.manualRunCount > 0 && relationship.serviceRunCount === 0) {
-      return `${relationship.manualRunCount} manual ${relationship.manualRunCount === 1 ? "run" : "runs"} requested`;
-    }
-    return "Maintainer requested previously";
-  }
-  return "Not maintainer requested";
-}
-
-function CoordinatorRelationshipBadge({
-  relationship,
-}: {
-  relationship: CICoordinatorRelationship;
-}) {
-  const Icon =
-    relationship.level === "previously-requested"
-      ? ShieldQuestion
-      : relationship.level === "unassociated"
-        ? ShieldAlert
-        : undefined;
-
-  return (
-    <Badge
-      variant="outline"
-      className={cn(
-        "h-5 gap-1 px-1.5 text-[10px] font-normal",
-        relationship.level === "requested" &&
-          "border-border bg-muted/60 text-foreground",
-        relationship.level === "previously-requested" &&
-          "border-border bg-muted/60 text-muted-foreground",
-        relationship.level === "unassociated" &&
-          "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300",
-      )}
-    >
-      {Icon && <Icon className="h-3 w-3" />}
-      {relationshipLabel(relationship)}
-    </Badge>
-  );
-}
-
 function coordinatorPath(basePath: string, pubkey: string): string {
   return `${basePath}/actions/coordinators/${nip19.npubEncode(pubkey)}`;
 }
@@ -155,11 +117,13 @@ export function CICoordinatorSummaryBar({
   runs,
   basePath,
   relationships,
+  trust,
 }: {
   coordinators: CICoordinatorSummary[] | undefined;
   runs: CIWorkflowRun[] | undefined;
   basePath: string;
   relationships: ReadonlyMap<string, CICoordinatorRelationship>;
+  trust: CITrustContextState;
 }) {
   const watchingCount =
     coordinators?.filter(({ availability }) => availability === "watching")
@@ -188,6 +152,11 @@ export function CICoordinatorSummaryBar({
   const offlineCount = [...knownCoordinatorPubkeys].filter(
     (pubkey) => !liveCoordinatorPubkeys.has(pubkey),
   ).length;
+  const trustSummary = summarizeCIRunTrust(
+    [...knownCoordinatorPubkeys].map((pubkey) =>
+      getCITrustResolution(trust, pubkey),
+    ),
+  );
   const relevantCoordinators =
     coordinators?.filter(
       ({ availability, pubkey }) =>
@@ -266,10 +235,12 @@ export function CICoordinatorSummaryBar({
                     )}
                     {previouslyRequestedCount > 0 && (
                       <span className="inline-flex items-center gap-1 text-muted-foreground">
-                        <ShieldQuestion className="h-3 w-3" />
                         {previouslyRequestedCount} of {knownCoordinatorCount}{" "}
                         previously requested by maintainers
                       </span>
+                    )}
+                    {knownCoordinatorCount > 0 && (
+                      <CITrustContextLabel resolution={trustSummary} />
                     )}
                   </div>
                 )}
@@ -312,11 +283,13 @@ export function CICoordinatorDirectory({
   runs,
   basePath,
   relationships,
+  trust,
 }: {
   coordinators: CICoordinatorSummary[] | undefined;
   runs: CIWorkflowRun[] | undefined;
   basePath: string;
   relationships: ReadonlyMap<string, CICoordinatorRelationship>;
+  trust: CITrustContextState;
 }) {
   const entries = useMemo(() => {
     if (!coordinators || !runs) return undefined;
@@ -379,15 +352,14 @@ export function CICoordinatorDirectory({
           const presentation = summary
             ? availabilityPresentation[summary.availability]
             : undefined;
-          const relationship = getCICoordinatorRelationship(
-            relationships,
-            pubkey,
-          );
           return (
-            <li key={pubkey}>
+            <li
+              key={pubkey}
+              className="group flex min-w-0 items-center transition-colors hover:bg-accent/40"
+            >
               <Link
                 to={coordinatorPath(basePath, pubkey)}
-                className="group flex min-w-0 items-center gap-3 px-4 py-3 transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:px-5"
+                className="flex min-w-0 flex-1 items-center gap-3 px-4 py-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:pl-5 sm:pr-3"
               >
                 <UserAvatar pubkey={pubkey} size="md" noHoverCard />
                 <div className="min-w-0 flex-1">
@@ -425,7 +397,6 @@ export function CICoordinatorDirectory({
                         Offline
                       </Badge>
                     )}
-                    <CoordinatorRelationshipBadge relationship={relationship} />
                     <span className="text-[10px] text-muted-foreground sm:hidden">
                       {runCount} run{runCount === 1 ? "" : "s"}
                     </span>
@@ -445,6 +416,10 @@ export function CICoordinatorDirectory({
                 </span>
                 <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
               </Link>
+              <CITrustContextLabel
+                resolution={getCITrustResolution(trust, pubkey)}
+                className="mr-4 sm:mr-5"
+              />
             </li>
           );
         })}
@@ -459,12 +434,14 @@ export function CICoordinatorDetailsCard({
   isMaintainer,
   relationship,
   controls,
+  trust,
 }: {
   summary: CICoordinatorSummary;
   repo: ResolvedRepo;
   isMaintainer: boolean;
   relationship: CICoordinatorRelationship;
   controls: readonly CIServiceControl[];
+  trust: CITrustContextState;
 }) {
   const [secretDialogOpen, setSecretDialogOpen] = useState(false);
   const [pendingSecretChanges, setPendingSecretChanges] = useState<
@@ -547,6 +524,9 @@ export function CICoordinatorDetailsCard({
                   avatarSize="md"
                   nameClassName="max-w-48 truncate"
                 />
+                <CITrustContextLabel
+                  resolution={getCITrustResolution(trust, summary.pubkey)}
+                />
                 {summary.advertisement.version && (
                   <span className="font-mono text-[10px] text-muted-foreground">
                     v{summary.advertisement.version}
@@ -578,6 +558,7 @@ export function CICoordinatorDetailsCard({
               executionPolicy={summary.advertisement.executionPolicy}
               relationship={relationship}
               availability={summary.availability}
+              trust={trust}
             />
           </div>
 
@@ -767,6 +748,7 @@ export function CICoordinatorDetailsCard({
           coordinator={summary}
           repo={repo}
           pendingChanges={pendingSecretChanges}
+          trust={trust}
           onSubmitted={recordPendingSecretChanges}
         />
       )}
@@ -782,6 +764,7 @@ export function CIServiceControlPanel({
   executionPolicy,
   relationship,
   availability,
+  trust,
 }: {
   coordinatorPubkey: string;
   controls: readonly CIServiceControl[];
@@ -790,6 +773,7 @@ export function CIServiceControlPanel({
   executionPolicy: CIExecutionPolicy | undefined;
   relationship: CICoordinatorRelationship;
   availability: CICoordinatorAvailability | undefined;
+  trust: CITrustContextState;
 }) {
   const [updatingService, setUpdatingService] = useState(false);
   const [showAllControls, setShowAllControls] = useState(false);
@@ -869,35 +853,16 @@ export function CIServiceControlPanel({
   const requestPrompt = canRecogniseExistingService
     ? "Did a maintainer arrange this? Recognise it so visitors can distinguish it from unsolicited CI."
     : "Request this service so visitors can see that repository maintainers chose it.";
-  const TrustIcon = isRequested
-    ? undefined
-    : relationship.level === "previously-requested"
-      ? ShieldQuestion
-      : ShieldAlert;
-
   return (
-    <div
-      className={cn(
-        isRequested
-          ? "border-l-2 border-l-muted-foreground/40 pl-3 sm:pl-4"
-          : relationship.level === "previously-requested"
-            ? "rounded-lg border border-border bg-muted/30 p-3"
-            : "rounded-lg border border-amber-500/30 bg-amber-500/[0.06] p-3",
-      )}
-    >
+    <div className="rounded-lg border border-border bg-muted/20 p-3">
       <div className="flex min-w-0 items-start gap-2">
-        {TrustIcon && (
-          <TrustIcon
-            className={cn(
-              "mt-0.5 h-4 w-4 shrink-0",
-              relationship.level === "previously-requested"
-                ? "text-muted-foreground"
-                : "text-amber-600 dark:text-amber-400",
-            )}
-          />
-        )}
         <div className="min-w-0 flex-1">
-          <h2 className="text-sm font-semibold">{trustTitle}</h2>
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="text-sm font-semibold">{trustTitle}</h2>
+            <CITrustContextLabel
+              resolution={getCITrustResolution(trust, coordinatorPubkey)}
+            />
+          </div>
           <p className="mt-1 text-xs text-muted-foreground">
             {trustDescription}
           </p>
@@ -924,7 +889,7 @@ export function CIServiceControlPanel({
             ) : isRequested ? (
               <CircleStop className="h-3.5 w-3.5" />
             ) : canRecogniseExistingService ? (
-              <ShieldCheck className="h-3.5 w-3.5" />
+              <Check className="h-3.5 w-3.5" />
             ) : (
               <Play className="h-3.5 w-3.5" />
             )}

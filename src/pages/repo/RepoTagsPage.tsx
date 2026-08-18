@@ -28,6 +28,15 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tag, AlertCircle } from "lucide-react";
 import { isNonHttpUrl } from "@/lib/git-grasp-pool";
 import { IncompatibleProtocolError } from "@/components/IncompatibleProtocolError";
+import { useCIForCommits } from "@/hooks/useCI";
+import { useRepositoryCITrust } from "@/hooks/useRepositoryCITrust";
+import { CIStatusIcon } from "@/components/ci/CIStatusIcon";
+import { CITrustContextLabel } from "@/components/ci/CITrustContextLabel";
+import { summarizeRuns } from "@/lib/ci";
+import {
+  getCIRunTrustResolution,
+  summarizeCIRunTrust,
+} from "@/lib/ciTrustContext";
 
 export default function RepoTagsPage() {
   const {
@@ -103,6 +112,21 @@ export default function RepoTagsPage() {
   const sortedTags = useMemo(
     () => [...tags].sort((a, b) => compareTagsNewestFirst(a.name, b.name)),
     [tags],
+  );
+  const tagCommitIds = useMemo(
+    () => sortedTags.map((tag) => tag.hash),
+    [sortedTags],
+  );
+  const ciChecks = useCIForCommits(tagCommitIds, resolved?.repoRelayGroup);
+  const ciRuns = useMemo(
+    () =>
+      ciChecks ? [...ciChecks.values()].flatMap((checks) => checks.runs) : [],
+    [ciChecks],
+  );
+  const { coordinatorState, trust } = useRepositoryCITrust(
+    repo,
+    ciRuns,
+    resolved?.repoRelayGroup,
   );
 
   useSeoMeta({
@@ -226,14 +250,44 @@ export default function RepoTagsPage() {
                   annotated={tag.rawTagOid !== undefined}
                 />
               );
+              const ci = ciChecks?.get(tag.hash);
+              const trustResolution = summarizeCIRunTrust(
+                (ci?.runs ?? []).map((run) =>
+                  getCIRunTrustResolution(
+                    trust,
+                    run,
+                    repo?.confirmedMaintainers ?? [],
+                    coordinatorState?.serviceControls ?? [],
+                  ),
+                ),
+              );
               return (
-                <Link
-                  key={tag.name}
-                  to={tagHref(tag.name)}
-                  className="block hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring transition-colors"
-                >
-                  {row}
-                </Link>
+                <div key={tag.name} className="flex items-center pr-4">
+                  <Link
+                    to={tagHref(tag.name)}
+                    className="min-w-0 flex-1 transition-colors hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  >
+                    {row}
+                  </Link>
+                  {ci?.status && (
+                    <span
+                      className="ml-2 inline-flex shrink-0 items-center"
+                      title={`CI: ${summarizeRuns(ci.runs)}`}
+                    >
+                      <CIStatusIcon
+                        status={ci.status}
+                        className="h-3.5 w-3.5"
+                      />
+                    </span>
+                  )}
+                  {ci && ci.runs.length > 0 && (
+                    <CITrustContextLabel
+                      resolution={trustResolution}
+                      visibility="exceptions-only"
+                      className="ml-2"
+                    />
+                  )}
+                </div>
               );
             })}
           </div>

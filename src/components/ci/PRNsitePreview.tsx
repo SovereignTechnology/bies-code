@@ -5,9 +5,15 @@ import { Card, CardContent } from "@/components/ui/card";
 import type { PRCIChecks } from "@/hooks/useCI";
 import { findNsitePreview, type NsitePreview } from "@/lib/ciOutputs";
 import { cn } from "@/lib/utils";
+import { CITrustContextLabel } from "@/components/ci/CITrustContextLabel";
+import {
+  getCIJobTrustResolution,
+  type CITrustContextState,
+} from "@/lib/ciTrustContext";
 
 interface PRNsitePreviewProps {
   checks: PRCIChecks;
+  trust?: CITrustContextState;
   className?: string;
 }
 
@@ -39,7 +45,11 @@ export function NsitePreviewLink({
 }
 
 /** Prominent PR-level link for an nsite published by the latest successful CI. */
-export function PRNsitePreview({ checks, className }: PRNsitePreviewProps) {
+export function PRNsitePreview({
+  checks,
+  trust,
+  className,
+}: PRNsitePreviewProps) {
   const preview = useMemo(
     () => findNsitePreview(checks.currentRuns),
     [checks.currentRuns],
@@ -66,9 +76,21 @@ export function PRNsitePreview({ checks, className }: PRNsitePreviewProps) {
               <p className="mt-0.5 text-sm text-muted-foreground">
                 CI published the current pull request build as an nsite.
               </p>
-              <p className="mt-1 truncate font-mono text-xs text-muted-foreground/80">
-                {preview.hostname}
-              </p>
+              <div className="mt-1 flex flex-wrap items-center gap-2">
+                <p className="truncate font-mono text-xs text-muted-foreground/80">
+                  {preview.hostname}
+                </p>
+                {trust && (
+                  <CITrustContextLabel
+                    resolution={getCIJobTrustResolution(
+                      trust,
+                      preview.run,
+                      preview.job,
+                    )}
+                    visibility="exceptions-only"
+                  />
+                )}
+              </div>
             </div>
           </div>
 

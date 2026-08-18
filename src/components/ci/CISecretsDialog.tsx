@@ -3,6 +3,7 @@ import { useActiveAccount } from "applesauce-react/hooks";
 import { formatDistanceToNow } from "date-fns";
 import {
   Clock3,
+  CheckCircle2,
   Eye,
   EyeOff,
   KeyRound,
@@ -10,7 +11,6 @@ import {
   LockKeyhole,
   Link2Off,
   Plus,
-  ShieldCheck,
   Trash2,
 } from "lucide-react";
 import type { ResolvedRepo } from "@/lib/nip34";
@@ -42,6 +42,11 @@ import {
   type CIPendingSecretChange,
   type SubmitCIRepositorySecretsResult,
 } from "@/services/ci";
+import {
+  getCITrustResolution,
+  type CITrustContextState,
+} from "@/lib/ciTrustContext";
+import { CITrustContextLabel } from "./CITrustContextLabel";
 
 interface SecretRow {
   id: number;
@@ -55,6 +60,7 @@ interface CISecretsDialogProps {
   coordinator: CICoordinatorSummary;
   repo: ResolvedRepo;
   pendingChanges: readonly CIPendingSecretChange[];
+  trust: CITrustContextState;
   onSubmitted: (
     result: SubmitCIRepositorySecretsResult,
     baselineStatusId: string | undefined,
@@ -78,6 +84,7 @@ export function CISecretsDialog({
   coordinator,
   repo,
   pendingChanges,
+  trust,
   onSubmitted,
 }: CISecretsDialogProps) {
   const account = useActiveAccount();
@@ -318,6 +325,11 @@ export function CISecretsDialog({
                 variant="inline"
               />
             </span>
+            <span className="mr-1 inline-flex align-middle">
+              <CITrustContextLabel
+                resolution={getCITrustResolution(trust, coordinator.pubkey)}
+              />
+            </span>
             using its current one-time recipient.
           </DialogDescription>
         </DialogHeader>
@@ -372,7 +384,7 @@ export function CISecretsDialog({
             <div className="space-y-4 p-4 sm:p-5">
               <div className="flex items-start gap-3">
                 <div className="rounded-lg border border-violet-500/20 bg-violet-500/10 p-2 text-violet-600 dark:text-violet-300">
-                  <ShieldCheck className="h-4 w-4" />
+                  <CheckCircle2 className="h-4 w-4" />
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
