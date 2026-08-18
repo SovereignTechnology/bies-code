@@ -1,32 +1,54 @@
 import { useMemo } from "react";
-import { useParams } from "react-router-dom";
-import { parseRelayUrl } from "@/lib/routeUtils";
-import { use$ } from "@/hooks/use$";
-import { pool } from "@/services/nostr";
-import { REPO_KIND } from "@/lib/nip34";
-import RepositoriesPage from "./RepositoriesPage";
-import NotFound from "./NotFound";
-import { Badge } from "@/components/ui/badge";
-import { Wifi, WifiOff, GitBranch } from "lucide-react";
+import { Link, useParams } from "react-router-dom";
 import type { Filter } from "applesauce-core/helpers";
 import type { RelayCountResponse as CountResponse } from "applesauce-relay";
-import type { Observable } from "rxjs";
-import { map, catchError } from "rxjs/operators";
-import { EMPTY } from "rxjs";
+import { nip19 } from "nostr-tools";
+import { combineLatest, of, type Observable } from "rxjs";
+import { catchError, map } from "rxjs/operators";
+import {
+  ArrowRight,
+  CircleHelp,
+  GitBranch,
+  GitPullRequest,
+  KeyRound,
+  LockKeyhole,
+  RadioTower,
+  Server,
+  ShieldCheck,
+  Wifi,
+  WifiOff,
+} from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
+import { use$ } from "@/hooks/use$";
+import { useCICoordinatorAdvertisement } from "@/hooks/useCICoordinatorProfile";
+import { useDnsIdentity } from "@/hooks/useDnsIdentity";
+import { useGraspServerInfo } from "@/hooks/useGraspServerInfo";
+import {
+  getGraspAccessSummary,
+  type GraspAccessMode,
+  type Nip11Document,
+} from "@/lib/grasp";
+import { ISSUE_KIND, PATCH_KIND, PR_KIND, REPO_KIND } from "@/lib/nip34";
+import { decodePubkeyIdentifier, parseRelayUrl } from "@/lib/routeUtils";
+import { cn } from "@/lib/utils";
+import { pool } from "@/services/nostr";
+import NotFound from "./NotFound";
+import RepositoriesPage from "./RepositoriesPage";
+
+type CountValue = number | null | undefined;
+
+interface GraspServiceCounts {
+  repositories: CountValue;
+  issues: CountValue;
+  pullRequests: CountValue;
+}
 
 /**
- * Browse repositories on a specific relay.
- *
- * Route: /relay/:relaySegment
- *
- * The segment uses the same encoding as relay hints in repo URLs:
- *   - wss:// is stripped:   relay.ngit.dev
- *   - ws:// uses a slash-free encoded scheme: ws%3Arelay.example.com
- *
- * Examples:
- *   /relay/relay.ngit.dev          → wss://relay.ngit.dev
- *   /relay/relay.damus.io          → wss://relay.damus.io
- *   /relay/ws%3Alocalhost           → ws://localhost
+ * Browse one relay as a service. GRASP-specific information lives here;
+ * coordinator identity, capability, and activity remain on /coordinator.
  */
 export default function RelayPage() {
   const { relaySegment } = useParams<{ relaySegment: string }>();
@@ -37,10 +59,10 @@ export default function RelayPage() {
 
   if (!relayUrl) {
     return (
-      <div className="min-h-full flex items-center justify-center">
-        <div className="text-center space-y-2">
+      <div className="flex min-h-full items-center justify-center">
+        <div className="space-y-2 text-center">
           <p className="text-lg font-semibold">Invalid relay URL</p>
-          <p className="text-muted-foreground text-sm">
+          <p className="text-sm text-muted-foreground">
             &ldquo;{relaySegment}&rdquo; could not be parsed as a relay address.
           </p>
         </div>
@@ -48,77 +70,304 @@ export default function RelayPage() {
     );
   }
 
-  // Extract a human-readable label: strip the scheme for display
   const relayLabel = relayUrl.replace(/^wss?:\/\//, "").replace(/\/$/, "");
 
   return (
     <RepositoriesPage
       relayOverride={[relayUrl]}
       relayLabel={relayLabel}
-      relayStatusBanner={<RelayStatusBanner relayUrl={relayUrl} />}
+      relayStatusBanner={
+        <GraspServiceOverview relayUrl={relayUrl} domain={relayLabel} />
+      }
     />
   );
 }
 
-/** Inline banner showing connection status and repo count for a relay. */
-function RelayStatusBanner({ relayUrl }: { relayUrl: string }) {
-  const relayInst = useMemo(() => pool.relay(relayUrl), [relayUrl]);
+function relayCount(
+  relayUrl: string,
+  filter: Filter,
+): Observable<number | null> {
+  return (
+    pool.count([relayUrl], filter) as Observable<Record<string, CountResponse>>
+  ).pipe(
+    map((record) =>
+      Object.values(record).reduce((sum, response) => sum + response.count, 0),
+    ),
+    catchError(() => of(null)),
+  );
+}
 
-  // Reactive connection state
-  const connected = use$(() => relayInst.connected$, [relayInst]);
-
-  // COUNT request for kind:30617 repo announcements on this relay.
-  // pool.count() returns Observable<Record<relayUrl, CountResponse>>.
-  // We sum across all relay responses (there will be one entry for our relay).
-  const repoCount = use$(
+function useGraspServiceCounts(
+  relayUrl: string,
+): GraspServiceCounts | undefined {
+  return use$(
     () =>
-      (
-        pool.count([relayUrl], { kinds: [REPO_KIND] } as Filter) as Observable<
-          Record<string, CountResponse>
-        >
-      ).pipe(
-        map((record) =>
-          Object.values(record).reduce((sum, r) => sum + r.count, 0),
-        ),
-        catchError(() => EMPTY),
-      ),
+      combineLatest({
+        repositories: relayCount(relayUrl, {
+          kinds: [REPO_KIND],
+        } as Filter),
+        issues: relayCount(relayUrl, { kinds: [ISSUE_KIND] } as Filter),
+        pullRequests: relayCount(relayUrl, {
+          kinds: [PATCH_KIND, PR_KIND],
+        } as Filter),
+      }),
     [relayUrl],
   );
+}
+
+function GraspServiceOverview({
+  relayUrl,
+  domain,
+}: {
+  relayUrl: string;
+  domain: string;
+}) {
+  const relay = useMemo(() => pool.relay(relayUrl), [relayUrl]);
+  const connected = use$(() => relay.connected$, [relay]);
+  const counts = useGraspServiceCounts(relayUrl);
+  const server = useGraspServerInfo(domain);
+  const rootIdentity = useDnsIdentity(`_@${domain}`);
+  const operatorPubkey =
+    server?.status === "found" && server.document.pubkey
+      ? decodePubkeyIdentifier(server.document.pubkey)
+      : undefined;
+  const linkedOperatorPubkey =
+    rootIdentity.status === "found" && rootIdentity.pubkey === operatorPubkey
+      ? operatorPubkey
+      : undefined;
+  const coordinator = useCICoordinatorAdvertisement(linkedOperatorPubkey);
+  const now = Math.floor(Date.now() / 1000);
+  const coordinatorIsLive =
+    coordinator.advertisement !== undefined &&
+    coordinator.advertisement.expiration > now;
+  const isGraspService =
+    server?.status === "found" &&
+    (server.document.supported_grasps?.length ?? 0) > 0;
+  const linkIsLoading =
+    server?.status === "loading" ||
+    rootIdentity.status === "loading" ||
+    (linkedOperatorPubkey !== undefined && !coordinator.settled);
 
   return (
-    <div className="flex flex-wrap items-center gap-3">
-      {/* Connection status */}
-      <Badge
-        variant={connected ? "default" : "secondary"}
-        className={
-          connected
-            ? "bg-green-500/15 text-green-600 dark:text-green-400 border-green-500/30 hover:bg-green-500/20"
-            : "bg-muted text-muted-foreground border-border"
-        }
-      >
-        {connected ? (
-          <Wifi className="h-3 w-3 mr-1.5" />
-        ) : (
-          <WifiOff className="h-3 w-3 mr-1.5" />
-        )}
-        {connected === undefined
-          ? "Connecting…"
-          : connected
-            ? "Connected"
-            : "Disconnected"}
-      </Badge>
+    <Card className="overflow-hidden border-border/70 bg-gradient-to-br from-violet-500/[0.06] via-background to-pink-500/[0.05] shadow-sm">
+      <CardContent className="space-y-5 p-4 sm:p-5">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
+          <div className="flex min-w-0 flex-1 items-start gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-violet-500/10 text-violet-600 dark:text-violet-400">
+              <Server className="h-5 w-5" />
+            </div>
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="font-semibold">
+                  {isGraspService ? "GRASP service" : "Relay service"}
+                </h2>
+                <ConnectionBadge connected={connected} />
+              </div>
+              {server?.status === "loading" ? (
+                <Skeleton className="mt-2 h-4 w-72 max-w-full" />
+              ) : (
+                <p className="mt-1 max-w-3xl text-sm leading-relaxed text-muted-foreground">
+                  {server?.status === "found"
+                    ? (server.document.description ??
+                      "Git hosting and repository collaboration over a Nostr relay.")
+                    : "Browse repository announcements observed on this relay."}
+                </p>
+              )}
+            </div>
+          </div>
 
-      {/* Repo count from NIP-45 COUNT */}
-      {repoCount !== undefined && (
-        <Badge
-          variant="secondary"
-          className="bg-pink-500/10 text-pink-600 dark:text-pink-400 border-pink-500/20"
-        >
-          <GitBranch className="h-3 w-3 mr-1.5" />
-          {repoCount.toLocaleString()} repositor
-          {repoCount === 1 ? "y" : "ies"}
-        </Badge>
+          {linkIsLoading ? (
+            <Skeleton className="h-9 w-36 shrink-0" />
+          ) : coordinatorIsLive && linkedOperatorPubkey ? (
+            <Button asChild variant="outline" className="shrink-0 gap-2">
+              <Link
+                to={`/coordinator/${nip19.npubEncode(linkedOperatorPubkey)}?grasp=${encodeURIComponent(domain)}`}
+              >
+                CI coordinator
+                <ArrowRight className="h-4 w-4" />
+              </Link>
+            </Button>
+          ) : null}
+        </div>
+
+        {server?.status === "error" && (
+          <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-900 dark:text-amber-100">
+            GRASP metadata is unavailable: {server.message}
+          </div>
+        )}
+
+        <div className="grid gap-3 md:grid-cols-3">
+          <AccessCard
+            document={server?.status === "found" ? server.document : undefined}
+          />
+          <ServiceCountsCard counts={counts} />
+          <ProtocolCard
+            document={server?.status === "found" ? server.document : undefined}
+          />
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function ConnectionBadge({ connected }: { connected: boolean | undefined }) {
+  return (
+    <Badge
+      variant="outline"
+      className={cn(
+        "gap-1.5 font-normal",
+        connected
+          ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+          : "border-border bg-muted text-muted-foreground",
       )}
+    >
+      {connected ? (
+        <Wifi className="h-3 w-3" />
+      ) : (
+        <WifiOff className="h-3 w-3" />
+      )}
+      {connected === undefined
+        ? "Connecting…"
+        : connected
+          ? "Connected"
+          : "Disconnected"}
+    </Badge>
+  );
+}
+
+const accessPresentation: Record<
+  GraspAccessMode,
+  { icon: typeof ShieldCheck; className: string }
+> = {
+  public: {
+    icon: ShieldCheck,
+    className: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+  },
+  curated: {
+    icon: KeyRound,
+    className: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
+  },
+  private: {
+    icon: LockKeyhole,
+    className: "bg-violet-500/10 text-violet-600 dark:text-violet-400",
+  },
+  unknown: {
+    icon: CircleHelp,
+    className: "bg-muted text-muted-foreground",
+  },
+};
+
+function AccessCard({ document }: { document: Nip11Document | undefined }) {
+  if (!document) return <OverviewSkeleton />;
+  const access = getGraspAccessSummary(document);
+  const presentation = accessPresentation[access.mode];
+  const Icon = presentation.icon;
+
+  return (
+    <div className="rounded-xl border border-border/70 bg-background/70 p-4">
+      <div
+        className={cn(
+          "mb-3 flex h-8 w-8 items-center justify-center rounded-lg",
+          presentation.className,
+        )}
+      >
+        <Icon className="h-4 w-4" />
+      </div>
+      <p className="text-sm font-semibold">{access.title}</p>
+      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+        {access.description}
+      </p>
+      {access.criteria && access.mode !== "public" && (
+        <p className="mt-2 text-xs text-muted-foreground">
+          Published policy: {access.criteria}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function ServiceCountsCard({
+  counts,
+}: {
+  counts: GraspServiceCounts | undefined;
+}) {
+  const stats = [
+    {
+      label: "Repositories",
+      value: counts?.repositories,
+      icon: GitBranch,
+    },
+    { label: "Issues", value: counts?.issues, icon: RadioTower },
+    {
+      label: "Pull requests",
+      value: counts?.pullRequests,
+      icon: GitPullRequest,
+    },
+  ];
+
+  return (
+    <div className="rounded-xl border border-border/70 bg-background/70 p-4">
+      <p className="text-sm font-semibold">Hosted collaboration</p>
+      <dl className="mt-3 space-y-2.5">
+        {stats.map(({ label, value, icon: Icon }) => (
+          <div key={label} className="flex items-center gap-2 text-xs">
+            <Icon className="h-3.5 w-3.5 text-muted-foreground" />
+            <dt className="flex-1 text-muted-foreground">{label}</dt>
+            <dd className="font-mono font-medium tabular-nums">
+              {value === undefined
+                ? "…"
+                : value === null
+                  ? "Unavailable"
+                  : value.toLocaleString()}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  );
+}
+
+function ProtocolCard({ document }: { document: Nip11Document | undefined }) {
+  if (!document) return <OverviewSkeleton />;
+  const grasps = document.supported_grasps ?? [];
+
+  return (
+    <div className="rounded-xl border border-border/70 bg-background/70 p-4">
+      <p className="text-sm font-semibold">Service protocol</p>
+      <div className="mt-3 flex flex-wrap gap-1.5">
+        {grasps.length > 0 ? (
+          grasps.map((grasp) => (
+            <Badge
+              key={grasp}
+              variant="secondary"
+              className="font-mono text-[10px]"
+            >
+              {grasp}
+            </Badge>
+          ))
+        ) : (
+          <span className="text-xs text-muted-foreground">
+            No GRASP capabilities advertised
+          </span>
+        )}
+      </div>
+      <p className="mt-3 text-xs text-muted-foreground">
+        {document.version ? `Version ${document.version}` : "Version unknown"}
+        {document.supported_nips?.length
+          ? ` · ${document.supported_nips.length} NIPs`
+          : ""}
+      </p>
+    </div>
+  );
+}
+
+function OverviewSkeleton() {
+  return (
+    <div className="space-y-3 rounded-xl border border-border/70 bg-background/70 p-4">
+      <Skeleton className="h-8 w-8 rounded-lg" />
+      <Skeleton className="h-4 w-28" />
+      <Skeleton className="h-3 w-full" />
+      <Skeleton className="h-3 w-4/5" />
     </div>
   );
 }

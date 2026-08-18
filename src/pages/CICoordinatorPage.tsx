@@ -1,5 +1,5 @@
 import { useMemo, type ReactNode } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import { useSeoMeta } from "@unhead/react";
 import { format, formatDistanceToNow } from "date-fns";
 import type { Observable } from "rxjs";
@@ -41,6 +41,7 @@ import { useGraspServerInfo } from "@/hooks/useGraspServerInfo";
 import { useLoadProfile } from "@/hooks/useLoadProfile";
 import { useProfile } from "@/hooks/useProfile";
 import { useDefaultRepoCoordPath } from "@/hooks/useRepoPath";
+import { isValidGraspDomain, normalizeGraspDomain } from "@/lib/grasp";
 import { parseRepoCoordinate, type ResolvedRepo } from "@/lib/nip34";
 import { decodePubkeyIdentifier, standardizeNip05 } from "@/lib/routeUtils";
 import { cn } from "@/lib/utils";
@@ -134,6 +135,13 @@ function coordinatorProfileTrustResolution(
 
 export default function CICoordinatorPage() {
   const { coordinatorIdentifier = "" } = useParams();
+  const [searchParams] = useSearchParams();
+  const rawGraspDomainHint = searchParams.get("grasp");
+  const graspDomainHint = useMemo(() => {
+    if (!rawGraspDomainHint) return undefined;
+    const normalized = normalizeGraspDomain(rawGraspDomainHint);
+    return isValidGraspDomain(normalized) ? normalized : undefined;
+  }, [rawGraspDomainHint]);
   const pubkey = decodePubkeyIdentifier(coordinatorIdentifier);
   useLoadProfile(pubkey);
   const profile = useProfile(pubkey);
@@ -353,6 +361,7 @@ export default function CICoordinatorPage() {
               pubkey={pubkey}
               state={state}
               nip05={profile?.nip05}
+              graspDomainHint={graspDomainHint}
             />
             <CoordinatorTrustContextCard
               resolution={profileTrust}
@@ -914,46 +923,55 @@ function CoordinatorInfrastructureCard({
   pubkey,
   state,
   nip05,
+  graspDomainHint,
 }: {
   pubkey: string;
   state: CICoordinatorProfileState | undefined;
   nip05: string | undefined;
+  graspDomainHint: string | undefined;
 }) {
   const standardizedNip05 = nip05 ? standardizeNip05(nip05) : undefined;
-  const domain = standardizedNip05?.split("@")[1];
-  const identity = useDnsIdentity(standardizedNip05);
+  const publishedDomain = standardizedNip05?.split("@")[1];
+  const domain = graspDomainHint ?? publishedDomain;
+  const identityName = graspDomainHint
+    ? `_@${graspDomainHint}`
+    : standardizedNip05;
+  const identity = useDnsIdentity(identityName);
   const identityMatches =
     identity.status === "found" && identity.pubkey === pubkey;
   const server = useGraspServerInfo(identityMatches ? domain : undefined);
+  const serverOperatorPubkey =
+    server?.status === "found" && server.document.pubkey
+      ? decodePubkeyIdentifier(server.document.pubkey)
+      : undefined;
   const operatorMatches =
-    server?.status === "found" && server.document.pubkey === pubkey;
+    server?.status === "found" && serverOperatorPubkey === pubkey;
   const operatorMismatch =
     server?.status === "found" &&
-    !!server.document.pubkey &&
-    server.document.pubkey !== pubkey;
-  const graspCapabilities =
+    !!serverOperatorPubkey &&
+    serverOperatorPubkey !== pubkey;
+  const isGraspService =
     server?.status === "found" &&
-    Array.isArray(server.document.supported_grasps)
-      ? server.document.supported_grasps
-      : [];
+    (server.document.supported_grasps?.length ?? 0) > 0;
+  const linkedGraspService = operatorMatches && isGraspService;
 
   return (
     <Card>
       <CardHeader className="pb-4">
         <CardTitle className="flex items-center gap-2 text-lg">
           <Server className="h-5 w-5 text-violet-500" />
-          Relays &amp; infrastructure
+          Coordinator infrastructure
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-6">
         <div>
           <div className="mb-2 flex items-center gap-2 text-sm font-medium">
             <Globe2 className="h-4 w-4 text-muted-foreground" />
-            NIP-05 GRASP server
+            Linked GRASP service
           </div>
-          {!standardizedNip05 ? (
+          {!identityName ? (
             <p className="text-sm text-muted-foreground">
-              No NIP-05 domain is published yet.
+              No linked service domain is available yet.
             </p>
           ) : identity.status === "loading" ? (
             <Skeleton className="h-16 w-full" />
@@ -962,20 +980,10 @@ function CoordinatorInfrastructureCard({
               tone="warning"
               title="Identity does not match"
             >
-              {standardizedNip05} does not currently resolve to this coordinator
-              key.
+              {identityName} does not currently resolve to this coordinator key.
             </InfrastructureNotice>
           ) : (
             <div className="space-y-2">
-              <a
-                href={`https://${domain}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1.5 break-all text-sm font-medium text-pink-600 hover:underline dark:text-pink-400"
-              >
-                {domain}
-                <ArrowUpRight className="h-3.5 w-3.5 shrink-0" />
-              </a>
               {server?.status === "loading" && (
                 <Skeleton className="h-16 w-full" />
               )}
@@ -985,41 +993,48 @@ function CoordinatorInfrastructureCard({
                 </InfrastructureNotice>
               )}
               {server?.status === "found" && (
-                <div className="rounded-lg border border-border/70 bg-muted/30 p-3">
-                  <div className="flex items-start gap-2">
-                    {operatorMatches ? (
-                      <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
-                    ) : (
-                      <CircleAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
-                    )}
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium">
-                        {operatorMatches
-                          ? "NIP-11 operator key matches"
-                          : operatorMismatch
-                            ? "NIP-11 operator key differs"
-                            : "NIP-11 has no operator key"}
-                      </p>
-                      <p className="mt-0.5 text-xs text-muted-foreground">
-                        {server.document.name ?? "Unnamed Nostr relay"}
-                        {server.document.version
-                          ? ` · v${server.document.version}`
-                          : ""}
-                      </p>
+                <div className="space-y-2">
+                  <div className="rounded-lg border border-border/70 bg-muted/30 p-3">
+                    <div className="flex items-start gap-2">
+                      {linkedGraspService ? (
+                        <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
+                      ) : (
+                        <CircleAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
+                      )}
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium">
+                          {linkedGraspService
+                            ? domain
+                            : operatorMismatch
+                              ? "NIP-11 operator key differs"
+                              : operatorMatches
+                                ? "No GRASP capabilities advertised"
+                                : "NIP-11 has no operator key"}
+                        </p>
+                        <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                          {linkedGraspService
+                            ? "NIP-05 resolves to this coordinator and the service names the same operator key."
+                            : operatorMismatch
+                              ? `${domain} names a different operator key.`
+                              : operatorMatches
+                                ? `${domain} identifies this key but does not advertise a GRASP service.`
+                                : `${domain} does not publish an operator key that can link these pages.`}
+                        </p>
+                      </div>
                     </div>
                   </div>
-                  {graspCapabilities.length > 0 && (
-                    <div className="mt-3 flex flex-wrap gap-1.5">
-                      {graspCapabilities.map((capability) => (
-                        <Badge
-                          key={capability}
-                          variant="secondary"
-                          className="font-mono text-[10px]"
-                        >
-                          {capability}
-                        </Badge>
-                      ))}
-                    </div>
+                  {linkedGraspService && domain && (
+                    <Button
+                      asChild
+                      variant="outline"
+                      size="sm"
+                      className="w-full gap-2"
+                    >
+                      <Link to={`/relay/${domain}`}>
+                        Open GRASP service
+                        <ArrowUpRight className="h-3.5 w-3.5" />
+                      </Link>
+                    </Button>
                   )}
                 </div>
               )}

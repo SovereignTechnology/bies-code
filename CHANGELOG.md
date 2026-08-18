@@ -29,6 +29,9 @@
 
 ### Features
 
+- Give GRASP relays a dedicated service view for access policy, hosted
+  collaboration totals, protocol metadata, and repository search, linked to
+  but kept distinct from the matching CI coordinator profile.
 - Classify CI coordinators and providers with settled maintainer-directed,
   operationally associated, socially corroborated, or no-known-context
   evidence across Actions, pull requests, commits, refs, coordinator pages,
