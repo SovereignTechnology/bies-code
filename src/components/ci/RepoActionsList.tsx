@@ -565,6 +565,7 @@ function RepoActionRunRow({
         showCoordinatorTrust ? false : maintainerLink !== undefined
       }
       trustIndicator={trustIndicator}
+      expandedTrustResolution={trustResolution}
       providerTrust={trust}
       attributionIndicator={
         needsAttributionCheck ? (

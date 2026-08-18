@@ -1521,9 +1521,7 @@ export default function PRPage() {
               {/* Conversation tab */}
               <TabsContent value="conversation" className="space-y-4 mt-0">
                 {/* The current-tip preview is the primary review artifact. */}
-                {ciChecks && (
-                  <PRNsitePreview checks={ciChecks} trust={trust} />
-                )}
+                {ciChecks && <PRNsitePreview checks={ciChecks} trust={trust} />}
 
                 {/* Cover note — pinned note from author/maintainer */}
                 {coverNoteEditing && pr ? (

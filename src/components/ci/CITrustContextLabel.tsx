@@ -1,3 +1,4 @@
+import { ShieldAlert } from "lucide-react";
 import {
   Popover,
   PopoverContent,
@@ -36,28 +37,33 @@ export function CITrustContextLabel({
     );
   }
 
-  const hiddenCommonClassification =
+  const incomplete = resolution.coverage === "partial";
+  const hasPositiveEvidence =
+    resolution.classification !== CITrustClassification.NoKnownContext;
+  const hiddenByPolicy =
     visibility === "exceptions-only" &&
     (resolution.classification === CITrustClassification.MaintainerDirected ||
       resolution.classification ===
-        CITrustClassification.OperationallyAssociated);
+        CITrustClassification.OperationallyAssociated ||
+      (incomplete && !hasPositiveEvidence));
 
   // Keep the shared component at every call site even when policy currently
   // suppresses the common positive classifications. Changing that policy is
   // therefore a one-file decision.
-  if (hiddenCommonClassification) {
+  if (hiddenByPolicy) {
     return (
       <span
         data-ci-trust-classification={resolution.classification}
+        data-ci-trust-coverage={resolution.coverage}
         aria-hidden="true"
       />
     );
   }
 
-  const incomplete = resolution.coverage === "partial";
   const copy = CI_TRUST_CLASSIFICATION_COPY[resolution.classification];
-  const hasPositiveEvidence =
-    resolution.classification !== CITrustClassification.NoKnownContext;
+  const weakContext =
+    resolution.classification === CITrustClassification.NoKnownContext &&
+    resolution.coverage === "complete";
   const label =
     incomplete && !hasPositiveEvidence
       ? "Context incomplete"
@@ -73,12 +79,18 @@ export function CITrustContextLabel({
             <button
               type="button"
               className={cn(
-                "inline-flex h-5 shrink-0 items-center rounded border border-border bg-muted/50 px-1.5 text-[10px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground",
+                "inline-flex h-5 shrink-0 items-center gap-1 rounded border px-1.5 text-[10px] font-medium transition-colors",
                 "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+                weakContext
+                  ? "border-amber-500/40 bg-amber-500/10 text-amber-700 hover:bg-amber-500/15 dark:text-amber-300"
+                  : "border-border bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground",
                 className,
               )}
               aria-label={`${label}. Open CI trust context`}
             >
+              {weakContext && (
+                <ShieldAlert className="h-3 w-3" aria-hidden="true" />
+              )}
               {label}
             </button>
           </PopoverTrigger>

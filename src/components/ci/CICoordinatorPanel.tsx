@@ -112,16 +112,77 @@ function isPendingSecretChangeConfirmed(
   );
 }
 
+interface CICoordinatorTrustCounts {
+  requested: number;
+  repositoryInfrastructure: number;
+  previouslyRequested: number;
+  operational: number;
+  social: number;
+  noKnownContext: number;
+}
+
+function countCoordinatorTrust(
+  trust: CITrustContextState,
+  pubkeys: ReadonlySet<string>,
+): CICoordinatorTrustCounts | undefined {
+  if (trust.phase === "loading") return undefined;
+
+  const counts: CICoordinatorTrustCounts = {
+    requested: 0,
+    repositoryInfrastructure: 0,
+    previouslyRequested: 0,
+    operational: 0,
+    social: 0,
+    noKnownContext: 0,
+  };
+  for (const pubkey of pubkeys) {
+    const resolution = getCITrustResolution(trust, pubkey);
+    if (resolution.phase !== "settled") return undefined;
+    switch (resolution.classification) {
+      case CITrustClassification.MaintainerDirected:
+        counts.requested++;
+        break;
+      case CITrustClassification.OperationallyAssociated:
+        if (
+          resolution.evidence.some(
+            ({ kind }) =>
+              kind === "repository-domain" || kind === "repository-subdomain",
+          )
+        ) {
+          counts.repositoryInfrastructure++;
+        } else if (
+          resolution.evidence.some(
+            ({ kind }) => kind === "historical-maintainer-request",
+          )
+        ) {
+          counts.previouslyRequested++;
+        } else {
+          counts.operational++;
+        }
+        break;
+      case CITrustClassification.SociallyCorroborated:
+        counts.social++;
+        break;
+      case CITrustClassification.NoKnownContext:
+        if (resolution.coverage === "complete") counts.noKnownContext++;
+        break;
+    }
+  }
+  return counts;
+}
+
 export function CICoordinatorSummaryBar({
   coordinators,
   runs,
   basePath,
   relationships,
+  trust,
 }: {
   coordinators: CICoordinatorSummary[] | undefined;
   runs: CIWorkflowRun[] | undefined;
   basePath: string;
   relationships: ReadonlyMap<string, CICoordinatorRelationship>;
+  trust: CITrustContextState;
 }) {
   const watchingCount =
     coordinators?.filter(({ availability }) => availability === "watching")
@@ -135,18 +196,13 @@ export function CICoordinatorSummaryBar({
   const liveCoordinatorPubkeys = new Set(
     coordinators?.map(({ pubkey }) => pubkey) ?? [],
   );
-  const requestedCount = [...relationships.values()].filter(
-    ({ level }) => level === "requested",
-  ).length;
-  const previouslyRequestedCount = [...relationships.values()].filter(
-    ({ level }) => level === "previously-requested",
-  ).length;
   const knownCoordinatorPubkeys = new Set([
     ...liveCoordinatorPubkeys,
     ...relationships.keys(),
     ...(runs?.map(({ pubkey }) => pubkey) ?? []),
   ]);
   const knownCoordinatorCount = knownCoordinatorPubkeys.size;
+  const trustCounts = countCoordinatorTrust(trust, knownCoordinatorPubkeys);
   const offlineCount = [...knownCoordinatorPubkeys].filter(
     (pubkey) => !liveCoordinatorPubkeys.has(pubkey),
   ).length;
@@ -193,8 +249,7 @@ export function CICoordinatorSummaryBar({
               {coordinators !== undefined &&
                 (coordinators.length > 0 ||
                   offlineCount > 0 ||
-                  requestedCount > 0 ||
-                  previouslyRequestedCount > 0) && (
+                  knownCoordinatorCount > 0) && (
                   <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
                     {watchingCount > 0 && (
                       <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
@@ -220,16 +275,45 @@ export function CICoordinatorSummaryBar({
                         {offlineCount} offline
                       </span>
                     )}
-                    {requestedCount > 0 && (
+                    {knownCoordinatorCount > 0 && trustCounts === undefined && (
+                      <span
+                        className="h-3 w-40 animate-pulse rounded bg-muted"
+                        aria-label="Checking coordinator trust context"
+                      />
+                    )}
+                    {(trustCounts?.requested ?? 0) > 0 && (
                       <span className="inline-flex items-center gap-1 text-muted-foreground">
-                        {requestedCount} of {knownCoordinatorCount} requested by
-                        maintainers
+                        {trustCounts?.requested} maintainer requested
                       </span>
                     )}
-                    {previouslyRequestedCount > 0 && (
+                    {(trustCounts?.repositoryInfrastructure ?? 0) > 0 && (
                       <span className="inline-flex items-center gap-1 text-muted-foreground">
-                        {previouslyRequestedCount} of {knownCoordinatorCount}{" "}
-                        previously requested by maintainers
+                        {trustCounts?.repositoryInfrastructure}{" "}
+                        {trustCounts?.repositoryInfrastructure === 1
+                          ? "uses"
+                          : "use"}{" "}
+                        repository-listed infrastructure
+                      </span>
+                    )}
+                    {(trustCounts?.previouslyRequested ?? 0) > 0 && (
+                      <span className="inline-flex items-center gap-1 text-muted-foreground">
+                        {trustCounts?.previouslyRequested} previously maintainer
+                        requested
+                      </span>
+                    )}
+                    {(trustCounts?.operational ?? 0) > 0 && (
+                      <span className="inline-flex items-center gap-1 text-muted-foreground">
+                        {trustCounts?.operational} operationally associated
+                      </span>
+                    )}
+                    {(trustCounts?.social ?? 0) > 0 && (
+                      <span className="inline-flex items-center gap-1 text-muted-foreground">
+                        {trustCounts?.social} socially corroborated
+                      </span>
+                    )}
+                    {(trustCounts?.noKnownContext ?? 0) > 0 && (
+                      <span className="inline-flex items-center gap-1 text-muted-foreground">
+                        {trustCounts?.noKnownContext} with no known context
                       </span>
                     )}
                   </div>
@@ -352,26 +436,27 @@ export function CICoordinatorDirectory({
           return (
             <li
               key={pubkey}
-              className="group flex min-w-0 items-center gap-3 px-4 py-3 transition-colors hover:bg-accent/40 sm:pl-5 sm:pr-4"
+              className="group relative flex min-w-0 items-center gap-3 px-4 py-3 transition-colors hover:bg-accent/40 sm:pl-5 sm:pr-4"
             >
               <Link
                 to={coordinatorPath(basePath, pubkey)}
-                className="shrink-0 rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                aria-label="Open coordinator"
+                className="absolute inset-0 rounded-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
               >
-                <UserAvatar pubkey={pubkey} size="md" noHoverCard />
+                <span className="sr-only">Open coordinator</span>
               </Link>
-              <div className="min-w-0 flex-1">
+              <div className="pointer-events-none relative z-10 shrink-0">
+                <UserAvatar pubkey={pubkey} size="md" noHoverCard />
+              </div>
+              <div className="pointer-events-none relative z-10 min-w-0 flex-1">
                 <div className="flex min-w-0 flex-wrap items-center gap-2">
-                  <Link
-                    to={coordinatorPath(basePath, pubkey)}
-                    className="min-w-0 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  >
-                    <UserName pubkey={pubkey} noHoverCard />
-                  </Link>
-                  <CITrustContextLabel
-                    resolution={trustResolution}
-                    displayLabel={trustLabel}
-                  />
+                  <UserName pubkey={pubkey} noHoverCard />
+                  <span className="pointer-events-auto relative z-20 inline-flex">
+                    <CITrustContextLabel
+                      resolution={trustResolution}
+                      displayLabel={trustLabel}
+                    />
+                  </span>
                   {summary?.advertisement.version && (
                     <span className="text-[10px] text-muted-foreground">
                       v{summary.advertisement.version}
@@ -409,7 +494,7 @@ export function CICoordinatorDirectory({
                   </span>
                 </div>
               </div>
-              <span className="hidden text-xs text-muted-foreground sm:inline">
+              <span className="pointer-events-none relative z-10 hidden text-xs text-muted-foreground sm:inline">
                 {runCount} run{runCount === 1 ? "" : "s"}
                 {summary && (
                   <>
@@ -421,13 +506,9 @@ export function CICoordinatorDirectory({
                   </>
                 )}
               </span>
-              <Link
-                to={coordinatorPath(basePath, pubkey)}
-                aria-label="Open coordinator"
-                className="shrink-0 rounded p-1 text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
+              <span className="pointer-events-none relative z-10 shrink-0 p-1 text-muted-foreground">
                 <ChevronRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
-              </Link>
+              </span>
             </li>
           );
         })}

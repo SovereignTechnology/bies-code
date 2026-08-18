@@ -571,6 +571,12 @@ function TrustAwareRunRow({
     repoCoords,
     repo,
   );
+  const trustResolution = getCIRunTrustResolution(
+    trust,
+    run,
+    repo.confirmedMaintainers,
+    serviceControls ?? EMPTY_SERVICE_CONTROLS,
+  );
 
   return (
     <CIRunRow
@@ -580,15 +586,11 @@ function TrustAwareRunRow({
       maintainerRequestedOverride={false}
       trustIndicator={
         <CITrustContextLabel
-          resolution={getCIRunTrustResolution(
-            trust,
-            run,
-            repo.confirmedMaintainers,
-            serviceControls ?? EMPTY_SERVICE_CONTROLS,
-          )}
+          resolution={trustResolution}
           visibility="exceptions-only"
         />
       }
+      expandedTrustResolution={trustResolution}
       providerTrust={trust}
       attributionIndicator={
         needsAttributionCheck ? (
@@ -611,6 +613,7 @@ export function CIRunRow({
   triggerContext,
   attributionIndicator,
   trustIndicator,
+  expandedTrustResolution,
   maintainerRequestedOverride,
   providerTrust,
 }: {
@@ -627,6 +630,8 @@ export function CIRunRow({
   attributionIndicator?: ReactNode;
   /** Optional interactive trust indicator shown outside the row trigger. */
   trustIndicator?: ReactNode;
+  /** Full trust classification shown once the workflow is expanded. */
+  expandedTrustResolution?: CITrustResolution;
   /** Override quote-only provenance detection when the caller validated it. */
   maintainerRequestedOverride?: boolean;
   /** Settled identity context used for provider labels inside expanded jobs. */
@@ -727,6 +732,12 @@ export function CIRunRow({
 
         <CollapsibleContent>
           <div className="space-y-2 px-3 pb-3 sm:pl-10 sm:pr-4">
+            {expandedTrustResolution && (
+              <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+                <span>Trust context</span>
+                <CITrustContextLabel resolution={expandedTrustResolution} />
+              </div>
+            )}
             <WorkflowTimingDetails
               run={run}
               nowSeconds={nowSeconds}
