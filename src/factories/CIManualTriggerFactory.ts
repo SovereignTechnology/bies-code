@@ -26,7 +26,6 @@ const RETRY_CONTEXT_TAGS = new Set([
   "P",
   "e",
   "k",
-  "p",
 ]);
 
 export class CIManualTriggerFactory extends EventFactory<
@@ -36,20 +35,20 @@ export class CIManualTriggerFactory extends EventFactory<
   /**
    * Request a new manual attempt of a completed workflow result.
    *
-   * The coordinator is the original workflow-result author. Existing lowercase
-   * `p` tags are retained for NIP-22 PR context; the coordinator receives its
-   * own `p` tag as required by the CI manual-trigger event shape.
+   * The coordinator is the original workflow-result author and is the sole
+   * addressee: a coordinator requires exactly one `p` tag naming itself and
+   * rejects a request carrying any other. A pull-request result's NIP-22
+   * participant `p` tags are therefore dropped, and the uppercase `E` root
+   * tag alone re-establishes the pull-request context.
    */
   static create(
     workflowResult: NostrEvent,
     coordinatorPubkey: string,
   ): CIManualTriggerFactory {
-    const isPullRequestRun = workflowResult.tags.some(([name]) => name === "E");
     const contextTags = workflowResult.tags
       .filter(
         ([name, value]) =>
           RETRY_CONTEXT_TAGS.has(name) &&
-          (name !== "p" || isPullRequestRun) &&
           (name !== "r" || value?.startsWith("refs/")),
       )
       .map((tag) => [...tag]);
