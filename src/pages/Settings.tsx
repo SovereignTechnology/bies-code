@@ -30,7 +30,12 @@ import {
   DEFAULT_NOSTR_CONNECT_RELAYS,
   type RelayCurationMode,
 } from "@/services/settings";
-import { validateGraspServer } from "@/lib/grasp";
+import {
+  graspServiceAddressToRelayUrl,
+  isValidGraspServiceAddress,
+  normalizeGraspServiceAddress,
+  validateGraspServer,
+} from "@/lib/grasp";
 import { use$ } from "@/hooks/use$";
 import { useAccount } from "@/hooks/useAccount";
 import { useUser } from "@/hooks/useUser";
@@ -368,7 +373,7 @@ function GraspRelaysSection() {
   // ---------------------------------------------------------------------------
 
   // null = no draft open (showing published state)
-  const [draftDomains, setDraftDomains] = useState<string[] | null>(null);
+  const [draftAddresses, setDraftAddresses] = useState<string[] | null>(null);
 
   // Sync draft when the published list changes from underneath us (e.g. first
   // load), but only if the user hasn't started editing yet.
@@ -381,26 +386,29 @@ function GraspRelaysSection() {
     }
   }, [servers]);
 
-  const activeDomains = draftDomains ?? servers.map((s) => s.domain);
+  const activeAddresses =
+    draftAddresses ?? servers.map((server) => server.serviceAddress);
 
   const isDirty =
-    draftDomains !== null &&
-    (draftDomains.length !== servers.length ||
-      draftDomains.some((d, i) => d !== servers[i]?.domain));
+    draftAddresses !== null &&
+    (draftAddresses.length !== servers.length ||
+      draftAddresses.some(
+        (address, index) => address !== servers[index]?.serviceAddress,
+      ));
 
   const openDraft = useCallback(
-    (initial: string[]) => setDraftDomains([...initial]),
+    (initial: string[]) => setDraftAddresses([...initial]),
     [],
   );
 
-  const discardDraft = useCallback(() => setDraftDomains(null), []);
+  const discardDraft = useCallback(() => setDraftAddresses(null), []);
 
   // ---------------------------------------------------------------------------
   // Add-server input with 1.5 s debounce auto-validation
   // ---------------------------------------------------------------------------
 
-  const [customDomain, setCustomDomain] = useState("");
-  const [customDomainError, setCustomDomainError] = useState<
+  const [customAddress, setCustomAddress] = useState("");
+  const [customAddressError, setCustomAddressError] = useState<
     string | undefined
   >();
   // "idle" | "validating" | "valid" | "invalid"
@@ -409,36 +417,32 @@ function GraspRelaysSection() {
   >("idle");
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const runValidation = useCallback(async (domain: string) => {
+  const runValidation = useCallback(async (address: string) => {
     setValidationState("validating");
-    setCustomDomainError(undefined);
-    const err = await validateGraspServer(domain);
+    setCustomAddressError(undefined);
+    const err = await validateGraspServer(address);
     if (err) {
       setValidationState("invalid");
-      setCustomDomainError(err);
+      setCustomAddressError(err);
     } else {
       setValidationState("valid");
     }
   }, []);
 
-  const handleDomainChange = useCallback(
+  const handleAddressChange = useCallback(
     (raw: string) => {
-      setCustomDomain(raw);
-      setCustomDomainError(undefined);
+      setCustomAddress(raw);
+      setCustomAddressError(undefined);
       setValidationState("idle");
 
       if (debounceRef.current) clearTimeout(debounceRef.current);
 
-      const domain = raw
-        .trim()
-        .toLowerCase()
-        .replace(/^wss?:\/\//, "")
-        .replace(/\/+$/, "");
+      const address = normalizeGraspServiceAddress(raw);
 
-      if (!domain || !/^[a-z0-9.-]+\.[a-z]{2,}$/.test(domain)) return;
+      if (!address || !isValidGraspServiceAddress(address)) return;
 
       debounceRef.current = setTimeout(() => {
-        void runValidation(domain);
+        void runValidation(address);
       }, 1500);
     },
     [runValidation],
@@ -451,20 +455,20 @@ function GraspRelaysSection() {
     };
   }, []);
 
-  const handleAddDomain = useCallback(async () => {
-    const raw = customDomain.trim().toLowerCase();
-    if (!raw) return;
+  const handleAddAddress = useCallback(async () => {
+    const address = normalizeGraspServiceAddress(customAddress);
+    if (!address) return;
 
-    const domain = raw.replace(/^wss?:\/\//, "").replace(/\/+$/, "");
-
-    if (!domain || !/^[a-z0-9.-]+\.[a-z]{2,}$/.test(domain)) {
-      setCustomDomainError("Enter a valid domain (e.g. relay.example.com)");
+    if (!isValidGraspServiceAddress(address)) {
+      setCustomAddressError(
+        "Enter a valid service address (e.g. relay.example.com/grasp)",
+      );
       setValidationState("invalid");
       return;
     }
 
-    if (activeDomains.includes(domain)) {
-      setCustomDomainError("Already in the list");
+    if (activeAddresses.includes(address)) {
+      setCustomAddressError("Already in the list");
       setValidationState("invalid");
       return;
     }
@@ -473,27 +477,27 @@ function GraspRelaysSection() {
     if (debounceRef.current) clearTimeout(debounceRef.current);
 
     if (validationState !== "valid") {
-      await runValidation(domain);
+      await runValidation(address);
       // Re-read state via closure won't work — check error after await
-      const err = await validateGraspServer(domain);
+      const err = await validateGraspServer(address);
       if (err) return; // runValidation already set the error
     }
 
     // Open draft if not already open, then append
-    setDraftDomains((prev) => {
-      const base = prev ?? servers.map((s) => s.domain);
-      return [...base, domain];
+    setDraftAddresses((previous) => {
+      const base = previous ?? servers.map((server) => server.serviceAddress);
+      return [...base, address];
     });
-    setCustomDomain("");
-    setCustomDomainError(undefined);
+    setCustomAddress("");
+    setCustomAddressError(undefined);
     setValidationState("idle");
-  }, [customDomain, activeDomains, validationState, runValidation, servers]);
+  }, [customAddress, activeAddresses, validationState, runValidation, servers]);
 
-  const handleRemoveDomain = useCallback(
-    (domain: string) => {
-      setDraftDomains((prev) => {
-        const base = prev ?? servers.map((s) => s.domain);
-        return base.filter((d) => d !== domain);
+  const handleRemoveAddress = useCallback(
+    (address: string) => {
+      setDraftAddresses((previous) => {
+        const base = previous ?? servers.map((server) => server.serviceAddress);
+        return base.filter((candidate) => candidate !== address);
       });
     },
     [servers],
@@ -506,12 +510,15 @@ function GraspRelaysSection() {
   const [publishing, setPublishing] = useState(false);
 
   const publishGraspList = useCallback(
-    async (domains: string[]) => {
+    async (addresses: string[]) => {
       if (!account) return;
       setPublishing(true);
       try {
         await execute(GRASP_LIST_KIND, async () => {
-          const tags = domains.map((d) => ["g", `wss://${d}`]);
+          const tags = addresses.map((address) => [
+            "g",
+            graspServiceAddressToRelayUrl(address),
+          ]);
           await publishEvent({
             kind: GRASP_LIST_KIND,
             content: "",
@@ -519,7 +526,7 @@ function GraspRelaysSection() {
             created_at: Math.floor(Date.now() / 1000),
           });
         });
-        setDraftDomains(null); // close draft on success
+        setDraftAddresses(null); // close draft on success
       } catch (err) {
         toast({
           title: "Failed to update grasp server list",
@@ -537,8 +544,8 @@ function GraspRelaysSection() {
   );
 
   const handleSave = useCallback(async () => {
-    await publishGraspList(draftDomains ?? activeDomains);
-  }, [publishGraspList, draftDomains, activeDomains]);
+    await publishGraspList(draftAddresses ?? activeAddresses);
+  }, [publishGraspList, draftAddresses, activeAddresses]);
 
   const handleSaveDefaults = useCallback(async () => {
     await publishGraspList([...DEFAULT_GRASP_SERVERS]);
@@ -551,14 +558,17 @@ function GraspRelaysSection() {
   const isInputBusy = validationState === "validating" || publishing;
 
   // The list to render — draft if open, otherwise published
-  const displayDomains = draftDomains ?? servers.map((s) => s.domain);
+  const displayAddresses =
+    draftAddresses ?? servers.map((server) => server.serviceAddress);
 
   // True when the user has a published list that differs from the defaults
-  const publishedDomains = servers.map((s) => s.domain);
+  const publishedAddresses = servers.map((server) => server.serviceAddress);
   const graspIsNonDefault =
     isFromUserList &&
-    (publishedDomains.length !== DEFAULT_GRASP_SERVERS.length ||
-      publishedDomains.some((d, i) => d !== DEFAULT_GRASP_SERVERS[i]));
+    (publishedAddresses.length !== DEFAULT_GRASP_SERVERS.length ||
+      publishedAddresses.some(
+        (address, index) => address !== DEFAULT_GRASP_SERVERS[index],
+      ));
 
   return (
     <Card>
@@ -598,7 +608,7 @@ function GraspRelaysSection() {
         ) : (
           <>
             {/* No user list notice */}
-            {!isFromUserList && draftDomains === null && (
+            {!isFromUserList && draftAddresses === null && (
               <div className="rounded-lg border border-blue-500/20 bg-blue-500/5 px-3 py-2.5 flex items-start gap-2">
                 <Info className="h-4 w-4 text-blue-500 mt-0.5 shrink-0" />
                 <div className="flex-1 space-y-2">
@@ -627,20 +637,21 @@ function GraspRelaysSection() {
 
             {/* Server list (draft or published) */}
             <div className="space-y-2">
-              {displayDomains.map((domain) => {
-                const isDefault = DEFAULT_GRASP_SERVERS.includes(domain);
+              {displayAddresses.map((address) => {
+                const isDefault = DEFAULT_GRASP_SERVERS.includes(address);
                 const isUserPublished =
-                  isFromUserList && servers.some((s) => s.domain === domain);
+                  isFromUserList &&
+                  servers.some((server) => server.serviceAddress === address);
                 const isDraftOnly =
-                  draftDomains !== null &&
-                  !servers.some((s) => s.domain === domain);
+                  draftAddresses !== null &&
+                  !servers.some((server) => server.serviceAddress === address);
                 return (
                   <div
-                    key={domain}
+                    key={address}
                     className="flex items-center gap-2 rounded-md border border-border/50 bg-muted/20 px-3 py-2"
                   >
                     <Server className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                    <span className="text-sm font-mono flex-1">{domain}</span>
+                    <span className="text-sm font-mono flex-1">{address}</span>
                     {isDraftOnly && (
                       <Badge
                         variant="secondary"
@@ -661,13 +672,15 @@ function GraspRelaysSection() {
                       <button
                         type="button"
                         onClick={() => {
-                          if (draftDomains === null) {
-                            openDraft(servers.map((s) => s.domain));
+                          if (draftAddresses === null) {
+                            openDraft(
+                              servers.map((server) => server.serviceAddress),
+                            );
                           }
-                          handleRemoveDomain(domain);
+                          handleRemoveAddress(address);
                         }}
                         className="text-xs text-muted-foreground hover:text-destructive transition-colors px-1"
-                        aria-label={`Remove ${domain}`}
+                        aria-label={`Remove ${address}`}
                       >
                         ✕
                       </button>
@@ -675,7 +688,7 @@ function GraspRelaysSection() {
                   </div>
                 );
               })}
-              {displayDomains.length === 0 && (
+              {displayAddresses.length === 0 && (
                 <p className="text-xs text-amber-600 dark:text-amber-400">
                   No servers selected — add at least one before saving.
                 </p>
@@ -687,14 +700,14 @@ function GraspRelaysSection() {
               <div className="space-y-1.5">
                 <div className="flex gap-2">
                   <Input
-                    placeholder="relay.example.com"
-                    value={customDomain}
+                    placeholder="relay.example.com/grasp"
+                    value={customAddress}
                     disabled={isInputBusy}
-                    onChange={(e) => handleDomainChange(e.target.value)}
+                    onChange={(e) => handleAddressChange(e.target.value)}
                     onKeyDown={(e) => {
                       if (e.key === "Enter") {
                         e.preventDefault();
-                        void handleAddDomain();
+                        void handleAddAddress();
                       }
                     }}
                     className={cn(
@@ -708,8 +721,8 @@ function GraspRelaysSection() {
                     type="button"
                     variant="outline"
                     size="sm"
-                    onClick={() => void handleAddDomain()}
-                    disabled={isInputBusy || !customDomain.trim()}
+                    onClick={() => void handleAddAddress()}
+                    disabled={isInputBusy || !customAddress.trim()}
                     className="h-8 px-2.5 shrink-0"
                   >
                     {validationState === "validating" ? (
@@ -719,12 +732,12 @@ function GraspRelaysSection() {
                     )}
                   </Button>
                 </div>
-                {customDomainError && (
+                {customAddressError && (
                   <p className="text-xs text-red-500 px-0.5">
-                    {customDomainError}
+                    {customAddressError}
                   </p>
                 )}
-                {validationState === "valid" && !customDomainError && (
+                {validationState === "valid" && !customAddressError && (
                   <p className="text-xs text-green-600 dark:text-green-400 px-0.5">
                     Server supports GRASP-01
                   </p>
@@ -749,7 +762,7 @@ function GraspRelaysSection() {
                   type="button"
                   size="sm"
                   onClick={() => void handleSave()}
-                  disabled={publishing || displayDomains.length === 0}
+                  disabled={publishing || displayAddresses.length === 0}
                   className="h-8 text-xs"
                 >
                   {publishing ? (

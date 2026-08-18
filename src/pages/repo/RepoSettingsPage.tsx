@@ -91,7 +91,7 @@ import {
   emptyRepoUpstream,
   isRepoUpstreamSelfReference,
   isGraspCloneUrl,
-  graspCloneUrlDomain,
+  graspCloneUrlServiceAddress,
   computeMaintainerLeadership,
   groupRequestedMaintainers,
   type RepoUpstream,
@@ -105,6 +105,11 @@ import { GraspLogo } from "@/components/GraspLogo";
 import { GraspServerSelector } from "@/components/GraspServerSelector";
 import { cn } from "@/lib/utils";
 import { normalizeUrl } from "@/lib/url";
+import {
+  graspRepositoryCloneUrl,
+  graspServiceAddressToRelayUrl,
+  relayMatchesGraspService,
+} from "@/lib/grasp";
 import { SubordinateForkField } from "@/components/repo/SubordinateForkField";
 import {
   formatUpstreamInput,
@@ -381,12 +386,12 @@ function RepoSettingsForm({
     () => currentCloneUrls.filter(isGraspCloneUrl),
     [currentCloneUrls],
   );
-  const currentGraspDomains = useMemo(
+  const currentGraspAddresses = useMemo(
     () => [
       ...new Set(
         currentGraspCloneUrls
-          .map(graspCloneUrlDomain)
-          .filter((d): d is string => !!d),
+          .map(graspCloneUrlServiceAddress)
+          .filter((address): address is string => !!address),
       ),
     ],
     [currentGraspCloneUrls],
@@ -396,15 +401,10 @@ function RepoSettingsForm({
     [currentCloneUrls],
   );
   const currentOtherRelays = useMemo(() => {
-    const graspDomainSet = new Set(currentGraspDomains);
-    return currentRelayUrls.filter((r) => {
-      try {
-        return !graspDomainSet.has(new URL(r).host);
-      } catch {
-        return true;
-      }
-    });
-  }, [currentRelayUrls, currentGraspDomains]);
+    return currentRelayUrls.filter(
+      (relay) => !relayMatchesGraspService(relay, currentGraspAddresses),
+    );
+  }, [currentRelayUrls, currentGraspAddresses]);
 
   const currentWebUrls = useMemo(
     () => (selectedAnnouncement ? getRepoWebUrls(selectedAnnouncement) : []),
@@ -537,8 +537,9 @@ function RepoSettingsForm({
   >();
 
   // Grasp server selection
-  const [selectedDomains, setSelectedDomains] =
-    useState<string[]>(currentGraspDomains);
+  const [selectedAddresses, setSelectedAddresses] = useState<string[]>(
+    currentGraspAddresses,
+  );
 
   // Other relays
   const [otherRelays, setOtherRelays] = useState<string[]>(currentOtherRelays);
@@ -600,8 +601,8 @@ function RepoSettingsForm({
   const editedCloneUrls = useMemo(() => {
     const npub = nip19.npubEncode(repo.selectedMaintainer);
     const encodedId = encodeURIComponent(repo.dTag);
-    const graspCloneUrls = selectedDomains.map(
-      (domain) => `https://${domain}/${npub}/${encodedId}.git`,
+    const graspCloneUrls = selectedAddresses.map((address) =>
+      graspRepositoryCloneUrl(address, npub, encodedId),
     );
 
     return Array.from(
@@ -611,7 +612,7 @@ function RepoSettingsForm({
     repo.selectedMaintainer,
     repo.dTag,
     repo.cloneUrls,
-    selectedDomains,
+    selectedAddresses,
     otherGitServers,
   ]);
 
@@ -665,9 +666,9 @@ function RepoSettingsForm({
     editedCloneUrls,
   ]);
 
-  // Sync selectedDomains with the current Grasp domains on first render
+  // Sync selected addresses with the current GRASP services on first render.
   useEffect(() => {
-    setSelectedDomains(currentGraspDomains);
+    setSelectedAddresses(currentGraspAddresses);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -862,31 +863,32 @@ function RepoSettingsForm({
     repo.cloneUrlProvenance,
   ]);
 
-  const unionOnlyGraspDomains = useMemo((): Array<{
-    domain: string;
+  const unionOnlyGraspAddresses = useMemo((): Array<{
+    address: string;
     contributorPubkey: string;
   }> => {
     if (!isMultiMaintainer || !selectedAnnouncement) return [];
     const myCloneUrls = new Set(getRepoCloneUrls(selectedAnnouncement));
-    const myGraspDomains = new Set(
+    const myGraspAddresses = new Set(
       Array.from(myCloneUrls)
         .filter(isGraspCloneUrl)
-        .map(graspCloneUrlDomain)
+        .map(graspCloneUrlServiceAddress)
         .filter(Boolean),
     );
     return repo.graspCloneUrls
       .filter((u) => {
-        const domain = graspCloneUrlDomain(u);
-        return domain && !myGraspDomains.has(domain);
+        const address = graspCloneUrlServiceAddress(u);
+        return address && !myGraspAddresses.has(address);
       })
       .map((url) => ({
-        domain: graspCloneUrlDomain(url) ?? url,
+        address: graspCloneUrlServiceAddress(url) ?? url,
         contributorPubkey:
           repo.cloneUrlProvenance.find((p) => p.value === url)?.pubkey ?? "",
       }))
       .filter(
         (item, idx, arr) =>
-          arr.findIndex((x) => x.domain === item.domain) === idx,
+          arr.findIndex((candidate) => candidate.address === item.address) ===
+          idx,
       );
   }, [
     isMultiMaintainer,
@@ -1075,7 +1077,7 @@ function RepoSettingsForm({
   // ---------------------------------------------------------------------------
 
   const hasInfrastructure =
-    selectedDomains.length > 0 ||
+    selectedAddresses.length > 0 ||
     (otherRelays.length > 0 && otherGitServers.length > 0);
 
   const announcementFieldsChanged =
@@ -1087,7 +1089,7 @@ function RepoSettingsForm({
     !stringArraysEqual(topics, currentTopics) ||
     !repoUpstreamsEqual(effectiveUpstreams, currentUpstreams) ||
     !stringArraysEqual(editedMaintainers, currentMaintainers) ||
-    !stringArraysEqual(selectedDomains, currentGraspDomains) ||
+    !stringArraysEqual(selectedAddresses, currentGraspAddresses) ||
     !stringArraysEqual(otherRelays, currentOtherRelays) ||
     !stringArraysEqual(otherGitServers, currentOtherGitServers) ||
     eucHash.trim() !== currentEucHash ||
@@ -1127,14 +1129,14 @@ function RepoSettingsForm({
         const encodedId = encodeURIComponent(repo.dTag);
 
         // Build clone URLs: Grasp URLs + other git servers
-        const graspCloneUrls = selectedDomains.map(
-          (domain) => `https://${domain}/${npub}/${encodedId}.git`,
+        const graspCloneUrls = selectedAddresses.map((address) =>
+          graspRepositoryCloneUrl(address, npub, encodedId),
         );
         const allCloneUrls = [...graspCloneUrls, ...otherGitServers];
 
         // Build relay URLs: Grasp relay WSS + other relays
-        const graspRelayUrls = selectedDomains.map(
-          (domain) => `wss://${domain}`,
+        const graspRelayUrls = selectedAddresses.map((address) =>
+          graspServiceAddressToRelayUrl(address),
         );
         const allRelayUrls = [...graspRelayUrls, ...otherRelays];
 
@@ -1218,7 +1220,7 @@ function RepoSettingsForm({
     defaultBranchChanged,
     repo,
     repoState,
-    selectedDomains,
+    selectedAddresses,
     otherGitServers,
     otherRelays,
     name,
@@ -2026,11 +2028,11 @@ function RepoSettingsForm({
                 </p>
 
                 <GraspServerSelector
-                  selectedDomains={selectedDomains}
-                  onSelectedDomainsChange={setSelectedDomains}
+                  selectedAddresses={selectedAddresses}
+                  onSelectedAddressesChange={setSelectedAddresses}
                   resolvedServers={resolvedServers}
                   isFromUserList={isFromUserList}
-                  currentDomains={currentGraspDomains}
+                  currentAddresses={currentGraspAddresses}
                   showTitle={false}
                 />
 
@@ -2042,13 +2044,13 @@ function RepoSettingsForm({
                 )}
 
                 {/* Union Grasp servers from other maintainers */}
-                {unionOnlyGraspDomains.length > 0 && (
+                {unionOnlyGraspAddresses.length > 0 && (
                   <UnionSection label="Covered by co-maintainers (read-only)">
-                    {unionOnlyGraspDomains.map(
-                      ({ domain, contributorPubkey }) => (
+                    {unionOnlyGraspAddresses.map(
+                      ({ address, contributorPubkey }) => (
                         <UnionItem
-                          key={domain}
-                          value={domain}
+                          key={address}
+                          value={address}
                           contributorPubkey={contributorPubkey}
                           monospace
                         />

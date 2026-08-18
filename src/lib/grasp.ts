@@ -88,12 +88,122 @@ export interface ValidateGraspServerOptions {
   requiredGrasps?: readonly string[];
 }
 
+/** A GRASP service and its canonical Nostr relay endpoint. */
+export interface GraspServer {
+  /** Scheme-less HTTPS service address, or an http:// address for plaintext. */
+  serviceAddress: string;
+  /** Canonical WebSocket relay URL, including any service mount path. */
+  wsUrl: string;
+}
+
+interface ParsedGraspServiceAddress {
+  host: string;
+  pathname: string;
+  secure: boolean;
+}
+
+function parseGraspServiceAddress(
+  value: string,
+): ParsedGraspServiceAddress | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+
+  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)
+    ? trimmed
+    : `wss://${trimmed}`;
+
+  try {
+    const url = new URL(withScheme);
+    if (!["ws:", "wss:", "http:", "https:"].includes(url.protocol)) {
+      return undefined;
+    }
+    if (
+      !url.hostname ||
+      url.username ||
+      url.password ||
+      url.search ||
+      url.hash
+    ) {
+      return undefined;
+    }
+
+    return {
+      host: url.host.toLowerCase(),
+      pathname: url.pathname === "/" ? "" : url.pathname.replace(/\/+$/, ""),
+      secure: url.protocol === "wss:" || url.protocol === "https:",
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Normalize a GRASP service location while preserving its public mount path.
+ *
+ * Secure services use ngit's scheme-less form (`relay.example/grasp`), while
+ * plaintext services retain `http://` so callers can derive `ws://` rather
+ * than accidentally upgrading a local or onion service.
+ */
+export function normalizeGraspServiceAddress(value: string): string {
+  const parsed = parseGraspServiceAddress(value);
+  if (!parsed) return "";
+  const address = `${parsed.host}${parsed.pathname}`;
+  return parsed.secure ? address : `http://${address}`;
+}
+
+/** Convert a normalized GRASP service address to its Nostr relay URL. */
+export function graspServiceAddressToRelayUrl(address: string): string {
+  const parsed = parseGraspServiceAddress(address);
+  if (!parsed) throw new Error(`Invalid GRASP service address: ${address}`);
+  return `${parsed.secure ? "wss" : "ws"}://${parsed.host}${parsed.pathname}`;
+}
+
+/** Convert a normalized GRASP service address to its HTTP base URL. */
+export function graspServiceAddressToHttpUrl(address: string): string {
+  const parsed = parseGraspServiceAddress(address);
+  if (!parsed) throw new Error(`Invalid GRASP service address: ${address}`);
+  return `${parsed.secure ? "https" : "http"}://${parsed.host}${parsed.pathname}`;
+}
+
+/** Resolve a user-list value or service address into a canonical server. */
+export function graspServerFromAddress(value: string): GraspServer | undefined {
+  const serviceAddress = normalizeGraspServiceAddress(value);
+  if (!serviceAddress) return undefined;
+  return {
+    serviceAddress,
+    wsUrl: graspServiceAddressToRelayUrl(serviceAddress),
+  };
+}
+
+/** Build a repository clone URL below a GRASP service's public mount path. */
+export function graspRepositoryCloneUrl(
+  serviceAddress: string,
+  npub: string,
+  encodedIdentifier: string,
+): string {
+  return `${graspServiceAddressToHttpUrl(serviceAddress)}/${npub}/${encodedIdentifier}.git`;
+}
+
+/** Whether a relay URL is the exact endpoint for a GRASP service address. */
+export function relayMatchesGraspService(
+  relayUrl: string,
+  serviceAddresses: readonly string[],
+): boolean {
+  const relayAddress = normalizeGraspServiceAddress(relayUrl);
+  return (
+    !!relayAddress &&
+    serviceAddresses.some(
+      (address) => normalizeGraspServiceAddress(address) === relayAddress,
+    )
+  );
+}
+
 /** Fetch a GRASP server's NIP-11 document for read-only presentation. */
 export async function fetchGraspServerInformation(
-  domain: string,
+  serviceAddress: string,
   signal?: AbortSignal,
 ): Promise<Nip11Document> {
-  const response = await fetch(`https://${normalizeGraspDomain(domain)}`, {
+  const response = await fetch(graspServiceAddressToHttpUrl(serviceAddress), {
     headers: { Accept: "application/nostr+json" },
     signal: signal ?? AbortSignal.timeout(8000),
   });
@@ -136,33 +246,30 @@ export async function fetchGraspServerInformation(
   };
 }
 
-/** Normalize a pasted WebSocket URL or domain to a lowercase host[:port]. */
-export function normalizeGraspDomain(value: string): string {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/^wss?:\/\//, "")
-    .replace(/\/+$/, "");
-}
-
-/** Whether a normalized value looks like a public DNS hostname[:port]. */
-export function isValidGraspDomain(domain: string): boolean {
-  const match = domain.match(/^([a-z0-9.-]+\.[a-z]{2,})(?::(\d{1,5}))?$/);
+/** Whether a normalized value is a public GRASP service address. */
+export function isValidGraspServiceAddress(serviceAddress: string): boolean {
+  const normalized = normalizeGraspServiceAddress(serviceAddress);
+  if (!normalized || normalized !== serviceAddress) return false;
+  const parsed = parseGraspServiceAddress(normalized);
+  if (!parsed || parsed.pathname.includes("//")) return false;
+  const match = parsed.host.match(/^([a-z0-9.-]+\.[a-z]{2,})(?::(\d{1,5}))?$/);
   if (!match) return false;
   if (!match[2]) return true;
   const port = Number(match[2]);
   return port > 0 && port <= 65_535;
 }
 
-/** Deduplicate domains while preserving the first occurrence. */
-export function uniqueGraspDomains(domains: readonly string[]): string[] {
+/** Deduplicate service addresses while preserving the first occurrence. */
+export function uniqueGraspServiceAddresses(
+  addresses: readonly string[],
+): string[] {
   const seen = new Set<string>();
   const result: string[] = [];
-  for (const value of domains) {
-    const domain = normalizeGraspDomain(value);
-    if (!domain || seen.has(domain)) continue;
-    seen.add(domain);
-    result.push(domain);
+  for (const value of addresses) {
+    const address = normalizeGraspServiceAddress(value);
+    if (!address || seen.has(address)) continue;
+    seen.add(address);
+    result.push(address);
   }
   return result;
 }
@@ -171,20 +278,20 @@ export function uniqueGraspDomains(domains: readonly string[]): string[] {
  * Select the first non-empty preference group, then backfill from defaults
  * until the desired redundancy is reached or the defaults are exhausted.
  */
-export function selectGraspDomainsWithBackfill(
+export function selectGraspServiceAddressesWithBackfill(
   preferenceGroups: ReadonlyArray<readonly string[]>,
   defaults: readonly string[],
   minimum = 3,
 ): string[] {
   const preferred =
     preferenceGroups
-      .map(uniqueGraspDomains)
-      .find((domains) => domains.length > 0) ?? [];
-  const selected = uniqueGraspDomains(preferred);
+      .map(uniqueGraspServiceAddresses)
+      .find((addresses) => addresses.length > 0) ?? [];
+  const selected = uniqueGraspServiceAddresses(preferred);
 
-  for (const domain of uniqueGraspDomains(defaults)) {
+  for (const address of uniqueGraspServiceAddresses(defaults)) {
     if (selected.length >= minimum) break;
-    if (!selected.includes(domain)) selected.push(domain);
+    if (!selected.includes(address)) selected.push(address);
   }
 
   return selected;
@@ -197,14 +304,14 @@ export function selectGraspDomainsWithBackfill(
  * Returns `null` on success, or an error string to display to the user.
  */
 export async function validateGraspServer(
-  domain: string,
+  serviceAddress: string,
   options: ValidateGraspServerOptions = {},
 ): Promise<string | null> {
-  const url = `https://${domain}`;
   const requiredGrasps = options.requiredGrasps ?? ["GRASP-01"];
   let doc: Nip11Document;
 
   try {
+    const url = graspServiceAddressToHttpUrl(serviceAddress);
     const res = await fetch(url, {
       headers: { Accept: "application/nostr+json" },
       signal: AbortSignal.timeout(8000),
@@ -219,7 +326,7 @@ export async function validateGraspServer(
     if (err instanceof DOMException && err.name === "TimeoutError") {
       return "Server did not respond in time";
     }
-    return "Could not reach server — check the domain and try again";
+    return "Could not reach server — check the address and try again";
   }
 
   const grasps = doc.supported_grasps;

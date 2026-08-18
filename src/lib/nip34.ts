@@ -2,7 +2,7 @@
  * NIP-34 Git Stuff - Constants and helpers
  */
 
-import type { NostrEvent } from "nostr-tools";
+import { nip19, type NostrEvent } from "nostr-tools";
 import {
   getNip10References,
   getCommentRootPointer,
@@ -16,6 +16,7 @@ import {
   parseReplaceableAddress,
 } from "applesauce-core/helpers";
 import { ISSUE_LABEL_NAMESPACE } from "@/factories/IssueLabelFactory";
+import { normalizeGraspServiceAddress } from "@/lib/grasp";
 import { getThreadTree } from "@/lib/threadTree";
 import { normalizeUrl } from "@/lib/url";
 
@@ -374,25 +375,43 @@ export function isGraspCloneUrl(url: string): boolean {
   if (!url.startsWith("http://") && !url.startsWith("https://")) return false;
   if (!url.endsWith(".git") && !url.endsWith(".git/")) return false;
 
-  // Extract npub1... substring
-  const npubStart = url.indexOf("npub1");
-  if (npubStart === -1) return false;
-  let npubEnd = npubStart + 5;
-  while (npubEnd < url.length && /[0-9a-z]/.test(url[npubEnd])) npubEnd++;
-  const npub = url.slice(npubStart, npubEnd);
-  if (npub.length < 10) return false; // sanity: too short to be a real npub
+  return parseGraspCloneUrl(url) !== undefined;
+}
 
-  // Must have format: /{npub}/<repo-name>.git
-  const npubPattern = `/${npub}/`;
-  const npubPos = url.indexOf(npubPattern);
-  if (npubPos === -1) return false;
+interface ParsedGraspCloneUrl {
+  npub: string;
+  servicePath: string;
+}
 
-  const afterNpub = url.slice(npubPos + npubPattern.length).replace(/\/$/, "");
-  if (!afterNpub || afterNpub === ".git") return false;
-  if (!afterNpub.endsWith(".git")) return false;
+/** Locate the rightmost valid npub path segment before a `.git` repository. */
+function parseGraspCloneUrl(url: string): ParsedGraspCloneUrl | undefined {
+  try {
+    const parsed = new URL(url);
+    const segments = parsed.pathname.replace(/\/$/, "").split("/");
 
-  const repoName = afterNpub.slice(0, -4); // strip .git
-  return repoName.length > 0;
+    for (let index = segments.length - 2; index >= 1; index--) {
+      const npub = segments[index];
+      try {
+        const decoded = nip19.decode(npub);
+        if (decoded.type !== "npub") continue;
+      } catch {
+        continue;
+      }
+
+      const repositoryPath = segments.slice(index + 1).join("/");
+      if (!repositoryPath.endsWith(".git") || repositoryPath === ".git") {
+        continue;
+      }
+
+      return {
+        npub,
+        servicePath: segments.slice(0, index).join("/"),
+      };
+    }
+  } catch {
+    // Invalid URL.
+  }
+  return undefined;
 }
 
 /**
@@ -409,18 +428,33 @@ export function graspCloneUrlDomain(url: string): string | undefined {
 }
 
 /**
+ * Extract the GRASP service address, including its mount path, from a clone
+ * URL. Plaintext services retain an `http://` prefix to distinguish them from
+ * the default HTTPS/WSS transport.
+ */
+export function graspCloneUrlServiceAddress(url: string): string | undefined {
+  if (!isGraspCloneUrl(url)) return undefined;
+  const clone = parseGraspCloneUrl(url);
+  if (!clone) return undefined;
+
+  try {
+    const parsed = new URL(url);
+    return normalizeGraspServiceAddress(
+      `${parsed.protocol}//${parsed.host}${clone.servicePath}`,
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Extract the npub from a Grasp clone URL.
  * Grasp URLs have the form: https://<domain>/<npub1...>/<repo-name>.git
  * Returns undefined if the URL is not a valid Grasp clone URL.
  */
 export function graspCloneUrlNpub(url: string): string | undefined {
   if (!isGraspCloneUrl(url)) return undefined;
-  const npubStart = url.indexOf("npub1");
-  if (npubStart === -1) return undefined;
-  let npubEnd = npubStart + 5;
-  while (npubEnd < url.length && /[0-9a-z]/.test(url[npubEnd])) npubEnd++;
-  const npub = url.slice(npubStart, npubEnd);
-  return npub.length >= 10 ? npub : undefined;
+  return parseGraspCloneUrl(url)?.npub;
 }
 
 /**
@@ -835,6 +869,8 @@ export interface ResolvedRepo {
   additionalGitServerUrls: string[];
   /** Unique Grasp server domains (hostnames) derived from graspCloneUrls */
   graspServerDomains: string[];
+  /** Unique Grasp service addresses, including mount paths */
+  graspServerAddresses: string[];
   /** All relay URLs across all maintainer announcements, deduplicated */
   relays: string[];
 
@@ -2568,6 +2604,13 @@ export function resolveChain(
         .filter((d): d is string => d !== undefined),
     ),
   );
+  const graspServerAddresses = Array.from(
+    new Set(
+      graspCloneUrls
+        .map(graspCloneUrlServiceAddress)
+        .filter((address): address is string => address !== undefined),
+    ),
+  );
 
   return {
     selectedMaintainer,
@@ -2581,6 +2624,7 @@ export function resolveChain(
     graspCloneUrls,
     additionalGitServerUrls,
     graspServerDomains,
+    graspServerAddresses,
     relays: relayProvenance.map((p) => p.value),
     maintainerSet,
     confirmedMaintainers,

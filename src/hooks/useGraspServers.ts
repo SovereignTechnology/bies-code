@@ -9,16 +9,19 @@
  * Falls back to DEFAULT_GRASP_SERVERS when the user has no grasp list
  * published.
  *
- * Returns an array of GraspServer objects with both the WebSocket URL
- * and the bare domain.
+ * Returns an array of GraspServer objects with both the WebSocket URL and the
+ * scheme-less service address, including any public mount path.
  */
 
 import { useMemo } from "react";
 import { map } from "rxjs/operators";
 import { use$ } from "@/hooks/use$";
 import { useEventStore } from "@/hooks/useEventStore";
+import { graspServerFromAddress, type GraspServer } from "@/lib/grasp";
 import { DEFAULT_GRASP_SERVERS } from "@/services/settings";
 import type { NostrEvent } from "nostr-tools";
+
+export type { GraspServer } from "@/lib/grasp";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -28,24 +31,12 @@ import type { NostrEvent } from "nostr-tools";
 const GRASP_LIST_KIND = 10317;
 
 // ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-/** A resolved Grasp server. */
-export interface GraspServer {
-  /** WebSocket URL, e.g. "wss://relay.ngit.dev" */
-  wsUrl: string;
-  /** Bare domain, e.g. "relay.ngit.dev" */
-  domain: string;
-}
-
-// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 /**
- * Extract Grasp server domains from a kind:10317 event.
- * Each `g` tag contains a WebSocket URL; we extract the hostname.
+ * Extract GRASP service addresses from a kind:10317 event.
+ * Each `g` tag contains a WebSocket URL whose mount path is significant.
  */
 function parseGraspListEvent(event: NostrEvent): GraspServer[] {
   const servers: GraspServer[] = [];
@@ -54,34 +45,21 @@ function parseGraspListEvent(event: NostrEvent): GraspServer[] {
   for (const tag of event.tags) {
     if (tag[0] !== "g" || !tag[1]) continue;
 
-    const wsUrl = tag[1];
-    try {
-      // Parse the WebSocket URL to extract the domain
-      const url = new URL(wsUrl);
-      const domain = url.host;
-      if (!seen.has(domain)) {
-        seen.add(domain);
-        servers.push({ wsUrl, domain });
-      }
-    } catch {
-      // If the tag value is a bare domain (no protocol), handle that too
-      const domain = wsUrl.replace(/^wss?:\/\//, "").replace(/\/+$/, "");
-      if (domain && !seen.has(domain)) {
-        seen.add(domain);
-        servers.push({ wsUrl: `wss://${domain}`, domain });
-      }
-    }
+    const server = graspServerFromAddress(tag[1]);
+    if (!server || seen.has(server.serviceAddress)) continue;
+    seen.add(server.serviceAddress);
+    servers.push(server);
   }
 
   return servers;
 }
 
-/** Convert DEFAULT_GRASP_SERVERS domains to GraspServer objects. */
+/** Convert default GRASP service addresses to GraspServer objects. */
 function defaultServers(): GraspServer[] {
-  return DEFAULT_GRASP_SERVERS.map((domain) => ({
-    wsUrl: `wss://${domain}`,
-    domain,
-  }));
+  return DEFAULT_GRASP_SERVERS.flatMap((address) => {
+    const server = graspServerFromAddress(address);
+    return server ? [server] : [];
+  });
 }
 
 // ---------------------------------------------------------------------------

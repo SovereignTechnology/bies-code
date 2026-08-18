@@ -21,8 +21,8 @@ import { eventStore, pool } from "@/services/nostr";
 import { outboxStore } from "@/services/outbox";
 
 import { pushToGitServer, ZERO_HASH, type RefUpdate } from "@/lib/git-push";
+import { graspRepositoryCloneUrl, type GraspServer } from "@/lib/grasp";
 import { useProfile } from "@/hooks/useProfile";
-import type { GraspServer } from "@/hooks/useGraspServers";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -116,8 +116,12 @@ export function useCreateRepo() {
         // Build clone URLs and relay URLs for all selected Grasp servers
         // Percent-encode the identifier per GRASP-01 §Git Smart HTTP path spec
         const encodedIdentifier = encodeURIComponent(input.identifier);
-        const cloneUrls = input.graspServers.map(
-          (s) => `https://${s.domain}/${npub}/${encodedIdentifier}.git`,
+        const cloneUrls = input.graspServers.map((server) =>
+          graspRepositoryCloneUrl(
+            server.serviceAddress,
+            npub,
+            encodedIdentifier,
+          ),
         );
         const relayUrls = input.graspServers.map((s) => s.wsUrl);
 
@@ -303,8 +307,12 @@ export function useCreateRepo() {
 
         // Percent-encode the identifier per GRASP-01 §Git Smart HTTP path spec
         const encodedIdentifier = encodeURIComponent(input.identifier);
-        const cloneUrls = input.graspServers.map(
-          (s) => `https://${s.domain}/${npub}/${encodedIdentifier}.git`,
+        const cloneUrls = input.graspServers.map((server) =>
+          graspRepositoryCloneUrl(
+            server.serviceAddress,
+            npub,
+            encodedIdentifier,
+          ),
         );
 
         const refUpdates: RefUpdate[] = [
