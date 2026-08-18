@@ -44,7 +44,6 @@ export default function RepoActionsPage() {
         runs={runs}
         basePath={basePath}
         relationships={relationships}
-        trust={trust}
       />
 
       <RepoActionsList

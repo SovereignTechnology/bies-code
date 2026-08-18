@@ -47,7 +47,6 @@ import type {
 } from "@/services/ci";
 import {
   getCITrustResolution,
-  summarizeCIRunTrust,
   type CITrustContextState,
 } from "@/lib/ciTrustContext";
 import { CICoordinatorLink } from "./CICoordinatorLink";
@@ -117,13 +116,11 @@ export function CICoordinatorSummaryBar({
   runs,
   basePath,
   relationships,
-  trust,
 }: {
   coordinators: CICoordinatorSummary[] | undefined;
   runs: CIWorkflowRun[] | undefined;
   basePath: string;
   relationships: ReadonlyMap<string, CICoordinatorRelationship>;
-  trust: CITrustContextState;
 }) {
   const watchingCount =
     coordinators?.filter(({ availability }) => availability === "watching")
@@ -152,11 +149,6 @@ export function CICoordinatorSummaryBar({
   const offlineCount = [...knownCoordinatorPubkeys].filter(
     (pubkey) => !liveCoordinatorPubkeys.has(pubkey),
   ).length;
-  const trustSummary = summarizeCIRunTrust(
-    [...knownCoordinatorPubkeys].map((pubkey) =>
-      getCITrustResolution(trust, pubkey),
-    ),
-  );
   const relevantCoordinators =
     coordinators?.filter(
       ({ availability, pubkey }) =>
@@ -238,9 +230,6 @@ export function CICoordinatorSummaryBar({
                         {previouslyRequestedCount} of {knownCoordinatorCount}{" "}
                         previously requested by maintainers
                       </span>
-                    )}
-                    {knownCoordinatorCount > 0 && (
-                      <CITrustContextLabel resolution={trustSummary} />
                     )}
                   </div>
                 )}
@@ -414,12 +403,12 @@ export function CICoordinatorDirectory({
                     </>
                   )}
                 </span>
-                <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
               </Link>
               <CITrustContextLabel
                 resolution={getCITrustResolution(trust, pubkey)}
-                className="mr-4 sm:mr-5"
+                className="mx-2"
               />
+              <ChevronRight className="mr-4 h-4 w-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 sm:mr-5" />
             </li>
           );
         })}

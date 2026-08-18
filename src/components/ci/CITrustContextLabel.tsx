@@ -36,7 +36,6 @@ export function CITrustContextLabel({
 
   const hiddenCommonClassification =
     visibility === "exceptions-only" &&
-    resolution.coverage === "complete" &&
     (resolution.classification === CITrustClassification.MaintainerDirected ||
       resolution.classification ===
         CITrustClassification.OperationallyAssociated);
@@ -55,7 +54,10 @@ export function CITrustContextLabel({
 
   const incomplete = resolution.coverage === "partial";
   const copy = CI_TRUST_CLASSIFICATION_COPY[resolution.classification];
-  const label = incomplete ? "Context incomplete" : copy.label;
+  const hasPositiveEvidence =
+    resolution.classification !== CITrustClassification.NoKnownContext;
+  const label =
+    incomplete && !hasPositiveEvidence ? "Context incomplete" : copy.label;
 
   const content = <CITrustExplanation resolution={resolution} label={label} />;
 
@@ -96,16 +98,26 @@ function CITrustExplanation({
   label: string;
 }) {
   const copy = CI_TRUST_CLASSIFICATION_COPY[resolution.classification];
+  const hasPositiveEvidence =
+    resolution.classification !== CITrustClassification.NoKnownContext;
+  const incompleteWithoutEvidence =
+    resolution.coverage === "partial" && !hasPositiveEvidence;
   return (
     <div className="space-y-2 text-xs">
       <div>
         <p className="font-semibold text-foreground">{label}</p>
         <p className="mt-1 leading-relaxed text-muted-foreground">
-          {resolution.coverage === "partial"
-            ? "Some relevant relay or identity queries could not be completed, so an absent evidence path is not treated as a final score."
+          {incompleteWithoutEvidence
+            ? "Some relevant relay or identity queries could not be completed, so an absent evidence path is not treated as a final classification."
             : copy.description}
         </p>
       </div>
+      {resolution.coverage === "partial" && hasPositiveEvidence && (
+        <p className="border-t border-border/60 pt-2 leading-relaxed text-muted-foreground">
+          Some additional relay or identity queries could not be completed. The
+          signed evidence below still supports this classification.
+        </p>
+      )}
       {resolution.evidence.length > 0 && (
         <ul className="space-y-2 border-t border-border/60 pt-2">
           {resolution.evidence.map((evidence, index) => (

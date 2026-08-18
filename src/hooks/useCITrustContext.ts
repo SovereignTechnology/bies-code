@@ -604,12 +604,14 @@ export function useCITrustContext({
   runs = [],
   coordinatorRelationships,
   coordinatorState,
+  repositoryRelationshipState,
   extraIdentities = [],
 }: {
   repo?: ResolvedRepo;
   runs?: readonly CIWorkflowRun[];
   coordinatorRelationships?: ReadonlyMap<string, CICoordinatorRelationship>;
   coordinatorState?: CICoordinatorState;
+  repositoryRelationshipState?: { settled: boolean; partial: boolean };
   extraIdentities?: readonly string[];
 }): CITrustContextState {
   const identityKey = [
@@ -631,12 +633,16 @@ export function useCITrustContext({
   );
   const verified = useVerifiedCIIdentities(identityPubkeys);
   const social = useCISocialEvidence(identityPubkeys);
-  const relationshipsSettled = repo ? coordinatorState?.settled === true : true;
+  const relationshipQueryState =
+    coordinatorState ?? repositoryRelationshipState;
+  const relationshipsSettled = repo
+    ? relationshipQueryState?.settled === true
+    : true;
   const settled = relationshipsSettled && verified.settled && social.settled;
   const partial =
     verified.partial ||
     social.partial ||
-    (repo ? coordinatorState?.partial === true : false);
+    (repo ? relationshipQueryState?.partial === true : false);
 
   return useMemo(() => {
     if (!settled) {

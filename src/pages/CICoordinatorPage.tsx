@@ -47,6 +47,7 @@ import { RepositoryModel } from "@/models/RepositoryModel";
 import NotFound from "@/pages/NotFound";
 import { CITrustContextLabel } from "@/components/ci/CITrustContextLabel";
 import { useCITrustContext } from "@/hooks/useCITrustContext";
+import { useCIRepositoryCoordinatorRelationship } from "@/hooks/useCIRepositoryCoordinatorRelationship";
 import { getCITrustResolution } from "@/lib/ciTrustContext";
 
 function humanize(value: string | undefined): string {
@@ -234,6 +235,7 @@ export default function CICoordinatorPage() {
             />
 
             <RepositorySection
+              coordinatorPubkey={pubkey}
               title="Acting now"
               description="Live repository status claims found on the coordinator's outboxes or targeted repository relays."
               icon={<RadioTower className="h-5 w-5 text-emerald-500" />}
@@ -247,6 +249,7 @@ export default function CICoordinatorPage() {
             />
 
             <RepositorySection
+              coordinatorPubkey={pubkey}
               title="Ready to serve"
               description="Repositories targeted by the live request-readiness list, excluding those already acting."
               icon={<GitBranch className="h-5 w-5 text-violet-500" />}
@@ -263,6 +266,7 @@ export default function CICoordinatorPage() {
             />
 
             <RepositorySection
+              coordinatorPubkey={pubkey}
               title="Previously reported"
               description="Expired acting claims found on coordinator outboxes or targeted repository relays."
               icon={<Clock3 className="h-5 w-5 text-amber-500" />}
@@ -465,6 +469,7 @@ function CoordinatorAdvertisementCard({
 }
 
 function RepositorySection({
+  coordinatorPubkey,
   title,
   description,
   icon,
@@ -474,6 +479,7 @@ function RepositorySection({
   loading,
   emptyMessage,
 }: {
+  coordinatorPubkey: string;
   title: string;
   description: string;
   icon: ReactNode;
@@ -528,6 +534,7 @@ function RepositorySection({
           {entries.map(({ coordinate, status }) => (
             <CoordinatorRepositoryRow
               key={`${coordinate}:${status?.event.id ?? "target"}`}
+              coordinatorPubkey={coordinatorPubkey}
               coordinate={coordinate}
               status={status}
               historical={historical}
@@ -546,10 +553,12 @@ function RepositorySection({
 }
 
 function CoordinatorRepositoryRow({
+  coordinatorPubkey,
   coordinate,
   status,
   historical,
 }: {
+  coordinatorPubkey: string;
   coordinate: string;
   status?: CIRepositoryStatus;
   historical: boolean;
@@ -565,6 +574,21 @@ function CoordinatorRepositoryRow({
     ) as unknown as Observable<ResolvedRepo | undefined>;
   }, [parsed?.pubkey, parsed?.identifier, store]);
   const repoPath = useDefaultRepoCoordPath(coordinate);
+  const relationshipState = useCIRepositoryCoordinatorRelationship(
+    repo,
+    coordinatorPubkey,
+  );
+  const relationships = useMemo(
+    () =>
+      new Map([[coordinatorPubkey, relationshipState.relationship] as const]),
+    [coordinatorPubkey, relationshipState.relationship],
+  );
+  const trust = useCITrustContext({
+    repo,
+    coordinatorRelationships: relationships,
+    repositoryRelationshipState: relationshipState,
+    extraIdentities: [coordinatorPubkey],
+  });
 
   return (
     <Card className="transition-colors hover:border-pink-500/25">
@@ -599,6 +623,13 @@ function CoordinatorRepositoryRow({
                     : "Acting"
                   : "Targeted"}
               </Badge>
+              <CITrustContextLabel
+                resolution={
+                  repo
+                    ? getCITrustResolution(trust, coordinatorPubkey)
+                    : { phase: "loading" }
+                }
+              />
             </div>
             {repo?.description && (
               <p className="mt-2 line-clamp-2 text-sm leading-relaxed text-muted-foreground">

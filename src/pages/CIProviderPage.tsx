@@ -18,6 +18,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useCIProviderAdvertisement } from "@/hooks/useCIProviderAdvertisement";
+import { useCICoordinatorAdvertisement } from "@/hooks/useCICoordinatorProfile";
 import { useCITrustContext } from "@/hooks/useCITrustContext";
 import { useLoadProfile } from "@/hooks/useLoadProfile";
 import { useProfile } from "@/hooks/useProfile";
@@ -32,6 +33,7 @@ export default function CIProviderPage() {
   useLoadProfile(pubkey);
   const profile = useProfile(pubkey);
   const state = useCIProviderAdvertisement(pubkey);
+  const coordinatorAdvertisement = useCICoordinatorAdvertisement(pubkey);
   const trust = useCITrustContext({
     extraIdentities: pubkey ? [pubkey] : [],
   });
@@ -40,13 +42,19 @@ export default function CIProviderPage() {
   const displayName =
     profile?.displayName ??
     profile?.name ??
-    (npub ? `${npub.slice(0, 16)}…` : "CI provider");
-  const live = advertisement?.isLive === true;
+    (npub ? `${npub.slice(0, 16)}…` : "CI identity");
+  const now = Math.floor(Date.now() / 1000);
+  const providerIsLive = advertisement?.isLive === true;
+  const coordinatorIsLive =
+    coordinatorAdvertisement !== undefined &&
+    coordinatorAdvertisement.expiration > now;
+  const hasAdvertisedRole = !!advertisement || !!coordinatorAdvertisement;
+  const hasLiveRole = providerIsLive || coordinatorIsLive;
 
   useSeoMeta({
-    title: `${displayName} CI provider - ngit`,
+    title: `${displayName} CI identity - ngit`,
     description:
-      "CI compute-provider identity, signed capabilities, and trust context",
+      "CI identity, observed signed roles, capabilities, and trust context",
     ogImage: profile?.picture ?? "/og-image.png",
     ogImageAlt: displayName,
     twitterCard: profile?.picture ? "summary" : "summary_large_image",
@@ -74,34 +82,61 @@ export default function CIProviderPage() {
                 size="xl"
                 className="ring-4 ring-background shadow-lg"
               />
-              <span
-                className={cn(
-                  "absolute bottom-0 right-0 h-4 w-4 rounded-full border-[3px] border-background",
-                  live ? "bg-emerald-500" : "bg-amber-500",
-                )}
-                aria-label={live ? "Online" : "Offline"}
-              />
+              {hasAdvertisedRole && (
+                <span
+                  className={cn(
+                    "absolute bottom-0 right-0 h-4 w-4 rounded-full border-[3px] border-background",
+                    hasLiveRole ? "bg-emerald-500" : "bg-amber-500",
+                  )}
+                  aria-label={
+                    hasLiveRole
+                      ? "At least one advertised CI role is live"
+                      : "Advertised CI roles are offline"
+                  }
+                />
+              )}
             </div>
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
                 <h1 className="w-full min-w-0 truncate text-2xl font-bold tracking-tight sm:w-auto sm:text-3xl md:text-4xl">
                   {displayName}
                 </h1>
-                <Badge variant="outline" className="gap-1.5 font-normal">
-                  <span
-                    className={cn(
-                      "h-1.5 w-1.5 rounded-full",
-                      live ? "bg-emerald-500" : "bg-amber-500",
-                    )}
-                  />
-                  {live ? "Live provider" : "Offline provider"}
-                </Badge>
+                {advertisement && (
+                  <Badge variant="outline" className="gap-1.5 font-normal">
+                    <span
+                      className={cn(
+                        "h-1.5 w-1.5 rounded-full",
+                        providerIsLive ? "bg-emerald-500" : "bg-amber-500",
+                      )}
+                    />
+                    {providerIsLive ? "Live provider" : "Offline provider"}
+                  </Badge>
+                )}
+                {coordinatorAdvertisement && (
+                  <Badge variant="outline" className="gap-1.5 font-normal">
+                    <span
+                      className={cn(
+                        "h-1.5 w-1.5 rounded-full",
+                        coordinatorIsLive ? "bg-emerald-500" : "bg-amber-500",
+                      )}
+                    />
+                    {coordinatorIsLive
+                      ? "Live coordinator"
+                      : "Offline coordinator"}
+                  </Badge>
+                )}
                 <CITrustContextLabel
                   resolution={getCITrustResolution(trust, pubkey)}
                 />
               </div>
               <p className="mt-2 text-lg text-muted-foreground">
-                Signed compute capabilities and execution identity.
+                {advertisement
+                  ? "Signed provider capabilities and execution identity."
+                  : coordinatorAdvertisement
+                    ? "This key advertises a coordinator role; no provider advertisement was found."
+                    : state.settled
+                      ? "A CI identity with no current provider advertisement."
+                      : "Resolving signed CI roles and capabilities."}
               </p>
               <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
                 {profile?.nip05 && (
@@ -118,6 +153,15 @@ export default function CIProviderPage() {
                   Nostr profile
                   <ArrowUpRight className="h-3.5 w-3.5" />
                 </Link>
+                {coordinatorAdvertisement && (
+                  <Link
+                    to={`/coordinator/${npub}`}
+                    className="inline-flex items-center gap-1 text-muted-foreground transition-colors hover:text-foreground"
+                  >
+                    Coordinator profile
+                    <ArrowUpRight className="h-3.5 w-3.5" />
+                  </Link>
+                )}
               </div>
             </div>
           </div>
@@ -184,7 +228,8 @@ function ProviderAdvertisementCard({
           <Cpu className="mx-auto mb-3 h-8 w-8 text-muted-foreground" />
           <h2 className="font-semibold">No provider advertisement found</h2>
           <p className="mx-auto mt-1 max-w-lg text-sm text-muted-foreground">
-            This identity may be linked from historical Job Results without a
+            A Job Result shows that its signer acted as a provider for that job.
+            It does not imply a persistent provider role, and this key has no
             current kind:19845 capability advertisement.
           </p>
         </CardContent>
