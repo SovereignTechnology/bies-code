@@ -17,7 +17,6 @@ import {
   KeyRound,
   RadioTower,
   Server,
-  Users,
 } from "lucide-react";
 import type {
   CICoordinatorAdvertisement,
@@ -25,7 +24,8 @@ import type {
 } from "@/casts/CICoordinator";
 import { EventCardActions } from "@/components/EventCardActions";
 import { RepoBadge } from "@/components/RepoBadge";
-import { UserAvatar, UserLink } from "@/components/UserAvatar";
+import { UserAvatar } from "@/components/UserAvatar";
+import { UserGroup } from "@/components/UserGroup";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -57,6 +57,7 @@ import {
   CITrustClassification,
   getCITrustResolution,
   settledCITrustResolution,
+  type CITrustEvidence,
   type CITrustResolution,
 } from "@/lib/ciTrustContext";
 
@@ -77,22 +78,15 @@ function coordinatorRepoCoordinate(
 }
 
 function coordinatorProfileTrustResolution(
-  base: CITrustResolution,
   context: CICoordinatorViewerContext,
   coordinatorSettled: boolean,
   coordinatorPartial: boolean,
 ): CITrustResolution {
-  if (
-    base.phase === "loading" ||
-    context.phase === "loading" ||
-    !coordinatorSettled
-  ) {
+  if (context.phase === "loading" || !coordinatorSettled) {
     return { phase: "loading" };
   }
 
-  const evidence = base.evidence.filter(
-    (item) => item.kind !== "contact-request",
-  );
+  const evidence: CITrustEvidence[] = [];
   if (context.viewerRequestedRepositoryCount > 0) {
     evidence.unshift({
       kind: "maintainer-request",
@@ -111,25 +105,28 @@ function coordinatorProfileTrustResolution(
       scope: "current",
     });
   }
-  const contactRepositoryCount = context.requestedByContacts.reduce(
-    (total, item) => total + item.repositoryCount,
-    0,
-  );
-  if (contactRepositoryCount > 0) {
+  if (context.requestedByContactsRepositoryCount > 0) {
     evidence.push({
       kind: "contact-request",
       classification: CITrustClassification.SociallyCorroborated,
       summary: "Requested by people you follow",
-      detail: `${context.requestedByContacts.length} ${context.requestedByContacts.length === 1 ? "person you follow currently requests" : "people you follow currently request"} this coordinator across ${contactRepositoryCount} ${contactRepositoryCount === 1 ? "repository" : "repositories"} they maintain.`,
-      scope: "current",
+      detail: `${context.requestedByContacts.length} ${context.requestedByContacts.length === 1 ? "person you follow has" : "people you follow have"} signed a standing or run-specific request for this coordinator across ${context.requestedByContactsRepositoryCount} ${context.requestedByContactsRepositoryCount === 1 ? "repository" : "repositories"} they maintain.`,
+      scope: "historical",
+    });
+  }
+  if (context.activeForContactsRepositoryCount > 0) {
+    evidence.push({
+      kind: "social-activity",
+      classification: CITrustClassification.SociallyCorroborated,
+      summary: "Used near your follow graph",
+      detail: `Signed coordinator status or started CI activity was observed on ${context.activeForContactsRepositoryCount} ${context.activeForContactsRepositoryCount === 1 ? "repository" : "repositories"} maintained by ${context.activeForContacts.length} ${context.activeForContacts.length === 1 ? "person" : "people"} you follow. This does not mean they requested or endorsed it.`,
+      scope: "historical",
     });
   }
 
   return settledCITrustResolution(
     evidence,
-    base.coverage === "partial" ||
-      context.coverage === "partial" ||
-      coordinatorPartial
+    context.coverage === "partial" || coordinatorPartial
       ? "partial"
       : "complete",
   );
@@ -141,16 +138,12 @@ export default function CICoordinatorPage() {
   useLoadProfile(pubkey);
   const profile = useProfile(pubkey);
   const state = useCICoordinatorProfile(pubkey);
-  const trust = useCITrustContext({
-    extraIdentities: pubkey ? [pubkey] : [],
-  });
   const viewerContext = useCICoordinatorViewerContext(
     pubkey ?? "",
     state?.activeStatuses,
     profile?.nip05,
   );
   const profileTrust = coordinatorProfileTrustResolution(
-    getCITrustResolution(trust, pubkey ?? ""),
     viewerContext,
     state?.settled === true,
     state?.partial === true,
@@ -464,23 +457,20 @@ function CoordinatorTrustContextCard({
             and with signed requests from people you follow.
           </p>
         ) : hasRepositoryEvidence ? (
-          <div className="mt-4 space-y-4 text-sm">
+          <div className="mt-4 space-y-3 text-sm">
             {(context.viewerRequestedRepositoryCount > 0 ||
               context.viewerActiveRepositoryCount > 0 ||
               context.viewerGraspRepositoryCount > 0) && (
-              <ul className="space-y-2.5">
+              <ul className="space-y-2">
                 {context.viewerRequestedRepositoryCount > 0 && (
                   <li className="flex items-start gap-2">
                     <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
                     <span>
-                      You currently request this coordinator on{" "}
+                      Requested on{" "}
                       <strong className="font-semibold text-foreground">
                         {context.viewerRequestedRepositoryCount}
                       </strong>{" "}
-                      {context.viewerRequestedRepositoryCount === 1
-                        ? "repository"
-                        : "repositories"}{" "}
-                      you maintain.
+                      of your repositories.
                     </span>
                   </li>
                 )}
@@ -488,14 +478,11 @@ function CoordinatorTrustContextCard({
                   <li className="flex items-start gap-2">
                     <RadioTower className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
                     <span>
-                      It is currently acting on{" "}
+                      Running against{" "}
                       <strong className="font-semibold text-foreground">
                         {context.viewerActiveRepositoryCount}
                       </strong>{" "}
-                      {context.viewerActiveRepositoryCount === 1
-                        ? "repository"
-                        : "repositories"}{" "}
-                      you maintain.
+                      of your repositories.
                     </span>
                   </li>
                 )}
@@ -508,14 +495,14 @@ function CoordinatorTrustContextCard({
                         <span className="font-medium text-foreground">
                           {context.verifiedGraspDomain}
                         </span>{" "}
-                        as a GRASP service on{" "}
+                        on{" "}
                         <strong className="font-semibold text-foreground">
                           {context.viewerGraspRepositoryCount}
                         </strong>{" "}
                         {context.viewerGraspRepositoryCount === 1
                           ? "repository"
-                          : "repositories"}{" "}
-                        you maintain.
+                          : "repositories"}
+                        .
                       </span>
                     </li>
                   )}
@@ -523,57 +510,41 @@ function CoordinatorTrustContextCard({
             )}
 
             {context.requestedByContacts.length > 0 && (
-              <section className="border-t border-border/60 pt-3">
-                <h3 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                  <Users className="h-3.5 w-3.5" />
-                  Requested by people you follow
-                </h3>
-                <ul className="mt-2 space-y-2">
-                  {context.requestedByContacts.map(
-                    ({ pubkey, repositoryCount }) => (
-                      <li key={pubkey} className="leading-relaxed">
-                        <UserLink
-                          pubkey={pubkey}
-                          avatarSize="xs"
-                          variant="inline"
-                        />{" "}
-                        currently requests this coordinator on {repositoryCount}{" "}
-                        {repositoryCount === 1
-                          ? "repository they maintain"
-                          : "repositories they maintain"}
-                        .
-                      </li>
-                    ),
+              <p className="border-t border-border/60 pt-3 leading-relaxed text-muted-foreground">
+                Requested by{" "}
+                <UserGroup
+                  pubkeys={context.requestedByContacts.map(
+                    ({ pubkey }) => pubkey,
                   )}
-                </ul>
-              </section>
+                />{" "}
+                on{" "}
+                <strong className="font-semibold text-foreground">
+                  {context.requestedByContactsRepositoryCount}
+                </strong>{" "}
+                {context.requestedByContactsRepositoryCount === 1
+                  ? "repository"
+                  : "repositories"}
+                .
+              </p>
             )}
 
             {context.activeForContacts.length > 0 && (
-              <section className="border-t border-border/60 pt-3">
-                <h3 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                  <RadioTower className="h-3.5 w-3.5" />
-                  Active in your follow graph
-                </h3>
-                <ul className="mt-2 space-y-2">
-                  {context.activeForContacts.map(
-                    ({ pubkey, repositoryCount }) => (
-                      <li key={pubkey} className="leading-relaxed">
-                        Acting on {repositoryCount}{" "}
-                        {repositoryCount === 1
-                          ? "repository maintained by"
-                          : "repositories maintained by"}{" "}
-                        <UserLink
-                          pubkey={pubkey}
-                          avatarSize="xs"
-                          variant="inline"
-                        />
-                        . This does not by itself show that they requested it.
-                      </li>
-                    ),
+              <p className="border-t border-border/60 pt-3 leading-relaxed text-muted-foreground">
+                Used by{" "}
+                <UserGroup
+                  pubkeys={context.activeForContacts.map(
+                    ({ pubkey }) => pubkey,
                   )}
-                </ul>
-              </section>
+                />{" "}
+                on{" "}
+                <strong className="font-semibold text-foreground">
+                  {context.activeForContactsRepositoryCount}
+                </strong>{" "}
+                {context.activeForContactsRepositoryCount === 1
+                  ? "repository"
+                  : "repositories"}
+                .
+              </p>
             )}
           </div>
         ) : (
@@ -590,9 +561,8 @@ function CoordinatorTrustContextCard({
           </p>
         )}
         <p className="mt-3 border-t border-border/60 pt-3 text-xs leading-relaxed text-muted-foreground">
-          Signed requests establish maintainer direction for their repositories.
-          Coordinator status alone reports activity; it does not prove that a
-          maintainer requested it or that a CI result is correct.
+          Requested means signed maintainer direction. Used means signed
+          coordinator activity; it is not itself a request or endorsement.
         </p>
       </CardContent>
     </Card>

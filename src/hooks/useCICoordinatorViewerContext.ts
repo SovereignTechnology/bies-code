@@ -9,10 +9,18 @@ import {
   type CIRepositoryStatus,
   isValidCIServiceControl,
 } from "@/casts/CICoordinator";
+import { isValidCIJobResult } from "@/casts/CIJobResult";
+import { isValidCIResult } from "@/casts/CIResult";
+import { isValidCIRun } from "@/casts/CIRun";
 import { use$ } from "@/hooks/use$";
 import { useDnsIdentity } from "@/hooks/useDnsIdentity";
 import { useEventStore } from "@/hooks/useEventStore";
-import { CI_SERVICE_REQUEST_KIND, CI_SERVICE_STOP_KIND } from "@/lib/ci";
+import {
+  CI_EVENT_KINDS,
+  CI_MANUAL_TRIGGER_KIND,
+  CI_SERVICE_REQUEST_KIND,
+  CI_SERVICE_STOP_KIND,
+} from "@/lib/ci";
 import { REPO_KIND, type ResolvedRepo } from "@/lib/nip34";
 import { loadRelayQueryUntilSettled } from "@/lib/relayQuerySettlement";
 import { standardizeNip05 } from "@/lib/routeUtils";
@@ -39,7 +47,9 @@ export type CICoordinatorViewerContext =
       viewerGraspRepositoryCount: number;
       verifiedGraspDomain: string | undefined;
       requestedByContacts: readonly CICoordinatorContactContext[];
+      requestedByContactsRepositoryCount: number;
       activeForContacts: readonly CICoordinatorContactContext[];
+      activeForContactsRepositoryCount: number;
     };
 
 function eventTagValues(event: NostrEvent, name: string): string[] {
@@ -82,6 +92,35 @@ function contactCounts(
         b.repositoryCount - a.repositoryCount ||
         a.pubkey.localeCompare(b.pubkey),
     );
+}
+
+function uniqueRepositoryCount(
+  counts: ReadonlyMap<string, ReadonlySet<string>>,
+): number {
+  return new Set(
+    [...counts.values()].flatMap((repositories) => [...repositories]),
+  ).size;
+}
+
+function isObservedStartedActivity(event: NostrEvent): boolean {
+  if (isValidCIResult(event) || isValidCIJobResult(event)) return true;
+  if (!isValidCIRun(event)) return false;
+  return event.tags.some(
+    ([name, value]) => name === "started_at" && /^\d+$/.test(value ?? ""),
+  );
+}
+
+function isValidSocialManualTrigger(event: NostrEvent): boolean {
+  return (
+    event.kind === CI_MANUAL_TRIGGER_KIND &&
+    event.content === "" &&
+    eventTagValues(event, "p").some((pubkey) =>
+      /^[0-9a-f]{64}$/.test(pubkey),
+    ) &&
+    eventTagValues(event, "a").some((coordinate) =>
+      /^30617:[0-9a-f]{64}:.+$/.test(coordinate),
+    )
+  );
 }
 
 /**
@@ -217,7 +256,7 @@ export function useCICoordinatorViewerContext(
   const coordinateKey = [...repositoryCoordinates].sort().join(",");
   const repositoryRelayKey = [...repositoryRelays].sort().join(",");
 
-  const controlsQuery = use$(() => {
+  const contextEventsQuery = use$(() => {
     if (!repositoryGraphQuery?.settled || repositories === undefined) {
       return of({
         settled: false,
@@ -237,10 +276,19 @@ export function useCICoordinatorViewerContext(
       repositoryRelays,
       [
         {
-          kinds: [CI_SERVICE_REQUEST_KIND, CI_SERVICE_STOP_KIND],
+          kinds: [
+            CI_SERVICE_REQUEST_KIND,
+            CI_SERVICE_STOP_KIND,
+            CI_MANUAL_TRIGGER_KIND,
+          ],
           authors: people,
           "#a": repositoryCoordinates,
           "#p": [coordinatorPubkey],
+        } as Filter,
+        {
+          kinds: [...CI_EVENT_KINDS],
+          authors: [coordinatorPubkey],
+          "#a": repositoryCoordinates,
         } as Filter,
       ],
       store,
@@ -281,6 +329,47 @@ export function useCICoordinatorViewerContext(
         );
     }, [coordinatorPubkey, coordinateKey, peopleKey, store]) ?? EMPTY_CONTROLS;
 
+  const observedActivity =
+    use$(() => {
+      if (repositoryCoordinates.length === 0) {
+        return of([] as NostrEvent[]);
+      }
+      return store
+        .timeline([
+          {
+            kinds: [...CI_EVENT_KINDS],
+            authors: [coordinatorPubkey],
+            "#a": repositoryCoordinates,
+          } as Filter,
+        ])
+        .pipe(
+          map((events) =>
+            (events as NostrEvent[]).filter(isObservedStartedActivity),
+          ),
+        );
+    }, [coordinatorPubkey, coordinateKey, store]) ?? [];
+
+  const contactManualTriggers =
+    use$(() => {
+      if (repositoryCoordinates.length === 0 || !follows?.length) {
+        return of([] as NostrEvent[]);
+      }
+      return store
+        .timeline([
+          {
+            kinds: [CI_MANUAL_TRIGGER_KIND],
+            authors: follows,
+            "#a": repositoryCoordinates,
+            "#p": [coordinatorPubkey],
+          } as Filter,
+        ])
+        .pipe(
+          map((events) =>
+            (events as NostrEvent[]).filter(isValidSocialManualTrigger),
+          ),
+        );
+    }, [coordinatorPubkey, coordinateKey, peopleKey, store]) ?? [];
+
   const standardizedNip05 = nip05 ? standardizeNip05(nip05) : undefined;
   const identity = useDnsIdentity(standardizedNip05);
   const identitySettled = !standardizedNip05 || identity.status !== "loading";
@@ -302,7 +391,9 @@ export function useCICoordinatorViewerContext(
       viewerGraspRepositoryCount: 0,
       verifiedGraspDomain,
       requestedByContacts: [],
+      requestedByContactsRepositoryCount: 0,
       activeForContacts: [],
+      activeForContactsRepositoryCount: 0,
     };
   }
 
@@ -311,7 +402,7 @@ export function useCICoordinatorViewerContext(
     directRepositoriesQuery?.settled === true &&
     repositoryGraphQuery?.settled === true &&
     repositories !== undefined &&
-    controlsQuery?.settled === true &&
+    contextEventsQuery?.settled === true &&
     identitySettled;
   if (!settled) return { phase: "loading", signedIn: true };
 
@@ -347,6 +438,18 @@ export function useCICoordinatorViewerContext(
       incrementContact(requestedByContacts, control.event.pubkey, repository);
     }
   }
+  for (const trigger of contactManualTriggers) {
+    for (const coordinate of eventTagValues(trigger, "a")) {
+      const repository = (repositories ?? []).find(
+        (repo) =>
+          repo.allCoordinates.includes(coordinate) &&
+          repo.confirmedMaintainers.includes(trigger.pubkey),
+      );
+      if (repository && followed.has(trigger.pubkey)) {
+        incrementContact(requestedByContacts, trigger.pubkey, repository);
+      }
+    }
+  }
 
   const activeRepositoryCoordinates = new Set<string>();
   for (const status of activeStatuses ?? []) {
@@ -354,17 +457,28 @@ export function useCICoordinatorViewerContext(
       activeRepositoryCoordinates.add(coordinate);
     }
   }
+  const socialActivityCoordinates = new Set(activeRepositoryCoordinates);
+  for (const event of observedActivity) {
+    for (const coordinate of eventTagValues(event, "a")) {
+      socialActivityCoordinates.add(coordinate);
+    }
+  }
   const activeForContacts = new Map<string, Set<string>>();
   const activeViewerRepositories = new Set<string>();
   for (const repository of repositories ?? []) {
     if (
       !repository.allCoordinates.some((coordinate) =>
-        activeRepositoryCoordinates.has(coordinate),
+        socialActivityCoordinates.has(coordinate),
       )
     ) {
       continue;
     }
-    if (repository.confirmedMaintainers.includes(accountPubkey)) {
+    if (
+      repository.confirmedMaintainers.includes(accountPubkey) &&
+      repository.allCoordinates.some((coordinate) =>
+        activeRepositoryCoordinates.has(coordinate),
+      )
+    ) {
       activeViewerRepositories.add(repository.selectedCoordinate);
     }
     for (const maintainer of repository.confirmedMaintainers) {
@@ -385,7 +499,7 @@ export function useCICoordinatorViewerContext(
     contactsQuery,
     directRepositoriesQuery,
     repositoryGraphQuery,
-    controlsQuery,
+    contextEventsQuery,
   ];
 
   return {
@@ -404,6 +518,9 @@ export function useCICoordinatorViewerContext(
     viewerGraspRepositoryCount,
     verifiedGraspDomain,
     requestedByContacts: contactCounts(requestedByContacts),
+    requestedByContactsRepositoryCount:
+      uniqueRepositoryCount(requestedByContacts),
     activeForContacts: contactCounts(activeForContacts),
+    activeForContactsRepositoryCount: uniqueRepositoryCount(activeForContacts),
   };
 }
