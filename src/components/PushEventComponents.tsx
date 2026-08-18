@@ -50,6 +50,8 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { NsitePreviewLink } from "@/components/ci/PRNsitePreview";
+import type { NsitePreview } from "@/lib/ciOutputs";
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -509,6 +511,7 @@ export function PRUpdatePushEvent({
   repoCoords,
   previousTipCommitId,
   latestCommitIds,
+  nsitePreview,
 }: {
   update: PRUpdate | PRUpdateLike;
   superseded: boolean;
@@ -536,6 +539,8 @@ export function PRUpdatePushEvent({
   previousTipCommitId?: string;
   /** Commit IDs present in the latest PR version. Used to avoid striking through retained commits. */
   latestCommitIds?: ReadonlySet<string>;
+  /** Successful nsite preview produced for this update's tip commit. */
+  nsitePreview?: NsitePreview;
 }) {
   const timeAgo = formatDistanceToNow(
     new Date(update.event.created_at * 1000),
@@ -736,21 +741,26 @@ export function PRUpdatePushEvent({
 
           {/* Commit list */}
           {rows.length > 0 && (
-            <div className="rounded-md border border-border/50 bg-muted/20 px-3 py-1.5 divide-y divide-border/30">
-              {rows.map((r) => (
-                <CommitRow
-                  key={r.key}
-                  shortHash={r.shortHash}
-                  subject={r.subject}
-                  superseded={commitIsSuperseded(
-                    r.hash,
-                    superseded,
-                    latestCommitIds,
-                  )}
-                  href={r.href}
-                />
-              ))}
-            </div>
+            <>
+              <div className="rounded-md border border-border/50 bg-muted/20 px-3 py-1.5 divide-y divide-border/30">
+                {rows.map((r) => (
+                  <CommitRow
+                    key={r.key}
+                    shortHash={r.shortHash}
+                    subject={r.subject}
+                    superseded={commitIsSuperseded(
+                      r.hash,
+                      superseded,
+                      latestCommitIds,
+                    )}
+                    href={r.href}
+                  />
+                ))}
+              </div>
+              {nsitePreview && (
+                <NsitePreviewLink preview={nsitePreview} className="mt-2" />
+              )}
+            </>
           )}
         </div>
       </div>
