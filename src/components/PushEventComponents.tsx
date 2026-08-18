@@ -30,7 +30,11 @@ import type { PR } from "@/casts/PR";
 import type { PRUpdate } from "@/casts/PRUpdate";
 import type { PatchRevision } from "@/hooks/usePatchChain";
 import type { NostrEvent } from "nostr-tools";
-import type { GitGraspPool, PoolState } from "@/lib/git-grasp-pool";
+import {
+  selectCommitRange,
+  type GitGraspPool,
+  type PoolState,
+} from "@/lib/git-grasp-pool";
 import { useCommitHistory } from "@/hooks/useGitExplorer";
 import { usePRMergeBase } from "@/hooks/usePRMergeBase";
 import { useActiveAccount } from "applesauce-react/hooks";
@@ -603,19 +607,14 @@ export function PRUpdatePushEvent({
     effectiveMergeBase,
   );
 
-  // Trim commits up to (but not including) the merge base.
+  // Subtract every commit reachable from the merge base. Array order cannot
+  // establish this range because histories are timestamp-sorted.
   const loadedCommits = useMemo(() => {
     if (!commitHistory.commits.length) return [];
-    const trimmed = (() => {
-      if (!effectiveMergeBase) return commitHistory.commits;
-      const idx = commitHistory.commits.findIndex(
-        (c) => c.hash === effectiveMergeBase,
-      );
-      return idx === -1
-        ? commitHistory.commits
-        : commitHistory.commits.slice(0, idx);
-    })();
-    return [...trimmed].reverse();
+    return selectCommitRange(
+      commitHistory.commits,
+      effectiveMergeBase,
+    ).reverse();
   }, [commitHistory.commits, effectiveMergeBase]);
 
   // Detect fast-forward: the previous tip is reachable from the new tip, i.e.

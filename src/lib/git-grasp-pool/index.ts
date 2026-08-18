@@ -51,6 +51,9 @@ export type {
   CommitComparisonData,
 } from "./types";
 
+// --- Commit range selection ---
+export { selectCommitRange } from "./commit-range";
+
 // --- CORS proxy (for UI components that need to display proxy status) ---
 export { CorsProxyManager, DEFAULT_CORS_PROXY_BASE } from "./cors-proxy";
 

@@ -68,7 +68,11 @@ import {
 import { cn, compactNumber } from "@/lib/utils";
 import { PRFilesTab } from "@/components/PRFilesTab";
 import { PatchFilesTab } from "@/components/PatchFilesTab";
-import { diffTrees, generateUnifiedDiff } from "@/lib/git-grasp-pool";
+import {
+  diffTrees,
+  generateUnifiedDiff,
+  selectCommitRange,
+} from "@/lib/git-grasp-pool";
 import { computePatchFileChanges } from "@/lib/patch-diff-merge";
 import parseDiff from "parse-diff";
 import {
@@ -529,19 +533,13 @@ export default function PRPage() {
     effectiveMergeBase ?? undefined,
   );
   const prCommits = useMemo(() => {
-    const trimmed = (() => {
-      if (!effectiveMergeBase || !prCommitHistory.commits.length)
-        return prCommitHistory.commits;
-      const idx = prCommitHistory.commits.findIndex(
-        (c) => c.hash === effectiveMergeBase,
-      );
-      return idx === -1
-        ? prCommitHistory.commits
-        : prCommitHistory.commits.slice(0, idx);
-    })();
+    const range = selectCommitRange(
+      prCommitHistory.commits,
+      effectiveMergeBase,
+    );
     // Reverse to oldest-first (git walks newest-first from tip).
     // Matches GitHub's PR commits tab convention and the patch body card order.
-    return [...trimmed].reverse();
+    return range.reverse();
   }, [prCommitHistory.commits, effectiveMergeBase]);
 
   // Use a deeper history walk for retained-commit checks than the visible
@@ -608,17 +606,7 @@ export default function PRPage() {
   const originalPRCommits = useMemo(() => {
     if (!hasRevisions) return [];
     const base = originalPRMergeBase ?? effectiveMergeBase;
-    const trimmed = (() => {
-      if (!base || !originalPRCommitHistory.commits.length)
-        return originalPRCommitHistory.commits;
-      const idx = originalPRCommitHistory.commits.findIndex(
-        (c) => c.hash === base,
-      );
-      return idx === -1
-        ? originalPRCommitHistory.commits
-        : originalPRCommitHistory.commits.slice(0, idx);
-    })();
-    return [...trimmed].reverse();
+    return selectCommitRange(originalPRCommitHistory.commits, base).reverse();
   }, [
     hasRevisions,
     originalPRCommitHistory.commits,
