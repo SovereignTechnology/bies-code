@@ -107,6 +107,11 @@ export function useResolvedPR(
   useNip34ItemLoaderBatch(revisionRootIds, repoRelayGroup, {
     includeThread: true,
     includeAuthorNip65: curationMode === "outbox",
+    supplementalRelayGroup:
+      curationMode === "outbox"
+        ? extraRelaysForMaintainerMailboxCoverage
+        : undefined,
+    additionalThreadRelayGroups: extraSearchGroups,
   });
 
   return { pr: resolved, search };

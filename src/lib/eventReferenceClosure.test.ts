@@ -52,6 +52,7 @@ describe("loadEventReferenceClosure", () => {
     ).subscribe((message) => received.push(message));
 
     expect(loadReferences).toHaveBeenCalledWith("root", ["wss://repo.example"]);
+    expect(activeSubscriptions.get("root:wss://repo.example")).toBe(1);
 
     // The relay may settle before an intermediate comment arrives. The live
     // stream must still extend the closure when that comment appears later.
@@ -95,6 +96,10 @@ describe("loadEventReferenceClosure", () => {
       expect(loadReferences).toHaveBeenCalledWith(eventId, [
         "wss://mirror.example",
       ]);
+      expect(activeSubscriptions.get(`${eventId}:wss://repo.example`)).toBe(1);
+      expect(activeSubscriptions.get(`${eventId}:wss://mirror.example`)).toBe(
+        1,
+      );
     }
 
     closureSub.unsubscribe();
