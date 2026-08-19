@@ -215,18 +215,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 9.15.9
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-
-      # Only nostr-tools is needed here, to assemble the signing credential.
-      - run: pnpm install --frozen-lockfile --ignore-scripts
-
       - name: Download tested web build
         uses: actions/download-artifact@v4
         with:
@@ -236,52 +224,16 @@ jobs:
       - name: Prepare SPA fallback
         run: cp dist/index.html dist/404.html
 
-      # This persistent deployment signs through the same NIP-46 bunker
-      # connection as the Zapstore job: the bunker authorizes the client key,
-      # not a particular tool. nsyte consumes that connection as an nbunksec
-      # credential, so re-encode the bunker URL and client key into its TLV
-      # form (0 = bunker pubkey, 1 = client secret key, 2 = relay, repeated).
-      # The one-time connect secret is deliberately omitted; nsyte reconnects
-      # with the already-authorized client key alone. Mask the credential
-      # before act processes GITHUB_OUTPUT since it embeds the client key.
-      - name: Assemble bunker credential
-        id: credential
-        env:
-          ZAPSTORE_BUNKER_URL: ${{ secrets.ZAPSTORE_BUNKER_URL }}
-          ZAPSTORE_CLIENT_KEY: ${{ secrets.ZAPSTORE_CLIENT_KEY }}
-        run: |
-          node --input-type=module <<'NODE'
-          import { appendFileSync } from "node:fs";
-          import { nip19 } from "nostr-tools";
-
-          const bunkerUrl = process.env.ZAPSTORE_BUNKER_URL ?? "";
-          const clientKey = (process.env.ZAPSTORE_CLIENT_KEY ?? "").trim();
-          if (!bunkerUrl.startsWith("bunker://")) {
-            throw new Error("Set the ZAPSTORE_BUNKER_URL secret to a bunker:// URL.");
-          }
-          if (!/^[0-9a-f]{64}$/.test(clientKey)) {
-            throw new Error("Set the ZAPSTORE_CLIENT_KEY secret to a 64-character hex key.");
-          }
-
-          const url = new URL(bunkerUrl.replace("bunker://", "https://"));
-          const relays = url.searchParams.getAll("relay");
-          if (!/^[0-9a-f]{64}$/.test(url.hostname) || relays.length === 0) {
-            throw new Error("The bunker URL must contain a hex pubkey and at least one relay.");
-          }
-
-          const hexToBytes = (hex) =>
-            Uint8Array.from(hex.match(/.{2}/g).map((byte) => parseInt(byte, 16)));
-          const tlv = [];
-          const record = (type, bytes) => tlv.push(type, bytes.length, ...bytes);
-          record(0, hexToBytes(url.hostname));
-          record(1, hexToBytes(clientKey));
-          for (const relay of relays) record(2, new TextEncoder().encode(relay));
-
-          const nbunksec = nip19.encodeBytes("nbunksec", Uint8Array.from(tlv));
-          console.log(`::add-mask::${nbunksec}`);
-          appendFileSync(process.env.GITHUB_OUTPUT, `nbunksec=${nbunksec}\n`);
-          NODE
-
+      # This persistent deployment signs through the same NIP-46 bunker as
+      # the Zapstore job by passing the bunker URL straight to nsyte. The
+      # URL's connect secret is essential: the bunker only answers connect
+      # requests that carry it (zsp sends it on every run), and nsyte's
+      # nbunksec path connects without a secret and therefore times out.
+      # nsyte's bunker-URL path sends the secret like zsp does, at the cost
+      # of a fresh NIP-46 client key per run, so the bunker must accept its
+      # static secret from new client keys rather than binding it to the
+      # first client that used it.
+      #
       # Deploy as the NIP-5A named site "gitworkshop" (kind 35128 with a d
       # tag) instead of the identity's root npub site, so the bunker
       # identity's root namespace and its kind 10002/10063 lists stay
@@ -292,7 +244,7 @@ jobs:
       - name: Publish production nsite
         uses: sandwichfarm/nsite-action@35466ff9509a5c063ca943d1f727f9b129a37970
         with:
-          nbunksec: ${{ steps.credential.outputs.nbunksec }}
+          sec: ${{ secrets.ZAPSTORE_BUNKER_URL }}
           directory: dist
           version: v0.27.2
           name: gitworkshop
