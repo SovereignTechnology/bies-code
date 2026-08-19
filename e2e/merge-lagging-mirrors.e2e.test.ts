@@ -399,10 +399,12 @@ describeIfGrasp("e2e — lagging Grasp mirror merge fan-out", () => {
       [fixture.serverA, fixture.serverB],
       [fixture.relayA, fixture.relayB],
       fixture.maintainer,
-      {
-        identifier: "catch-up-scan-boundary",
-        pushInitialTo: [fixture.serverA],
-      },
+      // Both mirrors receive the seeded commit so B starts with a branch of
+      // its own; only the later advances below are withheld from B, which
+      // makes it lag by exactly the commits this test cares about. Seeding A
+      // alone would leave B's branch to grasp's own mirror catch-up, which
+      // never runs against the harness's loopback peers.
+      { identifier: "catch-up-scan-boundary" },
     );
 
     const oldIssue = await IssueFactory.create(
