@@ -94,12 +94,34 @@ try {
   fail(`Upstream get_public_key failed: ${error.message}`);
 }
 
+// Wrap the upstream signer so the job log records the outcome of every
+// bridged signing request. The provider forwards failures to nsyte, but
+// nsyte's output does not include the bunker's error messages, and those
+// are the only evidence of bunker-side signing policy rejections.
+const loggingUpstream = {
+  getPublicKey: () => upstream.getPublicKey(),
+  signEvent: async (template) => {
+    try {
+      const event = await upstream.signEvent(template);
+      console.log(`upstream bunker signed kind ${template.kind}`);
+      return event;
+    } catch (error) {
+      console.error(
+        `upstream bunker refused to sign kind ${template.kind}: ${error.message}`,
+      );
+      throw error;
+    }
+  },
+  nip04: upstream.nip04,
+  nip44: upstream.nip44,
+};
+
 // Reuse the upstream bunker's relays for the local provider: they are proven
 // reachable from this runner and proven to accept kind 24133 traffic.
 const provider = new NostrConnectProvider({
   pool,
   relays,
-  upstream,
+  upstream: loggingUpstream,
   signer: new PrivateKeySigner(),
   bunkerSecret: randomBytes(16).toString("hex"),
   onSignEvent: (draft) => {

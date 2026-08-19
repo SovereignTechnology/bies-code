@@ -150,7 +150,6 @@ jobs:
           skip_secrets_scan: true
           relays: |
             wss://relay.nsite.lol
-            wss://relay.nosto.re
             wss://nos.lol
             wss://relay.primal.net
             wss://nsite.run
@@ -294,9 +293,9 @@ jobs:
           name: gitworkshop
           fallback: /index.html
           skip_secrets_scan: true
+          verbose: true
           relays: |
             wss://relay.nsite.lol
-            wss://relay.nosto.re
             wss://nos.lol
             wss://relay.primal.net
             wss://nsite.run
