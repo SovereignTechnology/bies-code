@@ -16,6 +16,10 @@ The built-in git explorer fetches only what it needs — commit graphs, trees, a
 
 [gitworkshop.dev](https://gitworkshop.dev)
 
+Also published as an [nsite](https://nips.nostr.com/5A) — a censorship-resistant deployment served from Nostr relays and Blossom servers — via any nsite gateway, for example:
+
+[3zlcdkw11p1zo7gt9etc6rlxooca91hbw3p3vvrwb4dataki19gitworkshop.nsite.cloud](https://3zlcdkw11p1zo7gt9etc6rlxooca91hbw3p3vvrwb4dataki19gitworkshop.nsite.cloud)
+
 ## Dev
 
 Use Node 24.x, matching CI. Neither Nix nor pnpm is required for day-to-day
