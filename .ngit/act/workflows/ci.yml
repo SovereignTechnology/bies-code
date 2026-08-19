@@ -215,6 +215,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      # The signing bridge below runs from the application's node_modules.
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+
       - name: Download tested web build
         uses: actions/download-artifact@v4
         with:
@@ -225,15 +237,47 @@ jobs:
         run: cp dist/index.html dist/404.html
 
       # This persistent deployment signs through the same NIP-46 bunker as
-      # the Zapstore job by passing the bunker URL straight to nsyte. The
-      # URL's connect secret is essential: the bunker only answers connect
-      # requests that carry it (zsp sends it on every run), and nsyte's
-      # nbunksec path connects without a secret and therefore times out.
-      # nsyte's bunker-URL path sends the secret like zsp does, at the cost
-      # of a fresh NIP-46 client key per run, so the bunker must accept its
-      # static secret from new client keys rather than binding it to the
-      # first client that used it.
-      #
+      # the Zapstore job, but no nsyte mode can reproduce zsp's handshake:
+      # the bunker binds its connect secret to zsp's client key, nsyte's
+      # nbunksec path omits the secret (timeout) and its bunker-URL path
+      # uses a fresh client key ("already connected"). The bridge performs
+      # the zsp-style handshake upstream and re-exposes the session as a
+      # throwaway local NIP-46 provider for nsyte to consume. It stays
+      # alive in the background relaying signing requests; the deploy step
+      # below talks to it through the bunker URI it writes out.
+      - name: Start NIP-46 signing bridge
+        id: bridge
+        env:
+          ZAPSTORE_BUNKER_URL: ${{ secrets.ZAPSTORE_BUNKER_URL }}
+          ZAPSTORE_CLIENT_KEY: ${{ secrets.ZAPSTORE_CLIENT_KEY }}
+        run: |
+          set -eu
+          : "${ZAPSTORE_BUNKER_URL:?Set the ZAPSTORE_BUNKER_URL secret.}"
+          : "${ZAPSTORE_CLIENT_KEY:?Set the ZAPSTORE_CLIENT_KEY secret.}"
+          uri_file="$RUNNER_TEMP/nsite-bridge-uri"
+          log_file="$RUNNER_TEMP/nsite-bridge.log"
+          BRIDGE_OUTPUT_FILE="$uri_file" nohup \
+            node .ngit/act/scripts/nsite-bunker-bridge.mjs \
+            > "$log_file" 2>&1 &
+          for _ in $(seq 1 45); do
+            [ -s "$uri_file" ] && break
+            sleep 1
+          done
+          if [ ! -s "$uri_file" ]; then
+            echo "The bridge produced no URI within 45s." >&2
+            cat "$log_file" >&2 || true
+            exit 1
+          fi
+          uri="$(head -n 1 "$uri_file")"
+          case "$uri" in
+            ERROR*)
+              cat "$log_file" >&2 || true
+              exit 1
+              ;;
+          esac
+          echo "::add-mask::$uri"
+          printf 'uri=%s\n' "$uri" >> "$GITHUB_OUTPUT"
+
       # Deploy as the NIP-5A named site "gitworkshop" (kind 35128 with a d
       # tag) instead of the identity's root npub site, so the bunker
       # identity's root namespace and its kind 10002/10063 lists stay
@@ -244,7 +288,7 @@ jobs:
       - name: Publish production nsite
         uses: sandwichfarm/nsite-action@35466ff9509a5c063ca943d1f727f9b129a37970
         with:
-          sec: ${{ secrets.ZAPSTORE_BUNKER_URL }}
+          sec: ${{ steps.bridge.outputs.uri }}
           directory: dist
           version: v0.27.2
           name: gitworkshop
@@ -259,6 +303,14 @@ jobs:
           servers: |
             https://blossom.primal.net
             https://blossom.ditto.pub
+
+      # Surface the bridge's log (handshake status, relayed signing
+      # requests) for debugging and stop the background process.
+      - name: Stop NIP-46 signing bridge
+        if: ${{ always() }}
+        run: |
+          pkill -f nsite-bunker-bridge.mjs || true
+          cat "$RUNNER_TEMP/nsite-bridge.log" || true
 
   build-android-release:
     runs-on: ubuntu-latest
