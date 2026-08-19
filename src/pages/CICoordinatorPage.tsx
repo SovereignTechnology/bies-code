@@ -41,7 +41,7 @@ import { useGraspServerInfo } from "@/hooks/useGraspServerInfo";
 import { useLoadProfile } from "@/hooks/useLoadProfile";
 import { useProfile } from "@/hooks/useProfile";
 import { useDefaultRepoCoordPath } from "@/hooks/useRepoPath";
-import { isValidGraspDomain, normalizeGraspDomain } from "@/lib/grasp";
+import { graspIdentityDomain } from "@/lib/grasp";
 import { parseRepoCoordinate, type ResolvedRepo } from "@/lib/nip34";
 import { decodePubkeyIdentifier, standardizeNip05 } from "@/lib/routeUtils";
 import { cn } from "@/lib/utils";
@@ -137,11 +137,11 @@ export default function CICoordinatorPage() {
   const { coordinatorIdentifier = "" } = useParams();
   const [searchParams] = useSearchParams();
   const rawGraspDomainHint = searchParams.get("grasp");
-  const graspDomainHint = useMemo(() => {
-    if (!rawGraspDomainHint) return undefined;
-    const normalized = normalizeGraspDomain(rawGraspDomainHint);
-    return isValidGraspDomain(normalized) ? normalized : undefined;
-  }, [rawGraspDomainHint]);
+  const graspDomainHint = useMemo(
+    () =>
+      rawGraspDomainHint ? graspIdentityDomain(rawGraspDomainHint) : undefined,
+    [rawGraspDomainHint],
+  );
   const pubkey = decodePubkeyIdentifier(coordinatorIdentifier);
   useLoadProfile(pubkey);
   const profile = useProfile(pubkey);

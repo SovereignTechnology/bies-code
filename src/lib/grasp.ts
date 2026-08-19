@@ -259,6 +259,26 @@ export function isValidGraspServiceAddress(serviceAddress: string): boolean {
   return port > 0 && port <= 65_535;
 }
 
+/**
+ * Resolve the domain root a GRASP service can prove NIP-05 identity against.
+ *
+ * Identity evidence is anchored at the domain root: path-mounted ngit-grasp
+ * instances deliberately do not advertise NIP-05, so an address carrying a
+ * mount path yields no identity domain. Plaintext services are excluded
+ * because `.well-known` resolution requires HTTPS.
+ */
+export function graspIdentityDomain(value: string): string | undefined {
+  const parsed = parseGraspServiceAddress(value);
+  if (!parsed || !parsed.secure || parsed.pathname) return undefined;
+  const match = parsed.host.match(/^([a-z0-9.-]+\.[a-z]{2,})(?::(\d{1,5}))?$/);
+  if (!match) return undefined;
+  if (match[2]) {
+    const port = Number(match[2]);
+    if (port <= 0 || port > 65_535) return undefined;
+  }
+  return parsed.host;
+}
+
 /** Deduplicate service addresses while preserving the first occurrence. */
 export function uniqueGraspServiceAddresses(
   addresses: readonly string[],
