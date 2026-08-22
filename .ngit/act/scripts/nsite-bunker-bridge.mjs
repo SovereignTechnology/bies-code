@@ -21,6 +21,7 @@
 import { randomBytes } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import { RelayPool } from "applesauce-relay";
+import { nip44 as extendedNip44 } from "nostr-tools-ci";
 import {
   NostrConnectProvider,
   NostrConnectSigner,
@@ -52,6 +53,23 @@ function withTimeout(promise, label) {
   ]);
 }
 
+// Applesauce Core 6.2 still resolves nostr-tools 2.19, whose NIP-44 helper
+// rejects plaintext over 64 KiB. nsyte 0.28 can send a larger manifest signing
+// request, so keep the newer codec scoped to this CI bridge rather than changing
+// the application's production dependency graph.
+function enableExtendedNip44(signer) {
+  const getConversationKey = (pubkey) =>
+    extendedNip44.v2.utils.getConversationKey(signer.key, pubkey);
+
+  signer.nip44 = {
+    encrypt: async (pubkey, plaintext) =>
+      extendedNip44.v2.encrypt(plaintext, getConversationKey(pubkey)),
+    decrypt: async (pubkey, ciphertext) =>
+      extendedNip44.v2.decrypt(ciphertext, getConversationKey(pubkey)),
+  };
+  return signer;
+}
+
 const bunkerUrl = process.env.ZAPSTORE_BUNKER_URL ?? "";
 const clientKey = (process.env.ZAPSTORE_CLIENT_KEY ?? "").trim();
 if (!outputFile) fail("Set BRIDGE_OUTPUT_FILE to a writable path.");
@@ -75,7 +93,7 @@ const upstream = new NostrConnectSigner({
   pool,
   relays,
   remote,
-  signer: PrivateKeySigner.fromKey(clientKey),
+  signer: enableExtendedNip44(PrivateKeySigner.fromKey(clientKey)),
 });
 
 try {
@@ -143,7 +161,7 @@ const provider = new NostrConnectProvider({
   pool,
   relays,
   upstream: loggingUpstream,
-  signer: new PrivateKeySigner(),
+  signer: enableExtendedNip44(new PrivateKeySigner()),
   bunkerSecret: randomBytes(16).toString("hex"),
   onSignEvent: (draft) => {
     console.log(`bridging sign_event request for kind ${draft.kind}`);
