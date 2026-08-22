@@ -9,10 +9,7 @@
     # rev so the harness is reproducible — bump it intentionally. This matches
     # the pin used by ngit's own Rust test harness.
     ngit-grasp = {
-      # Keep Nix's source-cache identity distinct from submodule-aware fetches.
-      # ngit-grasp currently contains a worktree Gitlink without a matching
-      # .gitmodules entry, which otherwise makes cached source trees ambiguous.
-      url = "git+https://gitnostr.com/npub15qydau2hjma6ngxkl2cyar74wzyjshvl65za5k5rl69264ar2exs5cyejr/ngit-grasp.git?submodules=0";
+      url = "git+https://gitnostr.com/npub15qydau2hjma6ngxkl2cyar74wzyjshvl65za5k5rl69264ar2exs5cyejr/ngit-grasp.git";
       inputs.nixpkgs.follows = "nixpkgs";
       inputs.rust-overlay.follows = "rust-overlay";
       inputs.flake-utils.follows = "flake-utils";
