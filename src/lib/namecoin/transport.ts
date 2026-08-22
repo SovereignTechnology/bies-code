@@ -62,6 +62,8 @@ export type ElectrumXServer = {
  * Browser TLS status of each entry, with reasoning so the next
  * audit doesn't have to redo the work:
  *
+ * - `electrumx2.testls.space:50014` — LE cert, nginx TLS-terminating
+ *   proxy in front of ElectrumX 1.16.0. ✅ browser-reachable.
  * - `electrum.nmc.ethicnology.com:50004` — LE cert. ✅ browser-reachable.
  * - `electrumx.testls.space:50004` — self-signed (CN=`electrum.testls.space`,
  *   issuer-self). ❌ `ERR_CERT_AUTHORITY_INVALID` in Chrome.
@@ -76,9 +78,11 @@ export type ElectrumXServer = {
  * failure on the third), so they are intentionally omitted entirely.
  */
 export const DEFAULT_ELECTRUMX_SERVERS: ElectrumXServer[] = [
-  // ElectrumX 1.19.0, public Let's Encrypt cert. ONLY entry guaranteed
-  // to work from a browser today; kept first so the fallback chain
-  // succeeds on the first hop.
+  // ElectrumX 1.16.0 behind nginx with a public Let's Encrypt cert.
+  // Added 2026-08-22; browser-reachable, kept first so the fallback
+  // chain succeeds on the first hop.
+  { host: "electrumx2.testls.space", port: 50014 },
+  // ElectrumX 1.19.0, public Let's Encrypt cert.
   { host: "electrum.nmc.ethicnology.com", port: 50004 },
   // ElectrumX 1.16.0, self-signed cert. Best-effort fallback for non-
   // browser callers that inject a `WebSocket` impl which accepts the
