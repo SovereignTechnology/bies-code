@@ -157,7 +157,7 @@ jobs:
         with:
           sec: ${{ steps.identity.outputs.nsec }}
           directory: dist
-          version: v0.27.2
+          version: v0.28.0
           fallback: /index.html
           publish_server_list: true
           publish_relay_list: true
@@ -303,7 +303,7 @@ jobs:
         with:
           sec: ${{ steps.bridge.outputs.uri }}
           directory: dist
-          version: v0.27.2
+          version: v0.28.0
           name: gitworkshop
           fallback: /index.html
           skip_secrets_scan: true
