@@ -80,19 +80,26 @@ jobs:
       # to regular GitHub Actions and the intentionally minimal act runner.
       - run: pnpm android:lint
 
-  # The act runner shares one action checkout cache across parallel jobs. Warm
-  # the pinned download action before the two production deploys fan out so a
-  # cold clone cannot expose a half-populated action directory to either job.
+  # The act runner shares one action checkout cache across parallel jobs. Give
+  # each production deploy a distinct pinned download-action revision, and
+  # warm both before fan-out, so concurrent action setup cannot mutate the
+  # directory another job is copying into its container.
   prepare-web-deploys:
     runs-on: ubuntu-latest
     needs: [test, android-lint]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
-      - name: Verify tested web build is downloadable
+      - name: Warm nsite artifact downloader
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: web-dist
-          path: dist
+          path: dist-nsite
+
+      - name: Warm Netlify artifact downloader
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
+        with:
+          name: web-dist
+          path: dist-netlify
 
   deploy-nsite-preview:
     runs-on: ubuntu-latest
@@ -199,7 +206,7 @@ jobs:
           node-version: 24
 
       - name: Download tested web build
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
         with:
           name: web-dist
           path: dist
