@@ -94,20 +94,41 @@ try {
   fail(`Upstream get_public_key failed: ${error.message}`);
 }
 
-// Wrap the upstream signer so the job log records the outcome of every
-// bridged signing request. The provider forwards failures to nsyte, but
-// nsyte's output does not include the bunker's error messages, and those
-// are the only evidence of bunker-side signing policy rejections.
+// nsyte retries the same event template after its 15-second signer timeout.
+// The upstream bunker can take longer than that, so coalesce those retries
+// instead of adding duplicate requests to the bunker queue. Retain successful
+// results for this short-lived process so a later retry can return immediately.
+const signedEventCache = new Map();
+
+// Wrap the upstream signer so the job log records the outcome and duration of
+// every distinct bridged signing request. The provider forwards failures to
+// nsyte, but nsyte's output does not include the bunker's error messages.
 const loggingUpstream = {
   getPublicKey: () => upstream.getPublicKey(),
   signEvent: async (template) => {
+    const cacheKey = JSON.stringify(template);
+    const cached = signedEventCache.get(cacheKey);
+    if (cached) {
+      console.log(`reusing upstream signature for kind ${template.kind}`);
+      return cached;
+    }
+
+    const startedAt = Date.now();
+    const signing = Promise.resolve().then(() => upstream.signEvent(template));
+    signedEventCache.set(cacheKey, signing);
+
     try {
-      const event = await upstream.signEvent(template);
-      console.log(`upstream bunker signed kind ${template.kind}`);
+      const event = await signing;
+      console.log(
+        `upstream bunker signed kind ${template.kind} in ${Date.now() - startedAt}ms`,
+      );
       return event;
     } catch (error) {
+      if (signedEventCache.get(cacheKey) === signing) {
+        signedEventCache.delete(cacheKey);
+      }
       console.error(
-        `upstream bunker refused to sign kind ${template.kind}: ${error.message}`,
+        `upstream bunker refused to sign kind ${template.kind} after ${Date.now() - startedAt}ms: ${error.message}`,
       );
       throw error;
     }
