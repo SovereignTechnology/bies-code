@@ -22,11 +22,13 @@ import { normalizeUrl } from "@/lib/url";
 import {
   getRepositoryAnnouncementDiscoveryPubkeys,
   getRepositoryMaintainerAssignments,
+  latestRepositoryAnnouncements,
   resolveRepositoryMembership,
   type LeadResolution,
   type MaintainerEdge,
   type ModeratorEdge,
   type RepositoryHealthWarning,
+  type RepositoryMembershipResolution,
 } from "@/lib/nip34-maintainer-model";
 
 export type {
@@ -800,6 +802,8 @@ export interface FieldProvenance {
  */
 export interface ResolvedRepo {
   // --- Identity ---
+  /** Stable identity for this identifier's confirmed maintainer component. */
+  componentId: string;
   /** The pubkey used as the starting point for resolution (route anchor) */
   selectedMaintainer: string;
   /** The selected maintainer's repository coordinate (current route anchor). */
@@ -896,10 +900,6 @@ export function hasAcceptedRepositoryReference(
     if (acceptedCoordinates.has(coordinate)) return true;
   }
   return false;
-}
-
-function selectRepoLeadAnchor(resolved: ResolvedRepo): string {
-  return resolved.leadResolution.leadMaintainer ?? resolved.selectedMaintainer;
 }
 
 // ---------------------------------------------------------------------------
@@ -2319,26 +2319,14 @@ export function buildResolvedPRs(
 // BFS chain resolution
 // ---------------------------------------------------------------------------
 
-/**
- * Given a set of 30617 announcement events already in memory, resolve the
- * transitive maintainer chain starting from `selectedMaintainer` for a given
- * `dTag`. Returns a `ResolvedRepo` or `undefined` if the selected maintainer
- * has no announcement for this dTag.
- *
- * This is a pure function — no side effects, no relay fetches. Both
- * RepositoryListModel (bulk) and RepositoryModel (single) use this.
- */
-export function resolveChain(
-  events: NostrEvent[],
-  selectedMaintainer: string,
-  dTag: string,
-): ResolvedRepo | undefined {
-  const membership = resolveRepositoryMembership(
-    events,
-    selectedMaintainer,
-    dTag,
-  );
-  if (!membership) return undefined;
+function repositoryComponentId(dTag: string, maintainers: Iterable<string>) {
+  return JSON.stringify([dTag, [...new Set(maintainers)].sort()]);
+}
+
+function resolvedRepoFromMembership(
+  membership: RepositoryMembershipResolution,
+): ResolvedRepo {
+  const { selectedMaintainer, dTag } = membership;
 
   // Shared metadata and infrastructure are accepted only from confirmed
   // members. Invitations and departed authors remain discovery inputs.
@@ -2468,6 +2456,7 @@ export function resolveChain(
   );
 
   return {
+    componentId: repositoryComponentId(dTag, membership.confirmedMaintainers),
     selectedMaintainer,
     selectedCoordinate,
     dTag,
@@ -2507,6 +2496,403 @@ export function resolveChain(
     nameSource,
     descriptionSource,
   };
+}
+
+/** Resolve one coordinate-rooted repository view before component deduplication. */
+function resolveRootedRepository(
+  events: NostrEvent[],
+  selectedMaintainer: string,
+  dTag: string,
+): ResolvedRepo | undefined {
+  const membership = resolveRepositoryMembership(
+    events,
+    selectedMaintainer,
+    dTag,
+  );
+  return membership ? resolvedRepoFromMembership(membership) : undefined;
+}
+
+/**
+ * Order-independent repository partition for the announcements currently in
+ * memory. Coordinate maps contain at most one component ID, enforcing the
+ * protocol rule that one active announcement cannot represent two repos.
+ */
+export interface RepositoryComponentIndex {
+  components: ResolvedRepo[];
+  componentById: ReadonlyMap<string, ResolvedRepo>;
+  coordinateComponentIds: ReadonlyMap<string, string>;
+  confirmedCoordinateComponentIds: ReadonlyMap<string, string>;
+  rootedRepositories: ReadonlyMap<string, ResolvedRepo>;
+}
+
+interface RepositoryComponentDraft {
+  id: string;
+  dTag: string;
+  anchor: string;
+  maintainers: string[];
+  moderatorCandidates: string[];
+  views: ResolvedRepo[];
+  anchorView: ResolvedRepo;
+  latestByPubkey: ReadonlyMap<string, NostrEvent>;
+}
+
+function uniqueSorted(values: Iterable<string>): string[] {
+  return [...new Set(values)].sort();
+}
+
+function chooseComponentAnchor(
+  maintainers: string[],
+  views: ResolvedRepo[],
+): { anchor: string; view: ResolvedRepo } {
+  const memberSet = new Set(maintainers);
+  const ranked = views
+    .flatMap((view) => {
+      const lead = view.leadResolution.leadMaintainer;
+      if (!lead || !memberSet.has(lead)) return [];
+      const rank =
+        view.leadResolution.source === "explicit"
+          ? 0
+          : view.leadResolution.source === "legacy_inferred"
+            ? 1
+            : view.leadResolution.source === "implicit_sole"
+              ? 2
+              : 3;
+      return [{ lead, rank, view }];
+    })
+    .sort(
+      (a, b) =>
+        a.rank - b.rank ||
+        a.lead.localeCompare(b.lead) ||
+        a.view.selectedMaintainer.localeCompare(b.view.selectedMaintainer),
+    );
+  const anchor = ranked[0]?.lead ?? maintainers[0];
+  const view =
+    views.find((candidate) => candidate.selectedMaintainer === anchor) ??
+    ranked[0]?.view ??
+    views[0];
+  return { anchor, view };
+}
+
+function uniqueMaintainerEdges(views: ResolvedRepo[]): MaintainerEdge[] {
+  const edges = new Map<string, MaintainerEdge>();
+  for (const edge of views.flatMap((view) => view.maintainerEdges)) {
+    edges.set(`${edge.from}:${edge.to}:${edge.role}:${edge.source}`, edge);
+  }
+  return [...edges.values()].sort(
+    (a, b) =>
+      a.from.localeCompare(b.from) ||
+      a.to.localeCompare(b.to) ||
+      a.role.localeCompare(b.role) ||
+      a.source.localeCompare(b.source),
+  );
+}
+
+function uniqueModeratorEdges(views: ResolvedRepo[]): ModeratorEdge[] {
+  const edges = new Map<string, ModeratorEdge>();
+  for (const edge of views.flatMap((view) => view.moderatorEdges)) {
+    edges.set(`${edge.from}:${edge.to}`, edge);
+  }
+  return [...edges.values()].sort(
+    (a, b) => a.from.localeCompare(b.from) || a.to.localeCompare(b.to),
+  );
+}
+
+function uniqueRepositoryHealth(
+  views: ResolvedRepo[],
+): RepositoryHealthWarning[] {
+  const warnings = new Map<string, RepositoryHealthWarning>();
+  for (const warning of views.flatMap((view) => view.repositoryHealth)) {
+    warnings.set(
+      JSON.stringify([
+        warning.code,
+        warning.author,
+        warning.role,
+        warning.subject,
+        warning.message,
+      ]),
+      warning,
+    );
+  }
+  return [...warnings.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([, warning]) => warning);
+}
+
+/** Build the deterministic component index shared by all repository readers. */
+export function buildRepositoryComponentIndex(
+  events: Iterable<NostrEvent>,
+): RepositoryComponentIndex {
+  const sourceEvents = [...events];
+  const dTags = uniqueSorted(
+    sourceEvents.flatMap((event) => {
+      if (event.kind !== REPO_KIND) return [];
+      const dTag = getReplaceableIdentifier(event);
+      return dTag ? [dTag] : [];
+    }),
+  );
+  const drafts: RepositoryComponentDraft[] = [];
+  const rootedRepositories = new Map<string, ResolvedRepo>();
+  const maintainerComponentIds = new Map<string, string>();
+
+  for (const dTag of dTags) {
+    const latestByPubkey = latestRepositoryAnnouncements(sourceEvents, dTag);
+    const latestEvents = [...latestByPubkey.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([, event]) => event);
+    const views = latestEvents.flatMap((event) => {
+      const view = resolveRootedRepository(latestEvents, event.pubkey, dTag);
+      if (!view) return [];
+      rootedRepositories.set(repoCoordinate(event.pubkey, dTag), view);
+      if (view.confirmedMaintainers.length === 0) return [];
+      return [view];
+    });
+
+    const parents = new Map<string, string>();
+    const find = (pubkey: string): string => {
+      const parent = parents.get(pubkey);
+      if (!parent) {
+        parents.set(pubkey, pubkey);
+        return pubkey;
+      }
+      if (parent === pubkey) return pubkey;
+      const root = find(parent);
+      parents.set(pubkey, root);
+      return root;
+    };
+    const union = (left: string, right: string) => {
+      const leftRoot = find(left);
+      const rightRoot = find(right);
+      if (leftRoot === rightRoot) return;
+      const [first, second] = [leftRoot, rightRoot].sort();
+      parents.set(second, first);
+    };
+
+    for (const view of views) {
+      const [first, ...rest] = uniqueSorted(view.confirmedMaintainers);
+      if (!first) continue;
+      find(first);
+      for (const maintainer of rest) union(first, maintainer);
+    }
+
+    const membersByRoot = new Map<string, string[]>();
+    for (const maintainer of [...parents].map(([pubkey]) => pubkey).sort()) {
+      const root = find(maintainer);
+      const members = membersByRoot.get(root) ?? [];
+      members.push(maintainer);
+      membersByRoot.set(root, members);
+    }
+
+    for (const maintainers of [...membersByRoot.values()].sort((a, b) =>
+      a.join(",").localeCompare(b.join(",")),
+    )) {
+      const memberSet = new Set(maintainers);
+      const componentViews = views.filter((view) =>
+        view.confirmedMaintainers.some((pubkey) => memberSet.has(pubkey)),
+      );
+      const { anchor, view: anchorView } = chooseComponentAnchor(
+        maintainers,
+        componentViews,
+      );
+      const orderedMaintainers = [
+        anchor,
+        ...maintainers.filter((pubkey) => pubkey !== anchor),
+      ];
+      const id = repositoryComponentId(dTag, orderedMaintainers);
+      for (const maintainer of orderedMaintainers) {
+        maintainerComponentIds.set(repoCoordinate(maintainer, dTag), id);
+      }
+      drafts.push({
+        id,
+        dTag,
+        anchor,
+        maintainers: orderedMaintainers,
+        moderatorCandidates: uniqueSorted(
+          componentViews.flatMap((view) => view.confirmedModerators),
+        ),
+        views: componentViews,
+        anchorView,
+        latestByPubkey,
+      });
+    }
+  }
+
+  // A role-aware announcement can belong to only one active repository. A
+  // maintainer component wins over a moderator acknowledgement; otherwise a
+  // pathological acknowledgement of two components resolves by stable ID.
+  const moderatorOwners = new Map<string, string>();
+  const moderatorDrafts = new Map<string, RepositoryComponentDraft[]>();
+  for (const draft of drafts) {
+    for (const moderator of draft.moderatorCandidates) {
+      const coordinate = repoCoordinate(moderator, draft.dTag);
+      const candidates = moderatorDrafts.get(coordinate) ?? [];
+      candidates.push(draft);
+      moderatorDrafts.set(coordinate, candidates);
+    }
+  }
+  for (const [coordinate, candidates] of moderatorDrafts) {
+    const maintainerOwner = maintainerComponentIds.get(coordinate);
+    moderatorOwners.set(
+      coordinate,
+      maintainerOwner ?? candidates.map(({ id }) => id).sort()[0],
+    );
+  }
+
+  const componentById = new Map<string, ResolvedRepo>();
+  const coordinateComponentIds = new Map(maintainerComponentIds);
+  const confirmedCoordinateComponentIds = new Map(maintainerComponentIds);
+
+  for (const draft of drafts) {
+    const confirmedModerators = draft.moderatorCandidates.filter(
+      (pubkey) =>
+        moderatorOwners.get(repoCoordinate(pubkey, draft.dTag)) === draft.id &&
+        !draft.maintainers.includes(pubkey),
+    );
+    const confirmedMembers = [...draft.maintainers, ...confirmedModerators];
+    const discoveryPubkeys = uniqueSorted([
+      ...confirmedMembers,
+      ...draft.views.flatMap((view) => view.discoveryPubkeys),
+    ]);
+    const confirmedAnnouncements = confirmedMembers.flatMap((pubkey) => {
+      const event = draft.latestByPubkey.get(pubkey);
+      return event ? [event] : [];
+    });
+    const discoveredAnnouncements = discoveryPubkeys.flatMap((pubkey) => {
+      const event = draft.latestByPubkey.get(pubkey);
+      return event ? [event] : [];
+    });
+    const membership: RepositoryMembershipResolution = {
+      selectedMaintainer: draft.anchor,
+      dTag: draft.dTag,
+      confirmedMaintainers: draft.maintainers,
+      confirmedModerators,
+      confirmedMembers,
+      invitedMaintainers: uniqueSorted(
+        draft.views
+          .flatMap((view) => view.invitedMaintainers)
+          .filter((pubkey) => !draft.maintainers.includes(pubkey)),
+      ),
+      invitedModerators: uniqueSorted(
+        draft.views
+          .flatMap((view) => view.invitedModerators)
+          .filter((pubkey) => !confirmedMembers.includes(pubkey)),
+      ),
+      departedMaintainers: uniqueSorted(
+        draft.views.flatMap((view) => view.departedMaintainers),
+      ),
+      departedModerators: uniqueSorted(
+        draft.views.flatMap((view) => view.departedModerators),
+      ),
+      discoveryPubkeys,
+      discoveredAnnouncements,
+      confirmedAnnouncements,
+      maintainerEdges: uniqueMaintainerEdges(draft.views),
+      moderatorEdges: uniqueModeratorEdges(draft.views),
+      repositoryHealth: uniqueRepositoryHealth(draft.views),
+      leadResolution: draft.anchorView.leadResolution,
+    };
+    const repository = resolvedRepoFromMembership(membership);
+    componentById.set(draft.id, repository);
+    for (const moderator of confirmedModerators) {
+      const coordinate = repoCoordinate(moderator, draft.dTag);
+      coordinateComponentIds.set(coordinate, draft.id);
+      confirmedCoordinateComponentIds.set(coordinate, draft.id);
+    }
+  }
+
+  // Redirect-only and other rooted coordinates resolve to their component but
+  // never expand its authority or metadata inputs.
+  for (const [coordinate, rooted] of rootedRepositories) {
+    const componentId = rooted.confirmedMaintainers
+      .map((pubkey) =>
+        maintainerComponentIds.get(repoCoordinate(pubkey, rooted.dTag)),
+      )
+      .find((id): id is string => !!id);
+    if (componentId && !coordinateComponentIds.has(coordinate)) {
+      coordinateComponentIds.set(coordinate, componentId);
+    }
+  }
+
+  const components = [...componentById.values()].sort(
+    (a, b) =>
+      b.updatedAt - a.updatedAt || a.componentId.localeCompare(b.componentId),
+  );
+  return {
+    components,
+    componentById,
+    coordinateComponentIds,
+    confirmedCoordinateComponentIds,
+    rootedRepositories,
+  };
+}
+
+/** Look up the one component assigned to a repository announcement coordinate. */
+export function getRepositoryComponentForCoordinate(
+  index: RepositoryComponentIndex,
+  pubkey: string,
+  dTag: string,
+  confirmedOnly = false,
+): ResolvedRepo | undefined {
+  const coordinate = repoCoordinate(pubkey, dTag);
+  const componentId = (
+    confirmedOnly
+      ? index.confirmedCoordinateComponentIds
+      : index.coordinateComponentIds
+  ).get(coordinate);
+  return componentId ? index.componentById.get(componentId) : undefined;
+}
+
+function repositoryForSelectedCoordinate(
+  index: RepositoryComponentIndex,
+  pubkey: string,
+  dTag: string,
+): ResolvedRepo | undefined {
+  const selectedCoordinate = repoCoordinate(pubkey, dTag);
+  const rooted = index.rootedRepositories.get(selectedCoordinate);
+  const component = getRepositoryComponentForCoordinate(index, pubkey, dTag);
+  if (!component) return rooted;
+  return {
+    ...component,
+    selectedMaintainer: pubkey,
+    selectedCoordinate,
+    leadResolution: rooted?.leadResolution ?? component.leadResolution,
+  };
+}
+
+/** Resolve and deduplicate an ordered set of explicit repository coordinates. */
+export function selectRepositoryComponents(
+  events: Iterable<NostrEvent>,
+  coordinates: Iterable<string>,
+): ResolvedRepo[] {
+  const index = buildRepositoryComponentIndex(events);
+  const selected: ResolvedRepo[] = [];
+  const seen = new Set<string>();
+  for (const coordinate of coordinates) {
+    const parsed = parseRepoCoordinate(coordinate);
+    if (!parsed) continue;
+    const repository = repositoryForSelectedCoordinate(
+      index,
+      parsed.pubkey,
+      parsed.identifier,
+    );
+    if (!repository || seen.has(repository.componentId)) continue;
+    seen.add(repository.componentId);
+    selected.push(repository);
+  }
+  return selected;
+}
+
+/**
+ * Resolve a selected coordinate through the shared component index. Authority,
+ * metadata, and infrastructure come from the component; the selected view's
+ * lead path is retained so direct routes can still follow signed redirects.
+ */
+export function resolveChain(
+  events: NostrEvent[],
+  selectedMaintainer: string,
+  dTag: string,
+): ResolvedRepo | undefined {
+  const index = buildRepositoryComponentIndex(events);
+  return repositoryForSelectedCoordinate(index, selectedMaintainer, dTag);
 }
 
 export interface RequestedRepositoryGroup {
@@ -2612,109 +2998,21 @@ export function groupRequestedMaintainers(
 
 /**
  * Given all 30617 events in the store, group them into resolved repositories.
- * Each connected component (by mutual maintainer listing) becomes one entry.
- * Only repos reachable from `selectedMaintainer` are included.
- *
- * For repos where the selected maintainer is NOT in the chain, we pick a
- * random maintainer from the connected component as the route anchor
- * (selectedMaintainer field). This will be refined later (e.g. prefer followed
- * users).
- */
-/**
- * Given all 30617 events in the store, group them into resolved repositories.
- * Each connected component (by mutual maintainer listing) becomes one entry.
+ * Each reciprocal component becomes one deterministically anchored entry.
  *
  * @param events - All 30617 events to consider
- * @param forPubkey - If provided, only return repos where this pubkey is
- *   involved — either as the event author or listed in a `maintainers` tag.
- *   The pubkey is used as the selectedMaintainer when they have their own
- *   announcement; otherwise the event author who listed them is used.
+ * @param forPubkey - If provided, return only components where this pubkey is
+ *   a confirmed maintainer or moderator. Invitations remain relationships and
+ *   do not create profile repository cards.
  */
 export function groupIntoResolvedRepos(
   events: NostrEvent[],
   forPubkey?: string,
 ): ResolvedRepo[] {
-  // Collect all distinct dTags
-  const dTags = new Set<string>();
-  for (const ev of events) {
-    if (ev.kind !== REPO_KIND) continue;
-    const d = getReplaceableIdentifier(ev);
-    if (d) dTags.add(d);
-  }
-
-  const results: ResolvedRepo[] = [];
-  const processedComponents = new Set<string>(); // "pubkey:dTag" keys already in a result
-
-  for (const dTag of dTags) {
-    if (forPubkey) {
-      // Scoped mode: find repos where forPubkey is involved as author or
-      // maintainer, then resolve the chain with forPubkey as selected
-      // maintainer when possible.
-
-      // First try: the user has their own announcement for this dTag
-      const resolved = resolveChain(events, forPubkey, dTag);
-      if (resolved) {
-        results.push(resolved);
-        continue;
-      }
-
-      // Second try: the user is listed in someone else's maintainers tag
-      // for this dTag but hasn't published their own announcement.
-      // Find an event author who listed them and resolve from that author.
-      for (const ev of events) {
-        if (ev.kind !== REPO_KIND) continue;
-        const d = getReplaceableIdentifier(ev);
-        if (d !== dTag) continue;
-
-        // Check if forPubkey is the event author (already handled above)
-        if (ev.pubkey === forPubkey) continue;
-
-        // Check if forPubkey is listed in the maintainers tag
-        if (getRepoMaintainers(ev).includes(forPubkey)) {
-          // Resolve from the event author who listed us
-          const fromAuthor = resolveChain(events, ev.pubkey, dTag);
-          if (fromAuthor) {
-            results.push(fromAuthor);
-            break; // Only need one result per dTag
-          }
-        }
-      }
-    } else {
-      // Global mode: resolve all connected components
-      const pubkeysForDTag: string[] = [];
-      for (const ev of events) {
-        if (ev.kind !== REPO_KIND) continue;
-        const d = getReplaceableIdentifier(ev);
-        if (d === dTag) pubkeysForDTag.push(ev.pubkey);
-      }
-
-      for (const startPubkey of pubkeysForDTag) {
-        const componentKey = `${startPubkey}:${dTag}`;
-        if (processedComponents.has(componentKey)) continue;
-
-        const resolved = resolveChain(events, startPubkey, dTag);
-        if (!resolved) continue;
-
-        const leadAnchor = selectRepoLeadAnchor(resolved);
-        const anchored =
-          leadAnchor === resolved.selectedMaintainer
-            ? resolved
-            : (resolveChain(events, leadAnchor, dTag) ?? resolved);
-
-        // Repository identity is the reciprocally accepted component, not the
-        // full directional authorization closure. Marking invited maintainers
-        // here can suppress their separate same-identifier repository when an
-        // announcement that points at them is processed first.
-        for (const pk of anchored.confirmedMaintainers) {
-          processedComponents.add(`${pk}:${dTag}`);
-        }
-
-        results.push(anchored);
-      }
-    }
-  }
-
-  // Sort by updatedAt descending
-  results.sort((a, b) => b.updatedAt - a.updatedAt);
-  return results;
+  const components = buildRepositoryComponentIndex(events).components;
+  return forPubkey
+    ? components.filter((repository) =>
+        repository.confirmedMembers.includes(forPubkey),
+      )
+    : components;
 }

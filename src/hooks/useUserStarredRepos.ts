@@ -31,7 +31,8 @@ import { normalizeUrl } from "@/lib/url";
 
 import {
   REPO_KIND,
-  groupIntoResolvedRepos,
+  parseRepoCoordinate,
+  selectRepositoryComponents,
   type ResolvedRepo,
 } from "@/lib/nip34";
 import type { Filter } from "applesauce-core/helpers";
@@ -118,17 +119,17 @@ export function useUserStarredRepos(
       switchMap((coords) => {
         if (coords.length === 0) return of(undefined);
 
-        const coordPubkeys = [
+        const dTags = [
           ...new Set(
             coords
-              .map((c) => c.split(":")[1])
-              .filter((pk): pk is string => !!pk),
+              .map((coordinate) => parseRepoCoordinate(coordinate)?.identifier)
+              .filter((dTag): dTag is string => !!dTag),
           ),
         ];
 
         const repoFilter: Filter = {
           kinds: [REPO_KIND],
-          authors: coordPubkeys,
+          "#d": dTags,
         };
 
         return resilientSubscription(pool, gitIndexRelays, [repoFilter]).pipe(
@@ -158,32 +159,22 @@ export function useUserStarredRepos(
       switchMap((coords) => {
         if (coords.length === 0) return of([] as ResolvedRepo[]);
 
-        const coordSet = new Set(coords);
-        const coordPubkeys = [
+        const dTags = [
           ...new Set(
             coords
-              .map((c) => c.split(":")[1])
-              .filter((pk): pk is string => !!pk),
+              .map((coordinate) => parseRepoCoordinate(coordinate)?.identifier)
+              .filter((dTag): dTag is string => !!dTag),
           ),
         ];
 
         const repoFilter: Filter = {
           kinds: [REPO_KIND],
-          authors: coordPubkeys,
+          "#d": dTags,
         };
 
         return (
           store.timeline([repoFilter]) as unknown as Observable<NostrEvent[]>
-        ).pipe(
-          map((events) => {
-            const relevant = events.filter((ev) => {
-              const d = ev.tags.find(([t]) => t === "d")?.[1];
-              if (!d) return false;
-              return coordSet.has(`${REPO_KIND}:${ev.pubkey}:${d}`);
-            });
-            return groupIntoResolvedRepos(relevant);
-          }),
-        );
+        ).pipe(map((events) => selectRepositoryComponents(events, coords)));
       }),
     );
   }, [pubkey, store]);

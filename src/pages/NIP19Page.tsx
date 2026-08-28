@@ -24,8 +24,8 @@ import {
   PATCH_KIND,
   PR_KIND,
   PR_UPDATE_KIND,
-  repoCoordinate,
-  resolveChain,
+  buildRepositoryComponentIndex,
+  getRepositoryComponentForCoordinate,
   getRootRepositoryCoordinates,
 } from "../lib/nip34";
 import {
@@ -169,18 +169,21 @@ function preferredRepoCoord(
   const fallbackCoord = firstCoordWithAnnouncement(coords, announcements);
   if (!fallbackCoord) return undefined;
 
-  const fallback = parseRepoCoord(fallbackCoord);
-  if (!fallback) return fallbackCoord;
-
-  const repo = resolveChain(announcements, fallback.pubkey, fallback.dTag);
+  const index = buildRepositoryComponentIndex(announcements);
+  const repo = coords.flatMap((coordinate) => {
+    const parsed = parseRepoCoord(coordinate);
+    if (!parsed) return [];
+    const component = getRepositoryComponentForCoordinate(
+      index,
+      parsed.pubkey,
+      parsed.dTag,
+    );
+    return component ? [component] : [];
+  })[0];
   if (!repo) return fallbackCoord;
-
-  const leadMaintainer = repo.leadResolution.leadMaintainer;
-
-  if (!leadMaintainer) return fallbackCoord;
-
-  const leadCoordinate = repoCoordinate(leadMaintainer, fallback.dTag);
-  return coords.includes(leadCoordinate) ? leadCoordinate : fallbackCoord;
+  return coords.includes(repo.selectedCoordinate)
+    ? repo.selectedCoordinate
+    : fallbackCoord;
 }
 
 /**

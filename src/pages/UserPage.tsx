@@ -393,10 +393,7 @@ export default function UserPage({ pubkey }: UserPageProps) {
             ) : (
               <div className="grid gap-3">
                 {followedRepos.map((repo) => (
-                  <UserRepoCard
-                    key={`${repo.selectedMaintainer}:${repo.dTag}`}
-                    repo={repo}
-                  />
+                  <UserRepoCard key={repo.componentId} repo={repo} />
                 ))}
               </div>
             )}
@@ -426,10 +423,7 @@ export default function UserPage({ pubkey }: UserPageProps) {
             ) : (
               <div className="grid gap-3">
                 {starredRepos.map((repo) => (
-                  <UserRepoCard
-                    key={`${repo.selectedMaintainer}:${repo.dTag}`}
-                    repo={repo}
-                  />
+                  <UserRepoCard key={repo.componentId} repo={repo} />
                 ))}
               </div>
             )}
@@ -716,10 +710,9 @@ function OverviewTab({
           <>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {featuredRepos.map((repo) => {
-                const coord = `30617:${repo.selectedMaintainer}:${repo.dTag}`;
                 return (
                   <PinnedRepoCard
-                    key={coord}
+                    key={repo.componentId}
                     repo={repo}
                     isDraggable={false}
                     isDragging={false}
@@ -839,11 +832,7 @@ function RepositoriesTab({
     return (
       <div className="grid gap-2">
         {repos.map((repo) => (
-          <UserRepoCard
-            key={`${repo.selectedMaintainer}:${repo.dTag}`}
-            repo={repo}
-            compact
-          />
+          <UserRepoCard key={repo.componentId} repo={repo} compact />
         ))}
       </div>
     );
@@ -1042,7 +1031,7 @@ function OtherReposSection({
         <div className="grid gap-2">
           {repos.map((repo) => (
             <UserRepoCard
-              key={`${repo.selectedMaintainer}:${repo.dTag}`}
+              key={repo.componentId}
               repo={repo}
               pinnedCoords={pinnedCoords}
               showPinControl={isOwnProfile}

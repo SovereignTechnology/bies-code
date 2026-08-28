@@ -51,6 +51,8 @@ import { pool, eventStore } from "@/services/nostr";
 import { gitIndexRelays } from "@/services/settings";
 import {
   REPO_KIND,
+  buildRepositoryComponentIndex,
+  getRepositoryComponentForCoordinate,
   groupIntoResolvedRepos,
   type ResolvedRepo,
 } from "@/lib/nip34";
@@ -475,13 +477,11 @@ export function useRepositorySearch(
     };
 
     const pushResults = () => {
-      const activeCoordinates = new Set<string>();
       const activeDTags = new Set<string>();
-      for (const { pubkey, dTag } of [
+      for (const { dTag } of [
         ...directRepoCoordinates.values(),
         ...userRepoCoordinates.values(),
       ]) {
-        activeCoordinates.add(`${pubkey}:${dTag}`);
         activeDTags.add(dTag);
       }
       if (activeDTags.size === 0) {
@@ -500,13 +500,30 @@ export function useRepositorySearch(
           "#d": [...activeDTags],
         } as Filter,
       ]);
-      const resolved = groupIntoResolvedRepos(currentAnnouncements).filter(
-        (repo) =>
-          repo.confirmedMaintainers.some((pubkey) =>
-            activeCoordinates.has(`${pubkey}:${repo.dTag}`),
-          ),
+      const index = buildRepositoryComponentIndex(currentAnnouncements);
+      const componentIds = new Set<string>();
+      for (const { pubkey, dTag } of directRepoCoordinates.values()) {
+        const repository = getRepositoryComponentForCoordinate(
+          index,
+          pubkey,
+          dTag,
+        );
+        if (repository) componentIds.add(repository.componentId);
+      }
+      for (const { pubkey, dTag } of userRepoCoordinates.values()) {
+        const repository = getRepositoryComponentForCoordinate(
+          index,
+          pubkey,
+          dTag,
+          true,
+        );
+        if (repository) componentIds.add(repository.componentId);
+      }
+      subject.next(
+        index.components.filter((repository) =>
+          componentIds.has(repository.componentId),
+        ),
       );
-      subject.next(resolved);
     };
 
     const paginate$ = new Subject<void>();

@@ -242,7 +242,7 @@ export default function RepositoriesPage({
             <div className="grid gap-3">
               {repos!.map((repo) => (
                 <RepoCard
-                  key={`${repo.selectedMaintainer}:${repo.dTag}`}
+                  key={repo.componentId}
                   repo={repo}
                   isUserMatch={getVisibleMaintainers(repo).some((pk) =>
                     matchedUserPubkeys.has(pk),

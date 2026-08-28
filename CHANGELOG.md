@@ -8,6 +8,7 @@
 - Resolve repository leads from the selected coordinate's signed `M` pointer path or legacy vote result, refresh the complete current announcement closure before redirecting, preserve the full URL, and leave unresolved or tied routes unchanged.
 - Remount account-authored repository settings when the active account changes so unsaved metadata cannot cross signer scopes.
 - Match ngit's duplicate active role-target handling while retaining a repository-health warning for malformed announcements.
+- Resolve repository discovery through a deterministic reciprocal-component index, so browse, search, profile, pinned, followed, starred, and NIP-19 results show one card per active repository regardless of relay arrival order and keep same-identifier invitations separate.
 
 ### Fixes
 

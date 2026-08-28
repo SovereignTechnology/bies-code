@@ -9,15 +9,15 @@ import {
 import type { NostrEvent } from "nostr-tools";
 
 /**
- * RepositoryModel — reactively resolves the full maintainer chain for a
- * single repository starting from a selected maintainer pubkey + d-tag.
+ * RepositoryModel — reactively resolves a selected coordinate through the
+ * deterministic repository-component index.
  *
  * How it works:
  * 1. Subscribe to the selected maintainer's announcement via store.addressable()
  * 2. Read the maintainers tag and subscribe to each listed pubkey's announcement
  * 3. For each of those, read their maintainers tags and subscribe further
  * 4. Repeat until no new pubkeys are discovered (fixed point)
- * 5. Re-emit a ResolvedRepo whenever any announcement in the chain changes
+ * 5. Re-index the hydrated closure whenever any announcement changes
  *
  * The EventStore's eventLoader (wired to addressLoader in nostr.ts) will
  * automatically fetch any co-maintainer announcements that aren't in the

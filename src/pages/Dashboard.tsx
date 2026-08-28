@@ -229,7 +229,7 @@ function MyRepositoriesPanel({ pubkey }: { pubkey: string }) {
                 const coord = `30617:${repo.selectedMaintainer}:${repo.dTag}`;
                 return (
                   <RepoListItem
-                    key={coord}
+                    key={repo.componentId}
                     repo={repo}
                     isPinned={pinnedSet.has(coord)}
                     hideAuthor
@@ -359,8 +359,7 @@ function FollowedReposPanel({ pubkey }: { pubkey: string }) {
           <>
             <div className="space-y-0.5">
               {displayRepos.map((repo) => {
-                const coord = `30617:${repo.selectedMaintainer}:${repo.dTag}`;
-                return <RepoListItem key={coord} repo={repo} />;
+                return <RepoListItem key={repo.componentId} repo={repo} />;
               })}
             </div>
             {hasMore && (

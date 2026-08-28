@@ -11,8 +11,8 @@
  *   2. Extract the `a` tag coordinates.
  *   3. Fetch the actual kind:30617 repo announcements for those coordinates
  *      from the git index relays.
- *   4. Return resolved repos via groupIntoResolvedRepos, scoped to the coords
- *      so only the followed repos appear.
+ *   4. Resolve those coordinates through the shared component index so only
+ *      one card appears for each followed repository.
  *
  * Reading counts and content from the in-memory EventStore (not directly from
  * relays) keeps the display reactive and avoids duplicate relay queries.
@@ -26,11 +26,13 @@ import { mapEventsToStore } from "applesauce-core";
 import { onlyEvents } from "applesauce-relay";
 import { resilientSubscription } from "@/lib/resilientSubscription";
 import {
+  parseRepoCoordinate,
   REPO_KIND,
-  groupIntoResolvedRepos,
+  selectRepositoryComponents,
   type ResolvedRepo,
 } from "@/lib/nip34";
 import type { Filter } from "applesauce-core/helpers";
+import type { NostrEvent } from "nostr-tools";
 import type { Observable } from "rxjs";
 import { switchMap, map, of } from "rxjs";
 
@@ -66,7 +68,9 @@ export function useUserFollowedRepos(
 
         const filter = {
           kinds: [REPO_KIND],
-          "#d": coords.map((c) => c.split(":")[2]).filter(Boolean),
+          "#d": coords
+            .map((coordinate) => parseRepoCoordinate(coordinate)?.identifier)
+            .filter((dTag): dTag is string => !!dTag),
         } as Filter;
 
         return resilientSubscription(pool, gitIndexRelays, [filter]).pipe(
@@ -95,36 +99,16 @@ export function useUserFollowedRepos(
       switchMap((coords) => {
         if (coords.length === 0) return of([] as ResolvedRepo[]);
 
-        // Extract the pubkeys from the coords so we can filter repo events
-        const coordPubkeys = [
-          ...new Set(
-            coords
-              .map((c) => c.split(":")[1])
-              .filter((pk): pk is string => !!pk),
-          ),
-        ];
-
         const filter: Filter = {
           kinds: [REPO_KIND],
-          authors: coordPubkeys,
+          "#d": coords
+            .map((coordinate) => parseRepoCoordinate(coordinate)?.identifier)
+            .filter((dTag): dTag is string => !!dTag),
         };
 
         return (
-          store.timeline([filter]) as unknown as Observable<
-            import("nostr-tools").NostrEvent[]
-          >
-        ).pipe(
-          map((events) => {
-            const coordSet = new Set(coords);
-            // Only include repo events whose coordinate is in the follow list
-            const relevant = events.filter((ev) => {
-              const d = ev.tags.find(([t]) => t === "d")?.[1];
-              if (!d) return false;
-              return coordSet.has(`${REPO_KIND}:${ev.pubkey}:${d}`);
-            });
-            return groupIntoResolvedRepos(relevant);
-          }),
-        );
+          store.timeline([filter]) as unknown as Observable<NostrEvent[]>
+        ).pipe(map((events) => selectRepositoryComponents(events, coords)));
       }),
     );
   }, [pubkey, store]);

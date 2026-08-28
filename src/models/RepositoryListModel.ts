@@ -1,11 +1,14 @@
-import { map, debounceTime } from "rxjs/operators";
+import { combineLatest, of, type Observable } from "rxjs";
+import { map, debounceTime, switchMap } from "rxjs/operators";
 import type { Model } from "applesauce-core/event-store";
+import { getReplaceableIdentifier } from "applesauce-core/helpers";
 import {
   REPO_KIND,
   groupIntoResolvedRepos,
   type ResolvedRepo,
 } from "@/lib/nip34";
 import type { Filter } from "applesauce-core/helpers";
+import { RepositoryModel } from "@/models/RepositoryModel";
 
 const repoFilter: Filter[] = [{ kinds: [REPO_KIND] }];
 
@@ -16,9 +19,8 @@ const repoFilter: Filter[] = [{ kinds: [REPO_KIND] }];
  * Multi-maintainer repos (where pubkeys mutually list each other) are merged
  * into a single ResolvedRepo.
  *
- * @param forPubkey - If provided, only return repos where this pubkey is
- *   involved — either as the event author or listed in a `maintainers` tag.
- *   When omitted, all connected components are resolved.
+ * @param forPubkey - If provided, hydrate each announcement authored by that
+ *   pubkey and return only components where it is a confirmed member.
  *
  * This model does NOT fetch from relays — pair it with a relay fetch in the
  * hook layer (e.g. useUserRepositories) that populates the store first.
@@ -31,9 +33,57 @@ const repoFilter: Filter[] = [{ kinds: [REPO_KIND] }];
  * which would otherwise cause thousands of expensive recomputations.
  */
 export function RepositoryListModel(forPubkey?: string): Model<ResolvedRepo[]> {
-  return (store) =>
-    store.timeline(repoFilter).pipe(
-      debounceTime(150),
-      map((events) => groupIntoResolvedRepos(events, forPubkey)),
-    );
+  return (store) => {
+    if (!forPubkey) {
+      return store.timeline(repoFilter).pipe(
+        debounceTime(150),
+        map((events) => groupIntoResolvedRepos(events)),
+      );
+    }
+
+    return store
+      .timeline([{ kinds: [REPO_KIND], authors: [forPubkey] } as Filter])
+      .pipe(
+        debounceTime(150),
+        map((events) =>
+          [
+            ...new Set(
+              events
+                .map(getReplaceableIdentifier)
+                .filter((dTag): dTag is string => !!dTag),
+            ),
+          ].sort(),
+        ),
+        switchMap((dTags) => {
+          if (dTags.length === 0) return of([] as ResolvedRepo[]);
+          return combineLatest(
+            dTags.map(
+              (dTag) =>
+                store.model(
+                  RepositoryModel,
+                  forPubkey,
+                  dTag,
+                ) as unknown as Observable<ResolvedRepo | undefined>,
+            ),
+          ).pipe(
+            map((repositories) => {
+              const byComponent = new Map<string, ResolvedRepo>();
+              for (const repository of repositories) {
+                if (
+                  repository?.confirmedMembers.includes(forPubkey) &&
+                  !byComponent.has(repository.componentId)
+                ) {
+                  byComponent.set(repository.componentId, repository);
+                }
+              }
+              return [...byComponent.values()].sort(
+                (a, b) =>
+                  b.updatedAt - a.updatedAt ||
+                  a.componentId.localeCompare(b.componentId),
+              );
+            }),
+          );
+        }),
+      );
+  };
 }

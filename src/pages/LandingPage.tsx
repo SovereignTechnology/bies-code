@@ -139,10 +139,7 @@ function FeaturedRepos() {
             <FeaturedReposSkeleton />
           ) : featured.length > 0 ? (
             featured.map((repo) => (
-              <FeaturedRepoCard
-                key={`${repo.selectedMaintainer}:${repo.dTag}`}
-                repo={repo}
-              />
+              <FeaturedRepoCard key={repo.componentId} repo={repo} />
             ))
           ) : (
             <div className="col-span-full text-center py-8 text-muted-foreground text-sm">

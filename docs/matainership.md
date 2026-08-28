@@ -20,6 +20,21 @@ repository. Their announcements join one virtual repository only through the
 reciprocal membership rules below. Invitation edges are discovery
 relationships and do not merge components.
 
+GitWorkshop indexes all currently known announcements for an identifier before
+presenting repositories. It reduces replacements per author, resolves every
+coordinate-rooted view, unions overlapping confirmed maintainer sets, and then
+assigns each announcement coordinate to at most one component. An explicit
+component uses its deterministic terminal lead as the discovery-card anchor;
+legacy and leadless components use the lexicographically stable confirmed
+membership set. `repo.componentId` encodes that identifier plus sorted
+maintainer set and is the UI identity used to deduplicate cards.
+
+Search, browse, profile repositories, stars, pins, follows, and NIP-19
+repository redirects all consume this component index. A hit for any confirmed
+member returns the same component. A unilateral same-identifier invitation may
+be shown as a relationship, but it cannot absorb the invitee's existing
+component or contribute its metadata, infrastructure, or privacy.
+
 ## Current role records
 
 Indexed role tags have the form:
@@ -129,9 +144,10 @@ Only confirmed member announcements contribute trusted repository fields:
 - Invited, departed, malformed-role, and unconfirmed moderator announcements
   contribute nothing to those fields.
 
-The selected coordinate remains a permanent discovery and routing anchor. It
-is not silently replaced merely because a lead can be inferred; signed lead
-redirects are introduced in migration Wave 2.
+The selected coordinate remains a permanent signed discovery perspective.
+Direct routes retain that perspective while following a complete explicit lead
+path or unique legacy lead; discovery cards use the component's deterministic
+anchor.
 
 ## Browser mutation safety during migration
 
@@ -150,6 +166,7 @@ Persisted v2 acceptance jobs are deliberately not hydrated or delivered.
 Callers consume the pure resolver through `useResolvedRepository` and must
 choose the narrowest explicit field:
 
+- `componentId` for repository-card and component identity
 - `confirmedMaintainers` / `confirmedMaintainerCoordinates`
 - `confirmedModerators`
 - `confirmedMembers` / `confirmedMemberCoordinates`
@@ -161,4 +178,5 @@ choose the narrowest explicit field:
 
 Do not recreate membership checks in components and do not treat a fetched
 announcement, matching identifier, or repository coordinate as proof of
-authority.
+authority. Discovery lists must use the shared component index rather than
+grouping announcements in relay arrival order.

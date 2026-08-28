@@ -19,8 +19,8 @@ import type { Observable } from "rxjs";
  * selectedMaintainer anchor for BFS resolution.
  *
  * Layer 1: relay fetch — loads this user's 30617 events into the EventStore.
- * Layer 2: RepositoryListModel(pubkey) — reactive BFS grouping scoped to
- *          repos where this pubkey has an announcement.
+ * Layer 2: RepositoryListModel(pubkey) — hydrate each authored coordinate and
+ *          return its one confirmed repository component.
  *
  * @param pubkey - The user's hex pubkey, or undefined to skip
  * @returns ResolvedRepo[] when loaded, undefined while loading

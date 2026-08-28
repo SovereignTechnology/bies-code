@@ -311,6 +311,8 @@ All three features share the same authorisation rule: an event is only **authori
 
 Events from any other pubkey are ignored when deriving the item's effective state. A directional role assignment is only an invitation and grants no authority. Because the confirmed member set is only known once repository announcements resolve, clients MAY treat the root author as authorised before membership resolves to avoid a flash of missing metadata.
 
+For a given repository identifier, clients MUST partition the latest kind:30617 announcement from each author into reciprocal confirmed components before presenting repository identity. One active announcement coordinate belongs to at most one active component. Search or discovery hits for any confirmed member resolve to that component, while unilateral invitation edges remain relationships between components and MUST NOT merge repository cards or trusted metadata.
+
 ### After-the-fact Labels (NIP-32, kind:1985)
 
 Labels are attached to an item with a [NIP-32](https://github.com/nostr-protocol/nips/blob/master/32.md) label event. The label namespace is `#t` (the same convention NIP-34 root items use for inline `t` tags), declared with an `L` tag and carried in one or more `l` tags.
