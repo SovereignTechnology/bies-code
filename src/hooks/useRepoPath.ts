@@ -33,7 +33,7 @@ export function useRepoPath(
  *
  * Discovery links prefer a resolved explicit, inferred, or implicit lead once
  * the recursive graph is available. Explicit route rewriting is handled
- * separately and accepts only a complete signed `M` path.
+ * separately and accepts a complete signed `M` path or unique legacy winner.
  */
 export function useDefaultRepoPath(repo: ResolvedRepo): string {
   const store = useEventStore();

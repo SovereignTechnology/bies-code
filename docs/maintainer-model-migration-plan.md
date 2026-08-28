@@ -92,7 +92,7 @@ The current implementation predates the new authority model:
 | Wave | Outcome                                                     | Release gate                                                                    |
 | ---- | ----------------------------------------------------------- | ------------------------------------------------------------------------------- |
 | 1    | Reciprocal membership becomes the sole authority boundary   | No unaccepted invitee affects trusted state anywhere                            |
-| 2    | Signed lead resolution and browser redirects                | Redirects follow only a complete, valid `M` path                                |
+| 2    | Signed lead resolution and browser redirects                | Redirects follow a complete `M` path or a unique legacy vote winner             |
 | 3    | One announcement belongs to one active repository component | Search shows one result per repository without invitations merging repositories |
 | 4    | Exits, history, and conservative normal mutations           | Every unsupported topology change publishes nothing                             |
 | 5    | Exceptional workflows replace individual refusal cases      | Each edge-case workflow is independently reviewable and verified                |
@@ -236,15 +236,20 @@ Selected indexed `m` without `M` is an explicit leadless boundary.
 
 ### 2B. Canonical browser routing
 
-- Automatically redirect a repository route only when an explicit signed `M`
-  path is complete, acyclic, and terminates at a confirmed self-`M` lead.
+- Automatically redirect a repository route when either:
+  - an explicit signed `M` path is complete, acyclic, and terminates at a
+    confirmed self-`M` lead; or
+  - the selected announcement remains legacy and the legacy voting model
+    resolves one unique confirmed lead.
 - Preserve the repository subpath, query string, and hash.
 - Use replacement navigation so the old coordinate does not create a back-loop.
-- Wait for the selected pointer path to settle before redirecting.
+- Wait for the selected pointer path or legacy vote result to resolve before
+  redirecting.
 - Never redirect through `defer`, a missing announcement, multiple active `M`
   entries, a cycle, a departed target, or an incomplete prepared handover.
-- Use a legacy-inferred lead for preferred discovery links, but do not
-  force-redirect an explicitly entered route based on an inference.
+- Redirect legacy repository routes to their unique inferred lead as well as
+  using that lead for preferred discovery links. A tied or absent legacy vote
+  remains on the selected coordinate.
 - Show selected maintainer and resolved lead separately in repository details.
 - Keep lead authority equal to co-maintainer authority; lead affects
   coordination and routing only.
@@ -255,8 +260,8 @@ Selected indexed `m` without `M` is an explicit leadless boundary.
       suffix.
 - [x] `defer`, missing, conflicting, and cyclic paths never redirect.
 - [x] An explicit leadless repository remains on the selected coordinate.
-- [x] Legacy-inferred leads affect default links without rewriting explicit
-      user navigation.
+- [x] A unique legacy-inferred lead rewrites explicit routes, while tied or
+      absent legacy votes remain on the selected coordinate.
 - [x] No route redirect changes an announcement or publishes an event.
 
 ## Wave 3 — Repository components and search
