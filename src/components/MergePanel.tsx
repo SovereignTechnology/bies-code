@@ -95,6 +95,7 @@ import {
 } from "@/lib/merge-push-fetch";
 import type { PrefetchedMergePushObjects } from "@/hooks/usePrefetchedMergePushObjects";
 import { relayMatchesGraspService } from "@/lib/grasp";
+import type { InferredPRParent } from "@/lib/inferredPRParents";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -152,6 +153,11 @@ interface MergePanelProps {
   /** Repository PRs, used to explain stale bases from already-merged stacks. */
   prs?: ResolvedPRLite[];
   /**
+   * Definite inferred stack parent while it is open or draft. Undefined means
+   * repository PR state is still loading; null means no active parent.
+   */
+  openStackParent: InferredPRParent | null | undefined;
+  /**
    * Called after at least one Grasp server accepted the git push. Lets the
    * parent keep this panel mounted after the merged status event changes the PR
    * status to resolved.
@@ -172,7 +178,8 @@ type MergeStep =
 type MergePanelStatus =
   | MergeabilityStatus
   | PRMergeabilityStatus
-  | "detected-merged";
+  | "detected-merged"
+  | "waiting-for-stack-parent";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -255,6 +262,7 @@ export function MergePanel({
   prefetched,
   issues,
   prs,
+  openStackParent,
   onSuccessfulPush,
 }: MergePanelProps) {
   const account = useActiveAccount();
@@ -378,9 +386,11 @@ export function MergePanel({
 
   const displayedStatus: MergePanelStatus = detectedMergeCommit
     ? "detected-merged"
-    : mergeabilityCheckWillStart
-      ? "loading"
-      : mergeability.status;
+    : openStackParent && mergeability.status === "ready"
+      ? "waiting-for-stack-parent"
+      : mergeabilityCheckWillStart
+        ? "loading"
+        : mergeability.status;
 
   // GRASP relay URLs: repo relays matching an exact service address.
   const graspRelayUrls = useMemo(
@@ -391,14 +401,17 @@ export function MergePanel({
     [repo.relays, repo.graspServerAddresses],
   );
 
-  // Can we show the merge button?
-  const canMerge =
+  // Can we offer the browser merge action? An open stack parent keeps the
+  // familiar action visible but disabled until that parent lands.
+  const canOfferBrowserMerge =
     supportsBrowserMerge &&
     !detectedMergeCommit &&
     mergeability.status === "ready" &&
-    defaultBranchHead &&
+    !!defaultBranchHead &&
     (targetIsDefaultBranch || !!currentStateEvent) &&
     mergeStep === "idle";
+  const canMerge = canOfferBrowserMerge && !openStackParent;
+  const mergeBlockedByStackParent = canOfferBrowserMerge && !!openStackParent;
 
   // Can we show the apply-to-tip button? (patch-type only)
   const canApplyToTip =
@@ -410,7 +423,10 @@ export function MergePanel({
     mergeStep === "idle";
 
   const canShowLocalMerge =
-    !supportsBrowserMerge && !detectedMergeCommit && mergeStep === "idle";
+    !supportsBrowserMerge &&
+    !detectedMergeCommit &&
+    !openStackParent &&
+    mergeStep === "idle";
 
   const canMarkDetectedMerged =
     !!account && !!detectedMergeCommit && mergeStep === "idle";
@@ -862,6 +878,7 @@ export function MergePanel({
                   }
                   isBaseGuessed={!!guessedBaseCommitId}
                   isPRType={isPRType}
+                  openStackParent={openStackParent}
                 />
               </div>
 
@@ -947,6 +964,19 @@ export function MergePanel({
                       </AlertDialogFooter>
                     </AlertDialogContent>
                   </AlertDialog>
+                )}
+
+                {mergeBlockedByStackParent && (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    className="h-8 bg-muted text-muted-foreground hover:bg-muted"
+                    disabled
+                    aria-label={`Merge disabled until parent PR #${openStackParent.rootId.slice(0, 8)} lands`}
+                  >
+                    <GitMerge className="h-3.5 w-3.5 mr-1.5" />
+                    Merge
+                  </Button>
                 )}
 
                 {canMerge && (
@@ -1105,8 +1135,23 @@ export function MergePanel({
             {mergeStep === "idle" &&
               !detectedMergeCommit &&
               mergeability.mergeBaseMismatch &&
-              mergedPRCommitMatch !== undefined &&
-              (mergedPRCommitMatch ? (
+              openStackParent !== undefined &&
+              (openStackParent ? (
+                <div className="rounded-md border border-muted bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+                  <div className="flex items-start gap-2">
+                    <GitBranch className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                    <p>
+                      <span className="font-medium text-foreground">
+                        Stacked on open PR #{openStackParent.rootId.slice(0, 8)}
+                        .
+                      </span>{" "}
+                      “{openStackParent.subject}” provides this PR's recorded
+                      base. Merge that parent into {defaultBranchName} first;
+                      this PR can be merged after it lands.
+                    </p>
+                  </div>
+                </div>
+              ) : mergedPRCommitMatch !== undefined && mergedPRCommitMatch ? (
                 <div className="rounded-md border border-muted bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
                   <div className="flex items-start gap-2">
                     <Info className="h-3.5 w-3.5 mt-0.5 shrink-0" />
@@ -1120,7 +1165,7 @@ export function MergePanel({
                     </p>
                   </div>
                 </div>
-              ) : (
+              ) : mergedPRCommitMatch !== undefined ? (
                 <div className="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
                   <div className="flex items-start gap-2">
                     <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
@@ -1150,7 +1195,7 @@ export function MergePanel({
                     </div>
                   </div>
                 </div>
-              ))}
+              ) : null)}
 
             {/* Already-merged detection hit its look-back cap */}
             {!detectedMergeCommit &&
@@ -1362,6 +1407,8 @@ function StatusIcon({
     case "already-merged":
     case "detected-merged":
       return <CheckCircle2 className="h-5 w-5 text-green-600" />;
+    case "waiting-for-stack-parent":
+      return <GitMerge className="h-5 w-5 text-muted-foreground" />;
     case "ready-apply-only":
       return <AlertTriangle className="h-5 w-5 text-amber-500" />;
     case "conflicts":
@@ -1382,6 +1429,7 @@ function StatusHeadline({
   allHashesVerified,
   isBaseGuessed,
   isPRType,
+  openStackParent,
 }: {
   status: MergePanelStatus;
   mergeStep: MergeStep;
@@ -1391,6 +1439,7 @@ function StatusHeadline({
   allHashesVerified: boolean;
   isBaseGuessed: boolean;
   isPRType: boolean;
+  openStackParent: InferredPRParent | null | undefined;
 }) {
   if (mergeStep === "done") {
     return (
@@ -1457,6 +1506,22 @@ function StatusHeadline({
               encoding).
             </p>
           )}
+        </div>
+      );
+    case "waiting-for-stack-parent":
+      return (
+        <div>
+          <p className="text-sm font-medium text-foreground">
+            Not ready to merge
+          </p>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            Waiting for stack parent PR #{openStackParent?.rootId.slice(0, 8)}{" "}
+            to land on{" "}
+            <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs text-foreground">
+              {defaultBranchName}
+            </code>{" "}
+            first.
+          </p>
         </div>
       );
     case "detected-merged":

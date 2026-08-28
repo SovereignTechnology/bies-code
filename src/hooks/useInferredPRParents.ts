@@ -8,9 +8,11 @@ import {
   getPRTargetBranch,
   PR_KIND,
   PR_UPDATE_KIND,
+  type ResolvedPRLite,
 } from "@/lib/nip34";
 import {
   getEffectivePRMergeBases,
+  withCurrentPRSubjects,
   type InferredPRParentRelation,
 } from "@/lib/inferredPRParents";
 import { InferredPRParentsModel } from "@/models/InferredPRParentsModel";
@@ -55,6 +57,7 @@ export function useInferredPRParents(
   gitPool: GitGraspPool | null,
   gitPoolState: PoolState,
   repoState: RepositoryState | null | undefined,
+  prs: ResolvedPRLite[] | undefined,
 ) {
   const store = useEventStore();
   const key = useMemo(
@@ -273,11 +276,19 @@ export function useInferredPRParents(
     targetHeadsKey,
   ]);
 
-  return useMemo(() => {
-    if (!inferredParents || !topologyEvents) return undefined;
-    if (!gitPool) return inferredParents;
+  const titledParents = useMemo(
+    () =>
+      inferredParents && prs
+        ? withCurrentPRSubjects(inferredParents, prs)
+        : undefined,
+    [inferredParents, prs],
+  );
 
-    const filtered = new Map(inferredParents);
+  return useMemo(() => {
+    if (!titledParents || !topologyEvents) return undefined;
+    if (!gitPool) return titledParents;
+
+    const filtered = new Map(titledParents);
     for (const { childId } of checks) {
       const result =
         reachability.key === reachabilityKey
@@ -293,9 +304,9 @@ export function useInferredPRParents(
   }, [
     checks,
     gitPool,
-    inferredParents,
     reachability,
     reachabilityKey,
+    titledParents,
     topologyEvents,
   ]);
 }
