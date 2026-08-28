@@ -168,18 +168,31 @@ Direct routes retain that perspective while following a complete explicit lead
 path or unique legacy lead; discovery cards use the component's deterministic
 anchor.
 
-## Browser mutation safety during migration
+## Browser mutation safety
 
-GitWorkshop's old complete-roster editor and legacy invitation acceptance are
-disabled until the conservative one-at-a-time mutation preflight lands.
-Metadata-only edits preserve every existing `M`, `m`, `o`, and
-`maintainers` tag byte-for-byte, including role history and contradictory
-compatibility projections. A role-free sole-maintainer announcement remains
-role-free.
+GitWorkshop exposes only four one-at-a-time membership intents: add one
+maintainer, accept one invitation, remove one directly authored relationship,
+and leave a lead-shaped repository. The complete-roster editor and every force
+path remain unavailable.
 
-Until the browser implements ngit's relationship-intent API and complete
-preflight, membership changes must be made with a compatible ngit v3 client.
-Persisted v2 acceptance jobs are deliberately not hydrated or delivered.
+Each intent refreshes the affected authors' mailbox lists, announcements, and
+state events, constructs the replacement in memory, simulates its exact member,
+moderator, invitation, and lead result, then repeats the settled fetch and
+compares every predecessor immediately before signing. Acceptance also proves
+that the current signed state objects are available from an announced Git
+server. The published replacement is observed and resolved again before the UI
+reports success.
+
+The normal lead-shaped cases are intentionally narrow. Component joins, lead
+changes, leadless edits, additional membership side effects, invitation
+withdrawals, state or identity differences, disputed/deferred history,
+incomplete relay views, concurrent replacements, and unavailable Git objects
+return a stable refusal code and publish nothing. Those cases move forward one
+workflow at a time in Wave 5 rather than through a browser force switch.
+
+Metadata-only edits still preserve every existing `M`, `m`, `o`, and
+`maintainers` tag byte-for-byte. Persisted v2 acceptance jobs remain
+quarantined; only role-aware v3 jobs are delivered.
 
 ## Resolver contract
 

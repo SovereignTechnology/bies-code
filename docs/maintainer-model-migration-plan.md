@@ -1,6 +1,6 @@
 # Maintainer Model Migration Plan
 
-> **Status:** Waves 1 through 3 and Wave 4A/4B implemented. Wave 4C is next.
+> **Status:** Waves 1 through 4 implemented. Wave 5 edge-case workflows are next.
 >
 > **Approach:** Land the maintainer-model change in deployable waves. Each
 > wave must leave gitworkshop with one internally consistent authority model;
@@ -411,11 +411,11 @@ leave no signed event, relay publication, Git mutation, or route change.
       the required role at publication time.
 - [x] A removed maintainer immediately loses current state and merge authority.
 - [x] Reinvitation requires a new acceptance interval.
-- [ ] A safe ordinary add, accept, remove, and leave changes exactly one
+- [x] A safe ordinary add, accept, remove, and leave changes exactly one
       intended relationship.
-- [ ] Every unsupported graph, identity, history, or state case refuses before
+- [x] Every unsupported graph, identity, history, or state case refuses before
       signing or publication.
-- [ ] A concurrent announcement or state replacement aborts the mutation.
+- [x] A concurrent announcement or state replacement aborts the mutation.
 
 ## Wave 5 — Edge-case workflows
 

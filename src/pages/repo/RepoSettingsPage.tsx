@@ -15,8 +15,8 @@
  *
  * The repository stays on its canonical route while the form resolves an
  * account-rooted view for the signed-in maintainer's own announcement.
- * Membership changes are intentionally read-only until the role-aware
- * mutation preflight is implemented.
+ * Membership changes are one-at-a-time relationship intents guarded by the
+ * role-aware mutation preflight; the old complete-roster editor never renders.
  */
 
 import {
