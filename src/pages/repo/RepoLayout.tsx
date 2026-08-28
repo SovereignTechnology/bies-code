@@ -24,6 +24,8 @@ import { useRepoReleaseSummary } from "@/hooks/useSoftwareReleases";
 import { usePrefetchNip05 } from "@/hooks/usePrefetchNip05";
 import { useDnsIdentity } from "@/hooks/useDnsIdentity";
 import { useRepositoryState } from "@/hooks/useRepositoryState";
+import { useRepositoryMembershipMutation } from "@/hooks/useRepositoryMembershipMutation";
+import type { RepositoryState } from "@/casts/RepositoryState";
 import { use$ } from "@/hooks/use$";
 import { useProfile } from "@/hooks/useProfile";
 import { useLoadProfile } from "@/hooks/useLoadProfile";
@@ -591,6 +593,7 @@ function RepoLayoutResolved({
           cloneUrls,
           repoState,
           repoRelayEose,
+          announcementsSettled,
           relayStateMap,
           treeRefAndPath,
           commitId,
@@ -818,6 +821,17 @@ function RepoLayoutResolved({
           <MaintainerInvitationSafetyBanner
             repo={repo}
             accountPubkey={account.pubkey}
+            announcementsSettled={announcementsSettled}
+            stateSettled={repoRelayEose}
+            repoState={repoState}
+            relayUrls={[
+              ...new Set([
+                ...repoRelayUrls,
+                ...(extraRelaysForMaintainerMailboxCoverage?.relays.map(
+                  ({ url }) => url,
+                ) ?? []),
+              ]),
+            ]}
           />
         )}
 
@@ -912,10 +926,26 @@ function RepoLayoutResolved({
 function MaintainerInvitationSafetyBanner({
   repo,
   accountPubkey,
+  announcementsSettled,
+  stateSettled,
+  relayUrls,
+  repoState,
 }: {
   repo: ResolvedRepo;
   accountPubkey: string;
+  announcementsSettled: boolean;
+  stateSettled: boolean;
+  relayUrls: string[];
+  repoState?: RepositoryState | null;
 }) {
+  const { mutate, pendingIntent, failure } = useRepositoryMembershipMutation({
+    repo,
+    announcementsSettled,
+    stateSettled,
+    relayUrls,
+    repoState,
+  });
+  const [accepted, setAccepted] = useState(false);
   if (!repo.invitedMaintainers.includes(accountPubkey)) return null;
 
   const inviters = Array.from(
@@ -953,14 +983,34 @@ function MaintainerInvitationSafetyBanner({
               )}
             </div>
           </div>
-          <div className="max-w-md rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-sm">
-            <p className="font-medium text-amber-700 dark:text-amber-300">
-              Acceptance is temporarily unavailable here
-            </p>
-            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-              GitWorkshop will enable this after its role-aware safety checks
-              land. For now, accept with a compatible ngit v3 client.
-            </p>
+          <div className="max-w-md space-y-2">
+            <Button
+              type="button"
+              disabled={
+                !!pendingIntent ||
+                accepted ||
+                !announcementsSettled ||
+                !stateSettled
+              }
+              onClick={() => {
+                void mutate({ type: "accept" })
+                  .then(() => setAccepted(true))
+                  .catch(() => undefined);
+              }}
+            >
+              {pendingIntent?.type === "accept" && (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              )}
+              {accepted ? "Acceptance published" : "Accept invitation"}
+            </Button>
+            {failure && (
+              <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+                <span className="font-mono text-amber-700 dark:text-amber-300">
+                  {failure.code}
+                </span>{" "}
+                {failure.message}
+              </div>
+            )}
           </div>
         </div>
       </div>

@@ -12,6 +12,10 @@ import {
   isHistoricalRepositoryMember,
   repositoryRoleStateAt,
 } from "@/lib/nip34-maintainer-model";
+import {
+  prepareRepositoryMembershipMutation,
+  RepositoryMembershipMutationRefusal,
+} from "@/lib/repositoryMembershipMutation";
 
 const owner = "a".repeat(64);
 const invitee = "b".repeat(64);
@@ -89,9 +93,7 @@ describe("reciprocal maintainer authorization", () => {
     );
 
     expect(resolved?.confirmedMaintainers).toEqual([owner]);
-    expect(new Set(resolved?.invitedMaintainers)).toEqual(
-      new Set([invitee, recursiveInvitee]),
-    );
+    expect(resolved?.invitedMaintainers).toEqual([invitee]);
   });
 
   it("uses indexed M/m roles instead of a contradictory legacy projection", () => {
@@ -587,5 +589,103 @@ describe("replicated role history and exits", () => {
     );
 
     expect(resolved?.coordinateStatus).toBe("unsupported_restart");
+  });
+});
+
+describe("conservative repository membership mutations", () => {
+  it("preflights add, accept, remove, and leave as one-person effects", () => {
+    const sole = resolveChain([announcement(owner, [])], owner, repoId)!;
+    const add = prepareRepositoryMembershipMutation({
+      repo: sole,
+      actorPubkey: owner,
+      intent: { type: "add", targetPubkey: invitee },
+      announcements: sole.historicalAnnouncements,
+      stateEvents: [],
+      createdAt: 10,
+    });
+    const ownerInvitation = announcement(
+      owner,
+      add.template.tags,
+      11,
+      "1".repeat(64),
+    );
+    const invited = resolveChain([ownerInvitation], owner, repoId)!;
+    expect(invited.invitedMaintainers).toEqual([invitee]);
+
+    const accept = prepareRepositoryMembershipMutation({
+      repo: invited,
+      actorPubkey: invitee,
+      intent: { type: "accept" },
+      announcements: [ownerInvitation],
+      stateEvents: [],
+      createdAt: 20,
+    });
+    const inviteeAcceptance = announcement(
+      invitee,
+      accept.template.tags,
+      20,
+      "2".repeat(64),
+    );
+    const accepted = resolveChain(
+      [ownerInvitation, inviteeAcceptance],
+      owner,
+      repoId,
+    )!;
+    expect(new Set(accepted.confirmedMaintainers)).toEqual(
+      new Set([owner, invitee]),
+    );
+
+    const remove = prepareRepositoryMembershipMutation({
+      repo: accepted,
+      actorPubkey: owner,
+      intent: { type: "remove", targetPubkey: invitee },
+      announcements: [ownerInvitation, inviteeAcceptance],
+      stateEvents: [],
+      createdAt: 30,
+    });
+    expect(remove.expectedMaintainers).toEqual([owner]);
+
+    const inviteeRooted = resolveChain(
+      [ownerInvitation, inviteeAcceptance],
+      invitee,
+      repoId,
+    )!;
+    const leave = prepareRepositoryMembershipMutation({
+      repo: inviteeRooted,
+      actorPubkey: invitee,
+      intent: { type: "leave" },
+      announcements: [ownerInvitation, inviteeAcceptance],
+      stateEvents: [],
+      createdAt: 30,
+    });
+    expect(leave.expectedMaintainers).toEqual([owner]);
+  });
+
+  it("refuses acceptance when the invitee already has repository state", () => {
+    const ownerInvitation = announcement(owner, [
+      ["M", owner, "10"],
+      ["m", invitee, "10"],
+      ["maintainers", owner, invitee],
+    ]);
+    const invited = resolveChain([ownerInvitation], owner, repoId)!;
+    const inviteeState: NostrEvent = {
+      ...announcement(invitee, [], 15, "3".repeat(64)),
+      kind: 30618,
+    };
+
+    expect(() =>
+      prepareRepositoryMembershipMutation({
+        repo: invited,
+        actorPubkey: invitee,
+        intent: { type: "accept" },
+        announcements: [ownerInvitation],
+        stateEvents: [inviteeState],
+        createdAt: 20,
+      }),
+    ).toThrowError(
+      expect.objectContaining<Partial<RepositoryMembershipMutationRefusal>>({
+        code: "state_conflict",
+      }),
+    );
   });
 });

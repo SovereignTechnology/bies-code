@@ -804,17 +804,19 @@ export function resolveRepositoryMembershipFromLatest(
     confirmedMaintainers,
     confirmedModerators,
     confirmedMembers,
-    invitedMaintainers: maintainerCandidates.filter(
-      (pubkey) =>
-        !confirmedMaintainerSet.has(pubkey) &&
-        (!declinedMaintainers.has(pubkey) ||
-          maintainerEdges.some(
-            (edge) =>
-              edge.to === pubkey &&
-              edge.requiresFreshAcceptance &&
-              confirmedMaintainerSet.has(edge.from),
-          )),
-    ),
+    invitedMaintainers: maintainerCandidates.filter((pubkey) => {
+      if (confirmedMaintainerSet.has(pubkey)) return false;
+      const incomingAssignments = maintainerEdges.filter(
+        (edge) => edge.to === pubkey && confirmedMaintainerSet.has(edge.from),
+      );
+      if (incomingAssignments.length === 0) return false;
+      return (
+        !declinedMaintainers.has(pubkey) ||
+        incomingAssignments.some(({ requiresFreshAcceptance }) =>
+          Boolean(requiresFreshAcceptance),
+        )
+      );
+    }),
     invitedModerators: assignedModerators.filter(
       (pubkey) =>
         !confirmedModerators.includes(pubkey) &&

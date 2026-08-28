@@ -38,6 +38,8 @@ export interface RepoContextValue {
    * is still in flight. Always true when there is no repo relay group.
    */
   repoRelayEose: boolean;
+  /** True after every current and retained-history announcement has settled. */
+  announcementsSettled: boolean;
   /**
    * Per-relay state registry: the best kind:30618 state event seen from each
    * relay URL. Derived reactively from the EventStore. Callers can use this

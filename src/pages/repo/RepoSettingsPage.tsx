@@ -118,6 +118,7 @@ import {
   type PendingNip05Upstream,
 } from "@/lib/repoUpstreamInput";
 import { useResolvedUpstreamNip05 } from "@/hooks/useResolvedUpstreamNip05";
+import { useRepositoryMembershipMutation } from "@/hooks/useRepositoryMembershipMutation";
 
 // ---------------------------------------------------------------------------
 // Known tag names — tags that the settings form explicitly manages.
@@ -250,7 +251,8 @@ function LeadBadge() {
 // ---------------------------------------------------------------------------
 
 export default function RepoSettingsPage() {
-  const { resolved, repoState, basePath } = useRepoContext();
+  const { resolved, repoState, basePath, announcementsSettled, repoRelayEose } =
+    useRepoContext();
   const account = useActiveAccount();
   const repo = resolved?.repo;
 
@@ -307,6 +309,16 @@ export default function RepoSettingsPage() {
       repo={editableRepo}
       basePath={basePath}
       repoState={repoState}
+      announcementsSettled={announcementsSettled}
+      stateSettled={repoRelayEose}
+      relayUrls={[
+        ...new Set([
+          ...(resolved.repoRelayGroup?.relays.map(({ url }) => url) ?? []),
+          ...(resolved.extraRelaysForMaintainerMailboxCoverage?.relays.map(
+            ({ url }) => url,
+          ) ?? []),
+        ]),
+      ]}
     />
   );
 }
@@ -319,6 +331,9 @@ interface RepoSettingsFormProps {
   repo: ResolvedRepo;
   basePath: string;
   repoState?: RepositoryState | null;
+  announcementsSettled: boolean;
+  stateSettled: boolean;
+  relayUrls: string[];
   title?: string;
 }
 
@@ -326,10 +341,26 @@ function RepoSettingsForm({
   repo,
   basePath,
   repoState,
+  announcementsSettled,
+  stateSettled,
+  relayUrls,
   title = "Repository settings",
 }: RepoSettingsFormProps) {
   const account = useActiveAccount();
   const navigate = useNavigate();
+  const membershipMutation = useRepositoryMembershipMutation({
+    repo,
+    announcementsSettled,
+    stateSettled,
+    relayUrls,
+    repoState,
+  });
+  const [membershipTargetInput, setMembershipTargetInput] = useState("");
+  const [membershipTargetError, setMembershipTargetError] = useState<string>();
+  const [membershipSuccess, setMembershipSuccess] = useState<string>();
+  // Kept in source for migration archaeology; the complete-roster editor must
+  // never render now that membership writes are relationship intents.
+  const showLegacyRosterEditor = false;
 
   // Find the selected maintainer's own announcement
   const selectedAnnouncement = useMemo(
@@ -1047,6 +1078,45 @@ function RepoSettingsForm({
     ],
   );
 
+  const runMembershipIntent = useCallback(
+    async (
+      intent:
+        | { type: "add"; targetPubkey: string }
+        | { type: "remove"; targetPubkey: string }
+        | { type: "leave" },
+    ) => {
+      setMembershipTargetError(undefined);
+      setMembershipSuccess(undefined);
+      try {
+        await membershipMutation.mutate(intent);
+        setMembershipSuccess(
+          intent.type === "add"
+            ? `Invitation published for ${nip19.npubEncode(intent.targetPubkey)}`
+            : intent.type === "remove"
+              ? `Relationship removed for ${nip19.npubEncode(intent.targetPubkey)}`
+              : "Leave announcement published",
+        );
+        if (intent.type === "add") setMembershipTargetInput("");
+      } catch {
+        // The mutation hook exposes a stable refusal category and explanation.
+      }
+    },
+    [membershipMutation],
+  );
+
+  const handleSafeAddMaintainer = useCallback(() => {
+    const targetPubkey = decodePubkeyIdentifier(membershipTargetInput.trim());
+    if (!targetPubkey) {
+      setMembershipTargetError("Enter a valid hex pubkey or npub");
+      return;
+    }
+    if (targetPubkey === repo.selectedMaintainer) {
+      setMembershipTargetError("You cannot invite yourself");
+      return;
+    }
+    void runMembershipIntent({ type: "add", targetPubkey });
+  }, [membershipTargetInput, repo.selectedMaintainer, runMembershipIntent]);
+
   // ---------------------------------------------------------------------------
   // Save
   // ---------------------------------------------------------------------------
@@ -1519,18 +1589,166 @@ function RepoSettingsForm({
               ) : null}
             </div>
 
-            <Alert className="border-amber-500/40 bg-amber-500/5">
-              <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400" />
-              <AlertTitle>
-                Membership editing is temporarily unavailable
-              </AlertTitle>
+            <Alert className="border-sky-500/40 bg-sky-500/5">
+              <Users className="h-4 w-4 text-sky-600 dark:text-sky-400" />
+              <AlertTitle>One relationship at a time</AlertTitle>
               <AlertDescription className="text-muted-foreground">
-                Metadata edits preserve every existing role, history, and
-                compatibility tag exactly. Use a compatible ngit v3 client for
-                maintainer changes until GitWorkshop adds the same guarded
-                preflight.
+                Each operation refreshes the affected announcements and state,
+                simulates the exact graph effect, rechecks predecessors before
+                signing, and verifies the observed replacement. Unsupported
+                topology, history, identity, and state cases publish nothing.
               </AlertDescription>
             </Alert>
+
+            <div className="space-y-4 rounded-lg border border-border/60 bg-muted/10 p-4">
+              {leadMaintainer === repo.selectedMaintainer ? (
+                <div className="space-y-2">
+                  <Label htmlFor="membership-target">
+                    Invite one maintainer
+                  </Label>
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <Input
+                      id="membership-target"
+                      value={membershipTargetInput}
+                      onChange={(event) => {
+                        setMembershipTargetInput(event.target.value);
+                        setMembershipTargetError(undefined);
+                        membershipMutation.clearFailure();
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          handleSafeAddMaintainer();
+                        }
+                      }}
+                      placeholder="npub1… or hex pubkey"
+                      className="font-mono"
+                      disabled={!!membershipMutation.pendingIntent}
+                    />
+                    <Button
+                      type="button"
+                      onClick={handleSafeAddMaintainer}
+                      disabled={
+                        !!membershipMutation.pendingIntent ||
+                        !announcementsSettled ||
+                        !stateSettled
+                      }
+                    >
+                      {membershipMutation.pendingIntent?.type === "add" ? (
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      ) : (
+                        <Plus className="mr-2 h-4 w-4" />
+                      )}
+                      Invite
+                    </Button>
+                  </div>
+                  {membershipTargetError && (
+                    <p className="text-xs text-destructive">
+                      {membershipTargetError}
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  Roster changes are routed through the resolved lead. You can
+                  leave this repository below; lead transfer and leadless
+                  changes remain unsupported in the browser.
+                </p>
+              )}
+
+              {leadMaintainer === repo.selectedMaintainer &&
+                repo.maintainerEdges.some(
+                  ({ from }) => from === repo.selectedMaintainer,
+                ) && (
+                  <div className="space-y-2 border-t border-border/50 pt-3">
+                    <Label>Remove one direct relationship</Label>
+                    {repo.maintainerEdges
+                      .filter(
+                        ({ from, to }) =>
+                          from === repo.selectedMaintainer &&
+                          to !== repo.selectedMaintainer,
+                      )
+                      .map(({ to }) => (
+                        <div
+                          key={to}
+                          className="flex items-center gap-2 rounded-md border border-border/50 bg-background/60 px-3 py-2"
+                        >
+                          <UserLink
+                            pubkey={to}
+                            avatarSize="xs"
+                            nameClassName="text-sm"
+                            className="min-w-0 flex-1"
+                          />
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            disabled={!!membershipMutation.pendingIntent}
+                            onClick={() =>
+                              void runMembershipIntent({
+                                type: "remove",
+                                targetPubkey: to,
+                              })
+                            }
+                          >
+                            {membershipMutation.pendingIntent?.type ===
+                              "remove" &&
+                            membershipMutation.pendingIntent.targetPubkey ===
+                              to ? (
+                              <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <X className="mr-2 h-3.5 w-3.5" />
+                            )}
+                            Remove
+                          </Button>
+                        </div>
+                      ))}
+                  </div>
+                )}
+
+              {leadMaintainer && leadMaintainer !== repo.selectedMaintainer && (
+                <div className="flex flex-col gap-3 border-t border-border/50 pt-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <Label>Leave repository</Label>
+                    <p className="text-xs text-muted-foreground">
+                      End your self-role while retaining the signed redirect to
+                      the lead.
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={!!membershipMutation.pendingIntent}
+                    onClick={() => void runMembershipIntent({ type: "leave" })}
+                  >
+                    {membershipMutation.pendingIntent?.type === "leave" && (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    )}
+                    Leave repository
+                  </Button>
+                </div>
+              )}
+
+              {membershipSuccess && (
+                <p
+                  role="status"
+                  className="rounded-md border border-emerald-500/30 bg-emerald-500/5 px-3 py-2 text-xs text-emerald-700 dark:text-emerald-300"
+                >
+                  {membershipSuccess}
+                </p>
+              )}
+              {membershipMutation.failure && (
+                <div
+                  role="alert"
+                  className="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs leading-relaxed text-muted-foreground"
+                >
+                  <span className="font-mono text-amber-700 dark:text-amber-300">
+                    {membershipMutation.failure.code}
+                  </span>{" "}
+                  {membershipMutation.failure.message}
+                </div>
+              )}
+            </div>
 
             <div className="rounded-lg border border-border/60 bg-muted/10 p-3 space-y-3">
               <div>
@@ -1660,330 +1878,345 @@ function RepoSettingsForm({
               )}
             </div>
 
-            {showMaintainerCoordination ? (
-              <div className="space-y-3">
-                <div>
-                  <Label className="flex items-center gap-1.5">
-                    <Crown className="h-3.5 w-3.5 text-pink-500" />
-                    Maintainer coordination
-                  </Label>
-                  <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
-                    With more than two maintainers, choose one person to
-                    coordinate or explicitly keep responsibility shared. This
-                    updates your maintainer list; it does not grant extra
-                    permissions.
-                  </p>
-                </div>
+            {showLegacyRosterEditor && (
+              <>
+                {showMaintainerCoordination ? (
+                  <div className="space-y-3">
+                    <div>
+                      <Label className="flex items-center gap-1.5">
+                        <Crown className="h-3.5 w-3.5 text-pink-500" />
+                        Maintainer coordination
+                      </Label>
+                      <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                        With more than two maintainers, choose one person to
+                        coordinate or explicitly keep responsibility shared.
+                        This updates your maintainer list; it does not grant
+                        extra permissions.
+                      </p>
+                    </div>
 
-                <RadioGroup
-                  value={selectedLead}
-                  onValueChange={handleSelectLead}
-                  disabled
-                  className="grid gap-2 sm:grid-cols-2"
-                  aria-label="Maintainer coordination preference"
-                >
-                  {orderedCoordinationCandidatePubkeys.map((pubkey, index) => {
-                    const selected = selectedLead === pubkey;
-                    const listedByCount =
-                      coordinationCandidateListers.get(pubkey)?.length ?? 0;
+                    <RadioGroup
+                      value={selectedLead}
+                      onValueChange={handleSelectLead}
+                      disabled
+                      className="grid gap-2 sm:grid-cols-2"
+                      aria-label="Maintainer coordination preference"
+                    >
+                      {orderedCoordinationCandidatePubkeys.map(
+                        (pubkey, index) => {
+                          const selected = selectedLead === pubkey;
+                          const listedByCount =
+                            coordinationCandidateListers.get(pubkey)?.length ??
+                            0;
 
-                    return (
-                      <div key={pubkey} className="contents">
-                        <label
-                          className={cn(
-                            "flex cursor-pointer items-center gap-2 rounded-md border px-2.5 py-2 transition-colors",
-                            "focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2",
-                            selected
-                              ? "border-pink-500/50 bg-pink-500/5"
-                              : "border-border/60 hover:bg-muted/30",
-                          )}
-                        >
-                          <RadioGroupItem
-                            value={pubkey}
-                            aria-label={`Choose ${pubkey} as lead`}
-                          />
-                          <UserAvatar pubkey={pubkey} size="xs" noHoverCard />
-                          <UserName
-                            pubkey={pubkey}
-                            className="min-w-0 flex-1 truncate text-xs"
-                            noHoverCard
-                          />
-                          {pubkey === repo.selectedMaintainer ? (
-                            <Badge
-                              variant="outline"
-                              className="h-5 shrink-0 px-1.5 text-[10px]"
-                            >
-                              you
-                            </Badge>
-                          ) : (
-                            <span className="shrink-0 text-[10px] text-muted-foreground">
-                              {listedByCount} listing
-                              {listedByCount === 1 ? "" : "s"}
-                            </span>
-                          )}
-                        </label>
+                          return (
+                            <div key={pubkey} className="contents">
+                              <label
+                                className={cn(
+                                  "flex cursor-pointer items-center gap-2 rounded-md border px-2.5 py-2 transition-colors",
+                                  "focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2",
+                                  selected
+                                    ? "border-pink-500/50 bg-pink-500/5"
+                                    : "border-border/60 hover:bg-muted/30",
+                                )}
+                              >
+                                <RadioGroupItem
+                                  value={pubkey}
+                                  aria-label={`Choose ${pubkey} as lead`}
+                                />
+                                <UserAvatar
+                                  pubkey={pubkey}
+                                  size="xs"
+                                  noHoverCard
+                                />
+                                <UserName
+                                  pubkey={pubkey}
+                                  className="min-w-0 flex-1 truncate text-xs"
+                                  noHoverCard
+                                />
+                                {pubkey === repo.selectedMaintainer ? (
+                                  <Badge
+                                    variant="outline"
+                                    className="h-5 shrink-0 px-1.5 text-[10px]"
+                                  >
+                                    you
+                                  </Badge>
+                                ) : (
+                                  <span className="shrink-0 text-[10px] text-muted-foreground">
+                                    {listedByCount} listing
+                                    {listedByCount === 1 ? "" : "s"}
+                                  </span>
+                                )}
+                              </label>
 
-                        {index === 0 ? (
-                          <label
-                            className={cn(
-                              "flex cursor-pointer items-center gap-2 rounded-md border px-2.5 py-2 transition-colors",
-                              "focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2",
-                              selectedLead === NO_LEAD
-                                ? "border-pink-500/50 bg-pink-500/5"
-                                : "border-border/60 hover:bg-muted/30",
-                            )}
-                          >
-                            <RadioGroupItem
-                              value={NO_LEAD}
-                              aria-label="Choose no lead"
-                            />
-                            <Network className="h-4 w-4 shrink-0 text-sky-600 dark:text-sky-400" />
-                            <div className="min-w-0">
-                              <p className="text-xs font-medium">No lead</p>
-                              <p className="text-[11px] text-muted-foreground">
-                                List everyone you recognize
-                              </p>
+                              {index === 0 ? (
+                                <label
+                                  className={cn(
+                                    "flex cursor-pointer items-center gap-2 rounded-md border px-2.5 py-2 transition-colors",
+                                    "focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2",
+                                    selectedLead === NO_LEAD
+                                      ? "border-pink-500/50 bg-pink-500/5"
+                                      : "border-border/60 hover:bg-muted/30",
+                                  )}
+                                >
+                                  <RadioGroupItem
+                                    value={NO_LEAD}
+                                    aria-label="Choose no lead"
+                                  />
+                                  <Network className="h-4 w-4 shrink-0 text-sky-600 dark:text-sky-400" />
+                                  <div className="min-w-0">
+                                    <p className="text-xs font-medium">
+                                      No lead
+                                    </p>
+                                    <p className="text-[11px] text-muted-foreground">
+                                      List everyone you recognize
+                                    </p>
+                                  </div>
+                                </label>
+                              ) : null}
                             </div>
-                          </label>
-                        ) : null}
+                          );
+                        },
+                      )}
+                    </RadioGroup>
+
+                    {selectedLead === NO_LEAD ? (
+                      <p className="rounded-md bg-muted/40 px-2.5 py-2 text-xs leading-relaxed text-muted-foreground">
+                        Everyone lists the maintainers they recognize. Removing
+                        someone requires the maintainers you still recognize to
+                        remove them too.
+                      </p>
+                    ) : selectedLead === repo.selectedMaintainer ? (
+                      <p className="rounded-md bg-muted/40 px-2.5 py-2 text-xs leading-relaxed text-muted-foreground">
+                        As lead, your announcement lists every maintainer. The
+                        others must list you back before the shared graph
+                        recognizes you as lead.
+                      </p>
+                    ) : (
+                      <p className="rounded-md bg-muted/40 px-2.5 py-2 text-xs leading-relaxed text-muted-foreground">
+                        Your announcement will keep{" "}
+                        <UserName
+                          pubkey={selectedLead}
+                          className="text-xs text-foreground"
+                          linkToProfile
+                        />{" "}
+                        as its direct maintainer link.
+                      </p>
+                    )}
+                  </div>
+                ) : null}
+
+                {!showMaintainerCoordination ||
+                selectedLead === NO_LEAD ||
+                selectedLead === repo.selectedMaintainer ? (
+                  <div className="space-y-2">
+                    <div>
+                      <Label>
+                        {isMultiMaintainer || showMaintainerCoordination
+                          ? "Co-maintainers you have listed"
+                          : "Add co-maintainers"}
+                      </Label>
+                      {isMultiMaintainer || showMaintainerCoordination ? (
+                        <p className="mt-0.5 text-xs text-muted-foreground">
+                          These people are written to your repository
+                          announcement. Your own pubkey is the event signer.
+                        </p>
+                      ) : null}
+                    </div>
+
+                    {editedMaintainers.length > 0 ? (
+                      <div className="space-y-1.5">
+                        {editedMaintainers.map((pubkey) => (
+                          <div
+                            key={pubkey}
+                            className="flex items-center gap-2 rounded-md border border-border/60 bg-muted/20 px-3 py-1.5"
+                          >
+                            <UserLink
+                              pubkey={pubkey}
+                              avatarSize="xs"
+                              nameClassName="text-sm"
+                              className="min-w-0 flex-1"
+                            />
+                            <button
+                              type="button"
+                              disabled
+                              onClick={() => handleRemoveMaintainer(pubkey)}
+                              className="shrink-0 cursor-not-allowed text-muted-foreground opacity-50"
+                              aria-label={`Remove maintainer ${pubkey}`}
+                            >
+                              <X className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        ))}
                       </div>
-                    );
-                  })}
-                </RadioGroup>
+                    ) : (
+                      <div className="rounded-md border border-dashed border-border/70 bg-muted/10 px-3 py-3 text-xs text-muted-foreground">
+                        You have not listed any co-maintainers.
+                      </div>
+                    )}
 
-                {selectedLead === NO_LEAD ? (
-                  <p className="rounded-md bg-muted/40 px-2.5 py-2 text-xs leading-relaxed text-muted-foreground">
-                    Everyone lists the maintainers they recognize. Removing
-                    someone requires the maintainers you still recognize to
-                    remove them too.
-                  </p>
-                ) : selectedLead === repo.selectedMaintainer ? (
-                  <p className="rounded-md bg-muted/40 px-2.5 py-2 text-xs leading-relaxed text-muted-foreground">
-                    As lead, your announcement lists every maintainer. The
-                    others must list you back before the shared graph recognizes
-                    you as lead.
-                  </p>
-                ) : (
-                  <p className="rounded-md bg-muted/40 px-2.5 py-2 text-xs leading-relaxed text-muted-foreground">
-                    Your announcement will keep{" "}
-                    <UserName
-                      pubkey={selectedLead}
-                      className="text-xs text-foreground"
-                      linkToProfile
-                    />{" "}
-                    as its direct maintainer link.
-                  </p>
-                )}
-              </div>
-            ) : null}
-
-            {!showMaintainerCoordination ||
-            selectedLead === NO_LEAD ||
-            selectedLead === repo.selectedMaintainer ? (
-              <div className="space-y-2">
-                <div>
-                  <Label>
-                    {isMultiMaintainer || showMaintainerCoordination
-                      ? "Co-maintainers you have listed"
-                      : "Add co-maintainers"}
-                  </Label>
-                  {isMultiMaintainer || showMaintainerCoordination ? (
-                    <p className="mt-0.5 text-xs text-muted-foreground">
-                      These people are written to your repository announcement.
-                      Your own pubkey is the event signer.
-                    </p>
-                  ) : null}
-                </div>
-
-                {editedMaintainers.length > 0 ? (
-                  <div className="space-y-1.5">
-                    {editedMaintainers.map((pubkey) => (
-                      <div
-                        key={pubkey}
-                        className="flex items-center gap-2 rounded-md border border-border/60 bg-muted/20 px-3 py-1.5"
-                      >
-                        <UserLink
-                          pubkey={pubkey}
-                          avatarSize="xs"
-                          nameClassName="text-sm"
-                          className="min-w-0 flex-1"
+                    <div className="space-y-1.5">
+                      <div className="flex gap-2">
+                        <MaintainerUserInput
+                          disabled
+                          placeholder="Name, npub1…, or hex pubkey"
+                          value={maintainerInput}
+                          onValueChange={(value) => {
+                            setMaintainerInput(value);
+                            setMaintainerInputError(undefined);
+                          }}
+                          onAdd={handleAddMaintainer}
+                          onSelectPubkey={addMaintainerPubkey}
+                          priorityPubkeys={maintainerPickerPriorityPubkeys}
+                          excludePubkeys={maintainerPickerExcludePubkeys}
+                          className="h-8 text-sm font-mono"
                         />
-                        <button
+                        <Button
                           type="button"
                           disabled
-                          onClick={() => handleRemoveMaintainer(pubkey)}
-                          className="shrink-0 cursor-not-allowed text-muted-foreground opacity-50"
-                          aria-label={`Remove maintainer ${pubkey}`}
+                          variant="outline"
+                          size="sm"
+                          onClick={handleAddMaintainer}
+                          className="h-8 shrink-0 px-2.5"
                         >
-                          <X className="h-3.5 w-3.5" />
-                        </button>
+                          <Plus className="h-3.5 w-3.5" />
+                        </Button>
                       </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="rounded-md border border-dashed border-border/70 bg-muted/10 px-3 py-3 text-xs text-muted-foreground">
-                    You have not listed any co-maintainers.
-                  </div>
-                )}
-
-                <div className="space-y-1.5">
-                  <div className="flex gap-2">
-                    <MaintainerUserInput
-                      disabled
-                      placeholder="Name, npub1…, or hex pubkey"
-                      value={maintainerInput}
-                      onValueChange={(value) => {
-                        setMaintainerInput(value);
-                        setMaintainerInputError(undefined);
-                      }}
-                      onAdd={handleAddMaintainer}
-                      onSelectPubkey={addMaintainerPubkey}
-                      priorityPubkeys={maintainerPickerPriorityPubkeys}
-                      excludePubkeys={maintainerPickerExcludePubkeys}
-                      className="h-8 text-sm font-mono"
-                    />
-                    <Button
-                      type="button"
-                      disabled
-                      variant="outline"
-                      size="sm"
-                      onClick={handleAddMaintainer}
-                      className="h-8 shrink-0 px-2.5"
-                    >
-                      <Plus className="h-3.5 w-3.5" />
-                    </Button>
-                  </div>
-                  {maintainerInputError && (
-                    <p className="px-0.5 text-xs text-red-500">
-                      {maintainerInputError}
-                    </p>
-                  )}
-                </div>
-              </div>
-            ) : null}
-
-            {showMaintainerCoordination &&
-            selectedLead === repo.selectedMaintainer &&
-            coMaintainersListedByOthers.length > 0 ? (
-              <div className="space-y-2">
-                <div>
-                  <Label>Co-maintainers listed by others</Label>
-                  <p className="mt-0.5 text-xs text-muted-foreground">
-                    These people are also listed by co-maintainers you
-                    recognize.
-                  </p>
-                </div>
-
-                <Alert className="border-amber-500/50 bg-amber-500/5">
-                  <CircleAlert className="h-4 w-4 text-amber-600 dark:text-amber-400" />
-                  <AlertTitle>
-                    Removing them from your list is not enough
-                  </AlertTitle>
-                  <AlertDescription className="text-muted-foreground">
-                    To fully remove one of these maintainers, the other
-                    maintainers who list them must remove them too.
-                  </AlertDescription>
-                </Alert>
-
-                <div className="space-y-1.5">
-                  {coMaintainersListedByOthers.map(
-                    ({ pubkey, listerPubkeys }) => (
-                      <div
-                        key={pubkey}
-                        className="rounded-md border border-border/60 bg-background/60 px-2.5 py-2"
-                      >
-                        <UserLink
-                          pubkey={pubkey}
-                          avatarSize="xs"
-                          nameClassName="text-sm"
-                        />
-                        <p className="ml-6 mt-1 text-xs leading-relaxed text-muted-foreground">
-                          Ask <MaintainerNameList pubkeys={listerPubkeys} /> to
-                          remove{" "}
-                          <UserName
-                            pubkey={pubkey}
-                            className="text-xs text-foreground"
-                            linkToProfile
-                          />{" "}
-                          from{" "}
-                          {listerPubkeys.length === 1
-                            ? "their repository announcement"
-                            : "each of their repository announcements"}{" "}
-                          too.
+                      {maintainerInputError && (
+                        <p className="px-0.5 text-xs text-red-500">
+                          {maintainerInputError}
                         </p>
-                      </div>
-                    ),
-                  )}
-                </div>
-              </div>
-            ) : null}
+                      )}
+                    </div>
+                  </div>
+                ) : null}
 
-            {temporarilyRemovedMaintainers.length > 0 ? (
-              <Alert className="border-amber-500/50 bg-amber-500/5">
-                <CircleAlert className="h-4 w-4 text-amber-600 dark:text-amber-400" />
-                <AlertTitle>
-                  This can temporarily remove{" "}
-                  <MaintainerNameList pubkeys={temporarilyRemovedMaintainers} />
-                </AlertTitle>
-                <AlertDescription className="text-muted-foreground">
-                  {selectedLead !== repo.selectedMaintainer ? (
-                    <>
-                      Consider asking{" "}
-                      <MaintainerNameList pubkeys={[selectedLead]} /> to add{" "}
-                      <MaintainerNameList
-                        pubkeys={temporarilyRemovedMaintainers}
-                      />{" "}
-                      first. Otherwise saving will, at least temporarily, remove
-                      them from this maintainer chain.
-                    </>
-                  ) : (
-                    <>
-                      Restore{" "}
-                      <MaintainerNameList
-                        pubkeys={temporarilyRemovedMaintainers}
-                      />{" "}
-                      unless you intend to remove them from your lead
-                      announcement.
-                    </>
-                  )}
-                </AlertDescription>
-              </Alert>
-            ) : null}
-
-            {showMaintainerCoordination &&
-            selectedLead === NO_LEAD &&
-            stillRecognizedMaintainers.length > 0 ? (
-              <Alert className="border-sky-500/40 bg-sky-500/5">
-                <Network className="h-4 w-4 text-sky-600 dark:text-sky-400" />
-                <AlertTitle>Your change alone is not enough</AlertTitle>
-                <AlertDescription className="space-y-2 text-muted-foreground">
-                  {stillRecognizedMaintainers.map(
-                    ({ pubkey, listerPubkeys }) => (
-                      <p key={pubkey}>
-                        <UserName
-                          pubkey={pubkey}
-                          className="text-sm text-foreground"
-                          linkToProfile
-                        />{" "}
-                        is still listed by{" "}
-                        <MaintainerNameList pubkeys={listerPubkeys} />, whom you
-                        continue to recognize. Ask{" "}
-                        {listerPubkeys.length === 1
-                          ? "them"
-                          : "those maintainers"}{" "}
-                        to remove{" "}
-                        <UserName
-                          pubkey={pubkey}
-                          className="text-sm text-foreground"
-                          linkToProfile
-                        />{" "}
-                        too.
+                {showMaintainerCoordination &&
+                selectedLead === repo.selectedMaintainer &&
+                coMaintainersListedByOthers.length > 0 ? (
+                  <div className="space-y-2">
+                    <div>
+                      <Label>Co-maintainers listed by others</Label>
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        These people are also listed by co-maintainers you
+                        recognize.
                       </p>
-                    ),
-                  )}
-                </AlertDescription>
-              </Alert>
-            ) : null}
+                    </div>
+
+                    <Alert className="border-amber-500/50 bg-amber-500/5">
+                      <CircleAlert className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+                      <AlertTitle>
+                        Removing them from your list is not enough
+                      </AlertTitle>
+                      <AlertDescription className="text-muted-foreground">
+                        To fully remove one of these maintainers, the other
+                        maintainers who list them must remove them too.
+                      </AlertDescription>
+                    </Alert>
+
+                    <div className="space-y-1.5">
+                      {coMaintainersListedByOthers.map(
+                        ({ pubkey, listerPubkeys }) => (
+                          <div
+                            key={pubkey}
+                            className="rounded-md border border-border/60 bg-background/60 px-2.5 py-2"
+                          >
+                            <UserLink
+                              pubkey={pubkey}
+                              avatarSize="xs"
+                              nameClassName="text-sm"
+                            />
+                            <p className="ml-6 mt-1 text-xs leading-relaxed text-muted-foreground">
+                              Ask <MaintainerNameList pubkeys={listerPubkeys} />{" "}
+                              to remove{" "}
+                              <UserName
+                                pubkey={pubkey}
+                                className="text-xs text-foreground"
+                                linkToProfile
+                              />{" "}
+                              from{" "}
+                              {listerPubkeys.length === 1
+                                ? "their repository announcement"
+                                : "each of their repository announcements"}{" "}
+                              too.
+                            </p>
+                          </div>
+                        ),
+                      )}
+                    </div>
+                  </div>
+                ) : null}
+
+                {temporarilyRemovedMaintainers.length > 0 ? (
+                  <Alert className="border-amber-500/50 bg-amber-500/5">
+                    <CircleAlert className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+                    <AlertTitle>
+                      This can temporarily remove{" "}
+                      <MaintainerNameList
+                        pubkeys={temporarilyRemovedMaintainers}
+                      />
+                    </AlertTitle>
+                    <AlertDescription className="text-muted-foreground">
+                      {selectedLead !== repo.selectedMaintainer ? (
+                        <>
+                          Consider asking{" "}
+                          <MaintainerNameList pubkeys={[selectedLead]} /> to add{" "}
+                          <MaintainerNameList
+                            pubkeys={temporarilyRemovedMaintainers}
+                          />{" "}
+                          first. Otherwise saving will, at least temporarily,
+                          remove them from this maintainer chain.
+                        </>
+                      ) : (
+                        <>
+                          Restore{" "}
+                          <MaintainerNameList
+                            pubkeys={temporarilyRemovedMaintainers}
+                          />{" "}
+                          unless you intend to remove them from your lead
+                          announcement.
+                        </>
+                      )}
+                    </AlertDescription>
+                  </Alert>
+                ) : null}
+
+                {showMaintainerCoordination &&
+                selectedLead === NO_LEAD &&
+                stillRecognizedMaintainers.length > 0 ? (
+                  <Alert className="border-sky-500/40 bg-sky-500/5">
+                    <Network className="h-4 w-4 text-sky-600 dark:text-sky-400" />
+                    <AlertTitle>Your change alone is not enough</AlertTitle>
+                    <AlertDescription className="space-y-2 text-muted-foreground">
+                      {stillRecognizedMaintainers.map(
+                        ({ pubkey, listerPubkeys }) => (
+                          <p key={pubkey}>
+                            <UserName
+                              pubkey={pubkey}
+                              className="text-sm text-foreground"
+                              linkToProfile
+                            />{" "}
+                            is still listed by{" "}
+                            <MaintainerNameList pubkeys={listerPubkeys} />, whom
+                            you continue to recognize. Ask{" "}
+                            {listerPubkeys.length === 1
+                              ? "them"
+                              : "those maintainers"}{" "}
+                            to remove{" "}
+                            <UserName
+                              pubkey={pubkey}
+                              className="text-sm text-foreground"
+                              linkToProfile
+                            />{" "}
+                            too.
+                          </p>
+                        ),
+                      )}
+                    </AlertDescription>
+                  </Alert>
+                ) : null}
+              </>
+            )}
           </section>
 
           <Separator />

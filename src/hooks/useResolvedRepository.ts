@@ -432,7 +432,12 @@ export function useResolvedRepository(
   // currently known discovery sources. The state carries its closure key so a
   // synchronous render after authors or relays change cannot reuse a stale
   // `settled: true` value from the previous observable.
-  const announcementAuthors = [...(repo?.discoveryPubkeys ?? [])].sort();
+  const announcementAuthors = [
+    ...new Set([
+      ...(repo?.discoveryPubkeys ?? []),
+      ...(repo?.historyPubkeys ?? []),
+    ]),
+  ].sort();
   const announcementRelayUrls = [
     ...new Set(
       [
