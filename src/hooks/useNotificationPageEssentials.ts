@@ -42,6 +42,7 @@ import {
   STATUS_KINDS,
   resolveChain,
   resolveItemEssentials,
+  type ResolvedRepo,
   type ResolvedIssueLite,
 } from "@/lib/nip34";
 import type {
@@ -298,6 +299,7 @@ export function useNotificationPageEssentials(
           // authorize notification status or label events.
           const coord = rootEvent.tags.find(([t]) => t === "a")?.[1];
           let memberSet = new Set<string>();
+          let roleHistory: ResolvedRepo["roleHistory"] | undefined;
 
           if (coord?.startsWith("30617:")) {
             const parsed = splitCoord(coord);
@@ -315,6 +317,7 @@ export function useNotificationPageEssentials(
               );
               if (repository) {
                 memberSet = new Set(repository.confirmedMembers);
+                roleHistory = repository.roleHistory;
               }
             }
           }
@@ -332,6 +335,7 @@ export function useNotificationPageEssentials(
             [], // comments — not needed for notification display
             [], // zaps — not needed for notification display
             memberSet,
+            { roleHistory },
           );
 
           result.set(rootEvent.id, resolved);

@@ -27,8 +27,9 @@ import {
   type ResolvedPR,
   type PRRevision,
   type PRItemType,
+  type RepositoryRoleHistory,
   compareNip01Chronologically,
-  isItemEventAuthorised,
+  isItemEventMaintainerAuthorisedAt,
   getPRTargetBranch,
 } from "@/lib/nip34";
 import { resolveAllChains } from "@/hooks/usePatchChain";
@@ -56,6 +57,7 @@ export function PRDetailModel(
   rootId: string,
   members: Set<string> | undefined,
   maintainers: Set<string> | undefined,
+  roleHistory?: RepositoryRoleHistory,
 ): Model<ResolvedPR | undefined> {
   return (store) => {
     // All essential kinds fetched per-item
@@ -191,6 +193,7 @@ export function PRDetailModel(
             {
               prUpdateEvents,
               essentialDeletionEvents: essentialDeletionEvents as NostrEvent[],
+              roleHistory,
             },
           );
 
@@ -274,10 +277,11 @@ export function PRDetailModel(
             // Sort chronologically; the NIP-01 winner is the latest revision.
             const sortedUpdates = [...prUpdateEvents]
               .filter((ev) =>
-                isItemEventAuthorised(
-                  ev.pubkey,
+                isItemEventMaintainerAuthorisedAt(
+                  ev,
                   rootEvent.pubkey,
                   effectiveMaintainers,
+                  roleHistory,
                 ),
               )
               .sort(compareNip01Chronologically);
@@ -356,6 +360,7 @@ export function PRDetailModel(
             rootEvent.pubkey,
             coverNotes,
             core.authorisedUsers,
+            roleHistory,
           );
           const coverNote = allCoverNotes[0];
 
@@ -373,6 +378,7 @@ export function PRDetailModel(
             comments: mergedComments,
             essentials,
             authorisedUsers: core.authorisedUsers,
+            roleHistory,
             deletedEssentialEventIds: core.deletedEssentialEventIds,
             revisions,
             revisionRootIds,

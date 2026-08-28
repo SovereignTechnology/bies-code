@@ -85,6 +85,7 @@ export default function IssuePage() {
     resolved?.repoRelayGroup,
     resolved?.extraRelaysForMaintainerMailboxCoverage,
     selectedMaintainers,
+    repo?.roleHistory,
     extraSearchGroups,
     retryKey,
   );

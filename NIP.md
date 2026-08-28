@@ -307,9 +307,9 @@ The following features apply uniformly to all three NIP-34 root item kinds — i
 All three features share the same authorisation rule: an event is only **authoritative** if its author is either
 
 1. the **root item author** (the pubkey that published the issue/patch/PR), or
-2. a **confirmed member** of the repository: either a reciprocally confirmed maintainer or a reciprocally acknowledged moderator (see the "Repository authorization model" in `AGENTS.md`).
+2. a **confirmed member at the event's `created_at`**: either a reciprocally confirmed maintainer or a reciprocally acknowledged moderator during that resolved historical interval (see the "Repository authorization model" in `AGENTS.md`).
 
-Events from any other pubkey are ignored when deriving the item's effective state. A directional role assignment is only an invitation and grants no authority. Because the confirmed member set is only known once repository announcements resolve, clients MAY treat the root author as authorised before membership resolves to avoid a flash of missing metadata.
+Events from any other pubkey are ignored when deriving the item's effective state. A directional role assignment is only an invitation and grants no authority. Historical `M`/`m`/`o` records use NIP-34 precedence and past reciprocity at publication time; malformed, disputed, or open-ended `defer` history fails closed. Because the confirmed member set is only known once repository announcements resolve, clients MAY treat the root author as authorised before membership resolves to avoid a flash of missing metadata.
 
 For a given repository identifier, clients MUST partition the latest kind:30617 announcement from each author into reciprocal confirmed components before presenting repository identity. One active announcement coordinate belongs to at most one active component. Search or discovery hits for any confirmed member resolve to that component, while unilateral invitation edges remain relationships between components and MUST NOT merge repository cards or trusted metadata.
 

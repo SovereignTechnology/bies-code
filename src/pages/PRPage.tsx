@@ -363,6 +363,7 @@ export default function PRPage() {
     resolved?.extraRelaysForMaintainerMailboxCoverage,
     selectedMaintainers,
     confirmedMaintainers,
+    repo?.roleHistory,
     undefined, // options
     extraSearchGroups,
     retryKey,

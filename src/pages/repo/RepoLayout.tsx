@@ -264,11 +264,13 @@ function RepoLayoutResolved({
     repo?.confirmedMemberCoordinates,
     repoRelayGroup,
     queryOptions,
+    repo?.roleHistory,
   );
   const prs = usePRs(
     repo?.confirmedMemberCoordinates,
     repoRelayGroup,
     queryOptions,
+    repo?.roleHistory,
   );
 
   const acceptedRepoCoordinates = useMemo(
@@ -627,6 +629,15 @@ function RepoLayoutResolved({
   if (leadRedirectPath) {
     return <Navigate to={leadRedirectPath} replace state={location.state} />;
   }
+  if (repo?.coordinateStatus === "dead" && announcementsSettled) {
+    return <DeadRepositoryCoordinate />;
+  }
+  if (
+    repo?.coordinateStatus === "unsupported_restart" &&
+    announcementsSettled
+  ) {
+    return <UnsupportedRepositoryRestart />;
+  }
 
   return (
     <RepoRelaysContext.Provider value={repoRelayUrls}>
@@ -981,6 +992,63 @@ function Nip05LoadingState({ nip05 }: { nip05: string }) {
         <p className="text-muted-foreground text-sm">
           Looking up <span className="font-mono text-foreground">{nip05}</span>…
         </p>
+      </div>
+    </div>
+  );
+}
+
+function DeadRepositoryCoordinate() {
+  return (
+    <div className="min-h-full flex items-center justify-center">
+      <div className="text-center space-y-6 max-w-md px-4">
+        <div className="flex justify-center">
+          <div className="p-4 rounded-full bg-destructive/10">
+            <AlertCircle className="h-8 w-8 text-destructive" />
+          </div>
+        </div>
+        <div className="space-y-2">
+          <h2 className="text-2xl font-bold">Repository coordinate ended</h2>
+          <p className="text-muted-foreground">
+            This announcement has no active repository role or signed lead
+            redirect. GitWorkshop cannot safely guess which same-identifier
+            repository should replace it.
+          </p>
+        </div>
+        <Button asChild variant="outline">
+          <Link to="/">
+            <ArrowLeft className="h-4 w-4 mr-2" />
+            Back to repositories
+          </Link>
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function UnsupportedRepositoryRestart() {
+  return (
+    <div className="min-h-full flex items-center justify-center">
+      <div className="text-center space-y-6 max-w-md px-4">
+        <div className="flex justify-center">
+          <div className="p-4 rounded-full bg-destructive/10">
+            <AlertCircle className="h-8 w-8 text-destructive" />
+          </div>
+        </div>
+        <div className="space-y-2">
+          <h2 className="text-2xl font-bold">Repository restart unsupported</h2>
+          <p className="text-muted-foreground">
+            This coordinate ended its previous membership and then opened a new
+            self-led repository with the same identifier. GitWorkshop can
+            resolve the signed transition, but does not yet support presenting
+            this aggressive fork safely.
+          </p>
+        </div>
+        <Button asChild variant="outline">
+          <Link to="/">
+            <ArrowLeft className="h-4 w-4 mr-2" />
+            Back to repositories
+          </Link>
+        </Button>
       </div>
     </div>
   );

@@ -62,6 +62,7 @@ export function SettledRepositoryModel(
           ...new Set([
             selectedMaintainer,
             ...(repository?.discoveryPubkeys ?? []),
+            ...(repository?.historyPubkeys ?? []),
           ]),
         ].sort();
         const [indexRelays, configuredFallbacks, configuredLookups] = settings;
@@ -70,6 +71,9 @@ export function SettledRepositoryModel(
           dTag,
           authors,
           repository?.discoveredAnnouncements
+            .map((event) => `${event.pubkey}:${event.id}`)
+            .sort() ?? [],
+          repository?.historicalAnnouncements
             .map((event) => `${event.pubkey}:${event.id}`)
             .sort() ?? [],
           [...indexRelays].sort(),

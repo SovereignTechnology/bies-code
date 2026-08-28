@@ -19,12 +19,18 @@ export interface MaintainerEdge {
   to: string;
   role: "M" | "m";
   source: RoleAssignmentSource;
+  /** Start of the current assignment interval, when it is signed. */
+  activeSince?: number;
+  /** A reopened interval cannot reuse an acknowledgement of an older interval. */
+  requiresFreshAcceptance: boolean;
 }
 
 export interface ModeratorEdge {
   from: string;
   to: string;
   source: "indexed";
+  activeSince?: number;
+  requiresFreshAcceptance: boolean;
 }
 
 export type RepositoryHealthCode =
@@ -64,6 +70,8 @@ interface ParsedAnnouncement {
     pubkey: string;
     role: "M" | "m";
     source: RoleAssignmentSource;
+    activeSince?: number;
+    requiresFreshAcceptance: boolean;
   }[];
   activeModerators: string[];
   activeRoles: { role: RepositoryRole; pubkey: string }[];
@@ -87,11 +95,41 @@ export interface RepositoryMembershipResolution {
   departedModerators: string[];
   discoveryPubkeys: string[];
   discoveredAnnouncements: NostrEvent[];
+  /** Historical role subjects fetched for event-time authorization only. */
+  historyPubkeys: string[];
+  /** Latest events for current discovery plus retained history subjects. */
+  historicalAnnouncements: NostrEvent[];
   confirmedAnnouncements: NostrEvent[];
   maintainerEdges: MaintainerEdge[];
   moderatorEdges: ModeratorEdge[];
   repositoryHealth: RepositoryHealthWarning[];
   leadResolution: LeadResolution;
+}
+
+export type HistoricalRoleState = "active" | "inactive" | "unknown";
+
+export interface RepositoryAuthorRoleHistory {
+  author: string;
+  records: RepositoryRoleRecord[];
+  /** Raw role keys that were malformed or duplicated in this announcement. */
+  disputedKeys: string[];
+  /** No self-role at all means implicit maintainership for the full history. */
+  implicitMaintainer: boolean;
+}
+
+export interface ResolvedRepositoryRoleRecord extends RepositoryRoleRecord {
+  sourceDistance: number;
+  conflicts: RepositoryRoleRecord[];
+}
+
+/** Replicated history view used only for authorization at publication time. */
+export interface RepositoryRoleHistory {
+  selectedMaintainer: string;
+  dTag: string;
+  /** Today's maintainers provide conservative roots for older graph views. */
+  currentConfirmedMaintainers: string[];
+  authorHistories: RepositoryAuthorRoleHistory[];
+  resolvedRecords: ResolvedRepositoryRoleRecord[];
 }
 
 const ROLE_NAMES = new Set<RepositoryRole>(["M", "m", "o"]);
@@ -141,7 +179,7 @@ export function latestRepositoryAnnouncements(
   );
 }
 
-function parseRoleRecord(
+export function parseRepositoryRoleRecord(
   author: string,
   tag: string[],
 ): RepositoryRoleRecord | undefined {
@@ -199,7 +237,7 @@ function parseAnnouncement(event: NostrEvent): ParsedAnnouncement {
   for (const tag of roleTags) {
     const role = tag[0] as RepositoryRole;
     const subject = tag[1] ?? "";
-    const record = parseRoleRecord(event.pubkey, tag);
+    const record = parseRepositoryRoleRecord(event.pubkey, tag);
     if (!record) {
       health.push({
         code: "invalid-role-record",
@@ -241,6 +279,7 @@ function parseAnnouncement(event: NostrEvent): ParsedAnnouncement {
         pubkey: event.pubkey,
         role: "m",
         source: "indexed",
+        requiresFreshAcceptance: false,
       });
     }
     for (const record of roleRecords) {
@@ -254,6 +293,11 @@ function parseAnnouncement(event: NostrEvent): ParsedAnnouncement {
           pubkey: record.subject,
           role: record.role,
           source: "indexed",
+          activeSince:
+            typeof record.boundaries[record.boundaries.length - 1] === "number"
+              ? (record.boundaries[record.boundaries.length - 1] as number)
+              : undefined,
+          requiresFreshAcceptance: record.boundaries.length >= 3,
         });
       }
     }
@@ -289,6 +333,7 @@ function parseAnnouncement(event: NostrEvent): ParsedAnnouncement {
       pubkey: event.pubkey,
       role: "m",
       source: "legacy",
+      requiresFreshAcceptance: false,
     });
     for (const tag of event.tags) {
       if (tag[0] !== "maintainers") continue;
@@ -297,7 +342,12 @@ function parseAnnouncement(event: NostrEvent): ParsedAnnouncement {
           HEX_PUBKEY.test(pubkey) &&
           !activeMaintainers.some((entry) => entry.pubkey === pubkey)
         ) {
-          activeMaintainers.push({ pubkey, role: "m", source: "legacy" });
+          activeMaintainers.push({
+            pubkey,
+            role: "m",
+            source: "legacy",
+            requiresFreshAcceptance: false,
+          });
         }
       }
     }
@@ -348,6 +398,15 @@ export function getRepositoryAnnouncementDiscoveryPubkeys(
       ...parsed.activeMaintainers.map(({ pubkey }) => pubkey),
       ...parsed.activeModerators,
     ]),
+  ];
+}
+
+/** Valid indexed role subjects whose announcements may supply retained history. */
+export function getRepositoryHistoryPubkeys(event: NostrEvent): string[] {
+  return [
+    ...new Set(
+      parseAnnouncement(event).roleRecords.map(({ subject }) => subject),
+    ),
   ];
 }
 
@@ -500,6 +559,34 @@ function resolveLead(
   }
 }
 
+function selfAcceptanceCoversAssignment(
+  candidate: ParsedAnnouncement | undefined,
+  edge: {
+    role: RepositoryRole;
+    activeSince?: number;
+    requiresFreshAcceptance: boolean;
+  },
+): boolean {
+  if (!candidate) return false;
+  const acceptedRoles =
+    edge.role === "o"
+      ? new Set<RepositoryRole>(["o"])
+      : new Set<RepositoryRole>(["M", "m"]);
+  const selfRecords = candidate.roleRecords.filter(
+    (record) =>
+      record.subject === candidate.event.pubkey &&
+      acceptedRoles.has(record.role) &&
+      record.active,
+  );
+  if (!edge.requiresFreshAcceptance) {
+    return selfRecords.length > 0 || !candidate.authorDeclinesMaintainership;
+  }
+  return selfRecords.some((record) => {
+    const start = record.boundaries[record.boundaries.length - 1];
+    return typeof start === "number" && start >= (edge.activeSince ?? 0);
+  });
+}
+
 export function resolveRepositoryMembership(
   events: Iterable<NostrEvent>,
   selectedMaintainer: string,
@@ -555,6 +642,8 @@ export function resolveRepositoryMembershipFromLatest(
           to: assignment.pubkey,
           role: assignment.role,
           source: assignment.source,
+          activeSince: assignment.activeSince,
+          requiresFreshAcceptance: assignment.requiresFreshAcceptance,
         });
       }
     }
@@ -564,7 +653,23 @@ export function resolveRepositoryMembershipFromLatest(
       const key = `${pubkey}:${moderator}`;
       if (!moderatorEdgeKeys.has(key)) {
         moderatorEdgeKeys.add(key);
-        moderatorEdges.push({ from: pubkey, to: moderator, source: "indexed" });
+        const record = parsed.roleRecords.find(
+          (candidate) =>
+            candidate.role === "o" &&
+            candidate.subject === moderator &&
+            candidate.active,
+        );
+        moderatorEdges.push({
+          from: pubkey,
+          to: moderator,
+          source: "indexed",
+          activeSince:
+            record &&
+            typeof record.boundaries[record.boundaries.length - 1] === "number"
+              ? (record.boundaries[record.boundaries.length - 1] as number)
+              : undefined,
+          requiresFreshAcceptance: (record?.boundaries.length ?? 0) >= 3,
+        });
       }
     }
   }
@@ -594,8 +699,12 @@ export function resolveRepositoryMembershipFromLatest(
       ) {
         continue;
       }
+      const candidateAnnouncement = parsedByPubkey.get(candidate);
       const listedByMember = maintainerEdges.some(
-        ({ from, to }) => to === candidate && confirmedMaintainerSet.has(from),
+        (edge) =>
+          edge.to === candidate &&
+          confirmedMaintainerSet.has(edge.from) &&
+          selfAcceptanceCoversAssignment(candidateAnnouncement, edge),
       );
       const acknowledgesMember = maintainerEdges.some(
         ({ from, to }) => from === candidate && confirmedMaintainerSet.has(to),
@@ -646,7 +755,17 @@ export function resolveRepositoryMembershipFromLatest(
       const acknowledgesMember = parsed.activeRoles.some(
         ({ pubkey }) => pubkey !== candidate && confirmedMemberSet.has(pubkey),
       );
-      if (acknowledgesRole && acknowledgesMember) {
+      const assignedWithCurrentAcceptance = moderatorEdges.some(
+        (edge) =>
+          edge.to === candidate &&
+          confirmedMaintainerSet.has(edge.from) &&
+          selfAcceptanceCoversAssignment(parsed, { ...edge, role: "o" }),
+      );
+      if (
+        assignedWithCurrentAcceptance &&
+        acknowledgesRole &&
+        acknowledgesMember
+      ) {
         confirmedModerators.push(candidate);
         confirmedMemberSet.add(candidate);
         changed = true;
@@ -663,6 +782,21 @@ export function resolveRepositoryMembershipFromLatest(
     const event = latestByPubkey.get(pubkey);
     return event ? [event] : [];
   });
+  const historyPubkeys = [
+    ...new Set(
+      [selectedMaintainer, ...confirmedMembers].flatMap((pubkey) => {
+        const parsed = parsedByPubkey.get(pubkey);
+        return [
+          pubkey,
+          ...(parsed?.roleRecords.map(({ subject }) => subject) ?? []),
+        ];
+      }),
+    ),
+  ];
+  const historicalAnnouncements = historyPubkeys.flatMap((pubkey) => {
+    const event = latestByPubkey.get(pubkey);
+    return event ? [event] : [];
+  });
 
   return {
     selectedMaintainer,
@@ -672,7 +806,14 @@ export function resolveRepositoryMembershipFromLatest(
     confirmedMembers,
     invitedMaintainers: maintainerCandidates.filter(
       (pubkey) =>
-        !confirmedMaintainerSet.has(pubkey) && !declinedMaintainers.has(pubkey),
+        !confirmedMaintainerSet.has(pubkey) &&
+        (!declinedMaintainers.has(pubkey) ||
+          maintainerEdges.some(
+            (edge) =>
+              edge.to === pubkey &&
+              edge.requiresFreshAcceptance &&
+              confirmedMaintainerSet.has(edge.from),
+          )),
     ),
     invitedModerators: assignedModerators.filter(
       (pubkey) =>
@@ -683,6 +824,8 @@ export function resolveRepositoryMembershipFromLatest(
     departedModerators: [...declinedModerators],
     discoveryPubkeys,
     discoveredAnnouncements,
+    historyPubkeys,
+    historicalAnnouncements,
     confirmedAnnouncements,
     maintainerEdges,
     moderatorEdges,
@@ -693,4 +836,473 @@ export function resolveRepositoryMembershipFromLatest(
       confirmedMaintainerSet,
     ),
   };
+}
+
+function roleKey(role: RepositoryRole, subject: string): string {
+  return `${role}:${subject}`;
+}
+
+function authorRoleHistory(event: NostrEvent): RepositoryAuthorRoleHistory {
+  const roleTags = event.tags.filter(([name]) =>
+    ROLE_NAMES.has(name as RepositoryRole),
+  );
+  if (roleTags.length === 0) {
+    const subjects = new Set<string>([event.pubkey]);
+    for (const tag of event.tags) {
+      if (tag[0] !== "maintainers") continue;
+      for (const subject of tag.slice(1)) {
+        if (HEX_PUBKEY.test(subject)) subjects.add(subject);
+      }
+    }
+    return {
+      author: event.pubkey,
+      records: [...subjects].map((subject) => ({
+        author: event.pubkey,
+        role: "m" as const,
+        subject,
+        boundaries: [],
+        active: true,
+      })),
+      disputedKeys: [],
+      implicitMaintainer: true,
+    };
+  }
+
+  const records: RepositoryRoleRecord[] = [];
+  const counts = new Map<string, number>();
+  const disputed = new Set<string>();
+  for (const tag of roleTags) {
+    const role = tag[0] as RepositoryRole;
+    const subject = tag[1] ?? "";
+    if (HEX_PUBKEY.test(subject)) {
+      const key = roleKey(role, subject);
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+      const record = parseRepositoryRoleRecord(event.pubkey, tag);
+      if (record) records.push(record);
+      else disputed.add(key);
+    }
+  }
+  for (const [key, count] of counts) {
+    if (count > 1) disputed.add(key);
+  }
+
+  const authorHasSelfRole = roleTags.some(
+    ([, subject]) => subject === event.pubkey,
+  );
+  const implicitMaintainer = !authorHasSelfRole;
+  if (implicitMaintainer) {
+    records.push({
+      author: event.pubkey,
+      role: "m",
+      subject: event.pubkey,
+      boundaries: [],
+      active: true,
+    });
+  }
+
+  return {
+    author: event.pubkey,
+    records,
+    disputedKeys: [...disputed].sort(),
+    implicitMaintainer,
+  };
+}
+
+function currentGraphDistances(
+  membership: RepositoryMembershipResolution,
+): Map<string, number> {
+  const distances = new Map<string, number>([
+    [membership.selectedMaintainer, 0],
+  ]);
+  const edges = [
+    ...membership.maintainerEdges.map(({ from, to }) => [from, to] as const),
+    ...membership.moderatorEdges.map(({ from, to }) => [from, to] as const),
+  ];
+  const queue = [membership.selectedMaintainer];
+  while (queue.length > 0) {
+    const author = queue.shift()!;
+    const nextDistance = (distances.get(author) ?? 0) + 1;
+    for (const [from, to] of edges) {
+      if (from !== author || distances.has(to)) continue;
+      distances.set(to, nextDistance);
+      queue.push(to);
+    }
+  }
+  return distances;
+}
+
+/** Resolve replicated role records using selected/distance/pubkey precedence. */
+export function resolveRepositoryRoleHistory(
+  membership: RepositoryMembershipResolution,
+): RepositoryRoleHistory {
+  const histories = new Map(
+    membership.historicalAnnouncements.map((event) => [
+      event.pubkey,
+      authorRoleHistory(event),
+    ]),
+  );
+  const sourceAuthors = new Set([
+    membership.selectedMaintainer,
+    ...membership.confirmedMembers,
+  ]);
+  const distances = currentGraphDistances(membership);
+  const candidateKeys = new Set<string>();
+  for (const author of sourceAuthors) {
+    const history = histories.get(author);
+    for (const record of history?.records ?? []) {
+      candidateKeys.add(roleKey(record.role, record.subject));
+    }
+    for (const key of history?.disputedKeys ?? []) candidateKeys.add(key);
+  }
+
+  const resolvedRecords: ResolvedRepositoryRoleRecord[] = [];
+  for (const key of [...candidateKeys].sort()) {
+    const candidates = [...sourceAuthors].flatMap((author) => {
+      const history = histories.get(author);
+      if (!history) return [];
+      const records = history.records.filter(
+        (record) => roleKey(record.role, record.subject) === key,
+      );
+      const present = records.length > 0 || history.disputedKeys.includes(key);
+      return present
+        ? [
+            {
+              author,
+              history,
+              records,
+              distance:
+                author === membership.selectedMaintainer
+                  ? -1
+                  : (distances.get(author) ?? Number.MAX_SAFE_INTEGER),
+            },
+          ]
+        : [];
+    });
+    candidates.sort(
+      (left, right) =>
+        left.distance - right.distance ||
+        left.author.localeCompare(right.author),
+    );
+    const preferred = candidates[0];
+    if (
+      !preferred ||
+      preferred.history.disputedKeys.includes(key) ||
+      preferred.records.length !== 1
+    ) {
+      continue;
+    }
+    const selected = preferred.records[0];
+    const conflicts = [...histories.values()]
+      .flatMap(({ records }) => records)
+      .filter((record) => roleKey(record.role, record.subject) === key)
+      .filter(
+        (record) =>
+          record.author !== selected.author ||
+          JSON.stringify(record.boundaries) !==
+            JSON.stringify(selected.boundaries),
+      );
+    resolvedRecords.push({
+      ...selected,
+      sourceDistance: preferred.distance,
+      conflicts,
+    });
+  }
+
+  return {
+    selectedMaintainer: membership.selectedMaintainer,
+    dTag: membership.dTag,
+    currentConfirmedMaintainers: membership.confirmedMaintainers,
+    authorHistories: [...histories.values()].sort((a, b) =>
+      a.author.localeCompare(b.author),
+    ),
+    resolvedRecords,
+  };
+}
+
+/** Interpret one valid role record at a publication timestamp. */
+export function repositoryRoleStateAt(
+  record: Pick<RepositoryRoleRecord, "boundaries">,
+  createdAt: number,
+): HistoricalRoleState {
+  const { boundaries } = record;
+  if (boundaries.length === 0) return "active";
+  for (let index = 0; index < boundaries.length; index += 2) {
+    const start = boundaries[index];
+    if (typeof start !== "number") return "unknown";
+    if (createdAt < start) return "inactive";
+    const end = boundaries[index + 1];
+    if (end === undefined) return "active";
+    if (end === "defer") return "unknown";
+    if (createdAt < end) return "active";
+  }
+  return "inactive";
+}
+
+function authorHistoryByPubkey(
+  history: RepositoryRoleHistory,
+): Map<string, RepositoryAuthorRoleHistory> {
+  return new Map(history.authorHistories.map((entry) => [entry.author, entry]));
+}
+
+function activeAuthorTargets(
+  authorHistory: RepositoryAuthorRoleHistory | undefined,
+  createdAt: number,
+  roles: ReadonlySet<RepositoryRole>,
+): string[] {
+  if (!authorHistory) return [];
+  return [
+    ...new Set(
+      authorHistory.records
+        .filter(
+          (record) =>
+            roles.has(record.role) &&
+            !authorHistory.disputedKeys.includes(
+              roleKey(record.role, record.subject),
+            ) &&
+            repositoryRoleStateAt(record, createdAt) === "active",
+        )
+        .map((record) => record.subject),
+    ),
+  ];
+}
+
+function authorHasSelfRoleAt(
+  authorHistory: RepositoryAuthorRoleHistory | undefined,
+  createdAt: number,
+  roles: ReadonlySet<RepositoryRole>,
+): boolean {
+  if (!authorHistory) return false;
+  return authorHistory.records.some(
+    (record) =>
+      record.subject === authorHistory.author &&
+      roles.has(record.role) &&
+      !authorHistory.disputedKeys.includes(
+        roleKey(record.role, record.subject),
+      ) &&
+      repositoryRoleStateAt(record, createdAt) === "active",
+  );
+}
+
+function historicalSelfAcceptanceCoversAssignment(
+  candidateHistory: RepositoryAuthorRoleHistory | undefined,
+  assignment: ResolvedRepositoryRoleRecord,
+  createdAt: number,
+  roles: ReadonlySet<RepositoryRole>,
+): boolean {
+  if (!candidateHistory) return false;
+  const selfRecords = candidateHistory.records.filter(
+    (record) =>
+      record.subject === candidateHistory.author &&
+      roles.has(record.role) &&
+      !candidateHistory.disputedKeys.includes(
+        roleKey(record.role, record.subject),
+      ) &&
+      repositoryRoleStateAt(record, createdAt) === "active",
+  );
+  if (assignment.boundaries.length < 3) return selfRecords.length > 0;
+  const assignmentStart = assignment.boundaries.at(-1);
+  if (typeof assignmentStart !== "number") return false;
+  return selfRecords.some((record) => {
+    const acceptanceStart = record.boundaries.at(-1);
+    return (
+      typeof acceptanceStart === "number" && acceptanceStart >= assignmentStart
+    );
+  });
+}
+
+const MAINTAINER_ROLES = new Set<RepositoryRole>(["M", "m"]);
+const LEAD_ROLE = new Set<RepositoryRole>(["M"]);
+const MODERATOR_ROLE = new Set<RepositoryRole>(["o"]);
+const historicalMemberCache = new WeakMap<
+  RepositoryRoleHistory,
+  Map<number, ReadonlySet<string>>
+>();
+const historicalMaintainerCache = new WeakMap<
+  RepositoryRoleHistory,
+  Map<number, ReadonlySet<string>>
+>();
+
+function historicalMaintainersFromRoot(
+  history: RepositoryRoleHistory,
+  createdAt: number,
+  root: string,
+): ReadonlySet<string> {
+  const byAuthor = authorHistoryByPubkey(history);
+  const confirmed = new Set<string>();
+  const visited = new Set<string>();
+  let current = root;
+  let followedLead = false;
+  while (true) {
+    if (visited.has(current)) return new Set();
+    visited.add(current);
+    const currentHistory = byAuthor.get(current);
+    const leads = activeAuthorTargets(currentHistory, createdAt, LEAD_ROLE);
+    if (leads.length === 0) {
+      if (
+        !followedLead &&
+        authorHasSelfRoleAt(currentHistory, createdAt, MAINTAINER_ROLES)
+      ) {
+        confirmed.add(current);
+      }
+      break;
+    }
+    if (leads.length !== 1) return new Set();
+    followedLead = true;
+    const target = leads[0];
+    if (target === current) {
+      if (authorHasSelfRoleAt(currentHistory, createdAt, LEAD_ROLE)) {
+        confirmed.add(current);
+      }
+      break;
+    }
+    current = target;
+  }
+
+  const maintainerCandidates = new Set(
+    history.resolvedRecords
+      .filter(
+        (record) =>
+          MAINTAINER_ROLES.has(record.role) &&
+          repositoryRoleStateAt(record, createdAt) === "active",
+      )
+      .map((record) => record.subject),
+  );
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const candidate of maintainerCandidates) {
+      if (confirmed.has(candidate)) continue;
+      const assignments = history.resolvedRecords.filter(
+        (record) =>
+          record.subject === candidate &&
+          MAINTAINER_ROLES.has(record.role) &&
+          confirmed.has(record.author) &&
+          repositoryRoleStateAt(record, createdAt) === "active",
+      );
+      if (assignments.length === 0) continue;
+      const candidateHistory = byAuthor.get(candidate);
+      const acceptsAssignment = assignments.some((assignment) =>
+        historicalSelfAcceptanceCoversAssignment(
+          candidateHistory,
+          assignment,
+          createdAt,
+          MAINTAINER_ROLES,
+        ),
+      );
+      const acknowledgesMember = activeAuthorTargets(
+        candidateHistory,
+        createdAt,
+        MAINTAINER_ROLES,
+      ).some((target) => target !== candidate && confirmed.has(target));
+      if (acceptsAssignment && acknowledgesMember) {
+        confirmed.add(candidate);
+        changed = true;
+      }
+    }
+  }
+  return confirmed;
+}
+
+/** Resolve the confirmed historical member set at an event timestamp. */
+export function historicalRepositoryMembersAt(
+  history: RepositoryRoleHistory,
+  createdAt: number,
+): ReadonlySet<string> {
+  const cache = historicalMemberCache.get(history) ?? new Map();
+  historicalMemberCache.set(history, cache);
+  const cached = cache.get(createdAt);
+  if (cached) return cached;
+
+  const distinctComponents = new Map<string, ReadonlySet<string>>();
+  for (const root of new Set([
+    history.selectedMaintainer,
+    ...history.currentConfirmedMaintainers,
+  ])) {
+    const component = historicalMaintainersFromRoot(history, createdAt, root);
+    if (component.size === 0) continue;
+    distinctComponents.set([...component].sort().join(":"), component);
+  }
+  // A present component assembled from multiple historical repositories is
+  // ambiguous until a dedicated join workflow reconciles it.
+  const confirmed =
+    distinctComponents.size === 1
+      ? new Set([...distinctComponents.values()][0])
+      : new Set<string>();
+  const byAuthor = authorHistoryByPubkey(history);
+
+  const maintainerCache = historicalMaintainerCache.get(history) ?? new Map();
+  historicalMaintainerCache.set(history, maintainerCache);
+  maintainerCache.set(createdAt, new Set(confirmed));
+
+  const members = new Set(confirmed);
+  const moderatorCandidates = new Set(
+    history.resolvedRecords
+      .filter(
+        (record) =>
+          record.role === "o" &&
+          repositoryRoleStateAt(record, createdAt) === "active",
+      )
+      .map((record) => record.subject),
+  );
+  for (const candidate of moderatorCandidates) {
+    const assignments = history.resolvedRecords.filter(
+      (record) =>
+        record.subject === candidate &&
+        record.role === "o" &&
+        confirmed.has(record.author) &&
+        repositoryRoleStateAt(record, createdAt) === "active",
+    );
+    if (assignments.length === 0) continue;
+    const candidateHistory = byAuthor.get(candidate);
+    const acceptsAssignment = assignments.some((assignment) =>
+      historicalSelfAcceptanceCoversAssignment(
+        candidateHistory,
+        assignment,
+        createdAt,
+        MODERATOR_ROLE,
+      ),
+    );
+    const acknowledgesMember = activeAuthorTargets(
+      candidateHistory,
+      createdAt,
+      new Set<RepositoryRole>(["M", "m", "o"]),
+    ).some((target) => target !== candidate && members.has(target));
+    if (acceptsAssignment && acknowledgesMember) members.add(candidate);
+  }
+
+  cache.set(createdAt, members);
+  return members;
+}
+
+export function historicalRepositoryMaintainersAt(
+  history: RepositoryRoleHistory,
+  createdAt: number,
+): ReadonlySet<string> {
+  const cache = historicalMaintainerCache.get(history) ?? new Map();
+  historicalMaintainerCache.set(history, cache);
+  const cached = cache.get(createdAt);
+  if (cached) return cached;
+  historicalRepositoryMembersAt(history, createdAt);
+  return cache.get(createdAt) ?? new Set();
+}
+
+export function isHistoricalRepositoryMember(
+  history: RepositoryRoleHistory | undefined,
+  pubkey: string,
+  createdAt: number,
+): boolean {
+  return (
+    !!history && historicalRepositoryMembersAt(history, createdAt).has(pubkey)
+  );
+}
+
+export function isHistoricalRepositoryMaintainer(
+  history: RepositoryRoleHistory | undefined,
+  pubkey: string,
+  createdAt: number,
+): boolean {
+  return (
+    !!history &&
+    historicalRepositoryMaintainersAt(history, createdAt).has(pubkey)
+  );
 }

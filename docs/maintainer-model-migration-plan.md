@@ -1,6 +1,6 @@
 # Maintainer Model Migration Plan
 
-> **Status:** Waves 1 through 3 implemented. Wave 4 is next.
+> **Status:** Waves 1 through 3 and Wave 4A/4B implemented. Wave 4C is next.
 >
 > **Approach:** Land the maintainer-model change in deployable waves. Each
 > wave must leave gitworkshop with one internally consistent authority model;
@@ -407,10 +407,10 @@ leave no signed event, relay publication, Git mutation, or route change.
 
 ### Wave 4 gate
 
-- [ ] Historical member actions remain effective only when their author held
+- [x] Historical member actions remain effective only when their author held
       the required role at publication time.
-- [ ] A removed maintainer immediately loses current state and merge authority.
-- [ ] Reinvitation requires a new acceptance interval.
+- [x] A removed maintainer immediately loses current state and merge authority.
+- [x] Reinvitation requires a new acceptance interval.
 - [ ] A safe ordinary add, accept, remove, and leave changes exactly one
       intended relationship.
 - [ ] Every unsupported graph, identity, history, or state case refuses before

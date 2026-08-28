@@ -20,14 +20,20 @@ import { getThreadTree } from "@/lib/threadTree";
 import { normalizeUrl } from "@/lib/url";
 import {
   getRepositoryAnnouncementDiscoveryPubkeys,
+  getRepositoryHistoryPubkeys,
   getRepositoryMaintainerAssignments,
   latestRepositoryAnnouncementsByIdentifier,
+  isHistoricalRepositoryMaintainer,
+  isHistoricalRepositoryMember,
+  parseRepositoryRoleRecord,
   resolveRepositoryMembershipFromLatest,
+  resolveRepositoryRoleHistory,
   type LeadResolution,
   type MaintainerEdge,
   type ModeratorEdge,
   type RepositoryHealthWarning,
   type RepositoryMembershipResolution,
+  type RepositoryRoleHistory,
 } from "@/lib/nip34-maintainer-model";
 
 export type {
@@ -35,6 +41,7 @@ export type {
   MaintainerEdge,
   ModeratorEdge,
   RepositoryHealthWarning,
+  RepositoryRoleHistory,
 } from "@/lib/nip34-maintainer-model";
 
 // ---------------------------------------------------------------------------
@@ -546,6 +553,11 @@ export function getRepoRoleSubjects(ev: NostrEvent): string[] {
   return getRepositoryAnnouncementDiscoveryPubkeys(ev);
 }
 
+/** Indexed role subjects fetched for retained historical authorization. */
+export function getRepoHistorySubjects(ev: NostrEvent): string[] {
+  return getRepositoryHistoryPubkeys(ev);
+}
+
 const GIT_CLONE_URL_SCHEME_PATTERN = /^(?:https?|ssh|git|file|nostr):\/\//i;
 const SCP_LIKE_GIT_URL_PATTERN = /^[^@\s]+@[^:\s]+:.+$/;
 
@@ -838,6 +850,13 @@ export interface ResolvedRepo {
   selectedCoordinate: string;
   /** The d-tag identifier shared by all announcements in this repo */
   dTag: string;
+  /** Whether the selected coordinate is active, forwarding, dead, or unsupported. */
+  coordinateStatus:
+    | "active"
+    | "redirect"
+    | "dead"
+    | "unsupported_restart"
+    | "unresolved";
 
   // --- Merged display fields (latest-wins) ---
   name: string;
@@ -888,12 +907,16 @@ export interface ResolvedRepo {
   departedModerators: string[];
   /** Pubkeys fetched while discovering active assignments; never an authority set. */
   discoveryPubkeys: string[];
+  /** Historical role subjects fetched only for event-time authorization. */
+  historyPubkeys: string[];
   /** `t` tags from the single latest confirmed-member announcement. */
   labels: string[];
 
   // --- Graph / provenance data (for detailed view) ---
   /** Raw events reached during assignment discovery, including invitations. */
   discoveredAnnouncements: NostrEvent[];
+  /** Raw events retained for resolved historical authorization. */
+  historicalAnnouncements: NostrEvent[];
   /** Raw events belonging to confirmed maintainers and moderators only. */
   confirmedAnnouncements: NostrEvent[];
   /** Directed current maintainer assignments with indexed/legacy provenance. */
@@ -902,6 +925,8 @@ export interface ResolvedRepo {
   moderatorEdges: ModeratorEdge[];
   /** Fail-closed parsing and compatibility warnings. */
   repositoryHealth: RepositoryHealthWarning[];
+  /** Replicated history used only for authorization at publication time. */
+  roleHistory: RepositoryRoleHistory;
   /** Signed lead result rooted at the selected coordinate. */
   leadResolution: LeadResolution;
   /** Per-URL provenance for clone URLs */
@@ -1065,6 +1090,8 @@ export function extractBody(ev: NostrEvent): string {
  */
 export interface ResolveEssentialsOptions {
   prUpdateEvents?: NostrEvent[];
+  /** Replicated membership history for publication-time authorization. */
+  roleHistory?: RepositoryRoleHistory;
   /**
    * NIP-09 deletion events (kind:5) that reference one or more essential event
    * IDs (status events, label/rename events). Used to exclude essentials whose
@@ -1096,7 +1123,7 @@ function buildResolvedList(
   memberSet: Set<string>,
   options: ResolveEssentialsOptions = {},
 ): (ResolvedIssueLite & { itemType?: PRItemType })[] {
-  const { prUpdateEvents } = options;
+  const { prUpdateEvents, roleHistory } = options;
 
   // ── Index root events ────────────────────────────────────────────────────
   const authorById = new Map<string, string>();
@@ -1135,7 +1162,9 @@ function buildResolvedList(
     if (ev.created_at > prev) latestEssentialAt.set(rootId, ev.created_at);
 
     const issuePubkey = authorById.get(rootId)!;
-    const isMember = memberSet.has(ev.pubkey);
+    const isMember = roleHistory
+      ? isHistoricalRepositoryMember(roleHistory, ev.pubkey, ev.created_at)
+      : memberSet.has(ev.pubkey);
     const isAuthor = ev.pubkey === issuePubkey;
 
     // ── Deletion (kind:5) — NIP-09: only the original author's deletion is valid.
@@ -1221,6 +1250,12 @@ function buildResolvedList(
     for (const ev of prUpdateEvents) {
       const rootId = ev.tags.find(([t]) => t === "E")?.[1];
       if (!rootId || !authorById.has(rootId)) continue;
+      const rootPubkey = authorById.get(rootId)!;
+      const isAuthor = ev.pubkey === rootPubkey;
+      const isMember = roleHistory
+        ? isHistoricalRepositoryMember(roleHistory, ev.pubkey, ev.created_at)
+        : memberSet.has(ev.pubkey);
+      if (!isAuthor && !isMember) continue;
       const prev = latestPRUpdateAt.get(rootId) ?? 0;
       if (ev.created_at > prev) latestPRUpdateAt.set(rootId, ev.created_at);
     }
@@ -1393,6 +1428,43 @@ export function isItemEventAuthorised(
   );
 }
 
+/** Publication-time authority for a role-scoped repository item event. */
+export function isItemEventAuthorisedAt(
+  event: Pick<NostrEvent, "pubkey" | "created_at">,
+  itemPubkey: string,
+  currentMembers: ReadonlySet<string>,
+  roleHistory?: RepositoryRoleHistory,
+): boolean {
+  if (event.pubkey === itemPubkey) return true;
+  if (roleHistory) {
+    return isHistoricalRepositoryMember(
+      roleHistory,
+      event.pubkey,
+      event.created_at,
+    );
+  }
+  // Preserve existing loading behavior until repository history resolves.
+  return currentMembers.size === 0 || currentMembers.has(event.pubkey);
+}
+
+/** Publication-time authority for item operations restricted to maintainers. */
+export function isItemEventMaintainerAuthorisedAt(
+  event: Pick<NostrEvent, "pubkey" | "created_at">,
+  itemPubkey: string,
+  currentMaintainers: ReadonlySet<string>,
+  roleHistory?: RepositoryRoleHistory,
+): boolean {
+  if (event.pubkey === itemPubkey) return true;
+  if (roleHistory) {
+    return isHistoricalRepositoryMaintainer(
+      roleHistory,
+      event.pubkey,
+      event.created_at,
+    );
+  }
+  return currentMaintainers.size === 0 || currentMaintainers.has(event.pubkey);
+}
+
 /**
  * Sort events from oldest to newest using NIP-01 replacement ordering.
  * For equal timestamps the lower event ID wins, so it sorts last.
@@ -1429,7 +1501,7 @@ export function resolveItemEssentials(
   memberSet: Set<string>,
   options: ResolveEssentialsOptions = {},
 ): ResolvedItemEssentials {
-  const { prUpdateEvents, essentialDeletionEvents } = options;
+  const { prUpdateEvents, essentialDeletionEvents, roleHistory } = options;
   const rootId = rootEvent.id;
   const rootPubkey = rootEvent.pubkey;
 
@@ -1461,7 +1533,9 @@ export function resolveItemEssentials(
 
     if (ev.created_at > latestEssentialAt) latestEssentialAt = ev.created_at;
 
-    const isMember = memberSet.has(ev.pubkey);
+    const isMember = roleHistory
+      ? isHistoricalRepositoryMember(roleHistory, ev.pubkey, ev.created_at)
+      : memberSet.has(ev.pubkey);
     const isAuthor = ev.pubkey === rootPubkey;
 
     // Deletion (kind:5) — NIP-09: only the original author's deletion is valid.
@@ -1559,7 +1633,17 @@ export function resolveItemEssentials(
   if (prUpdateEvents) {
     for (const ev of prUpdateEvents) {
       const updateRootId = ev.tags.find(([t]) => t === "E")?.[1];
-      if (updateRootId === rootId && ev.created_at > latestPRUpdateAt) {
+      const authorised = isItemEventAuthorisedAt(
+        ev,
+        rootPubkey,
+        memberSet,
+        roleHistory,
+      );
+      if (
+        updateRootId === rootId &&
+        authorised &&
+        ev.created_at > latestPRUpdateAt
+      ) {
         latestPRUpdateAt = ev.created_at;
       }
     }
@@ -1737,12 +1821,14 @@ export function resolveCoverNote(
   rootPubkey: string,
   coverNoteEvents: NostrEvent[],
   authorisedUsers: Set<string>,
+  roleHistory?: RepositoryRoleHistory,
 ): NostrEvent | undefined {
   const candidates = resolveCoverNotes(
     rootId,
     rootPubkey,
     coverNoteEvents,
     authorisedUsers,
+    roleHistory,
   );
   return candidates[0];
 }
@@ -1764,16 +1850,13 @@ export function resolveCoverNotes(
   rootPubkey: string,
   coverNoteEvents: NostrEvent[],
   authorisedUsers: Set<string>,
+  roleHistory?: RepositoryRoleHistory,
 ): NostrEvent[] {
   const candidates = coverNoteEvents.filter(
     (ev) =>
       ev.kind === COVER_NOTE_KIND &&
       ev.tags.some((t) => t[0] === "e" && t[1] === rootId) &&
-      // authorisedUsers.size === 0 means members are not yet loaded — treat
-      // the item author as authorised to avoid a flash of no cover note.
-      (authorisedUsers.size === 0
-        ? ev.pubkey === rootPubkey
-        : authorisedUsers.has(ev.pubkey)),
+      isItemEventAuthorisedAt(ev, rootPubkey, authorisedUsers, roleHistory),
   );
   return candidates.sort((a, b) =>
     b.created_at !== a.created_at
@@ -1840,6 +1923,8 @@ interface BuildTimelineBaseArgs {
   essentials: NostrEvent[];
   /** Authorised users set (confirmed members + item author). */
   authorisedUsers: Set<string>;
+  /** Replicated history for publication-time authorization. */
+  roleHistory?: RepositoryRoleHistory;
   /**
    * Set of essential event IDs (status, label/rename) deleted by their author
    * via NIP-09. Label timeline nodes whose event ID appears here are omitted.
@@ -1895,13 +1980,12 @@ export function buildTimelineNodes(args: BuildPRTimelineArgs): PRTimelineNode[];
 export function buildTimelineNodes(
   args: BuildTimelineArgs,
 ): IssueTimelineNode[] | PRTimelineNode[] {
-  const { rootEvent, comments, essentials, authorisedUsers } = args;
+  const { rootEvent, comments, essentials, authorisedUsers, roleHistory } =
+    args;
   const rootId = rootEvent.id;
 
   const isStatusAuthorised = (ev: NostrEvent): boolean =>
-    // authorisedUsers.size === 0 means members are not yet loaded — treat as
-    // authorised to avoid a flash of "proposed" on initial load.
-    authorisedUsers.size === 0 || authorisedUsers.has(ev.pubkey);
+    isItemEventAuthorisedAt(ev, rootEvent.pubkey, authorisedUsers, roleHistory);
 
   // ── Status nodes ──────────────────────────────────────────────────────────
   // Show all status events regardless of auth; flag unauthorised ones so the
@@ -1924,7 +2008,7 @@ export function buildTimelineNodes(
     .filter(
       (ev) =>
         ev.kind === LABEL_KIND &&
-        (authorisedUsers.size === 0 || authorisedUsers.has(ev.pubkey)) &&
+        isStatusAuthorised(ev) &&
         ev.tags.some(
           ([t, , ns]) => t === "l" && ns === SUBJECT_LABEL_NAMESPACE,
         ),
@@ -1971,8 +2055,7 @@ export function buildTimelineNodes(
         type: "label" as const,
         event: ev,
         labels,
-        authorised:
-          authorisedUsers.size === 0 || authorisedUsers.has(ev.pubkey),
+        authorised: isStatusAuthorised(ev),
         ts: ev.created_at,
       };
     })
@@ -2332,6 +2415,7 @@ export function buildResolvedPRs(
   zapEvents: NostrEvent[],
   memberSet: Set<string>,
   prUpdateEvents: NostrEvent[] = [],
+  roleHistory?: RepositoryRoleHistory,
 ): ResolvedPRLite[] {
   return buildResolvedList(
     rootEvents,
@@ -2341,6 +2425,7 @@ export function buildResolvedPRs(
     memberSet,
     {
       prUpdateEvents,
+      roleHistory,
     },
   ).map((item) => ({
     ...item,
@@ -2442,6 +2527,38 @@ function resolvedRepoFromMembership(
     : [];
 
   const selectedCoordinate = repoCoordinate(selectedMaintainer, dTag);
+  const selectedSelfRoles = selectedAnnouncement.tags.flatMap((tag) => {
+    const record = parseRepositoryRoleRecord(selectedMaintainer, tag);
+    return record?.subject === selectedMaintainer &&
+      (record.role === "M" || record.role === "m")
+      ? [record]
+      : [];
+  });
+  const aggressiveSelfLedRestart =
+    membership.confirmedMaintainers.length === 1 &&
+    membership.confirmedMaintainers[0] === selectedMaintainer &&
+    selectedSelfRoles.some(
+      (record) =>
+        record.role === "M" &&
+        record.active &&
+        typeof record.boundaries.at(-1) === "number",
+    ) &&
+    selectedSelfRoles.some(
+      (record) =>
+        !record.active &&
+        record.boundaries.some((boundary) => boundary !== "defer"),
+    );
+  const coordinateStatus: ResolvedRepo["coordinateStatus"] =
+    aggressiveSelfLedRestart
+      ? "unsupported_restart"
+      : membership.confirmedMembers.includes(selectedMaintainer)
+        ? "active"
+        : membership.leadResolution.leadMaintainer
+          ? "redirect"
+          : membership.departedMaintainers.includes(selectedMaintainer) &&
+              membership.leadResolution.path.length === 1
+            ? "dead"
+            : "unresolved";
 
   const allCloneUrls = cloneUrlProvenance.map((p) => p.value);
   const graspCloneUrls = allCloneUrls.filter(isGraspCloneUrl);
@@ -2468,6 +2585,7 @@ function resolvedRepoFromMembership(
     selectedMaintainer,
     selectedCoordinate,
     dTag,
+    coordinateStatus,
     name: nameSource.value || dTag,
     description: descriptionSource.value,
     webUrls: latestEv ? getRepoWebUrls(latestEv) : [],
@@ -2495,12 +2613,15 @@ function resolvedRepoFromMembership(
     departedMaintainers: membership.departedMaintainers,
     departedModerators: membership.departedModerators,
     discoveryPubkeys: membership.discoveryPubkeys,
+    historyPubkeys: membership.historyPubkeys,
     labels,
     discoveredAnnouncements: membership.discoveredAnnouncements,
+    historicalAnnouncements: membership.historicalAnnouncements,
     confirmedAnnouncements: membership.confirmedAnnouncements,
     maintainerEdges: membership.maintainerEdges,
     moderatorEdges: membership.moderatorEdges,
     repositoryHealth: membership.repositoryHealth,
+    roleHistory: resolveRepositoryRoleHistory(membership),
     leadResolution: membership.leadResolution,
     cloneUrlProvenance,
     relayProvenance,
@@ -2765,6 +2886,13 @@ export function buildRepositoryComponentIndex(
       const event = draft.latestByPubkey.get(pubkey);
       return event ? [event] : [];
     });
+    const historyPubkeys = uniqueSorted(
+      draft.views.flatMap((view) => view.historyPubkeys),
+    );
+    const historicalAnnouncements = historyPubkeys.flatMap((pubkey) => {
+      const event = draft.latestByPubkey.get(pubkey);
+      return event ? [event] : [];
+    });
     const membership: RepositoryMembershipResolution = {
       selectedMaintainer: draft.anchor,
       dTag: draft.dTag,
@@ -2789,6 +2917,8 @@ export function buildRepositoryComponentIndex(
       ),
       discoveryPubkeys,
       discoveredAnnouncements,
+      historyPubkeys,
+      historicalAnnouncements,
       confirmedAnnouncements,
       maintainerEdges: uniqueMaintainerEdges(draft.views),
       moderatorEdges: uniqueModeratorEdges(draft.views),
@@ -2859,7 +2989,9 @@ function repositoryForSelectedCoordinate(
     ...component,
     selectedMaintainer: pubkey,
     selectedCoordinate,
+    coordinateStatus: rooted?.coordinateStatus ?? component.coordinateStatus,
     leadResolution: rooted?.leadResolution ?? component.leadResolution,
+    roleHistory: rooted?.roleHistory ?? component.roleHistory,
   };
 }
 

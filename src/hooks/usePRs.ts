@@ -4,6 +4,7 @@ import { useEventStore } from "./useEventStore";
 import type { RelayGroup } from "applesauce-relay";
 import {
   coordsCacheKey,
+  type RepositoryRoleHistory,
   type ResolvedPRLite,
   type RepoQueryOptions,
 } from "@/lib/nip34";
@@ -26,6 +27,7 @@ export function usePRs(
   repoCoords: string | string[] | undefined,
   repoRelayGroup: RelayGroup | undefined,
   _options: RepoQueryOptions,
+  roleHistory?: RepositoryRoleHistory,
 ): ResolvedPRLite[] | undefined {
   const store = useEventStore();
 
@@ -53,8 +55,10 @@ export function usePRs(
   // Subscribe to the model — cached by the store, shared across components.
   return use$(() => {
     if (!coords || coords.length === 0) return undefined;
-    return store.model(PRListModel, cacheKey) as unknown as Observable<
-      ResolvedPRLite[]
-    >;
-  }, [cacheKey, store]);
+    return store.model(
+      PRListModel,
+      cacheKey,
+      roleHistory,
+    ) as unknown as Observable<ResolvedPRLite[]>;
+  }, [cacheKey, roleHistory, store]);
 }

@@ -9,6 +9,7 @@
 - Remount account-authored repository settings when the active account changes so unsaved metadata cannot cross signer scopes.
 - Match ngit's duplicate active role-target handling while retaining a repository-health warning for malformed announcements.
 - Resolve repository discovery through a deterministic reciprocal-component index and exact settled graph refreshes, so browse, search, profile, pinned, followed, starred, and NIP-19 results show one card per active repository regardless of relay arrival order, keep same-identifier invitations separate, and match ngit's confirmed-member metadata, infrastructure, and privacy merging.
+- Resolve replicated role history for collaboration events at their publication time, retain historical authorization after ordinary exits, require a new acceptance interval after reinvitation, fail dead coordinates closed, and identify unsupported same-coordinate restarts.
 
 ### Fixes
 

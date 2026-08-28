@@ -16,7 +16,7 @@ import { useEventStore } from "./useEventStore";
 import { useNip34ItemDetailLoader } from "./useNip34Loaders";
 import type { EventSearchState, RelayGroupSpec } from "./useEventSearch";
 import { IssueDetailModel } from "@/models/IssueDetailModel";
-import { type ResolvedIssue } from "@/lib/nip34";
+import { type RepositoryRoleHistory, type ResolvedIssue } from "@/lib/nip34";
 import type { RelayGroup } from "applesauce-relay";
 import type { Observable } from "rxjs";
 
@@ -41,6 +41,7 @@ export function useResolvedIssue(
   repoRelayGroup: RelayGroup | undefined,
   extraRelaysForMaintainerMailboxCoverage: RelayGroup | undefined,
   maintainers: Set<string> | undefined,
+  roleHistory?: RepositoryRoleHistory,
   extraSearchGroups?: RelayGroupSpec[],
   retryKey?: number,
 ): ResolvedIssueResult {
@@ -61,8 +62,9 @@ export function useResolvedIssue(
       IssueDetailModel,
       issueId,
       maintainers,
+      roleHistory,
     ) as unknown as Observable<ResolvedIssue | undefined>;
-  }, [issueId, maintainerKey, store]);
+  }, [issueId, maintainerKey, roleHistory, store]);
 
   return { issue, search };
 }

@@ -4,6 +4,7 @@ import { useEventStore } from "./useEventStore";
 import type { RelayGroup } from "applesauce-relay";
 import {
   coordsCacheKey,
+  type RepositoryRoleHistory,
   type ResolvedIssueLite,
   type RepoQueryOptions,
 } from "@/lib/nip34";
@@ -47,6 +48,7 @@ export function useIssues(
   repoCoords: string | string[] | undefined,
   repoRelayGroup: RelayGroup | undefined,
   _options: RepoQueryOptions,
+  roleHistory?: RepositoryRoleHistory,
 ): ResolvedIssueLite[] | undefined {
   const store = useEventStore();
 
@@ -75,8 +77,8 @@ export function useIssues(
   // Subscribe to the model — cached by the store, shared across components.
   return use$(() => {
     if (!coords || coords.length === 0) return undefined;
-    return store.model(IssueListModel, cacheKey) as unknown as Observable<
-      ResolvedIssueLite[]
-    >;
-  }, [cacheKey, store]);
+    return store.model(IssueListModel, cacheKey, {
+      roleHistory,
+    }) as unknown as Observable<ResolvedIssueLite[]>;
+  }, [cacheKey, roleHistory, store]);
 }

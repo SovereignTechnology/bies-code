@@ -8,6 +8,10 @@ import {
   resolveChain,
   selectRepositoryComponents,
 } from "@/lib/nip34";
+import {
+  isHistoricalRepositoryMember,
+  repositoryRoleStateAt,
+} from "@/lib/nip34-maintainer-model";
 
 const owner = "a".repeat(64);
 const invitee = "b".repeat(64);
@@ -387,5 +391,201 @@ describe("repository component indexing", () => {
       getRepositoryComponentForCoordinate(index, moderator, repoId)
         ?.componentId,
     ).toBe(owningComponents[0].componentId);
+  });
+});
+
+describe("replicated role history and exits", () => {
+  it("authorizes accepted maintainers only from their signed acceptance boundary", () => {
+    const resolved = resolveChain(
+      [
+        announcement(owner, [
+          ["M", owner, "10"],
+          ["m", invitee, "20"],
+          ["maintainers", owner, invitee],
+        ]),
+        announcement(
+          invitee,
+          [
+            ["M", owner, "20"],
+            ["m", invitee, "20"],
+            ["maintainers", owner, invitee],
+          ],
+          20,
+        ),
+      ],
+      owner,
+      repoId,
+    );
+
+    expect(
+      isHistoricalRepositoryMember(resolved?.roleHistory, invitee, 19),
+    ).toBe(false);
+    expect(
+      isHistoricalRepositoryMember(resolved?.roleHistory, invitee, 20),
+    ).toBe(true);
+  });
+
+  it("keeps past actions authorized after a signed self-role exit", () => {
+    const resolved = resolveChain(
+      [
+        announcement(owner, [
+          ["M", owner, "10"],
+          ["m", invitee, "20"],
+          ["maintainers", owner, invitee],
+        ]),
+        announcement(
+          invitee,
+          [
+            ["M", owner, "20"],
+            ["m", invitee, "20", "35"],
+            ["maintainers", owner],
+          ],
+          40,
+        ),
+      ],
+      owner,
+      repoId,
+    );
+
+    expect(resolved?.confirmedMaintainers).toEqual([owner]);
+    expect(
+      isHistoricalRepositoryMember(resolved?.roleHistory, invitee, 30),
+    ).toBe(true);
+    expect(
+      isHistoricalRepositoryMember(resolved?.roleHistory, invitee, 36),
+    ).toBe(false);
+  });
+
+  it("loads a former maintainer's history after every current edge ends", () => {
+    const resolved = resolveChain(
+      [
+        announcement(owner, [
+          ["M", owner, "10"],
+          ["m", invitee, "20", "35"],
+          ["maintainers", owner],
+        ]),
+        announcement(
+          invitee,
+          [
+            ["M", owner, "20", "35"],
+            ["m", invitee, "20", "35"],
+            ["maintainers"],
+          ],
+          40,
+        ),
+      ],
+      owner,
+      repoId,
+    );
+
+    expect(resolved?.discoveryPubkeys).not.toContain(invitee);
+    expect(resolved?.historyPubkeys).toContain(invitee);
+    expect(
+      isHistoricalRepositoryMember(resolved?.roleHistory, invitee, 30),
+    ).toBe(true);
+    expect(
+      isHistoricalRepositoryMember(resolved?.roleHistory, invitee, 36),
+    ).toBe(false);
+  });
+
+  it("uses an older root before today's selected coordinate joined", () => {
+    const resolved = resolveChain(
+      [
+        announcement(owner, [
+          ["M", owner, "10"],
+          ["m", invitee, "20"],
+          ["maintainers", owner, invitee],
+        ]),
+        announcement(
+          invitee,
+          [
+            ["M", owner, "20"],
+            ["m", invitee, "20"],
+            ["maintainers", owner, invitee],
+          ],
+          20,
+        ),
+      ],
+      invitee,
+      repoId,
+    );
+
+    expect(isHistoricalRepositoryMember(resolved?.roleHistory, owner, 15)).toBe(
+      true,
+    );
+    expect(
+      isHistoricalRepositoryMember(resolved?.roleHistory, invitee, 15),
+    ).toBe(false);
+  });
+
+  it("requires a new self-role interval to accept a reopened invitation", () => {
+    const ownerEvent = announcement(owner, [
+      ["M", owner, "10"],
+      ["m", invitee, "20", "35", "45"],
+      ["maintainers", owner, invitee],
+    ]);
+    const staleAcceptance = announcement(
+      invitee,
+      [
+        ["M", owner, "20"],
+        ["m", invitee, "20", "35"],
+        ["maintainers", owner],
+      ],
+      46,
+    );
+    const pending = resolveChain([ownerEvent, staleAcceptance], owner, repoId);
+
+    expect(pending?.confirmedMaintainers).toEqual([owner]);
+    expect(pending?.invitedMaintainers).toContain(invitee);
+
+    const freshAcceptance = announcement(
+      invitee,
+      [
+        ["M", owner, "20"],
+        ["m", invitee, "20", "35", "50"],
+        ["maintainers", owner, invitee],
+      ],
+      50,
+    );
+    const accepted = resolveChain([ownerEvent, freshAcceptance], owner, repoId);
+    expect(accepted?.confirmedMaintainers).toEqual([owner, invitee]);
+    expect(
+      isHistoricalRepositoryMember(accepted?.roleHistory, invitee, 46),
+    ).toBe(false);
+    expect(
+      isHistoricalRepositoryMember(accepted?.roleHistory, invitee, 50),
+    ).toBe(true);
+  });
+
+  it("fails closed for a deferred open-ended historical interval", () => {
+    expect(repositoryRoleStateAt({ boundaries: [20, "defer"] }, 30)).toBe(
+      "unknown",
+    );
+    expect(repositoryRoleStateAt({ boundaries: [20, 35] }, 30)).toBe("active");
+    expect(repositoryRoleStateAt({ boundaries: [20, 35] }, 35)).toBe(
+      "inactive",
+    );
+  });
+
+  it("marks a same-coordinate self-led restart as unsupported", () => {
+    const resolved = resolveChain(
+      [
+        announcement(owner, [["M", owner, "10"]]),
+        announcement(
+          invitee,
+          [
+            ["M", owner, "20", "40"],
+            ["m", invitee, "20", "40"],
+            ["M", invitee, "50"],
+            ["maintainers", invitee],
+          ],
+          50,
+        ),
+      ],
+      invitee,
+      repoId,
+    );
+
+    expect(resolved?.coordinateStatus).toBe("unsupported_restart");
   });
 });

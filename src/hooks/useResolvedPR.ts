@@ -30,7 +30,7 @@ import {
 } from "./useNip34Loaders";
 import type { EventSearchState, RelayGroupSpec } from "./useEventSearch";
 import { PRDetailModel } from "@/models/PRDetailModel";
-import { type ResolvedPR } from "@/lib/nip34";
+import { type RepositoryRoleHistory, type ResolvedPR } from "@/lib/nip34";
 import { relayCurationMode } from "@/services/settings";
 import type { RelayGroup } from "applesauce-relay";
 import { type Observable } from "rxjs";
@@ -64,6 +64,7 @@ export function useResolvedPR(
   extraRelaysForMaintainerMailboxCoverage: RelayGroup | undefined,
   members: Set<string> | undefined,
   maintainers: Set<string> | undefined,
+  roleHistory?: RepositoryRoleHistory,
   _options?: UseResolvedPROptions,
   extraSearchGroups?: RelayGroupSpec[],
   retryKey?: number,
@@ -89,8 +90,9 @@ export function useResolvedPR(
       prId,
       members,
       maintainers,
+      roleHistory,
     ) as unknown as Observable<ResolvedPR | undefined>;
-  }, [prId, maintainerKey, maintainers, store]);
+  }, [prId, maintainerKey, maintainers, roleHistory, store]);
 
   // ── 3. For patch revisions: batch-load revision root comments ───────────
   // Once the model resolves, we know which revision root IDs exist.

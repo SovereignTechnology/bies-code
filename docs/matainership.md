@@ -131,15 +131,23 @@ may have been filed against any accepted member's announcement.
 
 Authority remains separate from discovery:
 
-| Data or operation                                | Accepted authors                              |
-| ------------------------------------------------ | --------------------------------------------- |
-| Kind `30618` state, merge, settings, CI controls | `confirmedMaintainers` only                   |
-| Status, labels, subjects, cover notes            | Root author plus `confirmedMembers`           |
-| Shared metadata, clone URLs, relays, privacy     | `confirmedAnnouncements` only                 |
-| Issues, PRs, comments, reactions                 | Open protocol participation; no author filter |
+| Data or operation                                | Accepted authors                                                         |
+| ------------------------------------------------ | ------------------------------------------------------------------------ |
+| Kind `30618` state, merge, settings, CI controls | `confirmedMaintainers` only                                              |
+| Status, labels, subjects, cover notes            | Root author plus the resolved member set at the event's publication time |
+| Shared metadata, clone URLs, relays, privacy     | `confirmedAnnouncements` only                                            |
+| Issues, PRs, comments, reactions                 | Open protocol participation; no author filter                            |
 
-Wave 4 will add authorization-at-publication-time from resolved role history.
-Until then, these checks use current confirmed membership.
+Current controls never use historical membership. Immutable collaboration
+events instead use `repo.roleHistory` to resolve the author's role at the
+event's `created_at`. History records are selected deterministically from the
+selected maintainer, then shortest current graph distance, then lowest pubkey.
+Malformed, duplicated, deferred-open, or historically ambiguous records fail
+closed for the affected past action without weakening current authority.
+
+`repo.historyPubkeys` and `repo.historicalAnnouncements` are fetch inputs and
+audit data, not authority sets. They include ended role subjects needed to
+verify past reciprocity after those subjects leave the active discovery graph.
 
 ## Merged repository fields
 
@@ -163,7 +171,8 @@ anchor.
 ## Browser mutation safety during migration
 
 GitWorkshop's old complete-roster editor and legacy invitation acceptance are
-disabled. Metadata-only edits preserve every existing `M`, `m`, `o`, and
+disabled until the conservative one-at-a-time mutation preflight lands.
+Metadata-only edits preserve every existing `M`, `m`, `o`, and
 `maintainers` tag byte-for-byte, including role history and contradictory
 compatibility projections. A role-free sole-maintainer announcement remains
 role-free.

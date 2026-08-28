@@ -124,7 +124,7 @@ fi
 
 ### Repository authorization model — non-negotiable
 
-Nostr is permissionless: **anyone can publish any event.** A NIP-34 repository is _not_ a single pubkey + identifier; it is an identifier plus a **reciprocally confirmed component** of kind:30617 announcements. Directional listings are invitations and grant no authority. Kind:30618 state and maintainer-only operations require a current confirmed maintainer. Status, label, subject, and cover-note events accept the root author or a current confirmed member (maintainer or moderator).
+Nostr is permissionless: **anyone can publish any event.** A NIP-34 repository is _not_ a single pubkey + identifier; it is an identifier plus a **reciprocally confirmed component** of kind:30617 announcements. Directional listings are invitations and grant no authority. Kind:30618 state and maintainer-only operations require a current confirmed maintainer. Status, label, subject, and cover-note events accept the root author or a maintainer/moderator confirmed by resolved role history at the event's publication time.
 
 **Rules:**
 

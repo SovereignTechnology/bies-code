@@ -13,6 +13,7 @@ import {
   pubkeyFromCoordinate,
   isRepositoryRootItem,
   buildResolvedPRs,
+  type RepositoryRoleHistory,
   type ResolvedPRLite,
 } from "@/lib/nip34";
 import { hasNameValueTag, type Filter } from "applesauce-core/helpers";
@@ -34,7 +35,10 @@ const ESSENTIALS_KINDS = [...STATUS_KINDS, LABEL_KIND, DELETION_KIND] as const;
  *
  * @param coordsCacheKey - Sorted, comma-joined coordinate string (cache key)
  */
-export function PRListModel(coordsCacheKey: string): Model<ResolvedPRLite[]> {
+export function PRListModel(
+  coordsCacheKey: string,
+  roleHistory?: RepositoryRoleHistory,
+): Model<ResolvedPRLite[]> {
   return (store) => {
     const coords = coordsCacheKey ? coordsCacheKey.split(",") : [];
     const memberSet = new Set<string>(
@@ -113,6 +117,7 @@ export function PRListModel(coordsCacheKey: string): Model<ResolvedPRLite[]> {
                 zapEvents as NostrEvent[],
                 memberSet,
                 prUpdateEvents,
+                roleHistory,
               );
             },
           ),

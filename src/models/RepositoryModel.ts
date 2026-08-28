@@ -3,6 +3,7 @@ import type { Model } from "applesauce-core/event-store";
 import {
   REPO_KIND,
   resolveChain,
+  getRepoHistorySubjects,
   getRepoRoleSubjects,
   type ResolvedRepo,
 } from "@/lib/nip34";
@@ -38,7 +39,7 @@ export function RepositoryModel(
   return (store) =>
     new Observable<ResolvedRepo | undefined>((observer) => {
       // Track which pubkeys we're currently subscribed to
-      const subscribed = new Set<string>();
+      const subscriptionsByPubkey = new Map<string, boolean>();
       // All inner subscriptions — collected so the teardown can unsubscribe them
       const subs = new Subscription();
       // Latest announcement event per pubkey
@@ -54,9 +55,27 @@ export function RepositoryModel(
 
       // Subscribe to a pubkey's announcement and recursively subscribe to
       // any newly-discovered maintainers
-      function subscribe(pubkey: string) {
-        if (subscribed.has(pubkey)) return;
-        subscribed.add(pubkey);
+      function subscribe(pubkey: string, traverseCurrentGraph: boolean) {
+        const previousMode = subscriptionsByPubkey.get(pubkey);
+        if (previousMode !== undefined) {
+          if (traverseCurrentGraph && !previousMode) {
+            subscriptionsByPubkey.set(pubkey, true);
+            const event = latestByPubkey.get(pubkey);
+            if (event) discoverFrom(event, true);
+          }
+          return;
+        }
+        subscriptionsByPubkey.set(pubkey, traverseCurrentGraph);
+
+        function discoverFrom(ev: NostrEvent, traverse: boolean) {
+          if (!traverse) return;
+          for (const subject of getRepoRoleSubjects(ev)) {
+            subscribe(subject, true);
+          }
+          for (const subject of getRepoHistorySubjects(ev)) {
+            subscribe(subject, false);
+          }
+        }
 
         subs.add(
           store
@@ -70,9 +89,7 @@ export function RepositoryModel(
                 // store.addressable() emits synchronously, so all their
                 // initial states are populated in latestByPubkey before
                 // the loop returns — emit() sees the full picture.
-                for (const mp of getRepoRoleSubjects(ev)) {
-                  if (!subscribed.has(mp)) subscribe(mp);
-                }
+                discoverFrom(ev, subscriptionsByPubkey.get(pubkey) ?? false);
                 emit();
               } else {
                 // Announcement absent or removed — only re-emit if this is
@@ -85,7 +102,7 @@ export function RepositoryModel(
       }
 
       // Start from the selected maintainer
-      subscribe(selectedMaintainer);
+      subscribe(selectedMaintainer, true);
 
       return () => {
         // Unsubscribe all inner store.addressable() subscriptions collected
