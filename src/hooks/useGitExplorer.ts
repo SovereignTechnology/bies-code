@@ -483,6 +483,28 @@ export function useGitExplorer(
 ): GitExplorerState & { reload: () => void } {
   const { refAndPath, knownHeadCommit, stateRefs } = options;
 
+  // RepositoryState.refs and PoolState.effectiveRefs are derived values whose
+  // containers may be recreated on otherwise unrelated renders. Depending on
+  // their identities makes run() reset explorer state, which creates a render
+  // loop on failure pages and makes the error alternate with its skeleton.
+  // Track only the protocol values that can change what the explorer loads.
+  const stateRefsKey = (stateRefs ?? [])
+    .map((ref) => `${ref.name}:${ref.commitId}`)
+    .sort()
+    .join(",");
+  const stableStateRefsRef = useRef({ key: stateRefsKey, value: stateRefs });
+  if (stableStateRefsRef.current.key !== stateRefsKey) {
+    stableStateRefsRef.current = { key: stateRefsKey, value: stateRefs };
+  }
+  const stableStateRefs = stableStateRefsRef.current.value;
+  const effectiveRefsKey = Object.entries(poolState.effectiveRefs)
+    .map(
+      ([name, ref]) =>
+        `${name}:${ref.commitId}:${ref.source}:${ref.sourceUrl ?? ""}`,
+    )
+    .sort()
+    .join(",");
+
   const [state, setState] = useState<GitExplorerState>({
     loading: false,
     error: null,
@@ -509,6 +531,9 @@ export function useGitExplorer(
   // We use the pool reference itself as the key; if the pool changes, re-run.
   const poolRef = useRef<GitGraspPool | null>(null);
 
+  // effectiveRefsKey is an intentional semantic trigger: the callback reads
+  // the effective refs imperatively from the pool when it runs.
+  /* eslint-disable react-hooks/exhaustive-deps */
   const run = useCallback(async () => {
     if (!pool) return;
 
@@ -527,7 +552,7 @@ export function useGitExplorer(
     const fastInfo = pool.getEffectiveInfoRefs();
 
     if (fastInfo) {
-      const fastInfoWithState = includeStateRefs(fastInfo, stateRefs);
+      const fastInfoWithState = includeStateRefs(fastInfo, stableStateRefs);
       const fastParsedRefs = parseRefs(fastInfoWithState);
       let fastCommitHash: string | undefined;
       let fastResolvedRef: string | undefined;
@@ -728,7 +753,7 @@ export function useGitExplorer(
     let info: InfoRefsUploadPackResponse | null = null;
 
     // Check if infoRefs are already available synchronously.
-    info = getInfoRefsFromState(pool, poolState);
+    info = getInfoRefsFromState(pool, pool.getState());
 
     if (!info) {
       // Wait for the pool's observable to emit infoRefs.
@@ -796,7 +821,7 @@ export function useGitExplorer(
 
     if (signal.aborted) return;
 
-    const infoWithState = includeStateRefs(info, stateRefs);
+    const infoWithState = includeStateRefs(info, stableStateRefs);
     const parsedRefs = parseRefs(infoWithState);
     setState((prev) => ({ ...prev, refs: parsedRefs }));
 
@@ -822,7 +847,7 @@ export function useGitExplorer(
       const resolved = resolveRefAndPath(
         refAndPath,
         refreshedInfo
-          ? includeStateRefs(refreshedInfo, stateRefs)
+          ? includeStateRefs(refreshedInfo, stableStateRefs)
           : infoWithState,
       );
       if (!resolved) {
@@ -1047,7 +1072,8 @@ export function useGitExplorer(
       loading: false,
       pathExists: false,
     }));
-  }, [pool, refAndPath, knownHeadCommit, stateRefs, poolState.effectiveRefs]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [pool, refAndPath, knownHeadCommit, stableStateRefs, effectiveRefsKey]);
+  /* eslint-enable react-hooks/exhaustive-deps */
 
   // Re-run when the pool changes or when the pool emits infoRefs for the
   // first time (poolState.health transitions away from "idle"/"connecting").

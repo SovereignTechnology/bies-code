@@ -4,6 +4,7 @@
 
 ### Fixes
 
+- Keep unavailable repository code pages settled on their error state instead of repeatedly flashing loading placeholders and polling Git servers for stale Nostr state.
 - Reconcile issue and pull-request descendants across repository and mailbox relays, and persist verified deletion tombstones before cache hydration so split-relay deletions remain authoritative after reloads.
 - Preserve non-root GRASP service paths across server preferences, repository creation and editing, maintainer invitations, relay matching, and percent-encoded `nostr://` relay hints.
 - Complete repository-relay issue and pull-request thread loading across every `e`, `E`, and `q` descendant so reactions, revisions, and deletion requests are not lost at batch or delivery-order boundaries.

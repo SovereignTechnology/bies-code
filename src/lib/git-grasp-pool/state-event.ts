@@ -112,6 +112,15 @@ export class StateEventManager {
    * delay. Each call doubles the delay up to BACKOFF_MAX_MS.
    */
   scheduleBackoffFetch(callback: () => void): void {
+    // Backoff polling exists to bridge the short window between publishing a
+    // state event and Git servers applying it. Once that window has passed,
+    // automatic retries only churn the network and repeatedly disturb the UI;
+    // the user can still request an explicit refresh from the error state.
+    if (!this.isRecent()) {
+      this.cancelBackoff();
+      return;
+    }
+
     this.cancelBackoff();
     this._retryAt = Date.now() + this.backoffDelay;
     this.backoffTimer = setTimeout(() => {
