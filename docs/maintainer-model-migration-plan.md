@@ -1,6 +1,6 @@
 # Maintainer Model Migration Plan
 
-> **Status:** Wave 1 implemented. Wave 2 is next.
+> **Status:** Waves 1 and 2 implemented. Wave 3 is next.
 >
 > **Approach:** Land the maintainer-model change in deployable waves. Each
 > wave must leave gitworkshop with one internally consistent authority model;
