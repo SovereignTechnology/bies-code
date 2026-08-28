@@ -4,11 +4,14 @@ import {
   buildStackCandidateFilter,
   getEffectivePRMergeBases,
   getInferredPRChildren,
+  getOpenInferredPRParent,
   getInferredPRStackItems,
   getInferredPRAmbiguousChildren,
   getInferredPRStackLayer,
   resolveInferredPRParents,
+  withCurrentPRSubjects,
 } from "./inferredPRParents";
+import type { ResolvedPRLite } from "./nip34";
 
 const repo = "30617:maintainer:repo";
 function event(
@@ -47,6 +50,34 @@ const update = (
     createdAt,
   );
 
+function resolvedPR(
+  id: string,
+  originalSubject: string,
+  currentSubject: string,
+  status: ResolvedPRLite["status"] = "open",
+): ResolvedPRLite {
+  return {
+    id,
+    pubkey: "author",
+    event: root(id, `${id}-tip`),
+    itemType: "pr",
+    targetBranch: undefined,
+    originalSubject,
+    currentSubject,
+    content: "",
+    createdAt: 1,
+    lastActivityAt: 1,
+    status,
+    labels: [],
+    repoCoords: [repo],
+    commentCount: 0,
+    participantCount: 0,
+    zapTotal: 0,
+    authorisedUsers: new Set(["author"]),
+    deletedEssentialEventIds: new Set(),
+  };
+}
+
 describe("inferred PR parents", () => {
   it("matches root tips and resolves historical update tips to their root", () => {
     const parent = root("parent", "old-tip");
@@ -63,6 +94,53 @@ describe("inferred PR parents", () => {
       child: { rootId: child.id, subject: "child" },
       parents: [{ rootId: parent.id, subject: "parent" }],
     });
+  });
+
+  it("applies authorised subject renames to every stack node", () => {
+    const relations = new Map([
+      [
+        "child",
+        {
+          status: "matched" as const,
+          child: { rootId: "child", subject: "Old child" },
+          parents: [{ rootId: "parent", subject: "Old parent" }] as [
+            { rootId: string; subject: string },
+          ],
+        },
+      ],
+    ]);
+
+    const updated = withCurrentPRSubjects(relations, [
+      resolvedPR("parent", "Old parent", "Renamed parent"),
+      resolvedPR("child", "Old child", "Renamed child"),
+    ]);
+
+    expect(getInferredPRStackItems(updated, "child")).toEqual([
+      { rootId: "parent", subject: "Renamed parent" },
+      { rootId: "child", subject: "Renamed child" },
+    ]);
+  });
+
+  it("recognises only a definite open or draft stack parent", () => {
+    const relation = {
+      status: "matched" as const,
+      child: { rootId: "child", subject: "Child" },
+      parents: [{ rootId: "parent", subject: "Original parent" }] as [
+        { rootId: string; subject: string },
+      ],
+    };
+
+    expect(
+      getOpenInferredPRParent(relation, [
+        resolvedPR("parent", "Original parent", "Current parent"),
+      ]),
+    ).toEqual({ rootId: "parent", subject: "Current parent" });
+    expect(
+      getOpenInferredPRParent(relation, [
+        resolvedPR("parent", "Original parent", "Current parent", "resolved"),
+      ]),
+    ).toBeNull();
+    expect(getOpenInferredPRParent(relation, undefined)).toBeUndefined();
   });
 
   it("uses a child's latest update merge base", () => {

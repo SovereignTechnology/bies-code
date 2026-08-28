@@ -76,6 +76,7 @@ export default function RepoPRsPage() {
     gitPool,
     gitPoolState,
     repoState,
+    prs,
   );
   const ciRuns = useRepoCI(repo?.allCoordinates, resolved?.repoRelayGroup);
   const { coordinatorState, trust } = useRepositoryCITrust(

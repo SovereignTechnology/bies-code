@@ -115,6 +115,7 @@ import type { NostrEvent } from "nostr-tools";
 import { useInferredPRParents } from "@/hooks/useInferredPRParents";
 import { InferredPRStackMap } from "@/components/InferredPRParentLinks";
 import {
+  getOpenInferredPRParent,
   getInferredPRAmbiguousChildren,
   getInferredPRChildren,
   getInferredPRStackItems,
@@ -446,8 +447,10 @@ export default function PRPage() {
     gitPool,
     gitPoolState,
     repoState,
+    prs,
   );
   const inferredParent = prId ? inferredParents?.get(prId) : undefined;
+  const openStackParent = getOpenInferredPRParent(inferredParent, prs);
   const inferredStackItems =
     prId && inferredParents
       ? getInferredPRStackItems(inferredParents, prId)
@@ -1850,6 +1853,7 @@ export default function PRPage() {
                     targetIsDefaultBranch={targetIsDefaultBranch}
                     currentStateEvent={repoState?.event}
                     prs={prs}
+                    openStackParent={openStackParent}
                     guessedBaseCommitId={guessedBaseCommitId}
                     analysis={mergeAnalysis}
                     prefetched={prefetchedMergeObjects}

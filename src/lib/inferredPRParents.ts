@@ -6,6 +6,7 @@ import {
   compareNip01Chronologically,
   getRootRepositoryCoordinates,
   isItemEventAuthorised,
+  type ResolvedPRLite,
 } from "@/lib/nip34";
 
 export interface InferredPRParent {
@@ -28,6 +29,68 @@ export type InferredPRParentRelation =
 export interface InferredPRStackLayer {
   position: number;
   size: number;
+}
+
+/** Apply the latest authorised PR subjects to an inferred topology snapshot. */
+export function withCurrentPRSubjects(
+  relations: ReadonlyMap<string, InferredPRParentRelation>,
+  prs: readonly ResolvedPRLite[],
+): ReadonlyMap<string, InferredPRParentRelation> {
+  const currentSubjects = new Map(
+    prs
+      .filter((pr) => pr.itemType === "pr")
+      .map((pr) => [pr.id, pr.currentSubject || pr.originalSubject]),
+  );
+  let changed = false;
+  const update = (item: InferredPRParent): InferredPRParent => {
+    const subject = currentSubjects.get(item.rootId);
+    if (!subject || subject === item.subject) return item;
+    changed = true;
+    return { ...item, subject };
+  };
+  const updated = new Map<string, InferredPRParentRelation>();
+
+  for (const [childId, relation] of relations) {
+    const child = update(relation.child);
+    if (relation.status === "matched") {
+      updated.set(childId, {
+        status: "matched",
+        child,
+        parents: [update(relation.parents[0])],
+      });
+    } else {
+      updated.set(childId, {
+        status: "ambiguous",
+        child,
+        parents: relation.parents.map(update),
+      });
+    }
+  }
+
+  return changed ? updated : relations;
+}
+
+/** Return a definite inferred parent while that PR is still open or draft. */
+export function getOpenInferredPRParent(
+  relation: InferredPRParentRelation | undefined,
+  prs: readonly ResolvedPRLite[] | undefined,
+): InferredPRParent | null | undefined {
+  if (!prs) return undefined;
+  if (!relation || relation.status !== "matched") return null;
+
+  const rootId = relation.parents[0].rootId;
+  const parent = prs.find(
+    (pr) =>
+      pr.itemType === "pr" &&
+      pr.id === rootId &&
+      (pr.status === "open" || pr.status === "draft"),
+  );
+  if (!parent) return null;
+
+  return {
+    rootId,
+    subject: parent.currentSubject || parent.originalSubject,
+  };
 }
 
 /** Calculate a PR's layer within an unambiguous inferred chain. */
