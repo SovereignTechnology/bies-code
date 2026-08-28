@@ -304,13 +304,13 @@ fields and stop recommending the removed directional set.
 
 ### Wave 3 gate
 
-- [ ] Every confirmed component appears once in global browse results.
-- [ ] Searching for any confirmed member returns the same repository card.
-- [ ] Two unrelated same-identifier components remain separate.
-- [ ] An invitation between those components does not merge their cards.
-- [ ] Accepting the invitation moves the announcement into exactly one joined
+- [x] Every confirmed component appears once in global browse results.
+- [x] Searching for any confirmed member returns the same repository card.
+- [x] Two unrelated same-identifier components remain separate.
+- [x] An invitation between those components does not merge their cards.
+- [x] Accepting the invitation moves the announcement into exactly one joined
       component after the new event is observed.
-- [ ] Grouping is deterministic regardless of relay/event arrival order.
+- [x] Grouping is deterministic regardless of relay/event arrival order.
 
 ## Wave 4 — Exits, history, and conservative mutations
 
