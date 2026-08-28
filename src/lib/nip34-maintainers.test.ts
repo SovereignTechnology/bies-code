@@ -116,6 +116,47 @@ describe("reciprocal maintainer authorization", () => {
     );
   });
 
+  it("deduplicates active role targets like ngit without discarding authority", () => {
+    const resolved = resolveChain(
+      [
+        announcement(owner, [
+          ["M", invitee, "10"],
+          ["M", invitee, "10"],
+          ["m", owner, "10"],
+          ["maintainers", owner, invitee],
+        ]),
+        announcement(
+          invitee,
+          [
+            ["M", invitee, "20"],
+            ["m", owner, "20"],
+            ["maintainers", owner, invitee],
+          ],
+          2,
+        ),
+      ],
+      owner,
+      repoId,
+    );
+
+    expect(new Set(resolved?.confirmedMaintainers)).toEqual(
+      new Set([owner, invitee]),
+    );
+    expect(resolved?.leadResolution).toEqual({
+      leadMaintainer: invitee,
+      source: "explicit",
+      path: [owner, invitee],
+    });
+    expect(resolved?.repositoryHealth).toContainEqual(
+      expect.objectContaining({
+        code: "duplicate-role-record",
+        author: owner,
+        role: "M",
+        subject: invitee,
+      }),
+    );
+  });
+
   it("treats ended and deferred self roles as departures", () => {
     const ownerEvent = announcement(owner, [
       ["M", owner, "10"],

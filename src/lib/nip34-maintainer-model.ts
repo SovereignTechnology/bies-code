@@ -177,10 +177,8 @@ function parseAnnouncement(event: NostrEvent): ParsedAnnouncement {
     ([name]) => name === "maintainers",
   );
   const health: RepositoryHealthWarning[] = [];
-  const grouped = new Map<
-    string,
-    { tag: string[]; record?: RepositoryRoleRecord }[]
-  >();
+  const duplicateCounts = new Map<string, number>();
+  const roleRecords: RepositoryRoleRecord[] = [];
 
   for (const tag of roleTags) {
     const role = tag[0] as RepositoryRole;
@@ -194,28 +192,24 @@ function parseAnnouncement(event: NostrEvent): ParsedAnnouncement {
         role,
         subject: HEX_PUBKEY.test(subject) ? subject : undefined,
       });
+    } else {
+      roleRecords.push(record);
     }
     const key = `${role}:${subject}`;
-    const entries = grouped.get(key) ?? [];
-    entries.push({ tag, record });
-    grouped.set(key, entries);
+    duplicateCounts.set(key, (duplicateCounts.get(key) ?? 0) + 1);
   }
 
-  const roleRecords: RepositoryRoleRecord[] = [];
-  for (const [key, entries] of grouped) {
-    if (entries.length > 1) {
+  for (const [key, count] of duplicateCounts) {
+    if (count > 1) {
       const [role, subject] = key.split(":");
       health.push({
         code: "duplicate-role-record",
-        message: `Duplicate ${role} role records cannot grant authority`,
+        message: `Duplicate ${role} role records are resolved independently`,
         author: event.pubkey,
         role: role as RepositoryRole,
         subject: HEX_PUBKEY.test(subject) ? subject : undefined,
       });
-      continue;
     }
-    const record = entries[0].record;
-    if (record) roleRecords.push(record);
   }
 
   const activeRoles = roleRecords
