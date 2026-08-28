@@ -303,6 +303,7 @@ export default function RepoSettingsPage() {
 
   return (
     <RepoSettingsForm
+      key={editableRepo.selectedMaintainer}
       repo={editableRepo}
       basePath={basePath}
       repoState={repoState}
