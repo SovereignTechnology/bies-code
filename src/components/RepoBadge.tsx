@@ -157,7 +157,7 @@ interface RepoBadgeProps {
  * <RepoBadge coord="30617:<pubkey>:<d-tag>" />
  *
  * // With a pre-resolved name (skips store lookup):
- * <RepoBadge coord={repo.allCoordinates[0]} repoName={repo.name} />
+ * <RepoBadge coord={repo.confirmedMemberCoordinates[0]} repoName={repo.name} />
  * ```
  */
 export function RepoBadge({

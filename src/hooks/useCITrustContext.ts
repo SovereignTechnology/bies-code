@@ -415,7 +415,9 @@ function useCISocialEvidence(
   }, [followKey, store]);
   const socialCoordinates = [
     ...new Set(
-      (socialRepositories ?? []).flatMap((repo) => repo.allCoordinates),
+      (socialRepositories ?? []).flatMap(
+        (repo) => repo.confirmedMaintainerCoordinates,
+      ),
     ),
   ];
   const socialRelays = [
@@ -495,7 +497,7 @@ function useCISocialEvidence(
             if (matchingCoordinates.length === 0) continue;
             const matchingRepositories = (socialRepositories ?? []).filter(
               (repository) =>
-                repository.allCoordinates.some((coord) =>
+                repository.confirmedMaintainerCoordinates.some((coord) =>
                   matchingCoordinates.includes(coord),
                 ),
             );

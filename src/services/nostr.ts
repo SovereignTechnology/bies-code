@@ -54,9 +54,9 @@ import {
   COVER_NOTE_KIND,
   parseRepoCoordinate,
   isRepositoryRootItem,
+  resolveChain,
 } from "@/lib/nip34";
 import { CI_EVENT_KINDS, CI_RUN_KIND } from "@/lib/ci";
-import { Repository, isValidRepository } from "@/casts/Repository";
 import { SOFTWARE_APPLICATION_KIND } from "@/casts/Software";
 import {
   createPaginatedTagValueLoader,
@@ -331,44 +331,21 @@ const relayGroupResolver: RelayGroupResolver = async (groupId) => {
 
   // Repo coord: "30617:<pubkey>:<d>"
   //
-  // BFS through the full recursive maintainer chain so that ALL relay URLs
-  // declared in any announcement in the chain are returned, not just the
-  // relays from the single entry-point announcement. This mirrors the
-  // RepositoryRelayGroup model (which is the reactive/additive counterpart
-  // used for READ subscriptions). At publish-time all announcements that
-  // have arrived in the EventStore are used; any that arrive later will be
-  // picked up by outboxStore.reResolveRelayGroups() when triggered.
+  // Resolve the reciprocal component before accepting shared relay metadata.
+  // Directionally discovered invitation announcements never widen a publish
+  // target. Any announcements arriving later are picked up when the outbox
+  // re-resolves relay groups.
   if (groupId.startsWith("30617:")) {
     const parts = groupId.split(":");
     const pubkey = parts[1];
-    const d = parts[2];
+    const d = parts.slice(2).join(":");
     if (!pubkey || !d) return [];
 
-    const allRelays = new Set<string>();
-    const visited = new Set<string>();
-    const queue = [pubkey];
-
-    while (queue.length > 0) {
-      const pk = queue.shift()!;
-      if (visited.has(pk)) continue;
-      visited.add(pk);
-
-      const events = eventStore.getByFilters({
-        kinds: [30617],
-        authors: [pk],
-        "#d": [d],
-      } as Filter);
-      const ev = events[0];
-      if (!ev || !isValidRepository(ev)) continue;
-
-      const repo = new Repository(ev, eventStore);
-      for (const relay of repo.relays) allRelays.add(relay);
-      for (const maintainer of repo.maintainers) {
-        if (!visited.has(maintainer)) queue.push(maintainer);
-      }
-    }
-
-    return [...allRelays];
+    const events = eventStore.getByFilters({
+      kinds: [30617],
+      "#d": [d],
+    } as Filter);
+    return resolveChain(events, pubkey, d)?.relays ?? [];
   }
 
   // Static settings-based groups

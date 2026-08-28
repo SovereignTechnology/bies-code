@@ -220,7 +220,7 @@ export default function RepoIssuesPage() {
               </DialogDescription>
             </DialogHeader>
             <CreateIssueForm
-              repoCoords={repo.allCoordinates}
+              repoCoords={repo.confirmedMemberCoordinates}
               onSuccess={() => setNewIssueOpen(false)}
               onCancel={() => setNewIssueOpen(false)}
             />

@@ -25,7 +25,7 @@
  *
  * Multi-maintainer repos are announced under one coordinate per maintainer
  * and CI events may carry multiple `a` tags — every #a filter here takes the
- * repo's full coordinate set (repo.allCoordinates).
+ * repo's confirmed maintainer coordinate set.
  *
  * No trust filtering is applied — all runner identities are displayed and
  * the UI shows who signed each result.
@@ -308,7 +308,7 @@ export function useCIForCommit(
  * coordinates, so the full coordinate set is passed) and reads them back
  * from the store grouped into workflow runs, most recent first.
  *
- * @param repoCoords     - The repo's full coordinate set (repo.allCoordinates)
+ * @param repoCoords     - The repo's confirmed maintainer coordinates
  * @param repoRelayGroup - Repo relay group from useResolvedRepository
  */
 export function useRepoCI(

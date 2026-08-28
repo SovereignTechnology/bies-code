@@ -124,13 +124,13 @@ fi
 
 ### Repository authorization model — non-negotiable
 
-Nostr is permissionless: **anyone can publish any event.** A NIP-34 repository is _not_ a single pubkey + identifier; it's an identifier plus the **transitive maintainer chain** of pubkeys that mutually list each other in their kind:30617 announcements. Any event that participates in repo state (issues, patches, PRs, status events, labels, repo state kind:30618, repo announcements themselves) is only authoritative if its author is in that maintainer set — or, for issue/PR comments and statuses, the author of the root item.
+Nostr is permissionless: **anyone can publish any event.** A NIP-34 repository is _not_ a single pubkey + identifier; it is an identifier plus a **reciprocally confirmed component** of kind:30617 announcements. Directional listings are invitations and grant no authority. Kind:30618 state and maintainer-only operations require a current confirmed maintainer. Status, label, subject, and cover-note events accept the root author or a current confirmed member (maintainer or moderator).
 
 **Rules:**
 
 - **Always filter by `authors`** when fetching anything trust-bearing for a repo. Never trust an event because its `#a` / `#d` matches.
 - **URLs for addressable events include the author**: `/:npub/:repoId/...`, never `/:repoId/...`. (See §"Routing" — multi-segment repo routes must be declared above the `/:nip19` catch-all.)
-- **Don't roll your own author check.** The maintainer set is computed (with cycle detection) by the `Repository` cast in `src/casts/Repository.ts` and surfaced as `repo.maintainerSet` / `repo.allCoordinates` via `useResolvedRepository`. Pass those into any new query or status check; copy the pattern from `src/hooks/useIssues.ts`, `src/hooks/usePRs.ts`, or `src/hooks/useRepositoryState.ts`.
+- **Don't roll your own author check.** The pure resolver is surfaced through `useResolvedRepository`. Use `repo.confirmedMaintainers` / `repo.confirmedMaintainerCoordinates` for state, merges, settings, releases, and CI controls; use `repo.confirmedMembers` / `repo.confirmedMemberCoordinates` for member actions and collaboration tags. `repo.discoveryPubkeys`, `repo.discoveredAnnouncements`, and invitations are never authority sets. Copy the pattern from `src/hooks/useIssues.ts`, `src/hooks/usePRs.ts`, or `src/hooks/useRepositoryState.ts`.
 - **Background:** see `docs/matainership.md` for the full multi-maintainer model (recursive maintainers, mutual listing = one repo, splits when the chain breaks).
 
 For events that are intentionally open (kind:1 notes, kind:7 reactions, follower kind:10018 lists, public discovery feeds), filtering by author defeats the point — don't.

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Make reciprocal NIP-34 membership the repository authority boundary, add indexed `M`/`m`/`o` role and `defer` resolution, separate discovery from confirmed maintainer/member coordinates, and temporarily disable legacy browser membership writes while preserving membership tags through metadata edits.
+
 ### Fixes
 
 - Recognize open stacked pull requests before warning about an incorrect merge base, wait for the parent to land before enabling merge actions, and keep inferred stack titles current after authorized renames.

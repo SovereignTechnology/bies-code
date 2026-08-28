@@ -32,7 +32,10 @@ export default function RepoCoordinatorsPage({
   const coordinatorPubkey = coordinatorIdentifier
     ? decodePubkeyIdentifier(coordinatorIdentifier)
     : undefined;
-  const runs = useRepoCI(repo?.allCoordinates, resolved?.repoRelayGroup);
+  const runs = useRepoCI(
+    repo?.confirmedMaintainerCoordinates,
+    resolved?.repoRelayGroup,
+  );
   const {
     coordinatorState,
     relationships: coordinatorRelationships,

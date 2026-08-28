@@ -20,7 +20,7 @@
  * Multi-maintainer repos are announced under one coordinate per maintainer,
  * so CI events may carry multiple `a` tags — one per coordinate. All #a
  * fetches and store reads pass the repo's full coordinate set
- * (repo.allCoordinates) so events tagged under any maintainer's coordinate
+ * (repo.confirmedMaintainerCoordinates) so events tagged under any maintainer's coordinate
  * are found.
  *
  * Trust model: none yet — all CI events are displayed regardless of signer.

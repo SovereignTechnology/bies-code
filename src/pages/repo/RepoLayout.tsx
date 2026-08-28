@@ -24,9 +24,6 @@ import { useRepoReleaseSummary } from "@/hooks/useSoftwareReleases";
 import { usePrefetchNip05 } from "@/hooks/usePrefetchNip05";
 import { useDnsIdentity } from "@/hooks/useDnsIdentity";
 import { useRepositoryState } from "@/hooks/useRepositoryState";
-import type { RepositoryState } from "@/casts/RepositoryState";
-import { useGraspServers, type GraspServer } from "@/hooks/useGraspServers";
-import { useMaintainerAcceptanceJob } from "@/hooks/useMaintainerAcceptanceJob";
 import { use$ } from "@/hooks/use$";
 import { useProfile } from "@/hooks/useProfile";
 import { useLoadProfile } from "@/hooks/useLoadProfile";
@@ -38,16 +35,7 @@ import { nip34SupplementalRelayLoader } from "@/services/nostr";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { nip19, type EventTemplate, type NostrEvent } from "nostr-tools";
+import { nip19 } from "nostr-tools";
 import {
   ArrowLeft,
   CircleDot,
@@ -61,8 +49,6 @@ import {
   Workflow,
   Package,
   UserPlus,
-  CheckCircle2,
-  Users,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -72,10 +58,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { RepoContext, type RepoContextValue } from "./RepoContext";
 import {
-  getRepoCloneUrls,
-  graspCloneUrlServiceAddress,
   hasAcceptedRepositoryReference,
-  repoCoordinate,
   type RepoQueryOptions,
   type ResolvedRepo,
 } from "@/lib/nip34";
@@ -98,26 +81,6 @@ import { RepoRelaysContext } from "@/contexts/RepoRelaysContext";
 import { relayGroupUrls$ } from "@/models/RepositoryRelayGroup";
 import { EMPTY } from "rxjs";
 import { catchError } from "rxjs/operators";
-import { useToast } from "@/hooks/useToast";
-import { GraspServerSelector } from "@/components/GraspServerSelector";
-import {
-  graspRepositoryCloneUrl,
-  graspServerFromAddress,
-  selectGraspServiceAddressesWithBackfill,
-  validateGraspServer,
-} from "@/lib/grasp";
-import { DEFAULT_GRASP_SERVERS } from "@/services/settings";
-import {
-  maintainerAcceptanceKey,
-  runMaintainerAcceptanceDelivery,
-  saveMaintainerAcceptanceJob,
-  type MaintainerAcceptanceJob,
-} from "@/services/maintainerAcceptance";
-import {
-  buildMaintainerAcceptanceTemplate,
-  classifyInvitationState,
-  getAcceptanceMaintainerSelection,
-} from "@/lib/repositoryInvitation";
 // ---------------------------------------------------------------------------
 // RepoLayout
 // ---------------------------------------------------------------------------
@@ -252,7 +215,7 @@ function RepoLayoutResolved({
 
   // Prefetch NIP-05 identities for all maintainers so useRepoPath can resolve
   // them synchronously from the IDB cache on subsequent visits.
-  usePrefetchNip05(repo?.maintainerSet ?? []);
+  usePrefetchNip05(repo?.confirmedMembers ?? []);
   const repoRelayGroup = resolved?.repoRelayGroup;
   const extraRelaysForMaintainerMailboxCoverage =
     resolved?.extraRelaysForMaintainerMailboxCoverage;
@@ -272,16 +235,16 @@ function RepoLayoutResolved({
   // calls nip34ListLoader for each newly found item, ensuring status events
   // (1630-1633) and other essentials on author/maintainer outbox relays are
   // fetched, not just the root events.
-  const coordKey = repo?.allCoordinates?.join(",") ?? "";
+  const coordKey = repo?.confirmedMemberCoordinates.join(",") ?? "";
   use$(() => {
     if (
       curationMode !== "outbox" ||
       !extraRelaysForMaintainerMailboxCoverage ||
-      !repo?.allCoordinates?.length
+      !repo?.confirmedMemberCoordinates.length
     )
       return undefined;
     return nip34SupplementalRelayLoader(
-      repo.allCoordinates,
+      repo.confirmedMemberCoordinates,
       extraRelaysForMaintainerMailboxCoverage,
     ).pipe(catchError(() => EMPTY));
   }, [curationMode, extraRelaysForMaintainerMailboxCoverage, coordKey]);
@@ -290,45 +253,54 @@ function RepoLayoutResolved({
     () => ({
       relayHints,
       useItemAuthorRelays: false,
-      maintainerPubkeys: repo?.maintainerSet ?? [],
+      maintainerPubkeys: repo?.confirmedMaintainers ?? [],
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [relayHints.join(","), repo?.maintainerSet?.join(","), curationMode],
+    [relayHints.join(","), repo?.confirmedMaintainers.join(","), curationMode],
   );
 
-  const issues = useIssues(repo?.allCoordinates, repoRelayGroup, queryOptions);
-  const prs = usePRs(repo?.allCoordinates, repoRelayGroup, queryOptions);
+  const issues = useIssues(
+    repo?.confirmedMemberCoordinates,
+    repoRelayGroup,
+    queryOptions,
+  );
+  const prs = usePRs(
+    repo?.confirmedMemberCoordinates,
+    repoRelayGroup,
+    queryOptions,
+    repo?.confirmedMaintainers,
+  );
 
   const acceptedRepoCoordinates = useMemo(
-    () =>
-      repo?.confirmedMaintainers.map((maintainer) =>
-        repoCoordinate(maintainer, repo.dTag),
-      ) ?? [],
+    () => repo?.confirmedMemberCoordinates ?? [],
     [repo],
   );
   const selectedRepoCoordinate = repo?.selectedCoordinate;
   const acceptedAnnouncements = useMemo(
-    () =>
-      repo?.announcements.filter((announcement) =>
-        repo.confirmedMaintainers.includes(announcement.pubkey),
-      ) ?? [],
+    () => repo?.confirmedAnnouncements ?? [],
     [repo],
   );
 
   // Whether the repo has any CI events (ngit-ci kinds 9841/9842) — drives
   // visibility of the Actions tab. Cheap limit-1 probe by #a across all
   // maintainer coordinates.
-  const hasCI = useRepoHasCI(repo?.allCoordinates, repoRelayGroup);
+  const hasCI = useRepoHasCI(
+    repo?.confirmedMaintainerCoordinates,
+    repoRelayGroup,
+  );
   const releaseSummary = useRepoReleaseSummary(
-    repo?.allCoordinates,
-    repo?.maintainerSet,
+    repo?.confirmedMaintainerCoordinates,
+    repo?.confirmedMaintainers,
     repoRelayGroup,
     !isReleasesTab,
   );
   const hasReleases = releaseSummary.hasReleases;
 
-  const [repoState, repoRelayEose, relayStateMap, repoStateEvents] =
-    useRepositoryState(repo?.dTag, repo?.maintainerSet, repoRelayGroup);
+  const [repoState, repoRelayEose, relayStateMap] = useRepositoryState(
+    repo?.dTag,
+    repo?.confirmedMaintainers,
+    repoRelayGroup,
+  );
 
   // Count open issues for the tab badge
   const openIssueCount = useMemo(() => {
@@ -350,18 +322,12 @@ function RepoLayoutResolved({
     ).length;
   }, [prs, repo]);
 
-  // Every recursively reachable maintainer can enter Settings. The settings
-  // page redirects maintainers with announcements to their own coordinate and
-  // sends invitees without one through acceptance first.
+  // Settings and maintainer-only controls are restricted to the reciprocal
+  // confirmed component.
   const account = useActiveAccount();
-  const {
-    servers: accountGraspServers,
-    isFromUserList: accountGraspServersFromUserList,
-    isLoading: accountGraspServersLoading,
-  } = useGraspServers(account?.pubkey);
   const canOpenSettings =
     account?.pubkey && repo
-      ? repo.maintainerSet.includes(account.pubkey)
+      ? repo.confirmedMaintainers.includes(account.pubkey)
       : false;
   const showReleases = hasReleases || isReleasesTab || canOpenSettings;
 
@@ -662,14 +628,14 @@ function RepoLayoutResolved({
                 />
                 <div className="flex items-center gap-2 flex-shrink-0">
                   <RepoZapButton
-                    targetAnnouncement={repo.announcements.find(
+                    targetAnnouncement={repo.confirmedAnnouncements.find(
                       (a) => a.pubkey === repo.selectedMaintainer,
                     )}
                     repoCoords={acceptedRepoCoordinates}
                   />
                   <FollowRepoButton repoCoord={selectedRepoCoordinate} />
                   <StarButton
-                    targetAnnouncement={repo.announcements.find(
+                    targetAnnouncement={repo.confirmedAnnouncements.find(
                       (a) => a.pubkey === repo.selectedMaintainer,
                     )}
                     allAnnouncements={acceptedAnnouncements}
@@ -820,23 +786,9 @@ function RepoLayoutResolved({
         )}
 
         {repo && account?.pubkey && (
-          <MaintainerInvitationBanner
+          <MaintainerInvitationSafetyBanner
             repo={repo}
             accountPubkey={account.pubkey}
-            signer={account.signer}
-            graspServers={accountGraspServers}
-            graspServersFromUserList={accountGraspServersFromUserList}
-            ownState={repoStateEvents?.find(
-              (state) => state.publisherPubkey === account.pubkey,
-            )}
-            stateCheckComplete={repoRelayEose && !accountGraspServersLoading}
-            canonicalState={repoState}
-            openAcceptanceInitially={
-              isSettingsTab &&
-              !repo.announcements.some(
-                (announcement) => announcement.pubkey === account.pubkey,
-              )
-            }
           />
         )}
 
@@ -928,84 +880,15 @@ function RepoLayoutResolved({
   );
 }
 
-function getDefaultPersonalInfrastructure(
-  accountPubkey: string,
-  dTag: string,
-  graspServers: GraspServer[],
-): { cloneUrls: string[]; relayUrls: string[] } {
-  const npub = nip19.npubEncode(accountPubkey);
-  const encodedDTag = encodeURIComponent(dTag);
-  return {
-    cloneUrls: graspServers.map(({ serviceAddress }) =>
-      graspRepositoryCloneUrl(serviceAddress, npub, encodedDTag),
-    ),
-    relayUrls: graspServers.map(({ wsUrl }) => wsUrl),
-  };
-}
-
-function getAnnouncementGraspAddresses(
-  announcement: NostrEvent | undefined,
-): string[] {
-  if (!announcement) return [];
-  return Array.from(
-    new Set(
-      getRepoCloneUrls(announcement)
-        .map(graspCloneUrlServiceAddress)
-        .filter((address): address is string => !!address),
-    ),
-  );
-}
-
-function getInvitationDefaultGraspAddresses(
-  repo: ResolvedRepo,
-  ownAnnouncement: NostrEvent | undefined,
-  graspServers: GraspServer[],
-  graspServersFromUserList: boolean,
-): string[] {
-  return selectGraspServiceAddressesWithBackfill(
-    [
-      getAnnouncementGraspAddresses(ownAnnouncement),
-      graspServersFromUserList
-        ? graspServers.map((server) => server.serviceAddress)
-        : [],
-      repo.graspServerAddresses,
-    ],
-    DEFAULT_GRASP_SERVERS,
-  );
-}
-
-function MaintainerInvitationBanner({
+function MaintainerInvitationSafetyBanner({
   repo,
   accountPubkey,
-  signer,
-  graspServers,
-  graspServersFromUserList,
-  ownState,
-  stateCheckComplete,
-  canonicalState,
-  openAcceptanceInitially,
 }: {
   repo: ResolvedRepo;
   accountPubkey: string;
-  signer: {
-    signEvent(template: EventTemplate): Promise<NostrEvent>;
-  };
-  graspServers: GraspServer[];
-  graspServersFromUserList: boolean;
-  ownState: RepositoryState | undefined;
-  stateCheckComplete: boolean;
-  canonicalState: RepositoryState | null | undefined;
-  openAcceptanceInitially: boolean;
 }) {
-  const isRequested = repo.requestedMaintainers.includes(accountPubkey);
-  const acceptanceJob = useMaintainerAcceptanceJob(
-    accountPubkey,
-    repo.selectedMaintainer,
-    repo.dTag,
-  );
-  const ownAnnouncement = repo.announcements.find(
-    (announcement) => announcement.pubkey === accountPubkey,
-  );
+  if (!repo.invitedMaintainers.includes(accountPubkey)) return null;
+
   const inviters = Array.from(
     new Set(
       repo.maintainerEdges
@@ -1013,17 +896,6 @@ function MaintainerInvitationBanner({
         .map(({ from }) => from),
     ),
   );
-  const acceptanceSelection = getAcceptanceMaintainerSelection(
-    repo,
-    accountPubkey,
-  );
-  const stateDecision = classifyInvitationState(
-    canonicalState,
-    ownState,
-    accountPubkey,
-  );
-
-  if (!isRequested && !acceptanceJob) return null;
 
   return (
     <div className="border-b border-pink-500/20 bg-gradient-to-r from-pink-500/10 via-background to-violet-500/10">
@@ -1037,423 +909,33 @@ function MaintainerInvitationBanner({
               <p className="font-semibold">
                 You’re invited to maintain {repo.name}
               </p>
-              <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm text-muted-foreground">
-                {inviters.length > 0 ? (
-                  <>
-                    <span>Invited by</span>
-                    {inviters.map((pubkey) => (
-                      <UserLink
-                        key={pubkey}
-                        pubkey={pubkey}
-                        avatarSize="xs"
-                        nameClassName="text-sm"
-                      />
-                    ))}
-                  </>
-                ) : (
-                  <span>Select how you want to join the maintainer group.</span>
-                )}
-              </div>
+              {inviters.length > 0 && (
+                <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm text-muted-foreground">
+                  <span>Invited by</span>
+                  {inviters.map((pubkey) => (
+                    <UserLink
+                      key={pubkey}
+                      pubkey={pubkey}
+                      avatarSize="xs"
+                      nameClassName="text-sm"
+                    />
+                  ))}
+                </div>
+              )}
             </div>
           </div>
-
-          {acceptanceJob ? (
-            <MaintainerAcceptanceProgress job={acceptanceJob} />
-          ) : !stateCheckComplete ? (
-            <Button type="button" disabled className="w-full sm:w-auto">
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              Checking repository state and infrastructure…
-            </Button>
-          ) : stateDecision.blocked ? (
-            <div className="max-w-md rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-sm">
-              <p className="font-medium text-amber-700 dark:text-amber-300">
-                Use ngit CLI to accept this invitation
-              </p>
-              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                The repository owner has a newer state that would replace or
-                remove refs from your repository. Interactive ref selection and
-                combining is deferred to a future update.
-              </p>
-            </div>
-          ) : (
-            <MaintainerAcceptanceControls
-              key={`${repo.selectedMaintainer}:${acceptanceSelection.options.join(
-                ",",
-              )}:${acceptanceSelection.defaults.join(",")}`}
-              repo={repo}
-              ownAnnouncement={ownAnnouncement}
-              accountPubkey={accountPubkey}
-              signer={signer}
-              graspServers={graspServers}
-              graspServersFromUserList={graspServersFromUserList}
-              canonicalState={canonicalState}
-              openInitially={openAcceptanceInitially}
-              {...acceptanceSelection}
-            />
-          )}
+          <div className="max-w-md rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-sm">
+            <p className="font-medium text-amber-700 dark:text-amber-300">
+              Acceptance is temporarily unavailable here
+            </p>
+            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+              GitWorkshop will enable this after its role-aware safety checks
+              land. For now, accept with a compatible ngit v3 client.
+            </p>
+          </div>
         </div>
       </div>
     </div>
-  );
-}
-
-function MaintainerAcceptanceProgress({
-  job,
-}: {
-  job: MaintainerAcceptanceJob;
-}) {
-  const { toast } = useToast();
-  const readyCount = job.syncedCloneUrls.length;
-  const allReady =
-    job.cloneUrls.length > 0 && readyCount === job.cloneUrls.length;
-  const allDelivered = job.relayUrls.every((url) =>
-    job.deliveredRelayUrls.includes(url),
-  );
-  const pendingWork =
-    !allReady || !allDelivered || !job.broadcastReceived || !job.completedAt;
-
-  const retry = async () => {
-    try {
-      const result = await runMaintainerAcceptanceDelivery(job.key);
-      if (result?.phase === "delivery-error") {
-        toast({
-          title: "Some GRASP servers still did not accept the announcement",
-          description: "Check the failed servers and retry.",
-          variant: "destructive",
-        });
-      }
-    } catch (error) {
-      toast({
-        title: "Could not retry invitation delivery",
-        description: error instanceof Error ? error.message : String(error),
-        variant: "destructive",
-      });
-    }
-  };
-
-  if (job.phase === "delivery-error") {
-    const failedTargets = Object.keys(job.relayErrors);
-    return (
-      <div className="flex w-full shrink-0 flex-col gap-2 rounded-lg border border-destructive/30 bg-background/80 px-3 py-2 text-sm sm:w-auto sm:min-w-80">
-        <div className="flex items-center gap-2">
-          <AlertCircle className="h-4 w-4 shrink-0 text-destructive" />
-          <span className="font-medium">Invitation delivery incomplete</span>
-          <span className="ml-auto text-xs text-muted-foreground">
-            {job.deliveredRelayUrls.length}/{job.relayUrls.length}
-          </span>
-        </div>
-        <p className="text-xs text-muted-foreground">
-          {failedTargets.length} selected destination
-          {failedTargets.length === 1 ? "" : "s"} still need the announcement.
-        </p>
-        <Button type="button" size="sm" variant="outline" onClick={retry}>
-          Retry delivery
-        </Button>
-      </div>
-    );
-  }
-
-  const synced = job.phase === "synced";
-  return (
-    <div className="flex w-full shrink-0 items-center gap-2 rounded-lg border bg-background/80 px-3 py-2 text-sm sm:w-auto sm:min-w-72">
-      {synced ? (
-        <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />
-      ) : (
-        <Loader2 className="h-4 w-4 shrink-0 animate-spin text-pink-500" />
-      )}
-      <span className="font-medium">
-        {synced
-          ? allReady
-            ? "Invitation accepted · GRASP servers in sync"
-            : "Invitation accepted · GRASP server synced"
-          : job.phase === "publishing"
-            ? "Accepting invitation · publishing announcement"
-            : "Invitation accepted · syncing GRASP servers"}
-      </span>
-      {job.phase !== "publishing" && (
-        <span className="ml-auto flex items-center gap-1.5 text-xs text-muted-foreground">
-          {synced && pendingWork && (
-            <Loader2 className="h-3 w-3 animate-spin opacity-60" />
-          )}
-          {readyCount}/{job.cloneUrls.length}
-        </span>
-      )}
-    </div>
-  );
-}
-
-function MaintainerAcceptanceControls({
-  repo,
-  ownAnnouncement,
-  accountPubkey,
-  signer,
-  graspServers,
-  graspServersFromUserList,
-  canonicalState,
-  options,
-  defaults,
-  leadMaintainer,
-  openInitially,
-}: {
-  repo: ResolvedRepo;
-  ownAnnouncement: NostrEvent | undefined;
-  accountPubkey: string;
-  signer: {
-    signEvent(template: EventTemplate): Promise<NostrEvent>;
-  };
-  graspServers: GraspServer[];
-  graspServersFromUserList: boolean;
-  canonicalState: RepositoryState | null | undefined;
-  options: string[];
-  defaults: string[];
-  leadMaintainer?: string;
-  openInitially: boolean;
-}) {
-  const { toast } = useToast();
-  const [dialogOpen, setDialogOpen] = useState(openInitially);
-  const [publishing, setPublishing] = useState(false);
-  const [selectedMaintainers, setSelectedMaintainers] =
-    useState<string[]>(defaults);
-  const [selectedAddresses, setSelectedAddresses] = useState<string[]>(() =>
-    getInvitationDefaultGraspAddresses(
-      repo,
-      ownAnnouncement,
-      graspServers,
-      graspServersFromUserList,
-    ),
-  );
-  useEffect(() => {
-    if (openInitially) setDialogOpen(true);
-  }, [openInitially]);
-  const selectedGraspServers = useMemo<GraspServer[]>(
-    () =>
-      selectedAddresses.flatMap((address) => {
-        const server =
-          graspServers.find(
-            (candidate) => candidate.serviceAddress === address,
-          ) ?? graspServerFromAddress(address);
-        return server ? [server] : [];
-      }),
-    [graspServers, selectedAddresses],
-  );
-  const { cloneUrls, relayUrls } = useMemo(
-    () =>
-      getDefaultPersonalInfrastructure(
-        accountPubkey,
-        repo.dTag,
-        selectedGraspServers,
-      ),
-    [accountPubkey, repo.dTag, selectedGraspServers],
-  );
-
-  const accept = async () => {
-    if (
-      publishing ||
-      selectedMaintainers.length === 0 ||
-      selectedGraspServers.length === 0
-    ) {
-      return;
-    }
-    setPublishing(true);
-    try {
-      const validationResults = await Promise.all(
-        selectedAddresses.map(async (address) => ({
-          address,
-          error: await validateGraspServer(address, {
-            requiredGrasps: ["GRASP-01", "GRASP-02"],
-          }),
-        })),
-      );
-      const invalidServers = validationResults.filter(({ error }) => !!error);
-      if (invalidServers.length > 0) {
-        throw new Error(
-          invalidServers
-            .map(({ address, error }) => `${address}: ${error}`)
-            .join("; "),
-        );
-      }
-
-      const announcement = await signer.signEvent(
-        buildMaintainerAcceptanceTemplate(
-          repo,
-          ownAnnouncement,
-          accountPubkey,
-          selectedMaintainers,
-          selectedGraspServers,
-        ),
-      );
-      setDialogOpen(false);
-      const key = maintainerAcceptanceKey(
-        accountPubkey,
-        repo.selectedMaintainer,
-        repo.dTag,
-      );
-      const now = Date.now();
-      saveMaintainerAcceptanceJob({
-        key,
-        accountPubkey,
-        invitationAnchor: repo.selectedMaintainer,
-        dTag: repo.dTag,
-        announcement,
-        cloneUrls,
-        relayUrls,
-        deliveredRelayUrls: [],
-        syncedCloneUrls: [],
-        relayErrors: {},
-        deliveryAttempt: 0,
-        broadcastReceived: false,
-        phase: "publishing",
-        stateRefs: canonicalState?.refs ?? [],
-        knownHeadCommit: canonicalState?.headCommitId,
-        stateCreatedAt: canonicalState?.event.created_at,
-        createdAt: now,
-        updatedAt: now,
-      });
-      const result = await runMaintainerAcceptanceDelivery(key);
-      const startedSyncing = (result?.deliveredRelayUrls.length ?? 0) > 0;
-
-      toast({
-        title: startedSyncing
-          ? "Invitation accepted"
-          : "Invitation accepted, but delivery needs attention",
-        description: startedSyncing
-          ? "Your GRASP servers are syncing the repository."
-          : "Retry the GRASP servers that did not accept your announcement.",
-        variant: startedSyncing ? "default" : "destructive",
-      });
-    } catch (error) {
-      setPublishing(false);
-      toast({
-        title: "Could not accept invitation",
-        description:
-          error instanceof Error ? error.message : "Publishing failed.",
-        variant: "destructive",
-      });
-    }
-  };
-
-  const toggleMaintainer = (pubkey: string, checked: boolean) => {
-    setSelectedMaintainers((current) =>
-      checked
-        ? Array.from(new Set([...current, pubkey]))
-        : current.filter((candidate) => candidate !== pubkey),
-    );
-  };
-
-  return (
-    <>
-      <Button
-        type="button"
-        onClick={() => setDialogOpen(true)}
-        className="w-full shrink-0 bg-pink-600 text-white hover:bg-pink-700 sm:w-auto"
-      >
-        <CheckCircle2 className="mr-2 h-4 w-4" />
-        Accept invitation
-      </Button>
-
-      <Dialog
-        open={dialogOpen}
-        onOpenChange={(open) => {
-          if (!publishing) setDialogOpen(open);
-        }}
-      >
-        <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-xl">
-          <DialogHeader>
-            <DialogTitle>Accept invitation</DialogTitle>
-            <DialogDescription>
-              Choose where to host your copy of {repo.name}.
-            </DialogDescription>
-          </DialogHeader>
-
-          <section className="space-y-3">
-            <div>
-              <h3 className="font-medium">Your GRASP servers</h3>
-              <p className="text-sm text-muted-foreground">
-                Where to store the data
-              </p>
-            </div>
-            <GraspServerSelector
-              selectedAddresses={selectedAddresses}
-              onSelectedAddressesChange={setSelectedAddresses}
-              resolvedServers={graspServers}
-              isFromUserList={graspServersFromUserList}
-              additionalAddresses={repo.graspServerAddresses}
-              currentAddresses={getAnnouncementGraspAddresses(ownAnnouncement)}
-              requiredGrasps={["GRASP-01", "GRASP-02"]}
-              disabled={publishing}
-              showTitle={false}
-            />
-          </section>
-
-          {options.length > 1 && (
-            <section className="space-y-3 border-t pt-4">
-              <h3 className="flex items-center gap-2 font-medium">
-                <Users className="h-4 w-4" />
-                Select lead maintainer(s)
-              </h3>
-              <div className="max-h-48 space-y-1 overflow-y-auto">
-                {options.map((pubkey) => {
-                  const checked = selectedMaintainers.includes(pubkey);
-                  return (
-                    <label
-                      key={pubkey}
-                      className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 hover:bg-muted/60"
-                    >
-                      <Checkbox
-                        checked={checked}
-                        disabled={publishing}
-                        onCheckedChange={(value) =>
-                          toggleMaintainer(pubkey, value === true)
-                        }
-                      />
-                      <UserLink
-                        pubkey={pubkey}
-                        avatarSize="xs"
-                        nameClassName="text-sm"
-                        className="min-w-0 flex-1"
-                        noLink
-                      />
-                      {pubkey === leadMaintainer && (
-                        <Badge
-                          variant="outline"
-                          className="h-4 px-1.5 text-[10px] text-pink-600 dark:text-pink-400"
-                        >
-                          lead
-                        </Badge>
-                      )}
-                    </label>
-                  );
-                })}
-              </div>
-            </section>
-          )}
-
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={publishing}
-              onClick={() => setDialogOpen(false)}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              onClick={accept}
-              disabled={
-                publishing ||
-                selectedMaintainers.length === 0 ||
-                selectedAddresses.length === 0
-              }
-              className="bg-pink-600 text-white hover:bg-pink-700"
-            >
-              {publishing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              {publishing ? "Accepting…" : "Accept invitation"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </>
   );
 }
 

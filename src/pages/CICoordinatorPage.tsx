@@ -71,7 +71,7 @@ function coordinatorRepoCoordinate(
   targetPubkeys: ReadonlySet<string>,
 ): string {
   return (
-    repo.allCoordinates.find((coordinate) => {
+    repo.confirmedMaintainerCoordinates.find((coordinate) => {
       const parsed = parseRepoCoordinate(coordinate);
       return parsed ? targetPubkeys.has(parsed.pubkey) : false;
     }) ?? repo.selectedCoordinate
@@ -176,7 +176,7 @@ export default function CICoordinatorPage() {
     const activeRepositories = new Set(
       (targetedRepositories ?? [])
         .filter((repo) =>
-          repo.allCoordinates.some((coordinate) =>
+          repo.confirmedMaintainerCoordinates.some((coordinate) =>
             activeCoordinates.has(coordinate),
           ),
         )
@@ -192,7 +192,7 @@ export default function CICoordinatorPage() {
     return [...new Set(coordinates)].filter((coordinate) => {
       if (activeCoordinates.has(coordinate)) return false;
       const repository = targetedRepositories?.find((repo) =>
-        repo.allCoordinates.includes(coordinate),
+        repo.confirmedMaintainerCoordinates.includes(coordinate),
       );
       return (
         !repository || !activeRepositories.has(repository.selectedCoordinate)

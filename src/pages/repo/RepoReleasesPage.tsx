@@ -1193,8 +1193,8 @@ export default function RepoReleasesPage({
     releasesSettled,
     assetsSettled,
   } = useSoftwareReleases(
-    repo?.allCoordinates,
-    repo?.maintainerSet,
+    repo?.confirmedMaintainerCoordinates,
+    repo?.confirmedMaintainers,
     resolved?.repoRelayGroup,
   );
   const { poolState } = useGitPool(cloneUrls, {
@@ -1229,7 +1229,7 @@ export default function RepoReleasesPage({
     [applications],
   );
   const canPublishRelease =
-    !!account && !!repo?.maintainerSet.includes(account.pubkey);
+    !!account && !!repo?.confirmedMaintainers.includes(account.pubkey);
   const {
     applications: accountApplications,
     settled: accountApplicationsSettled,
@@ -1440,8 +1440,8 @@ export default function RepoReleasesPage({
             open={createApplicationOpen}
             onOpenChange={setCreateApplicationOpen}
             existingApplications={applications}
-            repoCoordinates={repo.allCoordinates}
-            maintainerPubkeys={repo.maintainerSet}
+            repoCoordinates={repo.confirmedMaintainerCoordinates}
+            maintainerPubkeys={repo.confirmedMaintainers}
             relayHint={repo.relays[0]}
           />
         )}
@@ -1452,8 +1452,8 @@ export default function RepoReleasesPage({
               if (!nextOpen) setEditingApplication(undefined);
             }}
             existingApplications={applications}
-            repoCoordinates={repo.allCoordinates}
-            maintainerPubkeys={repo.maintainerSet}
+            repoCoordinates={repo.confirmedMaintainerCoordinates}
+            maintainerPubkeys={repo.confirmedMaintainers}
             relayHint={repo.relays[0]}
             application={editingApplication}
             onPublished={() => setEditingApplication(undefined)}
@@ -1465,7 +1465,7 @@ export default function RepoReleasesPage({
             onOpenChange={setLinkApplicationOpen}
             applications={accountApplications}
             settled={accountApplicationsSettled}
-            repoCoordinates={repo.allCoordinates}
+            repoCoordinates={repo.confirmedMaintainerCoordinates}
             relayHint={repo.relays[0]}
           />
         )}
@@ -1521,8 +1521,8 @@ export default function RepoReleasesPage({
                 if (!nextOpen) setEditingApplication(undefined);
               }}
               existingApplications={applications}
-              repoCoordinates={repo.allCoordinates}
-              maintainerPubkeys={repo.maintainerSet}
+              repoCoordinates={repo.confirmedMaintainerCoordinates}
+              maintainerPubkeys={repo.confirmedMaintainers}
               relayHint={repo.relays[0]}
               application={editingApplication}
               onPublished={(application) => {
@@ -1625,8 +1625,8 @@ export default function RepoReleasesPage({
           existingReleases={releases}
           releaseRelays={releaseRelays}
           gitTags={gitTags}
-          repoCoordinates={repo.allCoordinates}
-          maintainerPubkeys={repo.maintainerSet}
+          repoCoordinates={repo.confirmedMaintainerCoordinates}
+          maintainerPubkeys={repo.confirmedMaintainers}
           relayHint={repo.relays[0]}
         />
       )}

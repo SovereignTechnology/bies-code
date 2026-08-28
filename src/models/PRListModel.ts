@@ -35,14 +35,20 @@ const ESSENTIALS_KINDS = [...STATUS_KINDS, LABEL_KIND, DELETION_KIND] as const;
  *
  * @param coordsCacheKey - Sorted, comma-joined coordinate string (cache key)
  */
-export function PRListModel(coordsCacheKey: string): Model<ResolvedPRLite[]> {
+export function PRListModel(
+  coordsCacheKey: string,
+  maintainerPubkeysKey: string,
+): Model<ResolvedPRLite[]> {
   return (store) => {
     const coords = coordsCacheKey ? coordsCacheKey.split(",") : [];
-    const maintainerSet = new Set<string>(
+    const memberSet = new Set<string>(
       coords.flatMap((c) => {
         const pk = pubkeyFromCoordinate(c);
         return pk ? [pk] : [];
       }),
+    );
+    const maintainerPubkeys = new Set(
+      maintainerPubkeysKey ? maintainerPubkeysKey.split(",") : [],
     );
     const coordinateSet = new Set(coords);
 
@@ -112,8 +118,9 @@ export function PRListModel(coordsCacheKey: string): Model<ResolvedPRLite[]> {
                 essentialEvents as NostrEvent[],
                 commentEvents,
                 zapEvents as NostrEvent[],
-                maintainerSet,
+                memberSet,
                 prUpdateEvents,
+                maintainerPubkeys,
               );
             },
           ),

@@ -87,7 +87,7 @@ export interface RepoStateLoaderOptions {
  * @param relays$   - Observable<string[]> of relay URLs; emits additively as
  *                    new relays are discovered (e.g. from relayGroupUrls$())
  * @param dTag           - Repository d-tag identifier
- * @param maintainerSet  - All maintainer pubkeys
+ * @param confirmedMaintainers - Current reciprocal maintainer authority set
  * @param eventStore     - EventStore to write events into
  * @param opts           - Optional settleTime override
  */
@@ -95,13 +95,13 @@ export function loadRepoStateFromRelays(
   pool: RelayPool,
   relays$: Observable<string[]>,
   dTag: string,
-  maintainerSet: string[],
+  confirmedMaintainers: string[],
   eventStore: IEventStore,
   opts: RepoStateLoaderOptions = {},
 ): Observable<RepoStateResponse> {
   const stateFilter: Filter = {
     kinds: [30618],
-    authors: maintainerSet,
+    authors: confirmedMaintainers,
     "#d": [dTag],
   } as Filter;
 

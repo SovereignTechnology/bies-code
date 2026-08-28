@@ -217,7 +217,7 @@ function invitedRepositoryPath(
   pubkey: string,
   pageSuffix: string,
 ): string {
-  const announcement = repo.announcements.find(
+  const announcement = repo.discoveredAnnouncements.find(
     (event) => event.pubkey === pubkey,
   );
   const announcementRelays = announcement ? getRepoRelays(announcement) : [];
@@ -436,14 +436,14 @@ function SidebarVariant({
   const aboutPath = `${repoBasePath}/about`;
   const editPath = `${repoBasePath}/settings`;
   const isMaintainer =
-    account?.pubkey && account.pubkey === repo.selectedMaintainer;
-  const selectedAnnouncement = repo.announcements.find(
+    !!account?.pubkey && repo.confirmedMaintainers.includes(account.pubkey);
+  const selectedAnnouncement = repo.confirmedAnnouncements.find(
     (a) => a.pubkey === repo.selectedMaintainer,
   );
   const upstreams = selectedAnnouncement
     ? getRepoUpstreams(selectedAnnouncement)
     : [];
-  const isMultiAnnouncement = repo.announcements.length > 1;
+  const isMultiAnnouncement = repo.discoveredAnnouncements.length > 1;
   const maintainerLeadership = useMemo(
     () =>
       computeMaintainerLeadership(
@@ -656,7 +656,7 @@ function SidebarVariant({
                   <Braces className="h-3 w-3" />
                 </Button>
                 <MultiAnnouncementsModal
-                  announcements={repo.announcements}
+                  announcements={repo.discoveredAnnouncements}
                   selectedMaintainer={repo.selectedMaintainer}
                   confirmedMaintainers={repo.confirmedMaintainers}
                   leadMaintainer={maintainerLeadership.leadMaintainer}
@@ -690,20 +690,23 @@ function FullVariant({
   const { basePath } = useRepoContext();
   const account = useActiveAccount();
   const isMaintainer =
-    account?.pubkey && account.pubkey === repo.selectedMaintainer;
+    !!account?.pubkey && repo.confirmedMaintainers.includes(account.pubkey);
   const editPath = `${basePath}/settings`;
 
   // For union display: find which relays/clone URLs are from other reachable
   // repository announcements.
   const selectedAnnouncement = useMemo(
-    () => repo.announcements.find((a) => a.pubkey === repo.selectedMaintainer),
+    () =>
+      repo.confirmedAnnouncements.find(
+        (a) => a.pubkey === repo.selectedMaintainer,
+      ),
     [repo],
   );
   const upstreams = useMemo(
     () => (selectedAnnouncement ? getRepoUpstreams(selectedAnnouncement) : []),
     [selectedAnnouncement],
   );
-  const hasMultipleAnnouncements = repo.announcements.length > 1;
+  const hasMultipleAnnouncements = repo.confirmedAnnouncements.length > 1;
   const confirmedMaintainerSet = useMemo(
     () => new Set(repo.confirmedMaintainers),
     [repo.confirmedMaintainers],
@@ -833,7 +836,7 @@ function FullVariant({
               </span>
             </div>
           ))}
-          {repo.requestedMaintainers.length > 0 && (
+          {repo.invitedMaintainers.length > 0 && (
             <>
               <Separator />
               <RequestedMaintainersSummary repo={repo} pageSuffix="/about" />
@@ -1005,14 +1008,16 @@ function FullVariant({
       )}
 
       {/* Bottom action bar: edit + share + raw event + delete */}
-      {repo.announcements.length > 0 && (
+      {repo.discoveredAnnouncements.length > 0 && (
         <FullVariantActionBar
-          announcements={repo.announcements}
+          announcements={repo.discoveredAnnouncements}
           selectedMaintainer={repo.selectedMaintainer}
           confirmedMaintainers={repo.confirmedMaintainers}
           leadMaintainer={maintainerLeadership.leadMaintainer}
           editPath={isMaintainer ? editPath : undefined}
-          repoCoords={isMaintainer ? repo.allCoordinates : undefined}
+          repoCoords={
+            isMaintainer ? repo.confirmedMemberCoordinates : undefined
+          }
         />
       )}
     </div>

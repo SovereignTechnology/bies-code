@@ -14,7 +14,7 @@ export function useRepositoryCITrust(
   repoRelayGroup: RelayGroup | undefined,
 ) {
   const coordinatorState = useCICoordinators(
-    repo?.allCoordinates,
+    repo?.confirmedMaintainerCoordinates,
     repo?.selectedCoordinate,
     repo?.confirmedMaintainers,
     repoRelayGroup,

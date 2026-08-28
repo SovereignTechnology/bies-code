@@ -15,7 +15,10 @@ export default function RepoActionsPage() {
   const account = useActiveAccount();
   const isMaintainer =
     !!account && !!repo?.confirmedMaintainers.includes(account.pubkey);
-  const runs = useRepoCI(repo?.allCoordinates, resolved?.repoRelayGroup);
+  const runs = useRepoCI(
+    repo?.confirmedMaintainerCoordinates,
+    resolved?.repoRelayGroup,
+  );
   const { coordinatorState, relationships, trust } = useRepositoryCITrust(
     repo,
     runs,

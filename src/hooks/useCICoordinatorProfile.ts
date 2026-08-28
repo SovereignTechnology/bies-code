@@ -139,7 +139,7 @@ function wasSeenOnRepositoryRelay(
   const statusCoordinates = new Set(status.repositoryCoordinates);
   return repositories.some(
     (repo) =>
-      repo.allCoordinates.some((coordinate) =>
+      repo.confirmedMaintainerCoordinates.some((coordinate) =>
         statusCoordinates.has(coordinate),
       ) && repo.relays.some((relay) => seenRelays.has(normalizeUrl(relay))),
   );
@@ -271,7 +271,7 @@ export function useCICoordinatorProfile(
   const repositoryCoordinates = [
     ...new Set(
       (targetedRepositories ?? []).flatMap(
-        (repository) => repository.allCoordinates,
+        (repository) => repository.confirmedMaintainerCoordinates,
       ),
     ),
   ];
@@ -437,8 +437,10 @@ export function useCITargetedRepositories(
       map((repositories) =>
         repositories.filter(
           (repo) =>
-            repo.announcements.some((event) => targetSet.has(event.pubkey)) ||
-            repo.allCoordinates.some((coordinate) =>
+            repo.confirmedAnnouncements.some((event) =>
+              targetSet.has(event.pubkey),
+            ) ||
+            repo.confirmedMaintainerCoordinates.some((coordinate) =>
               coordinateSet.has(coordinate),
             ),
         ),

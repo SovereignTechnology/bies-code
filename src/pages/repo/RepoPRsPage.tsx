@@ -72,13 +72,16 @@ export default function RepoPRsPage() {
     stateCreatedAt: repoState ? repoState.event.created_at : undefined,
   });
   const inferredParents = useInferredPRParents(
-    repo?.allCoordinates,
+    repo?.confirmedMemberCoordinates,
     gitPool,
     gitPoolState,
     repoState,
     prs,
   );
-  const ciRuns = useRepoCI(repo?.allCoordinates, resolved?.repoRelayGroup);
+  const ciRuns = useRepoCI(
+    repo?.confirmedMaintainerCoordinates,
+    resolved?.repoRelayGroup,
+  );
   const { coordinatorState, trust } = useRepositoryCITrust(
     repo,
     ciRuns,

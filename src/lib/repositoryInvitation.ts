@@ -6,6 +6,7 @@ import {
   computeMaintainerLeadership,
   getRepoCloneUrls,
   getRepoMaintainers,
+  getRepoRelays,
   isGraspCloneUrl,
   REPO_KIND,
   type ResolvedRepo,
@@ -94,8 +95,8 @@ export function buildMaintainerAcceptanceTemplate(
   graspServers: GraspServer[],
   createdAt = Math.floor(Date.now() / 1000),
 ): EventTemplate {
-  const latestAnnouncement = repo.announcements.reduce((latest, event) =>
-    event.created_at > latest.created_at ? event : latest,
+  const latestAnnouncement = repo.discoveredAnnouncements.reduce(
+    (latest, event) => (event.created_at > latest.created_at ? event : latest),
   );
   const existingMaintainers = ownAnnouncement
     ? getRepoMaintainers(ownAnnouncement)
@@ -117,7 +118,9 @@ export function buildMaintainerAcceptanceTemplate(
     accountPubkey,
     repo.dTag,
     graspServers,
-    repo.relays,
+    ownAnnouncement
+      ? Array.from(new Set([...repo.relays, ...getRepoRelays(ownAnnouncement)]))
+      : repo.relays,
   );
 
   return {

@@ -62,12 +62,12 @@ function pickWinningStateEvent(
  *     flows use these to compare the invitee's refs with the canonical state.
  *
  * @param dTag           - The repository d-tag identifier
- * @param maintainerSet  - All maintainer pubkeys (from ResolvedRepo.maintainerSet)
+ * @param confirmedMaintainers - Current reciprocal maintainer authority set
  * @param repoRelayGroup - The relay group to query (from useResolvedRepository)
  */
 export function useRepositoryState(
   dTag: string | undefined,
-  maintainerSet: string[] | undefined,
+  confirmedMaintainers: string[] | undefined,
   repoRelayGroup: RelayGroup | undefined,
 ): [
   RepositoryState | null | undefined,
@@ -78,7 +78,7 @@ export function useRepositoryState(
   const store = useEventStore();
   const castStore = store as unknown as CastRefEventStore;
 
-  const maintainerKey = maintainerSet?.join(",") ?? "";
+  const maintainerKey = confirmedMaintainers?.join(",") ?? "";
   // relayKey is used only as a dep to re-run the effect when the initial relay
   // set changes (e.g. navigating to a different repo). The loader itself
   // subscribes to relays$ reactively for additions within the same group.
@@ -96,8 +96,8 @@ export function useRepositoryState(
     // No relay group — nothing to fetch, already settled.
     if (
       !dTag ||
-      !maintainerSet ||
-      maintainerSet.length === 0 ||
+      !confirmedMaintainers ||
+      confirmedMaintainers.length === 0 ||
       !repoRelayGroup
     ) {
       setRepoRelayEose(true);
@@ -111,7 +111,7 @@ export function useRepositoryState(
       pool,
       relayGroupUrls$(repoRelayGroup),
       dTag,
-      maintainerSet,
+      confirmedMaintainers,
       store,
     ).subscribe({
       next: (msg) => {
@@ -133,7 +133,7 @@ export function useRepositoryState(
 
   const storeFilter: Filter = {
     kinds: [REPO_STATE_KIND],
-    authors: maintainerSet ?? [],
+    authors: confirmedMaintainers ?? [],
     "#d": dTag ? [dTag] : [],
   } as Filter;
 
@@ -141,7 +141,8 @@ export function useRepositoryState(
   // store.timeline() is reactive — it re-emits whenever new events arrive,
   // so the winning state updates automatically as relays respond.
   const repoState = use$(() => {
-    if (!dTag || !maintainerSet || maintainerSet.length === 0) return undefined;
+    if (!dTag || !confirmedMaintainers || confirmedMaintainers.length === 0)
+      return undefined;
 
     return store.timeline([storeFilter]).pipe(
       map((events) => {
@@ -161,7 +162,8 @@ export function useRepositoryState(
   }, [dTag, maintainerKey, store]);
 
   const stateEvents = use$(() => {
-    if (!dTag || !maintainerSet || maintainerSet.length === 0) return undefined;
+    if (!dTag || !confirmedMaintainers || confirmedMaintainers.length === 0)
+      return undefined;
 
     return store.timeline([storeFilter]).pipe(
       map((events) =>
@@ -186,7 +188,8 @@ export function useRepositoryState(
   // it was received from. We invert that: for each relay URL, we keep the
   // event with the highest created_at (event ID as tiebreaker).
   const relayStateMap = use$(() => {
-    if (!dTag || !maintainerSet || maintainerSet.length === 0) return undefined;
+    if (!dTag || !confirmedMaintainers || confirmedMaintainers.length === 0)
+      return undefined;
 
     return store.timeline([storeFilter]).pipe(
       map((events) => {

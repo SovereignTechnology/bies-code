@@ -19,6 +19,22 @@ import { ISSUE_LABEL_NAMESPACE } from "@/factories/IssueLabelFactory";
 import { normalizeGraspServiceAddress } from "@/lib/grasp";
 import { getThreadTree } from "@/lib/threadTree";
 import { normalizeUrl } from "@/lib/url";
+import {
+  getRepositoryAnnouncementDiscoveryPubkeys,
+  getRepositoryMaintainerAssignments,
+  resolveRepositoryMembership,
+  type LeadResolution,
+  type MaintainerEdge,
+  type ModeratorEdge,
+  type RepositoryHealthWarning,
+} from "@/lib/nip34-maintainer-model";
+
+export type {
+  LeadResolution,
+  MaintainerEdge,
+  ModeratorEdge,
+  RepositoryHealthWarning,
+} from "@/lib/nip34-maintainer-model";
 
 // ---------------------------------------------------------------------------
 // Patch-chain identification tags — excluded from user-visible labels
@@ -315,7 +331,7 @@ const RepoDescriptionSymbol = Symbol.for("repo-ev-description");
 const RepoCloneUrlsSymbol = Symbol.for("repo-ev-clone-urls");
 const RepoWebUrlsSymbol = Symbol.for("repo-ev-web-urls");
 const RepoRelaysSymbol = Symbol.for("repo-ev-relays");
-const RepoMaintainersSymbol = Symbol.for("repo-ev-maintainers");
+const RepoMaintainersSymbol = Symbol.for("repo-ev-current-maintainers-v2");
 const RepoUpstreamsSymbol = Symbol.for("repo-ev-upstreams");
 
 export interface RepoUpstream {
@@ -488,16 +504,16 @@ export function getRepoRelays(ev: NostrEvent): string[] {
   ]);
 }
 
-/**
- * Extract the list of co-maintainer pubkeys from a kind:30617 event.
- * Format: ["maintainers", "pubkey1", "pubkey2", ...]
- * Returns an empty array when the tag is absent.
- */
+/** Active maintainer assignments, using indexed M/m roles when present. */
 export function getRepoMaintainers(ev: NostrEvent): string[] {
-  return getOrComputeCachedValue(ev, RepoMaintainersSymbol, () => {
-    const tag = ev.tags.find(([t]) => t === "maintainers");
-    return tag ? tag.slice(1).filter(Boolean) : [];
-  });
+  return getOrComputeCachedValue(ev, RepoMaintainersSymbol, () =>
+    getRepositoryMaintainerAssignments(ev),
+  );
+}
+
+/** Active maintainer and moderator subjects used only for announcement discovery. */
+export function getRepoRoleSubjects(ev: NostrEvent): string[] {
+  return getRepositoryAnnouncementDiscoveryPubkeys(ev);
 }
 
 const GIT_CLONE_URL_SCHEME_PATTERN = /^(?:https?|ssh|git|file|nostr):\/\//i;
@@ -693,7 +709,7 @@ export const DEFAULT_GIT_INDEX_RELAY = "wss://index.ngit.dev";
  *   (IssuePage) where completeness matters.
  *
  * maintainerPubkeys: the full list of maintainer pubkeys from
- *   ResolvedRepo.maintainerSet. Required when useItemAuthorRelays is true so
+ *   ResolvedRepo.confirmedMaintainers. Required when useItemAuthorRelays is true so
  *   that outbox relays can be fetched for issues and status queries. Ignored
  *   when useItemAuthorRelays is false.
  */
@@ -772,12 +788,6 @@ export interface FieldProvenance {
   pubkey: string;
   createdAt: number;
   value: string;
-}
-
-/** An edge in the maintainer graph: `from` listed `to` as a maintainer */
-export interface MaintainerEdge {
-  from: string;
-  to: string;
 }
 
 export interface MaintainerLeadership {
@@ -874,42 +884,43 @@ export interface ResolvedRepo {
   /** All relay URLs across all maintainer announcements, deduplicated */
   relays: string[];
 
-  // --- Maintainer set ---
-  /**
-   * Full recursive authorization set rooted at selectedMaintainer. This
-   * intentionally matches ngit and ngit-grasp: listed maintainers are trusted
-   * for state and collaboration events even before they accept the invitation.
-   */
-  maintainerSet: string[];
-  /**
-   * Maintainers that have explicitly linked their announcement back into the
-   * accepted component. Use this set for public identity and mutation controls;
-   * the selectedMaintainer is always included.
-   */
+  // --- Resolved membership and authority ---
+  /** Maintainers in the reciprocal component; the sole state/merge authority set. */
   confirmedMaintainers: string[];
-  /**
-   * "30617:<pubkey>:<dTag>" for every recursively authorized maintainer — used
-   * for #a tag queries and publishing. The selected coordinate is always first,
-   * followed by other confirmed coordinates, then requested coordinates. This
-   * order is a compatibility hint only; consumers must inspect every value.
-   */
-  allCoordinates: string[];
-  /**
-   * Recursively authorized pubkeys that have not accepted. Covers two cases:
-   *   1. Listed by someone in the confirmed set but have no announcement at all.
-   *   2. Have an announcement for this dTag but don't list any confirmed
-   *      maintainer back (no reciprocation) — the reputation-hijack vector.
-   * Neither case should be displayed in repo cards.
-   */
-  requestedMaintainers: string[];
+  /** Reciprocally acknowledged moderators with member-action authority. */
+  confirmedModerators: string[];
+  /** Confirmed maintainers followed by confirmed moderators. */
+  confirmedMembers: string[];
+  /** Coordinates authorized to publish state and perform maintainer-only actions. */
+  confirmedMaintainerCoordinates: string[];
+  /** Coordinates used for collaboration tags and member-authorized events. */
+  confirmedMemberCoordinates: string[];
+  /** Assigned maintainer subjects that have not reciprocally acknowledged membership. */
+  invitedMaintainers: string[];
+  /** Assigned moderator subjects that have not reciprocally acknowledged membership. */
+  invitedModerators: string[];
+  /** Authors whose latest self-role explicitly ends or declines maintainership. */
+  departedMaintainers: string[];
+  /** Authors whose latest self-role explicitly ends or declines moderatorship. */
+  departedModerators: string[];
+  /** Pubkeys fetched while discovering active assignments; never an authority set. */
+  discoveryPubkeys: string[];
   /** Union of `t` tags across all announcements */
   labels: string[];
 
   // --- Graph / provenance data (for detailed view) ---
-  /** Raw announcement events, one per maintainer that has published one */
-  announcements: NostrEvent[];
-  /** Directed edges: who listed whom in their maintainers tag */
+  /** Raw events reached during assignment discovery, including invitations. */
+  discoveredAnnouncements: NostrEvent[];
+  /** Raw events belonging to confirmed maintainers and moderators only. */
+  confirmedAnnouncements: NostrEvent[];
+  /** Directed current maintainer assignments with indexed/legacy provenance. */
   maintainerEdges: MaintainerEdge[];
+  /** Directed current moderator assignments. */
+  moderatorEdges: ModeratorEdge[];
+  /** Fail-closed parsing and compatibility warnings. */
+  repositoryHealth: RepositoryHealthWarning[];
+  /** Signed lead result, exposed now for diagnostics; routing changes in Wave 2. */
+  leadResolution: LeadResolution;
   /** Per-URL provenance for clone URLs */
   cloneUrlProvenance: FieldProvenance[];
   /** Per-URL provenance for relay URLs */
@@ -931,12 +942,10 @@ export interface ResolvedRepo {
  */
 export function hasAcceptedRepositoryReference(
   repoCoords: Iterable<string>,
-  repo: Pick<ResolvedRepo, "confirmedMaintainers" | "dTag">,
+  repo: Pick<ResolvedRepo, "confirmedMembers" | "dTag">,
 ): boolean {
   const acceptedCoordinates = new Set(
-    repo.confirmedMaintainers.map((pubkey) =>
-      repoCoordinate(pubkey, repo.dTag),
-    ),
+    repo.confirmedMembers.map((pubkey) => repoCoordinate(pubkey, repo.dTag)),
   );
   for (const coordinate of repoCoords) {
     if (acceptedCoordinates.has(coordinate)) return true;
@@ -1087,6 +1096,8 @@ export function extractBody(ev: NostrEvent): string {
  */
 export interface ResolveEssentialsOptions {
   mergeStatusRequiresMaintainer?: boolean;
+  /** Maintainer-only authors when the general authority set also has moderators. */
+  mergeStatusAuthorPubkeys?: ReadonlySet<string>;
   prUpdateEvents?: NostrEvent[];
   /**
    * NIP-09 deletion events (kind:5) that reference one or more essential event
@@ -1121,7 +1132,11 @@ function buildResolvedList(
   maintainerSet: Set<string>,
   options: ResolveEssentialsOptions = {},
 ): (ResolvedIssueLite & { itemType?: PRItemType })[] {
-  const { mergeStatusRequiresMaintainer = false, prUpdateEvents } = options;
+  const {
+    mergeStatusRequiresMaintainer = false,
+    mergeStatusAuthorPubkeys = maintainerSet,
+    prUpdateEvents,
+  } = options;
 
   // ── Index root events ────────────────────────────────────────────────────
   const authorById = new Map<string, string>();
@@ -1178,7 +1193,7 @@ function buildResolvedList(
       // (1632) is permitted from either the original author or a maintainer
       // — an author may close their own PR without maintainer rights.
       if (mergeStatusRequiresMaintainer && ev.kind === STATUS_RESOLVED) {
-        if (!isMaintainer) continue;
+        if (!mergeStatusAuthorPubkeys.has(ev.pubkey)) continue;
       } else {
         if (!isAuthor && !isMaintainer) continue;
       }
@@ -1460,6 +1475,7 @@ export function resolveItemEssentials(
 ): ResolvedItemEssentials {
   const {
     mergeStatusRequiresMaintainer = false,
+    mergeStatusAuthorPubkeys = maintainerSet,
     prUpdateEvents,
     essentialDeletionEvents,
   } = options;
@@ -1511,7 +1527,7 @@ export function resolveItemEssentials(
       // (1632) is permitted from either the original author or a maintainer
       // — an author may close their own PR without maintainer rights.
       if (mergeStatusRequiresMaintainer && ev.kind === STATUS_RESOLVED) {
-        if (!isMaintainer) continue;
+        if (!mergeStatusAuthorPubkeys.has(ev.pubkey)) continue;
       } else {
         if (!isAuthor && !isMaintainer) continue;
       }
@@ -2374,17 +2390,19 @@ export function buildResolvedPRs(
   essentialEvents: NostrEvent[],
   commentEvents: NostrEvent[],
   zapEvents: NostrEvent[],
-  maintainerSet: Set<string>,
+  memberSet: Set<string>,
   prUpdateEvents: NostrEvent[] = [],
+  maintainerSet: ReadonlySet<string> = memberSet,
 ): ResolvedPRLite[] {
   return buildResolvedList(
     rootEvents,
     essentialEvents,
     commentEvents,
     zapEvents,
-    maintainerSet,
+    memberSet,
     {
       mergeStatusRequiresMaintainer: true,
+      mergeStatusAuthorPubkeys: maintainerSet,
       prUpdateEvents,
     },
   ).map((item) => ({
@@ -2412,108 +2430,32 @@ export function resolveChain(
   selectedMaintainer: string,
   dTag: string,
 ): ResolvedRepo | undefined {
-  // Index all announcements for this dTag by pubkey for O(1) lookup
-  const byPubkey = new Map<string, NostrEvent>();
-  for (const ev of events) {
-    if (ev.kind !== REPO_KIND) continue;
-    const d = getReplaceableIdentifier(ev);
-    if (d !== dTag) continue;
-    const existing = byPubkey.get(ev.pubkey);
-    // Keep only the latest announcement per pubkey (store handles this but
-    // be defensive in case we receive multiple)
-    if (!existing || ev.created_at > existing.created_at) {
-      byPubkey.set(ev.pubkey, ev);
-    }
-  }
+  const membership = resolveRepositoryMembership(
+    events,
+    selectedMaintainer,
+    dTag,
+  );
+  if (!membership) return undefined;
 
-  // The selected maintainer must have an announcement to anchor the chain
-  if (!byPubkey.has(selectedMaintainer)) return undefined;
-
-  // BFS over the maintainer graph — collect all reachable pubkeys
-  const reachable = new Set<string>();
-  const queue: string[] = [selectedMaintainer];
-  const edges: MaintainerEdge[] = [];
-  const pending: string[] = [];
-
-  while (queue.length > 0) {
-    const pubkey = queue.shift()!;
-    if (reachable.has(pubkey)) continue;
-    reachable.add(pubkey);
-
-    const ev = byPubkey.get(pubkey);
-    if (!ev) {
-      // Listed as maintainer but no announcement yet
-      pending.push(pubkey);
-      continue;
-    }
-
-    // Read maintainers tag — format: ["maintainers", pubkey1, pubkey2, ...]
-    const listed = getRepoMaintainers(ev);
-
-    for (const listed_pubkey of listed) {
-      edges.push({ from: pubkey, to: listed_pubkey });
-      if (!reachable.has(listed_pubkey)) {
-        queue.push(listed_pubkey);
-      }
-    }
-  }
-
-  // ---------------------------------------------------------------------------
-  // Reciprocation check — determine confirmed vs requested maintainers.
-  //
-  // A maintainer B is "confirmed" if:
-  //   1. B is the selectedMaintainer (always trusted as the anchor), OR
-  //   2. B has published their own announcement for this dTag AND B's
-  //      announcement lists at least one already-confirmed maintainer.
-  //
-  // This prevents reputation hijacking: an attacker cannot inflate their
-  // project's credibility by listing a reputable pubkey as a maintainer
-  // unless that pubkey has reciprocated by listing someone in the confirmed
-  // set back.
-  //
-  // We use an iterative fixed-point loop because reciprocation can be
-  // transitive: A confirms B, B confirms C, C confirms D, etc.
-  // ---------------------------------------------------------------------------
-  const confirmed = new Set<string>([selectedMaintainer]);
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (const pubkey of reachable) {
-      if (confirmed.has(pubkey)) continue;
-      const ev = byPubkey.get(pubkey);
-      if (!ev) continue; // pending — no announcement, cannot self-confirm
-      const listed = getRepoMaintainers(ev);
-      if (listed.some((pk) => confirmed.has(pk))) {
-        confirmed.add(pubkey);
-        changed = true;
-      }
-    }
-  }
-
-  // Pubkeys reachable but not confirmed (have an announcement but no back-link)
-  // — merge into pending alongside those with no announcement at all.
-  for (const pubkey of reachable) {
-    if (!confirmed.has(pubkey) && byPubkey.has(pubkey)) {
-      pending.push(pubkey);
-    }
-  }
-
-  // Merge every announcement in the recursively authorized graph. This is the
-  // same consuming model used by ngit: metadata and infrastructure are pooled
-  // directionally from the selected coordinate, while reciprocal confirmation
-  // remains a separate display/publishing concern.
-  const announcements: NostrEvent[] = [];
-  for (const pubkey of reachable) {
-    const ev = byPubkey.get(pubkey);
-    if (ev) announcements.push(ev);
-  }
+  // Shared metadata and infrastructure are accepted only from confirmed
+  // members. Invitations and departed authors remain discovery inputs.
+  const announcements = membership.confirmedAnnouncements;
+  const selectedAnnouncement = membership.discoveredAnnouncements.find(
+    (event) => event.pubkey === selectedMaintainer,
+  )!;
 
   // --- Merge fields ---
 
   // Latest-wins: name, description, webUrls
-  let latestEv = announcements[0];
+  let latestEv: NostrEvent | undefined;
   for (const ev of announcements) {
-    if (ev.created_at > latestEv.created_at) latestEv = ev;
+    if (
+      !latestEv ||
+      ev.created_at > latestEv.created_at ||
+      (ev.created_at === latestEv.created_at && ev.id < latestEv.id)
+    ) {
+      latestEv = ev;
+    }
   }
 
   // Find the latest announcement that actually has a name/description
@@ -2522,24 +2464,42 @@ export function resolveChain(
     (best, ev) => {
       const val = getRepoName(ev);
       if (!val) return best;
-      return ev.created_at > best.createdAt
-        ? { pubkey: ev.pubkey, createdAt: ev.created_at, value: val }
+      return ev.created_at > best.createdAt ||
+        (ev.created_at === best.createdAt && ev.id < best.eventId)
+        ? {
+            pubkey: ev.pubkey,
+            createdAt: ev.created_at,
+            eventId: ev.id,
+            value: val,
+          }
         : best;
     },
-    { pubkey: latestEv.pubkey, createdAt: 0, value: getRepoName(latestEv) },
+    {
+      pubkey: latestEv?.pubkey ?? selectedMaintainer,
+      createdAt: 0,
+      eventId: "f".repeat(64),
+      value: latestEv ? getRepoName(latestEv) : dTag,
+    },
   );
 
   const descriptionSource = announcements.reduce(
     (best, ev) => {
       const val = getRepoDescription(ev);
-      return ev.created_at > best.createdAt
-        ? { pubkey: ev.pubkey, createdAt: ev.created_at, value: val }
+      return ev.created_at > best.createdAt ||
+        (ev.created_at === best.createdAt && ev.id < best.eventId)
+        ? {
+            pubkey: ev.pubkey,
+            createdAt: ev.created_at,
+            eventId: ev.id,
+            value: val,
+          }
         : best;
     },
     {
-      pubkey: latestEv.pubkey,
+      pubkey: latestEv?.pubkey ?? selectedMaintainer,
       createdAt: 0,
-      value: getRepoDescription(latestEv),
+      eventId: "f".repeat(64),
+      value: latestEv ? getRepoDescription(latestEv) : "",
     },
   );
 
@@ -2582,14 +2542,6 @@ export function resolveChain(
     }
   }
 
-  const maintainerSet = Array.from(reachable);
-  const confirmedMaintainers = Array.from(confirmed);
-  const requestedMaintainers = Array.from(new Set(pending));
-  const orderedMaintainers = [
-    selectedMaintainer,
-    ...confirmedMaintainers.filter((pk) => pk !== selectedMaintainer),
-    ...maintainerSet.filter((pk) => !confirmed.has(pk)),
-  ];
   const selectedCoordinate = repoCoordinate(selectedMaintainer, dTag);
 
   const allCloneUrls = cloneUrlProvenance.map((p) => p.value);
@@ -2618,21 +2570,35 @@ export function resolveChain(
     dTag,
     name: nameSource.value || dTag,
     description: descriptionSource.value,
-    webUrls: getRepoWebUrls(latestEv),
-    updatedAt: latestEv.created_at,
+    webUrls: latestEv ? getRepoWebUrls(latestEv) : [],
+    updatedAt: latestEv?.created_at ?? selectedAnnouncement.created_at,
     cloneUrls: allCloneUrls,
     graspCloneUrls,
     additionalGitServerUrls,
     graspServerDomains,
     graspServerAddresses,
     relays: relayProvenance.map((p) => p.value),
-    maintainerSet,
-    confirmedMaintainers,
-    allCoordinates: orderedMaintainers.map((pk) => repoCoordinate(pk, dTag)),
-    requestedMaintainers,
+    confirmedMaintainers: membership.confirmedMaintainers,
+    confirmedModerators: membership.confirmedModerators,
+    confirmedMembers: membership.confirmedMembers,
+    confirmedMaintainerCoordinates: membership.confirmedMaintainers.map((pk) =>
+      repoCoordinate(pk, dTag),
+    ),
+    confirmedMemberCoordinates: membership.confirmedMembers.map((pk) =>
+      repoCoordinate(pk, dTag),
+    ),
+    invitedMaintainers: membership.invitedMaintainers,
+    invitedModerators: membership.invitedModerators,
+    departedMaintainers: membership.departedMaintainers,
+    departedModerators: membership.departedModerators,
+    discoveryPubkeys: membership.discoveryPubkeys,
     labels,
-    announcements,
-    maintainerEdges: edges,
+    discoveredAnnouncements: membership.discoveredAnnouncements,
+    confirmedAnnouncements: membership.confirmedAnnouncements,
+    maintainerEdges: membership.maintainerEdges,
+    moderatorEdges: membership.moderatorEdges,
+    repositoryHealth: membership.repositoryHealth,
+    leadResolution: membership.leadResolution,
     cloneUrlProvenance,
     relayProvenance,
     nameSource,
@@ -2665,19 +2631,23 @@ export interface RequestedRepositoryGroup {
  */
 export function groupRequestedMaintainers(
   repo: ResolvedRepo,
-  requestedMaintainers: Iterable<string> = repo.requestedMaintainers,
+  requestedMaintainers: Iterable<string> = repo.invitedMaintainers,
 ): RequestedRepositoryGroup[] {
   const referenced = new Set(requestedMaintainers);
-  const requested = new Set(repo.requestedMaintainers);
+  const requested = new Set(repo.invitedMaintainers);
   const announced = new Set(
-    repo.announcements.map((announcement) => announcement.pubkey),
+    repo.discoveredAnnouncements.map((announcement) => announcement.pubkey),
   );
   const groups = new Map<string, RequestedRepositoryGroup>();
 
   for (const referencedMaintainer of referenced) {
     const hasAnnouncement = announced.has(referencedMaintainer);
     const alternateRepo = hasAnnouncement
-      ? resolveChain(repo.announcements, referencedMaintainer, repo.dTag)
+      ? resolveChain(
+          repo.discoveredAnnouncements,
+          referencedMaintainer,
+          repo.dTag,
+        )
       : undefined;
     const members = alternateRepo?.confirmedMaintainers.filter((pubkey) =>
       requested.has(pubkey),

@@ -1,6 +1,6 @@
 # Maintainer Model Migration Plan
 
-> **Status:** Accepted working plan. Implementation has not started.
+> **Status:** Wave 1 implemented. Wave 2 is next.
 >
 > **Approach:** Land the maintainer-model change in deployable waves. Each
 > wave must leave gitworkshop with one internally consistent authority model;
@@ -199,18 +199,18 @@ settings, and every use of `maintainerSet` or `allCoordinates`.
 
 ### Wave 1 gate
 
-- [ ] A unilateral legacy listing is an invitation and grants no authority.
-- [ ] A unilateral indexed assignment is an invitation and grants no
+- [x] A unilateral legacy listing is an invitation and grants no authority.
+- [x] A unilateral indexed assignment is an invitation and grants no
       authority.
-- [ ] A cycle of unconfirmed invitees cannot bootstrap authority.
-- [ ] An accepted reciprocal chain resolves to the same current maintainer set
+- [x] A cycle of unconfirmed invitees cannot bootstrap authority.
+- [x] An accepted reciprocal chain resolves to the same current maintainer set
       as `ngit`.
-- [ ] An ended self-role defeats active assignments in other announcements.
-- [ ] A `defer` record grants no authority.
-- [ ] A moderator can perform member actions but cannot publish state or merge.
-- [ ] Invited, departed, and unconfirmed moderator announcements contribute no
+- [x] An ended self-role defeats active assignments in other announcements.
+- [x] A `defer` record grants no authority.
+- [x] A moderator can perform member actions but cannot publish state or merge.
+- [x] Invited, departed, and unconfirmed moderator announcements contribute no
       trusted metadata, infrastructure, or privacy.
-- [ ] No old acceptance job or complete-roster editor can publish the retired
+- [x] No old acceptance job or complete-roster editor can publish the retired
       shape.
 
 ## Wave 2 — Lead resolution and redirects

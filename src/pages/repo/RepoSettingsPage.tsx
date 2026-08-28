@@ -13,8 +13,9 @@
  *   - Relay URLs generated from selected Grasp servers
  *   - Items contributed only by co-maintainers (displayed as info)
  *
- * Recursive maintainers are redirected to the same repository under their own
- * announcement coordinate. Invitees without an announcement must accept first.
+ * Confirmed maintainers are redirected to the same repository under their own
+ * announcement coordinate. Membership changes are intentionally read-only
+ * until the role-aware mutation preflight is implemented.
  */
 
 import {
@@ -131,6 +132,9 @@ const KNOWN_TAG_NAMES = new Set([
   "relays",
   "alt",
   "r",
+  "M",
+  "m",
+  "o",
   "maintainers",
   "web",
   "t",
@@ -138,6 +142,7 @@ const KNOWN_TAG_NAMES = new Set([
 ]);
 
 const HEX_PUBKEY_INPUT_RE = /^[0-9a-fA-F]{64}$/;
+const MEMBERSHIP_TAG_NAMES = new Set(["M", "m", "o", "maintainers"]);
 const NO_LEAD = "no-lead";
 const LEAD_MAINTAINER_HELP_TEXT =
   "The lead maintainer is the confirmed maintainer listed by more confirmed maintainers than anyone else. If the top listing count is tied, there is no single lead maintainer.";
@@ -260,10 +265,10 @@ export default function RepoSettingsPage() {
   }
 
   const accountPubkey = account?.pubkey;
-  const isRecursiveMaintainer =
-    !!accountPubkey && repo.maintainerSet.includes(accountPubkey);
+  const isConfirmedMaintainer =
+    !!accountPubkey && repo.confirmedMaintainers.includes(accountPubkey);
   const accountAnnouncement = accountPubkey
-    ? repo.announcements.find(
+    ? repo.confirmedAnnouncements.find(
         (announcement) => announcement.pubkey === accountPubkey,
       )
     : undefined;
@@ -271,7 +276,7 @@ export default function RepoSettingsPage() {
   if (
     accountPubkey &&
     accountPubkey !== repo.selectedMaintainer &&
-    isRecursiveMaintainer &&
+    isConfirmedMaintainer &&
     accountAnnouncement
   ) {
     const accountRepoPath = repoToPath(
@@ -283,35 +288,10 @@ export default function RepoSettingsPage() {
   }
 
   if (
-    accountPubkey &&
-    accountPubkey !== repo.selectedMaintainer &&
-    isRecursiveMaintainer &&
+    accountPubkey !== repo.selectedMaintainer ||
+    !isConfirmedMaintainer ||
     !accountAnnouncement
   ) {
-    return (
-      <div className="container max-w-screen-xl px-4 py-8 md:px-8">
-        <div className="max-w-md">
-          <div className="mb-4 flex items-center gap-2 text-pink-600 dark:text-pink-400">
-            <Users className="h-5 w-5" />
-            <p className="font-medium">Accept the invitation first</p>
-          </div>
-          <p className="mb-4 text-sm leading-relaxed text-muted-foreground">
-            You are in this repository&apos;s recursive maintainer set, but you
-            do not have your own repository announcement yet. Accept the
-            invitation above to publish it and continue to your settings page.
-          </p>
-          <Button asChild variant="outline" size="sm">
-            <Link to={`${basePath}/about`}>
-              <ArrowLeft className="mr-2 h-4 w-4" />
-              Back to About
-            </Link>
-          </Button>
-        </div>
-      </div>
-    );
-  }
-
-  if (accountPubkey !== repo.selectedMaintainer) {
     return (
       <div className="container max-w-screen-xl px-4 py-8 md:px-8">
         <div className="max-w-md">
@@ -320,8 +300,8 @@ export default function RepoSettingsPage() {
             <p className="font-medium">Not authorised</p>
           </div>
           <p className="mb-4 text-sm text-muted-foreground">
-            Only a maintainer in this repository&apos;s recursive maintainer set
-            can edit settings.
+            Only a confirmed maintainer in this repository&apos;s reciprocal
+            component can edit settings.
           </p>
           <Button asChild variant="outline" size="sm">
             <Link to={`${basePath}/about`}>
@@ -361,7 +341,10 @@ function RepoSettingsForm({
 
   // Find the selected maintainer's own announcement
   const selectedAnnouncement = useMemo(
-    () => repo.announcements.find((a) => a.pubkey === repo.selectedMaintainer),
+    () =>
+      repo.confirmedAnnouncements.find(
+        (a) => a.pubkey === repo.selectedMaintainer,
+      ),
     [repo],
   );
 
@@ -456,11 +439,11 @@ function RepoSettingsForm({
       Array.from(
         new Set([
           repo.selectedMaintainer,
-          ...repo.maintainerSet,
+          ...repo.discoveryPubkeys,
           ...currentMaintainers,
         ]),
       ),
-    [repo.selectedMaintainer, repo.maintainerSet, currentMaintainers],
+    [repo.selectedMaintainer, repo.discoveryPubkeys, currentMaintainers],
   );
   const initialCoordinationChoice = useMemo(() => {
     const lead = maintainerLeadership.leadMaintainer;
@@ -579,6 +562,13 @@ function RepoSettingsForm({
       ([name]) => name !== undefined && !KNOWN_TAG_NAMES.has(name),
     );
   });
+  const preservedMembershipTags = useMemo(
+    () =>
+      selectedAnnouncement?.tags
+        .filter(([name]) => MEMBERSHIP_TAG_NAMES.has(name))
+        .map((tag) => [...tag]) ?? [],
+    [selectedAnnouncement],
+  );
 
   // Other-section open state (auto-open if the repo already has entries there)
   const [otherRelaysOpen, setOtherRelaysOpen] = useState(
@@ -682,8 +672,8 @@ function RepoSettingsForm({
   // ---------------------------------------------------------------------------
 
   const requestedMaintainers = useMemo(
-    () => Array.from(new Set(repo.requestedMaintainers)),
-    [repo.requestedMaintainers],
+    () => Array.from(new Set(repo.invitedMaintainers)),
+    [repo.invitedMaintainers],
   );
   const requestedMaintainerGroups = useMemo(
     () => groupRequestedMaintainers(repo, requestedMaintainers),
@@ -1088,7 +1078,6 @@ function RepoSettingsForm({
     !stringArraysEqual(webUrls, currentWebUrls) ||
     !stringArraysEqual(topics, currentTopics) ||
     !repoUpstreamsEqual(effectiveUpstreams, currentUpstreams) ||
-    !stringArraysEqual(editedMaintainers, currentMaintainers) ||
     !stringArraysEqual(selectedAddresses, currentGraspAddresses) ||
     !stringArraysEqual(otherRelays, currentOtherRelays) ||
     !stringArraysEqual(otherGitServers, currentOtherGitServers) ||
@@ -1140,12 +1129,6 @@ function RepoSettingsForm({
         );
         const allRelayUrls = [...graspRelayUrls, ...otherRelays];
 
-        // Match ngit init behavior: seed maintainers with the selected maintainer
-        // (self), then append any co-maintainers listed in this form.
-        const maintainersTagValues = Array.from(
-          new Set([repo.selectedMaintainer, ...editedMaintainers]),
-        );
-
         const template: EventTemplate = {
           kind: REPO_KIND,
           content: "",
@@ -1164,9 +1147,10 @@ function RepoSettingsForm({
             ...(eucHash.trim()
               ? [["r", eucHash.trim(), "euc"] as string[]]
               : []),
-            ...(maintainersTagValues.length > 0
-              ? [["maintainers", ...maintainersTagValues] as string[]]
-              : []),
+            // Membership is not editable in Wave 1. Preserve indexed roles,
+            // history boundaries, and the legacy compatibility projection
+            // exactly during every metadata-only edit.
+            ...preservedMembershipTags,
             ...webUrls.map((u) => ["web", u] as string[]),
             ...topics.map((t) => ["t", t] as string[]),
             ...repoUpstreamsToTags(effectiveUpstreams),
@@ -1228,7 +1212,7 @@ function RepoSettingsForm({
     webUrls,
     topics,
     effectiveUpstreams,
-    editedMaintainers,
+    preservedMembershipTags,
     eucHash,
     unknownTags,
     selectedBranch,
@@ -1550,6 +1534,19 @@ function RepoSettingsForm({
               ) : null}
             </div>
 
+            <Alert className="border-amber-500/40 bg-amber-500/5">
+              <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+              <AlertTitle>
+                Membership editing is temporarily unavailable
+              </AlertTitle>
+              <AlertDescription className="text-muted-foreground">
+                Metadata edits preserve every existing role, history, and
+                compatibility tag exactly. Use a compatible ngit v3 client for
+                maintainer changes until GitWorkshop adds the same guarded
+                preflight.
+              </AlertDescription>
+            </Alert>
+
             <div className="rounded-lg border border-border/60 bg-muted/10 p-3 space-y-3">
               <div>
                 <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
@@ -1618,7 +1615,7 @@ function RepoSettingsForm({
                   {invitedMaintainers.map((pubkey) => {
                     const listedBy =
                       requestedMaintainerListers.get(pubkey) ?? [];
-                    const announcement = repo.announcements.find(
+                    const announcement = repo.discoveredAnnouncements.find(
                       (event) => event.pubkey === pubkey,
                     );
                     const announcementRelays = announcement
@@ -1696,6 +1693,7 @@ function RepoSettingsForm({
                 <RadioGroup
                   value={selectedLead}
                   onValueChange={handleSelectLead}
+                  disabled
                   className="grid gap-2 sm:grid-cols-2"
                   aria-label="Maintainer coordination preference"
                 >
@@ -1827,8 +1825,9 @@ function RepoSettingsForm({
                         />
                         <button
                           type="button"
+                          disabled
                           onClick={() => handleRemoveMaintainer(pubkey)}
-                          className="shrink-0 text-muted-foreground transition-colors hover:text-foreground"
+                          className="shrink-0 cursor-not-allowed text-muted-foreground opacity-50"
                           aria-label={`Remove maintainer ${pubkey}`}
                         >
                           <X className="h-3.5 w-3.5" />
@@ -1845,6 +1844,7 @@ function RepoSettingsForm({
                 <div className="space-y-1.5">
                   <div className="flex gap-2">
                     <MaintainerUserInput
+                      disabled
                       placeholder="Name, npub1…, or hex pubkey"
                       value={maintainerInput}
                       onValueChange={(value) => {
@@ -1859,6 +1859,7 @@ function RepoSettingsForm({
                     />
                     <Button
                       type="button"
+                      disabled
                       variant="outline"
                       size="sm"
                       onClick={handleAddMaintainer}
@@ -2405,6 +2406,7 @@ function RepoSettingsForm({
 // ---------------------------------------------------------------------------
 
 function MaintainerUserInput({
+  disabled = false,
   value,
   onValueChange,
   onAdd,
@@ -2414,6 +2416,7 @@ function MaintainerUserInput({
   placeholder,
   className,
 }: {
+  disabled?: boolean;
   value: string;
   onValueChange: (value: string) => void;
   onAdd: () => void;
@@ -2438,7 +2441,10 @@ function MaintainerUserInput({
   const raw = value.trim();
   const searchQuery = raw.startsWith("@") ? raw.slice(1) : raw;
   const shouldSearch =
-    isFocused && raw.length > 0 && !looksLikeDirectPubkeyInput(raw);
+    !disabled &&
+    isFocused &&
+    raw.length > 0 &&
+    !looksLikeDirectPubkeyInput(raw);
 
   const updateDropdownPosition = useCallback(() => {
     const input = inputRef.current;
@@ -2477,6 +2483,7 @@ function MaintainerUserInput({
     <div className="relative flex-1">
       <Input
         ref={inputRef}
+        disabled={disabled}
         placeholder={placeholder}
         value={value}
         onChange={(e) => {
@@ -2503,7 +2510,7 @@ function MaintainerUserInput({
         }
         className={cn(className, isSearching && "pr-8")}
       />
-      {isSearching && (
+      {!disabled && isSearching && (
         <>
           <span className="pointer-events-none absolute inset-y-0 right-2 flex items-center">
             <Loader2
@@ -2518,7 +2525,7 @@ function MaintainerUserInput({
       )}
       <UserAutocompleteDropdown
         query={searchQuery}
-        isOpen={shouldSearch}
+        isOpen={!disabled && shouldSearch}
         position={dropdownPos}
         onSelectPubkey={handleSelectPubkey}
         onClose={() => setIsFocused(false)}

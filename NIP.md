@@ -307,9 +307,9 @@ The following features apply uniformly to all three NIP-34 root item kinds — i
 All three features share the same authorisation rule: an event is only **authoritative** if its author is either
 
 1. the **root item author** (the pubkey that published the issue/patch/PR), or
-2. a **confirmed maintainer** of the repository (a pubkey in the repo's transitive maintainer set — see the "Repository authorization model" in `AGENTS.md`).
+2. a **confirmed member** of the repository: either a reciprocally confirmed maintainer or a reciprocally acknowledged moderator (see the "Repository authorization model" in `AGENTS.md`).
 
-Events from any other pubkey are ignored when deriving the item's effective state. Because the maintainer set is only known once the repo announcements load, clients MAY treat the root author as authorised before maintainers resolve to avoid a flash of missing metadata.
+Events from any other pubkey are ignored when deriving the item's effective state. A directional role assignment is only an invitation and grants no authority. Because the confirmed member set is only known once repository announcements resolve, clients MAY treat the root author as authorised before membership resolves to avoid a flash of missing metadata.
 
 ### After-the-fact Labels (NIP-32, kind:1985)
 

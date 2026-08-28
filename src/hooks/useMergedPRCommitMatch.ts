@@ -46,8 +46,8 @@ export function useMergedPRCommitMatch(
   const validCommitId =
     commitId && /^[0-9a-f]{40}$/i.test(commitId) ? commitId : undefined;
   const coordsKey = useMemo(
-    () => coordsCacheKey(repo.allCoordinates),
-    [repo.allCoordinates],
+    () => coordsCacheKey(repo.confirmedMemberCoordinates),
+    [repo.confirmedMemberCoordinates],
   );
   const coords = useMemo(
     () => (coordsKey ? coordsKey.split(",") : []),
@@ -102,7 +102,7 @@ export function useMergedPRCommitMatch(
     if (!parentStatusEvents) return undefined;
 
     const mergedAt = parentStatusEvents
-      .filter((ev) => repo.maintainerSet.includes(ev.pubkey))
+      .filter((ev) => repo.confirmedMaintainers.includes(ev.pubkey))
       .reduce((max, ev) => Math.max(max, ev.created_at), 0);
     if (mergedAt === 0 || currentCreatedAt >= mergedAt) return null;
 

@@ -49,15 +49,15 @@ export default function IssuePage() {
   // All confirmed co-maintainer coordinates — gives the full union of relay
   // groups for publishing. Falls back to the issue's own `a` tag coords if
   // the resolved repo isn't available yet (shouldn't happen in practice).
-  // Using allCoordinates instead of issue.repoCoords ensures comments, status
+  // Use every confirmed member coordinate so collaboration events survive
   // changes, labels etc. reach every co-maintainer's relay set, not just the
   // single maintainer baked into the issue's `a` tag at creation time.
-  const repoAllCoords = repo?.allCoordinates;
+  const repoAllCoords = repo?.confirmedMemberCoordinates;
 
   // Compute the effective maintainer set.
   const selectedMaintainers = useMemo(
-    () => (repo?.maintainerSet ? new Set(repo.maintainerSet) : undefined),
-    [repo?.maintainerSet],
+    () => (repo?.confirmedMembers ? new Set(repo.confirmedMembers) : undefined),
+    [repo?.confirmedMembers],
   );
 
   // ── Retry search ─────────────────────────────────────────────────────────
@@ -121,9 +121,9 @@ export default function IssuePage() {
     };
     add(issue.pubkey);
     for (const pk of issue.participants) add(pk);
-    for (const pk of repo?.maintainerSet ?? []) add(pk);
+    for (const pk of repo?.confirmedMembers ?? []) add(pk);
     return out;
-  }, [issue, repo?.maintainerSet]);
+  }, [issue, repo?.confirmedMembers]);
 
   // ── Auth ──────────────────────────────────────────────────────────────────
   const activeAccount = useActiveAccount();

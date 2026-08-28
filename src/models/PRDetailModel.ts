@@ -54,6 +54,7 @@ import { Patch, isValidPatch } from "@/casts/Patch";
  */
 export function PRDetailModel(
   rootId: string,
+  members: Set<string> | undefined,
   maintainers: Set<string> | undefined,
 ): Model<ResolvedPR | undefined> {
   return (store) => {
@@ -171,6 +172,7 @@ export function PRDetailModel(
             rootEvent.kind === PATCH_KIND ? "patch" : "pr";
 
           // Effective maintainer set (use provided or empty while loading)
+          const effectiveMembers = members ?? new Set<string>();
           const effectiveMaintainers = maintainers ?? new Set<string>();
 
           // Split merged updates into PR Updates (kind:1619) and patches (kind:1617)
@@ -185,9 +187,10 @@ export function PRDetailModel(
             essentials,
             allComments,
             zaps,
-            effectiveMaintainers,
+            effectiveMembers,
             {
               mergeStatusRequiresMaintainer: true,
+              mergeStatusAuthorPubkeys: effectiveMaintainers,
               prUpdateEvents,
               essentialDeletionEvents: essentialDeletionEvents as NostrEvent[],
             },

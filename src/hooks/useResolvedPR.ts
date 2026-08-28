@@ -52,7 +52,8 @@ export interface ResolvedPRResult {
  * @param prId            - The event ID of the root PR or patch
  * @param repoRelayGroup  - Base relay group from useResolvedRepository
  * @param extraRelaysForMaintainerMailboxCoverage - Delta relay group for outbox mode
- * @param maintainers     - Effective maintainer set from repo resolution
+ * @param members         - Confirmed member set from repo resolution
+ * @param maintainers     - Confirmed maintainer-only authority set
  * @param options         - Additional options
  * @param extraSearchGroups - Additional relay groups for user-triggered expansion
  * @param retryKey        - Increment to force a fresh search across all relays
@@ -61,6 +62,7 @@ export function useResolvedPR(
   prId: string | undefined,
   repoRelayGroup: RelayGroup | undefined,
   extraRelaysForMaintainerMailboxCoverage: RelayGroup | undefined,
+  members: Set<string> | undefined,
   maintainers: Set<string> | undefined,
   _options?: UseResolvedPROptions,
   extraSearchGroups?: RelayGroupSpec[],
@@ -74,7 +76,7 @@ export function useResolvedPR(
     prId,
     repoRelayGroup,
     extraRelaysForMaintainerMailboxCoverage,
-    maintainers,
+    members,
     extraSearchGroups,
     retryKey,
   );
@@ -85,9 +87,10 @@ export function useResolvedPR(
     return store.model(
       PRDetailModel,
       prId,
+      members,
       maintainers,
     ) as unknown as Observable<ResolvedPR | undefined>;
-  }, [prId, maintainerKey, store]);
+  }, [prId, maintainerKey, maintainers, store]);
 
   // ── 3. For patch revisions: batch-load revision root comments ───────────
   // Once the model resolves, we know which revision root IDs exist.

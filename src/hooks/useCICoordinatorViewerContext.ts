@@ -245,7 +245,11 @@ export function useCICoordinatorViewerContext(
     );
   }, [accountPubkey, peopleKey, store]);
   const repositoryCoordinates = [
-    ...new Set((repositories ?? []).flatMap((repo) => repo.allCoordinates)),
+    ...new Set(
+      (repositories ?? []).flatMap(
+        (repo) => repo.confirmedMaintainerCoordinates,
+      ),
+    ),
   ];
   const repositoryRelays = [
     ...new Set([
@@ -414,8 +418,9 @@ export function useCICoordinatorViewerContext(
   for (const control of controls) {
     const repository = (repositories ?? []).find(
       (repo) =>
-        repo.allCoordinates.includes(control.repositoryCoordinate) &&
-        repo.confirmedMaintainers.includes(control.event.pubkey),
+        repo.confirmedMaintainerCoordinates.includes(
+          control.repositoryCoordinate,
+        ) && repo.confirmedMaintainers.includes(control.event.pubkey),
     );
     if (!repository) continue;
     const current = latestControls.get(repository.selectedCoordinate);
@@ -442,7 +447,7 @@ export function useCICoordinatorViewerContext(
     for (const coordinate of eventTagValues(trigger, "a")) {
       const repository = (repositories ?? []).find(
         (repo) =>
-          repo.allCoordinates.includes(coordinate) &&
+          repo.confirmedMaintainerCoordinates.includes(coordinate) &&
           repo.confirmedMaintainers.includes(trigger.pubkey),
       );
       if (repository && followed.has(trigger.pubkey)) {
@@ -467,7 +472,7 @@ export function useCICoordinatorViewerContext(
   const activeViewerRepositories = new Set<string>();
   for (const repository of repositories ?? []) {
     if (
-      !repository.allCoordinates.some((coordinate) =>
+      !repository.confirmedMaintainerCoordinates.some((coordinate) =>
         socialActivityCoordinates.has(coordinate),
       )
     ) {
@@ -475,7 +480,7 @@ export function useCICoordinatorViewerContext(
     }
     if (
       repository.confirmedMaintainers.includes(accountPubkey) &&
-      repository.allCoordinates.some((coordinate) =>
+      repository.confirmedMaintainerCoordinates.some((coordinate) =>
         activeRepositoryCoordinates.has(coordinate),
       )
     ) {

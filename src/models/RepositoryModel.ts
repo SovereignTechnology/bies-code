@@ -3,7 +3,7 @@ import type { Model } from "applesauce-core/event-store";
 import {
   REPO_KIND,
   resolveChain,
-  getRepoMaintainers,
+  getRepoRoleSubjects,
   type ResolvedRepo,
 } from "@/lib/nip34";
 import type { NostrEvent } from "nostr-tools";
@@ -70,7 +70,7 @@ export function RepositoryModel(
                 // store.addressable() emits synchronously, so all their
                 // initial states are populated in latestByPubkey before
                 // the loop returns — emit() sees the full picture.
-                for (const mp of getRepoMaintainers(ev)) {
+                for (const mp of getRepoRoleSubjects(ev)) {
                   if (!subscribed.has(mp)) subscribe(mp);
                 }
                 emit();

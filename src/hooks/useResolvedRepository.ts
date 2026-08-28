@@ -277,7 +277,7 @@ export function useResolvedRepository(
   // Layer 3: once we know the repo's own relay list, add any relays not yet
   // in repoRelayGroup. Also subscribes to maintainer announcements on those relays.
   const repoRelayKey = repo?.relays.join(",") ?? "";
-  const maintainerKey = repo?.maintainerSet.join(",") ?? "";
+  const discoveryKey = repo?.discoveryPubkeys.join(",") ?? "";
   // If a relay was previously added to extraRelaysForMaintainerMailboxCoverage
   // (Layer 4) and is now declared by the repo itself, remove it from the delta
   // group — repoRelayGroup now covers it and the delta subscription closes cleanly.
@@ -321,7 +321,7 @@ export function useResolvedRepository(
     const filter: Filter[] = [
       {
         kinds: [REPO_KIND],
-        authors: repo.maintainerSet,
+        authors: repo.discoveryPubkeys,
         "#d": [dTag],
       } as Filter,
     ];
@@ -332,7 +332,7 @@ export function useResolvedRepository(
   }, [
     dTag,
     repoRelayKey,
-    maintainerKey,
+    discoveryKey,
     store,
     repoRelayGroup,
     extraRelays$,
@@ -350,11 +350,11 @@ export function useResolvedRepository(
       !repoRelayGroup ||
       !extraRelaysForMaintainerMailboxCoverage ||
       !extraRelays$ ||
-      repo.maintainerSet.length === 0
+      repo.discoveryPubkeys.length === 0
     )
       return undefined;
 
-    const pointers = repo.maintainerSet.map((pk) => ({ pubkey: pk }));
+    const pointers = repo.discoveryPubkeys.map((pk) => ({ pubkey: pk }));
     const outbox$ = of(pointers).pipe(
       includeMailboxes(store, "outbox"),
       ignoreUnhealthyRelaysOnPointers(liveness),
@@ -389,7 +389,7 @@ export function useResolvedRepository(
         const filter: Filter[] = [
           {
             kinds: [REPO_KIND],
-            authors: repo.maintainerSet,
+            authors: repo.discoveryPubkeys,
             "#d": [dTag],
           } as Filter,
         ];
@@ -401,7 +401,7 @@ export function useResolvedRepository(
     ) as unknown as Observable<null>;
   }, [
     dTag,
-    maintainerKey,
+    discoveryKey,
     store,
     repoRelayGroup,
     extraRelaysForMaintainerMailboxCoverage,

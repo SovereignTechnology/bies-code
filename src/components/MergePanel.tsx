@@ -326,8 +326,8 @@ export function MergePanel({
         status: issue.status,
       }));
     if (candidates.length === 0) return undefined;
-    return { issues: candidates, maintainers: repo.maintainerSet };
-  }, [issues, repo.maintainerSet, targetIsDefaultBranch]);
+    return { issues: candidates, maintainers: repo.confirmedMaintainers };
+  }, [issues, repo.confirmedMaintainers, targetIsDefaultBranch]);
 
   const { detectionStopCommitId } = analysis;
 
@@ -481,13 +481,13 @@ export function MergePanel({
         publishStatusBroadly: (status) =>
           outboxStore.publish(status, [
             `outbox:${accountPubkey}`,
-            ...repo.allCoordinates,
+            ...repo.confirmedMemberCoordinates,
             ...(pr.pubkey !== accountPubkey ? [`inbox:${pr.pubkey}`] : []),
           ]),
         publishIssueStatus: (status, issue) =>
           outboxStore.publish(status, [
             `outbox:${accountPubkey}`,
-            ...repo.allCoordinates,
+            ...repo.confirmedMemberCoordinates,
             ...(issue.pubkey !== accountPubkey
               ? [`inbox:${issue.pubkey}`]
               : []),
@@ -495,7 +495,7 @@ export function MergePanel({
         broadcastStateBroadly: (state) =>
           outboxStore.publish(state, [
             `outbox:${accountPubkey}`,
-            ...repo.allCoordinates,
+            ...repo.confirmedMemberCoordinates,
             "fallback-relays",
           ]),
         onEvent: (event) => eventStore.add(event),
@@ -508,7 +508,7 @@ export function MergePanel({
       gitPool,
       graspRelayUrls,
       repo.graspCloneUrls,
-      repo.allCoordinates,
+      repo.confirmedMemberCoordinates,
       currentStateEvent,
       pr.pubkey,
       onSuccessfulPush,
@@ -581,12 +581,12 @@ export function MergePanel({
 
       await outboxStore.publish(signedStatus, [
         `outbox:${account.pubkey}`,
-        ...repo.allCoordinates,
+        ...repo.confirmedMemberCoordinates,
         ...(pr.pubkey !== account.pubkey ? [`inbox:${pr.pubkey}`] : []),
       ]);
       eventStore.add(signedStatus);
     },
-    [account, patchEventIds, pr, repo.allCoordinates],
+    [account, patchEventIds, pr, repo.confirmedMemberCoordinates],
   );
 
   const handleMarkDetectedMerged = useCallback(async () => {

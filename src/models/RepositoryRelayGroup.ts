@@ -3,7 +3,7 @@ import { map } from "rxjs/operators";
 import type { Model } from "applesauce-core/event-store";
 import { RelayGroup } from "applesauce-relay";
 import type { Relay } from "applesauce-relay";
-import { REPO_KIND, getRepoRelays, getRepoMaintainers } from "@/lib/nip34";
+import { REPO_KIND, getRepoRelays, getRepoRoleSubjects } from "@/lib/nip34";
 import { pool } from "@/services/nostr";
 import { normalizeUrl } from "@/lib/url";
 
@@ -29,10 +29,9 @@ export function relayGroupUrls$(
  * RepositoryRelayGroup — a long-lived RelayGroup for a repository, cached by
  * the EventStore model system alongside RepositoryModel.
  *
- * Starts with an empty group and grows as the repository's declared relay list
- * is discovered from announcement events (kind 30617). Callers (e.g.
- * useResolvedRepository) add further relays (maintainer outboxes) via
- * group.add() as NIP-65 data arrives.
+ * Starts with the selected coordinate's relay hints, then grows from the
+ * confirmed component resolved by useResolvedRepository. Relay tags on merely
+ * discovered or invited announcements never enter this shared group.
  *
  * Because RelayGroup.add() is idempotent (checks has() before next()) and
  * internalSubscription uses a WeakMap cache keyed on the Relay instance,
@@ -70,14 +69,18 @@ export function RepositoryRelayGroup(
             .subscribe((ev) => {
               if (!ev) return;
 
-              // Add any relay URLs declared in this announcement (normalized)
-              for (const url of getRepoRelays(ev)) {
-                const relay = pool.relay(normalizeUrl(url));
-                if (!group.has(relay)) group.add(relay);
+              // The selected event is a discovery anchor. Confirmed member
+              // relays are added later from ResolvedRepo; invitation relays
+              // must never become shared repository infrastructure here.
+              if (pubkey === selectedMaintainer) {
+                for (const url of getRepoRelays(ev)) {
+                  const relay = pool.relay(normalizeUrl(url));
+                  if (!group.has(relay)) group.add(relay);
+                }
               }
 
-              // Follow the maintainers tag to discover co-maintainer relays
-              for (const mp of getRepoMaintainers(ev)) {
+              // Follow active role assignments to discover member announcements.
+              for (const mp of getRepoRoleSubjects(ev)) {
                 subscribe(mp);
               }
 

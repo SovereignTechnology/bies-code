@@ -2,7 +2,9 @@ import type { NostrEvent } from "nostr-tools";
 import type { RepoStateRef } from "@/lib/nip34";
 import { pool } from "@/services/nostr";
 
-const STORAGE_KEY = "gitworkshop:maintainer-acceptance:v2";
+// Deliberately do not hydrate v2 jobs: they contain legacy roster-shaped
+// announcements that must never be delivered under the reciprocal model.
+const STORAGE_KEY = "gitworkshop:maintainer-acceptance:v3";
 const MAX_STORED_JOBS = 20;
 export const MAINTAINER_ACCEPTANCE_JOB_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const DELIVERY_RETRY_INITIAL_MS = 5_000;

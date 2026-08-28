@@ -38,7 +38,7 @@ export function useCIRepositoryCoordinatorRelationship(
 ): CIRepositoryCoordinatorRelationshipState {
   const store = useEventStore();
   const castStore = store as unknown as CastRefEventStore;
-  const coordinates = repo?.allCoordinates ?? [];
+  const coordinates = repo?.confirmedMaintainerCoordinates ?? [];
   const maintainers = repo?.confirmedMaintainers ?? [];
   const relays = repo?.relays ?? [];
   const coordinateKey = [...coordinates].sort().join(",");

@@ -276,10 +276,10 @@ export default function PRPage() {
   // All confirmed co-maintainer coordinates — gives the full union of relay
   // groups for publishing. Falls back to the PR's own `a` tag coords if the
   // resolved repo isn't available yet (shouldn't happen in practice).
-  // Using allCoordinates instead of pr.repoCoords ensures comments, status
+  // Use every confirmed member coordinate so collaboration events survive
   // changes, labels etc. reach every co-maintainer's relay set, not just the
   // single maintainer baked into the PR's `a` tag at creation time.
-  const repoAllCoords = repo?.allCoordinates;
+  const repoAllCoords = repo?.confirmedMemberCoordinates;
 
   const store = useEventStore();
 
@@ -326,8 +326,15 @@ export default function PRPage() {
 
   // Compute the effective maintainer set.
   const selectedMaintainers = useMemo(
-    () => (repo?.maintainerSet ? new Set(repo.maintainerSet) : undefined),
-    [repo?.maintainerSet],
+    () => (repo?.confirmedMembers ? new Set(repo.confirmedMembers) : undefined),
+    [repo?.confirmedMembers],
+  );
+  const confirmedMaintainers = useMemo(
+    () =>
+      repo?.confirmedMaintainers
+        ? new Set(repo.confirmedMaintainers)
+        : undefined,
+    [repo?.confirmedMaintainers],
   );
 
   // ── Retry search ─────────────────────────────────────────────────────────
@@ -355,6 +362,7 @@ export default function PRPage() {
     resolved?.repoRelayGroup,
     resolved?.extraRelaysForMaintainerMailboxCoverage,
     selectedMaintainers,
+    confirmedMaintainers,
     undefined, // options
     extraSearchGroups,
     retryKey,
@@ -431,9 +439,9 @@ export default function PRPage() {
     };
     add(pr.pubkey);
     for (const pk of pr.participants) add(pk);
-    for (const pk of repo?.maintainerSet ?? []) add(pk);
+    for (const pk of repo?.confirmedMembers ?? []) add(pk);
     return out;
-  }, [pr, repo?.maintainerSet]);
+  }, [pr, repo?.confirmedMembers]);
 
   // Git pool — uses the repo's clone URLs (same as RepoCodePage).
   const { pool: gitPool, poolState: gitPoolState } = useGitPool(cloneUrls, {
