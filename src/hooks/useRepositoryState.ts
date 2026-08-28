@@ -21,7 +21,7 @@ import { relayGroupUrls$ } from "@/models/RepositoryRelayGroup";
  * Pick the winning state event from a list of candidates.
  *
  * NIP-34 says the latest `created_at` wins; event ID is the tiebreaker
- * (lexicographically larger ID wins) so the result is deterministic.
+ * (lexicographically lower ID wins) so the result is deterministic.
  */
 function pickWinningStateEvent(
   events: { id: string; created_at: number; pubkey: string }[],
@@ -29,7 +29,7 @@ function pickWinningStateEvent(
   if (events.length === 0) return undefined;
   return events.reduce((best, ev) => {
     if (ev.created_at > best.created_at) return ev;
-    if (ev.created_at === best.created_at && ev.id > best.id) return ev;
+    if (ev.created_at === best.created_at && ev.id < best.id) return ev;
     return best;
   });
 }
@@ -39,7 +39,7 @@ function pickWinningStateEvent(
  * event for a repository, while also tracking the per-relay state registry.
  *
  * The "winner" is the state event with the latest `created_at` among all
- * maintainers, with the event ID as a tiebreaker (lexicographically larger
+ * maintainers, with the event ID as a tiebreaker (lexicographically lower
  * ID wins). This matches the NIP-34 spec.
  *
  * Each relay in the group is queried individually so that every relay's
@@ -186,7 +186,7 @@ export function useRepositoryState(
   //
   // For each valid state event, getSeenRelays() returns the set of relay URLs
   // it was received from. We invert that: for each relay URL, we keep the
-  // event with the highest created_at (event ID as tiebreaker).
+  // event with the highest created_at (lowest event ID as tiebreaker).
   const relayStateMap = use$(() => {
     if (!dTag || !confirmedMaintainers || confirmedMaintainers.length === 0)
       return undefined;
@@ -204,7 +204,7 @@ export function useRepositoryState(
               !existing ||
               event.created_at > existing.created_at ||
               (event.created_at === existing.created_at &&
-                event.id > existing.id)
+                event.id < existing.id)
             ) {
               result.set(relayUrl, event);
             }
