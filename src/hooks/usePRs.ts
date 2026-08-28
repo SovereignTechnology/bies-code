@@ -26,7 +26,6 @@ export function usePRs(
   repoCoords: string | string[] | undefined,
   repoRelayGroup: RelayGroup | undefined,
   _options: RepoQueryOptions,
-  confirmedMaintainers: string[] | undefined = undefined,
 ): ResolvedPRLite[] | undefined {
   const store = useEventStore();
 
@@ -38,7 +37,6 @@ export function usePRs(
   }, [Array.isArray(repoCoords) ? repoCoords.join(",") : repoCoords]);
 
   const cacheKey = coords ? coordsCacheKey(coords) : "";
-  const maintainerKey = confirmedMaintainers?.slice().sort().join(",") ?? "";
 
   // Fetch PRs/patches from relay and pipe each newly discovered root item ID
   // into nip34ListLoader via nip34RepoLoader. The factory handles dedup
@@ -55,10 +53,8 @@ export function usePRs(
   // Subscribe to the model — cached by the store, shared across components.
   return use$(() => {
     if (!coords || coords.length === 0) return undefined;
-    return store.model(
-      PRListModel,
-      cacheKey,
-      maintainerKey,
-    ) as unknown as Observable<ResolvedPRLite[]>;
-  }, [cacheKey, maintainerKey, store]);
+    return store.model(PRListModel, cacheKey) as unknown as Observable<
+      ResolvedPRLite[]
+    >;
+  }, [cacheKey, store]);
 }

@@ -40,8 +40,6 @@ import {
   LABEL_KIND,
   DELETION_KIND,
   STATUS_KINDS,
-  PATCH_KIND,
-  PR_KIND,
   resolveChain,
   resolveItemEssentials,
   type ResolvedIssueLite,
@@ -300,7 +298,6 @@ export function useNotificationPageEssentials(
           // authorize notification status or label events.
           const coord = rootEvent.tags.find(([t]) => t === "a")?.[1];
           let memberSet = new Set<string>();
-          let maintainerSet = new Set<string>();
 
           if (coord?.startsWith("30617:")) {
             const parsed = splitCoord(coord);
@@ -318,7 +315,6 @@ export function useNotificationPageEssentials(
               );
               if (repository) {
                 memberSet = new Set(repository.confirmedMembers);
-                maintainerSet = new Set(repository.confirmedMaintainers);
               }
             }
           }
@@ -336,11 +332,6 @@ export function useNotificationPageEssentials(
             [], // comments — not needed for notification display
             [], // zaps — not needed for notification display
             memberSet,
-            {
-              mergeStatusRequiresMaintainer:
-                rootEvent.kind === PATCH_KIND || rootEvent.kind === PR_KIND,
-              mergeStatusAuthorPubkeys: maintainerSet,
-            },
           );
 
           result.set(rootEvent.id, resolved);

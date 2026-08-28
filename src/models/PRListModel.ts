@@ -29,16 +29,12 @@ const ESSENTIALS_KINDS = [...STATUS_KINDS, LABEL_KIND, DELETION_KIND] as const;
  * Structurally identical to IssueListModel but:
  * - Queries kinds [1617, 1618] instead of [1621]
  * - Filters patches to root-only (t:root tag) in the final build step
- * - Passes mergeStatusRequiresMaintainer=true via buildResolvedPRLites
  *
  * Cache key: the sorted, comma-joined coordinate string (same as IssueListModel).
  *
  * @param coordsCacheKey - Sorted, comma-joined coordinate string (cache key)
  */
-export function PRListModel(
-  coordsCacheKey: string,
-  maintainerPubkeysKey: string,
-): Model<ResolvedPRLite[]> {
+export function PRListModel(coordsCacheKey: string): Model<ResolvedPRLite[]> {
   return (store) => {
     const coords = coordsCacheKey ? coordsCacheKey.split(",") : [];
     const memberSet = new Set<string>(
@@ -46,9 +42,6 @@ export function PRListModel(
         const pk = pubkeyFromCoordinate(c);
         return pk ? [pk] : [];
       }),
-    );
-    const maintainerPubkeys = new Set(
-      maintainerPubkeysKey ? maintainerPubkeysKey.split(",") : [],
     );
     const coordinateSet = new Set(coords);
 
@@ -120,7 +113,6 @@ export function PRListModel(
                 zapEvents as NostrEvent[],
                 memberSet,
                 prUpdateEvents,
-                maintainerPubkeys,
               );
             },
           ),

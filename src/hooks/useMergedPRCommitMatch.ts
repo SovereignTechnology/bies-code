@@ -28,7 +28,7 @@ export interface MergedPRCommitMatch {
  * attributing the commit to the wrong PR.
  *
  * The current PR must also have been opened before the matched PR's
- * maintainer-signed merged status. A fast-forwarded parent leaves no merge
+ * authorised merged status. A fast-forwarded parent leaves no merge
  * commit, so the status event timestamp is the only record of when the parent
  * landed; the gate guards against mislabelling a PR that recorded a bad merge
  * base after its base commit was already merged. Timestamps are
@@ -102,7 +102,11 @@ export function useMergedPRCommitMatch(
     if (!parentStatusEvents) return undefined;
 
     const mergedAt = parentStatusEvents
-      .filter((ev) => repo.confirmedMaintainers.includes(ev.pubkey))
+      .filter(
+        (ev) =>
+          ev.pubkey === parent.pubkey ||
+          repo.confirmedMembers.includes(ev.pubkey),
+      )
       .reduce((max, ev) => Math.max(max, ev.created_at), 0);
     if (mergedAt === 0 || currentCreatedAt >= mergedAt) return null;
 

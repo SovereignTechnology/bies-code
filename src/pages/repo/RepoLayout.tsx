@@ -268,7 +268,6 @@ function RepoLayoutResolved({
     repo?.confirmedMemberCoordinates,
     repoRelayGroup,
     queryOptions,
-    repo?.confirmedMaintainers,
   );
 
   const acceptedRepoCoordinates = useMemo(

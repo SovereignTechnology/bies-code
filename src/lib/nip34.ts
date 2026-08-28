@@ -1034,10 +1034,10 @@ export interface ResolvedIssueLite {
   zapTotal: number;
   /**
    * The set of pubkeys authorised to write status, label, and subject-rename
-   * events for this issue. Includes the issue author and all maintainers.
+   * events for this item. Includes the item author and all confirmed members.
    *
    * Convenience property so consumers (e.g. edit buttons) can check
-   * authorisation without independently reconstructing the maintainer set.
+   * authorisation without independently reconstructing the member set.
    */
   authorisedUsers: Set<string>;
   /**
@@ -1085,19 +1085,11 @@ export function extractBody(ev: NostrEvent): string {
 /**
  * Options that vary between entity types when building resolved lists.
  *
- * mergeStatusRequiresMaintainer: when true, the merge-specific status kinds
- *   (resolved/closed) require the author to be a maintainer — the item author
- *   alone is not sufficient. Used for patches and PRs where only maintainers
- *   can mark something as merged. Default: false (issue behaviour).
- *
  * prUpdateEvents: kind:1619 PR Update events to factor into lastActivityAt.
  *   These are keyed by their `E` (uppercase) root pointer to the original PR.
  *   Only used for PRs — ignored for issues.
  */
 export interface ResolveEssentialsOptions {
-  mergeStatusRequiresMaintainer?: boolean;
-  /** Maintainer-only authors when the general authority set also has moderators. */
-  mergeStatusAuthorPubkeys?: ReadonlySet<string>;
   prUpdateEvents?: NostrEvent[];
   /**
    * NIP-09 deletion events (kind:5) that reference one or more essential event
@@ -1115,10 +1107,8 @@ export interface ResolveEssentialsOptions {
  *
  * Auth rules:
  * - Deletion (kind:5): only the root event author is valid (NIP-09).
- * - Status events: root author and maintainers are authorised.
- *   When mergeStatusRequiresMaintainer is true, only maintainers may set
- *   resolved/closed status (for patches/PRs).
- * - Label events: root author and maintainers are authorised.
+ * - Status events: root author and confirmed members are authorised.
+ * - Label events: root author and confirmed members are authorised.
  * Deletion takes precedence over all status events.
  *
  * The returned list is sorted descending by lastActivityAt (max of root
@@ -1129,14 +1119,10 @@ function buildResolvedList(
   essentialEvents: NostrEvent[],
   commentEvents: NostrEvent[],
   zapEvents: NostrEvent[],
-  maintainerSet: Set<string>,
+  memberSet: Set<string>,
   options: ResolveEssentialsOptions = {},
 ): (ResolvedIssueLite & { itemType?: PRItemType })[] {
-  const {
-    mergeStatusRequiresMaintainer = false,
-    mergeStatusAuthorPubkeys = maintainerSet,
-    prUpdateEvents,
-  } = options;
+  const { prUpdateEvents } = options;
 
   // ── Index root events ────────────────────────────────────────────────────
   const authorById = new Map<string, string>();
@@ -1175,7 +1161,7 @@ function buildResolvedList(
     if (ev.created_at > prev) latestEssentialAt.set(rootId, ev.created_at);
 
     const issuePubkey = authorById.get(rootId)!;
-    const isMaintainer = maintainerSet.has(ev.pubkey);
+    const isMember = memberSet.has(ev.pubkey);
     const isAuthor = ev.pubkey === issuePubkey;
 
     // ── Deletion (kind:5) — NIP-09: only the original author's deletion is valid.
@@ -1189,14 +1175,10 @@ function buildResolvedList(
       const statusRootId = getNip10References(ev).root?.e?.id;
       if (!statusRootId || !authorById.has(statusRootId)) continue;
 
-      // NIP-34: only a maintainer can mark a PR as merged (1631). Closing
-      // (1632) is permitted from either the original author or a maintainer
-      // — an author may close their own PR without maintainer rights.
-      if (mergeStatusRequiresMaintainer && ev.kind === STATUS_RESOLVED) {
-        if (!mergeStatusAuthorPubkeys.has(ev.pubkey)) continue;
-      } else {
-        if (!isAuthor && !isMaintainer) continue;
-      }
+      // NIP-34 authorises the root author or a confirmed repository member
+      // for every status kind. A merged status records an authorised merge;
+      // it does not grant permission to create or push the merge itself.
+      if (!isAuthor && !isMember) continue;
 
       const existing = latestStatusByRoot.get(statusRootId);
       if (!existing || ev.created_at > existing.createdAt) {
@@ -1210,7 +1192,7 @@ function buildResolvedList(
 
     // ── Label events (kind:1985)
     if (ev.kind === LABEL_KIND) {
-      if (!isAuthor && !isMaintainer) continue;
+      if (!isAuthor && !isMember) continue;
 
       const subjectLabel = ev.tags.find(
         ([t, , ns]) => t === "l" && ns === SUBJECT_LABEL_NAMESPACE,
@@ -1299,7 +1281,7 @@ function buildResolvedList(
       const comments = commentsByRoot.get(ev.id) ?? [];
       const participantPubkeys = new Set(comments.map((c) => c.pubkey));
 
-      const authorisedUsers = new Set(maintainerSet);
+      const authorisedUsers = new Set(memberSet);
       authorisedUsers.add(ev.pubkey);
 
       const latestCommentAt = comments.reduce(
@@ -1347,7 +1329,7 @@ export function buildResolvedIssues(
   essentialEvents: NostrEvent[],
   commentEvents: NostrEvent[],
   zapEvents: NostrEvent[],
-  maintainerSet: Set<string>,
+  memberSet: Set<string>,
   options: ResolveEssentialsOptions = {},
 ): ResolvedIssueLite[] {
   return buildResolvedList(
@@ -1355,7 +1337,7 @@ export function buildResolvedIssues(
     essentialEvents,
     commentEvents,
     zapEvents,
-    maintainerSet,
+    memberSet,
     options,
   );
 }
@@ -1462,23 +1444,18 @@ export function compareNip01Chronologically(
  * @param essentialEvents - Status, label, and deletion events for this item
  * @param commentEvents   - NIP-22 comments (kind:1111) for this item
  * @param zapEvents       - Zap receipts (kind:9735) for this item
- * @param maintainerSet   - Authorised maintainer pubkeys
- * @param options         - mergeStatusRequiresMaintainer, prUpdateEvents
+ * @param memberSet       - Current confirmed member pubkeys
+ * @param options         - PR updates and deleted-essential events
  */
 export function resolveItemEssentials(
   rootEvent: NostrEvent,
   essentialEvents: NostrEvent[],
   commentEvents: NostrEvent[],
   zapEvents: NostrEvent[],
-  maintainerSet: Set<string>,
+  memberSet: Set<string>,
   options: ResolveEssentialsOptions = {},
 ): ResolvedItemEssentials {
-  const {
-    mergeStatusRequiresMaintainer = false,
-    mergeStatusAuthorPubkeys = maintainerSet,
-    prUpdateEvents,
-    essentialDeletionEvents,
-  } = options;
+  const { prUpdateEvents, essentialDeletionEvents } = options;
   const rootId = rootEvent.id;
   const rootPubkey = rootEvent.pubkey;
 
@@ -1510,7 +1487,7 @@ export function resolveItemEssentials(
 
     if (ev.created_at > latestEssentialAt) latestEssentialAt = ev.created_at;
 
-    const isMaintainer = maintainerSet.has(ev.pubkey);
+    const isMember = memberSet.has(ev.pubkey);
     const isAuthor = ev.pubkey === rootPubkey;
 
     // Deletion (kind:5) — NIP-09: only the original author's deletion is valid.
@@ -1523,14 +1500,10 @@ export function resolveItemEssentials(
     if ((STATUS_KINDS as readonly number[]).includes(ev.kind)) {
       // Skip status events that have been deleted by their author.
       if (deletedEssentialEventIds.has(ev.id)) continue;
-      // NIP-34: only a maintainer can mark a PR as merged (1631). Closing
-      // (1632) is permitted from either the original author or a maintainer
-      // — an author may close their own PR without maintainer rights.
-      if (mergeStatusRequiresMaintainer && ev.kind === STATUS_RESOLVED) {
-        if (!mergeStatusAuthorPubkeys.has(ev.pubkey)) continue;
-      } else {
-        if (!isAuthor && !isMaintainer) continue;
-      }
+      // NIP-34 authorises the root author or a confirmed repository member
+      // for every status kind. A merged status records an authorised merge;
+      // it does not grant permission to create or push the merge itself.
+      if (!isAuthor && !isMember) continue;
 
       if (!latestStatus || ev.created_at > latestStatus.createdAt) {
         latestStatus = { kind: ev.kind, createdAt: ev.created_at };
@@ -1540,7 +1513,7 @@ export function resolveItemEssentials(
 
     // Label events (kind:1985)
     if (ev.kind === LABEL_KIND) {
-      if (!isAuthor && !isMaintainer) continue;
+      if (!isAuthor && !isMember) continue;
       // Skip label events that have been deleted by their author.
       if (deletedEssentialEventIds.has(ev.id)) continue;
 
@@ -1629,7 +1602,7 @@ export function resolveItemEssentials(
     latestPRUpdateAt,
   );
 
-  const authorisedUsers = new Set(maintainerSet);
+  const authorisedUsers = new Set(memberSet);
   authorisedUsers.add(rootPubkey);
 
   return {
@@ -1805,7 +1778,7 @@ export function resolveCoverNote(
  * newest-first (highest `created_at`, ties broken by event ID descending).
  *
  * A cover note is authorised when its author is the item author or a
- * confirmed maintainer.
+ * confirmed member.
  *
  * @param rootId          - The event ID of the root issue / PR / patch
  * @param rootPubkey      - The pubkey of the root event author
@@ -1822,7 +1795,7 @@ export function resolveCoverNotes(
     (ev) =>
       ev.kind === COVER_NOTE_KIND &&
       ev.tags.some((t) => t[0] === "e" && t[1] === rootId) &&
-      // authorisedUsers.size === 0 means maintainers not yet loaded — treat
+      // authorisedUsers.size === 0 means members are not yet loaded — treat
       // the item author as authorised to avoid a flash of no cover note.
       (authorisedUsers.size === 0
         ? ev.pubkey === rootPubkey
@@ -1891,7 +1864,7 @@ interface BuildTimelineBaseArgs {
    * independently of resolveItemEssentials which filters for effective status.
    */
   essentials: NostrEvent[];
-  /** Authorised users set (maintainers + item author). */
+  /** Authorised users set (confirmed members + item author). */
   authorisedUsers: Set<string>;
   /**
    * Set of essential event IDs (status, label/rename) deleted by their author
@@ -1913,8 +1886,6 @@ export interface BuildIssueTimelineArgs extends BuildTimelineBaseArgs {
 
 export interface BuildPRTimelineArgs extends BuildTimelineBaseArgs {
   itemType: "pr" | "patch";
-  /** Effective repository maintainer set. Required for PR/patch merge status auth. */
-  maintainers: Set<string>;
   /** Ordered revisions (oldest first). */
   revisions: PRRevision[];
   /**
@@ -1953,15 +1924,10 @@ export function buildTimelineNodes(
   const { rootEvent, comments, essentials, authorisedUsers } = args;
   const rootId = rootEvent.id;
 
-  const isStatusAuthorised = (ev: NostrEvent): boolean => {
-    if (args.itemType !== "issue" && ev.kind === STATUS_RESOLVED) {
-      return args.maintainers.has(ev.pubkey);
-    }
-
-    // authorisedUsers.size === 0 means maintainers not yet loaded — treat as
+  const isStatusAuthorised = (ev: NostrEvent): boolean =>
+    // authorisedUsers.size === 0 means members are not yet loaded — treat as
     // authorised to avoid a flash of "proposed" on initial load.
-    return authorisedUsers.size === 0 || authorisedUsers.has(ev.pubkey);
-  };
+    authorisedUsers.size === 0 || authorisedUsers.has(ev.pubkey);
 
   // ── Status nodes ──────────────────────────────────────────────────────────
   // Show all status events regardless of auth; flag unauthorised ones so the
@@ -1979,7 +1945,7 @@ export function buildTimelineNodes(
   // ── Rename nodes ──────────────────────────────────────────────────────────
   // Only authorised renames (already filtered by resolveItemEssentials for
   // effective subject, but here we derive them directly from essentials for
-  // the timeline — same auth rule: author or maintainer only).
+  // the timeline — same auth rule: root author or confirmed member).
   const renameEvs = essentials
     .filter(
       (ev) =>
@@ -2378,8 +2344,8 @@ export interface ResolvedPR extends ResolvedPRLite {
 
 /**
  * Build a sorted list of ResolvedPRLite objects from raw patch and PR events.
- * Identical to buildResolvedIssues but mergeStatusRequiresMaintainer=true and
- * each item gets an itemType discriminator ("patch" | "pr").
+ * Identical to buildResolvedIssues, with an itemType discriminator
+ * ("patch" | "pr") added to each item.
  *
  * prUpdateEvents (kind:1619) are factored into lastActivityAt so the list
  * sorts correctly when a PR branch is updated. They are NOT counted as
@@ -2392,7 +2358,6 @@ export function buildResolvedPRs(
   zapEvents: NostrEvent[],
   memberSet: Set<string>,
   prUpdateEvents: NostrEvent[] = [],
-  maintainerSet: ReadonlySet<string> = memberSet,
 ): ResolvedPRLite[] {
   return buildResolvedList(
     rootEvents,
@@ -2401,8 +2366,6 @@ export function buildResolvedPRs(
     zapEvents,
     memberSet,
     {
-      mergeStatusRequiresMaintainer: true,
-      mergeStatusAuthorPubkeys: maintainerSet,
       prUpdateEvents,
     },
   ).map((item) => ({

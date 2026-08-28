@@ -43,12 +43,12 @@ const ESSENTIALS_KINDS = [...STATUS_KINDS, LABEL_KIND, DELETION_KIND] as const;
  * The model reacts to whatever is present — no special casing.
  *
  * Used for both the list page (many issues) and the detail page (one issue,
- * passed as a single-element coord set). PatchListModel will be structurally
- * identical, passing { mergeStatusRequiresMaintainer: true } to options.
+ * passed as a single-element coord set). PatchListModel is structurally
+ * identical with different root kinds.
  *
  * Cache key: the sorted, comma-joined coordinate string (e.g.
  * "30617:abc:repo,30617:def:repo"). Use coordsCacheKey() from nip34.ts.
- * The maintainer set is derived from the coord strings directly via
+ * The member set is derived from the coord strings directly via
  * pubkeyFromCoordinate — no BFS needed here, that's done upstream.
  *
  * This model does NOT fetch from relays — pair it with relay subscriptions in
@@ -62,11 +62,11 @@ export function IssueListModel(
   options: ResolveEssentialsOptions = {},
 ): Model<ResolvedIssueLite[]> {
   return (store) => {
-    // Derive the maintainer set from the coord strings. The pubkey is always
+    // Derive the member set from the coord strings. The pubkey is always
     // extractable from the coordinate itself ("30617:<pubkey>:<dTag>"), so the
     // set is fully known without any relay fetches.
     const coords = coordsCacheKey ? coordsCacheKey.split(",") : [];
-    const maintainerSet = new Set<string>(
+    const memberSet = new Set<string>(
       coords.flatMap((c) => {
         const pk = pubkeyFromCoordinate(c);
         return pk ? [pk] : [];
@@ -119,7 +119,7 @@ export function IssueListModel(
                   ...(legacyReplyEvents as NostrEvent[]),
                 ],
                 zapEvents as NostrEvent[],
-                maintainerSet,
+                memberSet,
                 options,
               ),
           ),

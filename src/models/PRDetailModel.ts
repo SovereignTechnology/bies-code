@@ -189,8 +189,6 @@ export function PRDetailModel(
             zaps,
             effectiveMembers,
             {
-              mergeStatusRequiresMaintainer: true,
-              mergeStatusAuthorPubkeys: effectiveMaintainers,
               prUpdateEvents,
               essentialDeletionEvents: essentialDeletionEvents as NostrEvent[],
             },
@@ -375,7 +373,6 @@ export function PRDetailModel(
             comments: mergedComments,
             essentials,
             authorisedUsers: core.authorisedUsers,
-            maintainers: effectiveMaintainers,
             deletedEssentialEventIds: core.deletedEssentialEventIds,
             revisions,
             revisionRootIds,
