@@ -609,6 +609,29 @@ function RepoLayoutResolved({
     [cloneUrls.join(","), basePath],
   );
 
+  // Only a complete signed pointer walk may rewrite an explicitly entered
+  // coordinate. Inferred, leadless, pending, and conflicting results stay on
+  // the current route. Keeping this after every hook also makes resolution
+  // changes safe across renders.
+  const explicitLeadMaintainer =
+    repo?.leadResolution.source === "explicit"
+      ? repo.leadResolution.leadMaintainer
+      : undefined;
+  if (repo && explicitLeadMaintainer && explicitLeadMaintainer !== pubkey) {
+    const leadBasePath = repoToPath(
+      explicitLeadMaintainer,
+      repo.dTag,
+      relayHints,
+    );
+    return (
+      <Navigate
+        to={`${leadBasePath}${repoPageSuffix}${location.search}${location.hash}`}
+        replace
+        state={location.state}
+      />
+    );
+  }
+
   return (
     <RepoRelaysContext.Provider value={repoRelayUrls}>
       <div className="min-h-full">

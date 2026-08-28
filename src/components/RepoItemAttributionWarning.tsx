@@ -10,7 +10,6 @@ import {
   PopoverContent,
 } from "@/components/ui/popover";
 import {
-  computeMaintainerLeadership,
   getRepoRelays,
   groupRequestedMaintainers,
   parseRepoCoordinate,
@@ -140,10 +139,7 @@ function CurrentRepositoryBadge({
   repo: ResolvedRepo;
   pageSuffix: string;
 }) {
-  const leadMaintainer = computeMaintainerLeadership(
-    repo.confirmedMaintainers,
-    repo.maintainerEdges,
-  ).leadMaintainer;
+  const leadMaintainer = repo.leadResolution.leadMaintainer;
 
   return (
     <RepoGroupBadge

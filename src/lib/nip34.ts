@@ -790,61 +790,6 @@ export interface FieldProvenance {
   value: string;
 }
 
-export interface MaintainerLeadership {
-  /** Maintainer with the unique highest confirmed in-degree, if one exists. */
-  leadMaintainer?: string;
-  /** Number of confirmed maintainers that list each confirmed maintainer. */
-  listingCounts: Map<string, number>;
-}
-
-/**
- * Compute maintainer listing counts and a simple lead from the resolved graph.
- *
- * Only confirmed maintainers participate. Duplicate `from -> to` edges count
- * once. A lead exists only when exactly one maintainer has the highest positive
- * in-degree; ties and zero-count graphs intentionally have no lead.
- */
-export function computeMaintainerLeadership(
-  maintainerSet: Iterable<string>,
-  maintainerEdges: MaintainerEdge[],
-): MaintainerLeadership {
-  const confirmed = new Set(maintainerSet);
-  const listingCounts = new Map<string, number>();
-  for (const pubkey of confirmed) listingCounts.set(pubkey, 0);
-
-  const seenEdges = new Set<string>();
-  for (const { from, to } of maintainerEdges) {
-    if (!confirmed.has(from) || !confirmed.has(to)) continue;
-    if (from === to) continue;
-
-    const edgeKey = `${from}:${to}`;
-    if (seenEdges.has(edgeKey)) continue;
-    seenEdges.add(edgeKey);
-
-    listingCounts.set(to, (listingCounts.get(to) ?? 0) + 1);
-  }
-
-  let highestCount = 0;
-  let leadMaintainer: string | undefined;
-  let leadersAtHighest = 0;
-
-  for (const [pubkey, count] of listingCounts) {
-    if (count > highestCount) {
-      highestCount = count;
-      leadMaintainer = pubkey;
-      leadersAtHighest = 1;
-    } else if (count === highestCount && count > 0) {
-      leadersAtHighest += 1;
-    }
-  }
-
-  return {
-    leadMaintainer:
-      highestCount > 0 && leadersAtHighest === 1 ? leadMaintainer : undefined,
-    listingCounts,
-  };
-}
-
 /**
  * The fully-resolved view of a repository after BFS chain resolution.
  *
@@ -857,7 +802,7 @@ export interface ResolvedRepo {
   // --- Identity ---
   /** The pubkey used as the starting point for resolution (route anchor) */
   selectedMaintainer: string;
-  /** The selected maintainer's repository coordinate (canonical route anchor) */
+  /** The selected maintainer's repository coordinate (current route anchor). */
   selectedCoordinate: string;
   /** The d-tag identifier shared by all announcements in this repo */
   dTag: string;
@@ -919,7 +864,7 @@ export interface ResolvedRepo {
   moderatorEdges: ModeratorEdge[];
   /** Fail-closed parsing and compatibility warnings. */
   repositoryHealth: RepositoryHealthWarning[];
-  /** Signed lead result, exposed now for diagnostics; routing changes in Wave 2. */
+  /** Signed lead result rooted at the selected coordinate. */
   leadResolution: LeadResolution;
   /** Per-URL provenance for clone URLs */
   cloneUrlProvenance: FieldProvenance[];
@@ -954,12 +899,7 @@ export function hasAcceptedRepositoryReference(
 }
 
 function selectRepoLeadAnchor(resolved: ResolvedRepo): string {
-  return (
-    computeMaintainerLeadership(
-      resolved.confirmedMaintainers,
-      resolved.maintainerEdges,
-    ).leadMaintainer ?? resolved.selectedMaintainer
-  );
+  return resolved.leadResolution.leadMaintainer ?? resolved.selectedMaintainer;
 }
 
 // ---------------------------------------------------------------------------
@@ -2633,12 +2573,7 @@ export function groupRequestedMaintainers(
       continue;
     }
 
-    const leadMaintainer = alternateRepo
-      ? computeMaintainerLeadership(
-          uniqueMembers,
-          alternateRepo.maintainerEdges,
-        ).leadMaintainer
-      : undefined;
+    const leadMaintainer = alternateRepo?.leadResolution.leadMaintainer;
     groups.set(key, {
       members: uniqueMembers,
       referencedMaintainers: [referencedMaintainer],

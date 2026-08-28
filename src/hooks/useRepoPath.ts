@@ -1,9 +1,5 @@
 import type { Observable } from "rxjs";
-import {
-  computeMaintainerLeadership,
-  parseRepoCoordinate,
-  type ResolvedRepo,
-} from "@/lib/nip34";
+import { parseRepoCoordinate, type ResolvedRepo } from "@/lib/nip34";
 import { repoToPath } from "@/lib/routeUtils";
 import { RepositoryModel } from "@/models/RepositoryModel";
 import { use$ } from "./use$";
@@ -35,9 +31,9 @@ export function useRepoPath(
 /**
  * Build the default path for a discovered repository.
  *
- * Discovery links prefer the unique lead maintainer once the recursive graph
- * is available. Explicit maintainer routes continue to use useRepoPath
- * directly so navigating to a specific maintainer's coordinate is preserved.
+ * Discovery links prefer a resolved explicit, inferred, or implicit lead once
+ * the recursive graph is available. Explicit route rewriting is handled
+ * separately and accepts only a complete signed `M` path.
  */
 export function useDefaultRepoPath(repo: ResolvedRepo): string {
   const store = useEventStore();
@@ -49,10 +45,7 @@ export function useDefaultRepoPath(repo: ResolvedRepo): string {
     ) as unknown as Observable<ResolvedRepo | undefined>;
   }, [store, repo.selectedMaintainer, repo.dTag]);
   const routeRepo = resolvedRepo ?? repo;
-  const leadMaintainer = computeMaintainerLeadership(
-    routeRepo.confirmedMaintainers,
-    routeRepo.maintainerEdges,
-  ).leadMaintainer;
+  const leadMaintainer = routeRepo.leadResolution.leadMaintainer;
 
   return useRepoPath(
     leadMaintainer ?? routeRepo.selectedMaintainer,
@@ -82,12 +75,7 @@ export function useDefaultRepoCoordPath(
       parsed.identifier,
     ) as unknown as Observable<ResolvedRepo | undefined>;
   }, [store, parsed?.pubkey, parsed?.identifier]);
-  const leadMaintainer = resolvedRepo
-    ? computeMaintainerLeadership(
-        resolvedRepo.confirmedMaintainers,
-        resolvedRepo.maintainerEdges,
-      ).leadMaintainer
-    : undefined;
+  const leadMaintainer = resolvedRepo?.leadResolution.leadMaintainer;
   const routePubkey = leadMaintainer ?? parsed?.pubkey ?? "";
   const verifiedNip05 = useVerifiedNip05(routePubkey);
 

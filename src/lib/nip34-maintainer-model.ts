@@ -50,8 +50,10 @@ export type LeadResolutionSource =
   | "conflict";
 
 export interface LeadResolution {
+  /** Terminal lead when resolution completed successfully. */
   leadMaintainer?: string;
   source: LeadResolutionSource;
+  /** Selected maintainer followed by each explicit pointer target. */
   path: string[];
 }
 

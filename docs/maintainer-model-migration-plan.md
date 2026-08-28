@@ -251,13 +251,13 @@ Selected indexed `m` without `M` is an explicit leadless boundary.
 
 ### Wave 2 gate
 
-- [ ] `Alice -> Bob -> Bob` routes to Bob and preserves the complete URL
+- [x] `Alice -> Bob -> Bob` routes to Bob and preserves the complete URL
       suffix.
-- [ ] `defer`, missing, conflicting, and cyclic paths never redirect.
-- [ ] An explicit leadless repository remains on the selected coordinate.
-- [ ] Legacy-inferred leads affect default links without rewriting explicit
+- [x] `defer`, missing, conflicting, and cyclic paths never redirect.
+- [x] An explicit leadless repository remains on the selected coordinate.
+- [x] Legacy-inferred leads affect default links without rewriting explicit
       user navigation.
-- [ ] No route redirect changes an announcement or publishes an event.
+- [x] No route redirect changes an announcement or publishes an event.
 
 ## Wave 3 — Repository components and search
 

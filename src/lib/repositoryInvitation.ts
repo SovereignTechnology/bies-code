@@ -3,7 +3,6 @@ import { nip19, type EventTemplate, type NostrEvent } from "nostr-tools";
 import type { RepositoryState } from "@/casts/RepositoryState";
 import { graspRepositoryCloneUrl, type GraspServer } from "@/lib/grasp";
 import {
-  computeMaintainerLeadership,
   getRepoCloneUrls,
   getRepoMaintainers,
   getRepoRelays,
@@ -66,10 +65,7 @@ export function getAcceptanceMaintainerSelection(
   const options = repo.confirmedMaintainers.filter(
     (pubkey) => pubkey !== accountPubkey,
   );
-  const leadMaintainer = computeMaintainerLeadership(
-    repo.confirmedMaintainers,
-    repo.maintainerEdges,
-  ).leadMaintainer;
+  const leadMaintainer = repo.leadResolution.leadMaintainer;
   const defaults =
     options.length === 1
       ? options

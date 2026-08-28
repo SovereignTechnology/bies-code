@@ -13,9 +13,10 @@
  *   - Relay URLs generated from selected Grasp servers
  *   - Items contributed only by co-maintainers (displayed as info)
  *
- * Confirmed maintainers are redirected to the same repository under their own
- * announcement coordinate. Membership changes are intentionally read-only
- * until the role-aware mutation preflight is implemented.
+ * The repository stays on its canonical route while the form resolves an
+ * account-rooted view for the signed-in maintainer's own announcement.
+ * Membership changes are intentionally read-only until the role-aware
+ * mutation preflight is implemented.
  */
 
 import {
@@ -27,7 +28,7 @@ import {
   useId,
   useRef,
 } from "react";
-import { Link, Navigate, useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useActiveAccount } from "applesauce-react/hooks";
 import {
   ArrowLeft,
@@ -93,8 +94,8 @@ import {
   isRepoUpstreamSelfReference,
   isGraspCloneUrl,
   graspCloneUrlServiceAddress,
-  computeMaintainerLeadership,
   groupRequestedMaintainers,
+  resolveChain,
   type RepoUpstream,
   type ResolvedRepo,
 } from "@/lib/nip34";
@@ -267,31 +268,17 @@ export default function RepoSettingsPage() {
   const accountPubkey = account?.pubkey;
   const isConfirmedMaintainer =
     !!accountPubkey && repo.confirmedMaintainers.includes(accountPubkey);
-  const accountAnnouncement = accountPubkey
-    ? repo.confirmedAnnouncements.find(
+  const editableRepo =
+    accountPubkey && isConfirmedMaintainer
+      ? resolveChain(repo.discoveredAnnouncements, accountPubkey, repo.dTag)
+      : undefined;
+  const accountAnnouncement = editableRepo
+    ? editableRepo.confirmedAnnouncements.find(
         (announcement) => announcement.pubkey === accountPubkey,
       )
     : undefined;
 
-  if (
-    accountPubkey &&
-    accountPubkey !== repo.selectedMaintainer &&
-    isConfirmedMaintainer &&
-    accountAnnouncement
-  ) {
-    const accountRepoPath = repoToPath(
-      accountPubkey,
-      repo.dTag,
-      getRepoRelays(accountAnnouncement),
-    );
-    return <Navigate to={`${accountRepoPath}/settings`} replace />;
-  }
-
-  if (
-    accountPubkey !== repo.selectedMaintainer ||
-    !isConfirmedMaintainer ||
-    !accountAnnouncement
-  ) {
+  if (!isConfirmedMaintainer || !editableRepo || !accountAnnouncement) {
     return (
       <div className="container max-w-screen-xl px-4 py-8 md:px-8">
         <div className="max-w-md">
@@ -315,7 +302,11 @@ export default function RepoSettingsPage() {
   }
 
   return (
-    <RepoSettingsForm repo={repo} basePath={basePath} repoState={repoState} />
+    <RepoSettingsForm
+      repo={editableRepo}
+      basePath={basePath}
+      repoState={repoState}
+    />
   );
 }
 
@@ -417,14 +408,7 @@ function RepoSettingsForm({
     );
   }, [selectedAnnouncement, repo.selectedMaintainer]);
   const isMultiMaintainer = repo.confirmedMaintainers.length > 1;
-  const maintainerLeadership = useMemo(
-    () =>
-      computeMaintainerLeadership(
-        repo.confirmedMaintainers,
-        repo.maintainerEdges,
-      ),
-    [repo.confirmedMaintainers, repo.maintainerEdges],
-  );
+  const leadMaintainer = repo.leadResolution.leadMaintainer;
   const maintainerListers = useMemo(
     () =>
       computeMaintainerListers(
@@ -446,7 +430,7 @@ function RepoSettingsForm({
     [repo.selectedMaintainer, repo.discoveryPubkeys, currentMaintainers],
   );
   const initialCoordinationChoice = useMemo(() => {
-    const lead = maintainerLeadership.leadMaintainer;
+    const lead = leadMaintainer;
     if (!lead || initialCoordinationCandidatePubkeys.length <= 2) {
       return NO_LEAD;
     }
@@ -467,7 +451,7 @@ function RepoSettingsForm({
   }, [
     currentMaintainers,
     initialCoordinationCandidatePubkeys,
-    maintainerLeadership.leadMaintainer,
+    leadMaintainer,
     repo.selectedMaintainer,
   ]);
   const currentEucHash = useMemo(
@@ -1562,7 +1546,7 @@ function RepoSettingsForm({
               <div className="space-y-2">
                 {repo.confirmedMaintainers.map((pubkey) => {
                   const listedBy = maintainerListers.get(pubkey) ?? [];
-                  const isLead = maintainerLeadership.leadMaintainer === pubkey;
+                  const isLead = leadMaintainer === pubkey;
                   return (
                     <div
                       key={pubkey}
@@ -1585,13 +1569,13 @@ function RepoSettingsForm({
 
               {isMultiMaintainer || showMaintainerCoordination ? (
                 <div className="rounded-md border border-border/40 bg-background/40 px-2.5 py-2 text-xs">
-                  {maintainerLeadership.leadMaintainer ? (
+                  {leadMaintainer ? (
                     <LeadMaintainerSummary
                       hasLead
                       className="text-muted-foreground"
                     >
                       <UserName
-                        pubkey={maintainerLeadership.leadMaintainer}
+                        pubkey={leadMaintainer}
                         className="text-xs text-foreground"
                         linkToProfile
                       />

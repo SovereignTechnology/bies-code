@@ -54,7 +54,6 @@ import {
 } from "lucide-react";
 import {
   graspCloneUrlNpub,
-  computeMaintainerLeadership,
   getRepoRelays,
   getRepoUpstreams,
   groupRequestedMaintainers,
@@ -444,14 +443,7 @@ function SidebarVariant({
     ? getRepoUpstreams(selectedAnnouncement)
     : [];
   const isMultiAnnouncement = repo.discoveredAnnouncements.length > 1;
-  const maintainerLeadership = useMemo(
-    () =>
-      computeMaintainerLeadership(
-        repo.confirmedMaintainers,
-        repo.maintainerEdges,
-      ),
-    [repo.confirmedMaintainers, repo.maintainerEdges],
-  );
+  const leadMaintainer = repo.leadResolution.leadMaintainer;
   const [multiModalOpen, setMultiModalOpen] = useState(false);
 
   return (
@@ -525,7 +517,7 @@ function SidebarVariant({
                         selected
                       </Badge>
                     )}
-                  {pk === maintainerLeadership.leadMaintainer && (
+                  {pk === leadMaintainer && (
                     <Badge
                       variant="outline"
                       className="text-[10px] px-1.5 py-0 h-4 text-pink-600 border-pink-500/40 dark:text-pink-400"
@@ -659,7 +651,7 @@ function SidebarVariant({
                   announcements={repo.discoveredAnnouncements}
                   selectedMaintainer={repo.selectedMaintainer}
                   confirmedMaintainers={repo.confirmedMaintainers}
-                  leadMaintainer={maintainerLeadership.leadMaintainer}
+                  leadMaintainer={leadMaintainer}
                   open={multiModalOpen}
                   onOpenChange={setMultiModalOpen}
                 />
@@ -711,14 +703,7 @@ function FullVariant({
     () => new Set(repo.confirmedMaintainers),
     [repo.confirmedMaintainers],
   );
-  const maintainerLeadership = useMemo(
-    () =>
-      computeMaintainerLeadership(
-        repo.confirmedMaintainers,
-        repo.maintainerEdges,
-      ),
-    [repo.confirmedMaintainers, repo.maintainerEdges],
-  );
+  const leadMaintainer = repo.leadResolution.leadMaintainer;
   const maintainerListings = useMemo(
     () =>
       computeConfirmedMaintainerListings(
@@ -821,7 +806,7 @@ function FullVariant({
                     selected
                   </Badge>
                 )}
-              {pk === maintainerLeadership.leadMaintainer && (
+              {pk === leadMaintainer && (
                 <Badge
                   variant="outline"
                   className="text-[10px] px-1.5 py-0 h-4 text-pink-600 border-pink-500/40 dark:text-pink-400"
@@ -1013,7 +998,7 @@ function FullVariant({
           announcements={repo.discoveredAnnouncements}
           selectedMaintainer={repo.selectedMaintainer}
           confirmedMaintainers={repo.confirmedMaintainers}
-          leadMaintainer={maintainerLeadership.leadMaintainer}
+          leadMaintainer={leadMaintainer}
           editPath={isMaintainer ? editPath : undefined}
           repoCoords={
             isMaintainer ? repo.confirmedMemberCoordinates : undefined

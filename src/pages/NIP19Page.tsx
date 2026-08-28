@@ -19,7 +19,6 @@ import {
 } from "rxjs";
 import { eventStore, pool } from "../services/nostr";
 import {
-  computeMaintainerLeadership,
   REPO_KIND,
   ISSUE_KIND,
   PATCH_KIND,
@@ -176,10 +175,7 @@ function preferredRepoCoord(
   const repo = resolveChain(announcements, fallback.pubkey, fallback.dTag);
   if (!repo) return fallbackCoord;
 
-  const leadMaintainer = computeMaintainerLeadership(
-    repo.confirmedMaintainers,
-    repo.maintainerEdges,
-  ).leadMaintainer;
+  const leadMaintainer = repo.leadResolution.leadMaintainer;
 
   if (!leadMaintainer) return fallbackCoord;
 
