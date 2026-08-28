@@ -13,6 +13,7 @@ import { RelayGroup } from "applesauce-relay";
 import type { RelayGroup as RelayGroupType } from "applesauce-relay";
 import { ignoreUnhealthyRelaysOnPointers } from "applesauce-relay/operators";
 import {
+  addressLoader,
   pool,
   liveness,
   eventStore as globalEventStore,
@@ -27,8 +28,15 @@ import { RepositoryModel } from "@/models/RepositoryModel";
 import { RepositoryRelayGroup } from "@/models/RepositoryRelayGroup";
 import type { Filter } from "applesauce-core/helpers";
 import type { Observable } from "rxjs";
-import { BehaviorSubject, combineLatest, of } from "rxjs";
-import { switchMap, map, distinctUntilChanged } from "rxjs/operators";
+import { BehaviorSubject, combineLatest, concat, forkJoin, of } from "rxjs";
+import {
+  catchError,
+  distinctUntilChanged,
+  endWith,
+  ignoreElements,
+  map,
+  switchMap,
+} from "rxjs/operators";
 import { normalizeUrl } from "@/lib/url";
 
 /** Max healthy mailbox relays to take per maintainer when querying NIP-65 relays. */
@@ -55,6 +63,13 @@ export interface ResolvedRepositoryResult {
   /** Search state for the repo announcement — undefined if the event was
    *  already in the store (no search needed). */
   repoSearch: EventSearchState | undefined;
+  /** True once the exact current announcement-author/relay closure has been refreshed. */
+  announcementsSettled: boolean;
+}
+
+interface AnnouncementGraphSettleState {
+  key: string;
+  settled: boolean;
 }
 
 /**
@@ -196,6 +211,8 @@ export function useResolvedRepository(
   }, [pubkey, dTag, alreadyInStore]);
 
   const repoSearch = useEventSearch(searchTarget, searchGroups);
+  const configuredGitIndexRelays = use$(gitIndexRelays) ?? [];
+  const configuredFallbackRelays = use$(fallbackRelays) ?? [];
 
   // Background refresh: when the event is already in the store (e.g. navigated
   // from the landing page which pre-fetched it), useEventSearch is skipped
@@ -273,6 +290,7 @@ export function useResolvedRepository(
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [key],
   );
+  const extraMailboxRelayUrls = use$(extraRelays$) ?? [];
 
   // Layer 3: once we know the repo's own relay list, add any relays not yet
   // in repoRelayGroup. Also subscribes to maintainer announcements on those relays.
@@ -408,10 +426,95 @@ export function useResolvedRepository(
     extraRelays$,
   ]);
 
+  // A cached RepositoryModel snapshot is useful for immediate rendering but
+  // cannot safely drive canonical routing until its complete current closure
+  // has been refreshed. Query every discovered announcement author across all
+  // currently known discovery sources. The state carries its closure key so a
+  // synchronous render after authors or relays change cannot reuse a stale
+  // `settled: true` value from the previous observable.
+  const announcementAuthors = [...(repo?.discoveryPubkeys ?? [])].sort();
+  const announcementRelayUrls = [
+    ...new Set(
+      [
+        ...nip05Relays,
+        ...relayHints,
+        ...(repo?.relays ?? []),
+        ...extraMailboxRelayUrls,
+        ...configuredGitIndexRelays,
+        ...configuredFallbackRelays,
+      ].map(normalizeUrl),
+    ),
+  ].sort();
+  const announcementGraphKey = JSON.stringify([
+    pubkey ?? "",
+    dTag ?? "",
+    announcementAuthors,
+    announcementRelayUrls,
+  ]);
+  const announcementMailboxRelayGroup = extraRelaysForMaintainerMailboxCoverage;
+  const announcementGraphState = use$(() => {
+    const unsettled: AnnouncementGraphSettleState = {
+      key: announcementGraphKey,
+      settled: false,
+    };
+    if (
+      !dTag ||
+      !announcementMailboxRelayGroup ||
+      announcementAuthors.length === 0 ||
+      announcementRelayUrls.length === 0
+    ) {
+      return of(unsettled);
+    }
+
+    const mailboxRefreshes = announcementAuthors.map((author) =>
+      addressLoader({ kind: 10002, pubkey: author, cache: false }).pipe(
+        ignoreElements(),
+        endWith(null),
+        catchError(() => of(null)),
+      ),
+    );
+    return concat(
+      of(unsettled),
+      forkJoin(mailboxRefreshes).pipe(
+        switchMap(() => {
+          // Mailbox subscriptions above update this shared group before their
+          // loaders complete. Read it at request time so a freshly discovered
+          // author relay participates in the same settled snapshot.
+          const refreshedRelayUrls = [
+            ...new Set([
+              ...announcementRelayUrls,
+              ...announcementMailboxRelayGroup.relays.map((relay) =>
+                normalizeUrl(relay.url),
+              ),
+            ]),
+          ].sort();
+          const filter: Filter = {
+            kinds: [REPO_KIND],
+            authors: announcementAuthors,
+            "#d": [dTag],
+          } as Filter;
+          return resilientRequest(pool, refreshedRelayUrls, [filter]).pipe(
+            onlyEvents(),
+            mapEventsToStore(store),
+            ignoreElements(),
+            endWith<AnnouncementGraphSettleState>({
+              key: announcementGraphKey,
+              settled: true,
+            }),
+          );
+        }),
+        catchError(() => of(unsettled)),
+      ),
+    );
+  }, [announcementGraphKey, store, announcementMailboxRelayGroup]);
+  const announcementsSettled =
+    announcementGraphState?.key === announcementGraphKey &&
+    announcementGraphState.settled;
+
   const resolved: ResolvedRepository | undefined =
     repo && repoRelayGroup && extraRelaysForMaintainerMailboxCoverage
       ? { repo, repoRelayGroup, extraRelaysForMaintainerMailboxCoverage }
       : undefined;
 
-  return { resolved, repoSearch };
+  return { resolved, repoSearch, announcementsSettled };
 }

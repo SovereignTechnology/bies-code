@@ -5,7 +5,7 @@
 ### Changed
 
 - Make reciprocal NIP-34 membership the repository authority boundary, add indexed `M`/`m`/`o` role and `defer` resolution, separate discovery from confirmed maintainer/member coordinates, and temporarily disable legacy browser membership writes while preserving membership tags through metadata edits.
-- Resolve repository leads from the selected coordinate's signed `M` pointer path or legacy vote result, redirect complete explicit paths and unique legacy winners while preserving the full URL, and leave unresolved or tied routes unchanged.
+- Resolve repository leads from the selected coordinate's signed `M` pointer path or legacy vote result, refresh the complete current announcement closure before redirecting, preserve the full URL, and leave unresolved or tied routes unchanged.
 
 ### Fixes
 

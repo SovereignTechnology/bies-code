@@ -243,8 +243,9 @@ Selected indexed `m` without `M` is an explicit leadless boundary.
     resolves one unique confirmed lead.
 - Preserve the repository subpath, query string, and hash.
 - Use replacement navigation so the old coordinate does not create a back-loop.
-- Wait for the selected pointer path or legacy vote result to resolve before
-  redirecting.
+- Refresh every announcement in the current author/relay closure before
+  redirecting. Any newly discovered author or relay invalidates the prior
+  settled result and must settle again.
 - Never redirect through `defer`, a missing announcement, multiple active `M`
   entries, a cycle, a departed target, or an incomplete prepared handover.
 - Redirect legacy repository routes to their unique inferred lead as well as

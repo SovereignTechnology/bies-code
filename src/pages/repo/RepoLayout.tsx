@@ -79,6 +79,7 @@ import {
 } from "@/components/CommitLinkContext";
 import { RepoRelaysContext } from "@/contexts/RepoRelaysContext";
 import { relayGroupUrls$ } from "@/models/RepositoryRelayGroup";
+import { getRepositoryLeadRedirectPath } from "@/lib/repositoryLeadRoute";
 import { EMPTY } from "rxjs";
 import { catchError } from "rxjs/operators";
 // ---------------------------------------------------------------------------
@@ -187,7 +188,7 @@ function RepoLayoutResolved({
   location: ReturnType<typeof useLocation>;
   nip05?: string;
 }) {
-  const { resolved, repoSearch } = useResolvedRepository(
+  const { resolved, repoSearch, announcementsSettled } = useResolvedRepository(
     pubkey,
     repoId,
     relayHints,
@@ -609,28 +610,22 @@ function RepoLayoutResolved({
     [cloneUrls.join(","), basePath],
   );
 
-  // A complete signed pointer walk or unique legacy vote winner may rewrite
-  // an explicitly entered coordinate. Leadless, pending, conflicting, and
-  // tied legacy results stay on the current route. Keeping this after every
-  // hook also makes resolution changes safe across renders.
-  const redirectLeadMaintainer =
-    repo?.leadResolution.source === "explicit" ||
-    repo?.leadResolution.source === "legacy_inferred"
-      ? repo.leadResolution.leadMaintainer
-      : undefined;
-  if (repo && redirectLeadMaintainer && redirectLeadMaintainer !== pubkey) {
-    const leadBasePath = repoToPath(
-      redirectLeadMaintainer,
-      repo.dTag,
-      relayHints,
-    );
-    return (
-      <Navigate
-        to={`${leadBasePath}${repoPageSuffix}${location.search}${location.hash}`}
-        replace
-        state={location.state}
-      />
-    );
+  // Route only after the exact current announcement closure has refreshed.
+  // Keeping this after every hook makes closure changes safe across renders.
+  const leadRedirectPath = repo
+    ? getRepositoryLeadRedirectPath({
+        selectedPubkey: pubkey,
+        dTag: repo.dTag,
+        relayHints,
+        pageSuffix: repoPageSuffix,
+        search: location.search,
+        hash: location.hash,
+        leadResolution: repo.leadResolution,
+        announcementsSettled,
+      })
+    : undefined;
+  if (leadRedirectPath) {
+    return <Navigate to={leadRedirectPath} replace state={location.state} />;
   }
 
   return (
