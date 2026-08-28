@@ -11,7 +11,6 @@ import {
   getZapSender,
 } from "applesauce-common/helpers";
 import {
-  getReplaceableIdentifier,
   getOrComputeCachedValue,
   parseReplaceableAddress,
 } from "applesauce-core/helpers";
@@ -22,8 +21,8 @@ import { normalizeUrl } from "@/lib/url";
 import {
   getRepositoryAnnouncementDiscoveryPubkeys,
   getRepositoryMaintainerAssignments,
-  latestRepositoryAnnouncements,
-  resolveRepositoryMembership,
+  latestRepositoryAnnouncementsByIdentifier,
+  resolveRepositoryMembershipFromLatest,
   type LeadResolution,
   type MaintainerEdge,
   type ModeratorEdge,
@@ -335,6 +334,8 @@ const RepoWebUrlsSymbol = Symbol.for("repo-ev-web-urls");
 const RepoRelaysSymbol = Symbol.for("repo-ev-relays");
 const RepoMaintainersSymbol = Symbol.for("repo-ev-current-maintainers-v2");
 const RepoUpstreamsSymbol = Symbol.for("repo-ev-upstreams");
+const RepoBlossomUrlsSymbol = Symbol.for("repo-ev-blossom-urls");
+const RepoIsPrivateSymbol = Symbol.for("repo-ev-is-private");
 
 export interface RepoUpstream {
   /** Upstream repository coordinate, e.g. "30617:<pubkey>:<identifier>". */
@@ -504,6 +505,33 @@ export function getRepoRelays(ev: NostrEvent): string[] {
         .map(normalizeUrl),
     ),
   ]);
+}
+
+/** Extract valid Blossom server URLs from `blossoms` tags. */
+export function getRepoBlossomUrls(ev: NostrEvent): string[] {
+  return getOrComputeCachedValue(ev, RepoBlossomUrlsSymbol, () => {
+    const urls = new Set<string>();
+    for (const value of ev.tags
+      .filter(([name]) => name === "blossoms")
+      .flatMap(([, ...values]) => values)) {
+      try {
+        urls.add(new URL(value).toString());
+      } catch {
+        // Invalid infrastructure URLs do not enter the resolved repository.
+      }
+    }
+    return [...urls];
+  });
+}
+
+/** Match ngit's repository privacy interpretation for an announcement. */
+export function getRepoIsPrivate(ev: NostrEvent): boolean {
+  return getOrComputeCachedValue(ev, RepoIsPrivateSymbol, () =>
+    ev.tags.some(
+      ([name, value]) =>
+        (name === "private" && value === "true") || name === "buzz-channel",
+    ),
+  );
 }
 
 /** Active maintainer assignments, using indexed M/m roles when present. */
@@ -814,8 +842,10 @@ export interface ResolvedRepo {
   // --- Merged display fields (latest-wins) ---
   name: string;
   description: string;
-  /** Web URLs from the single latest announcement */
+  /** Web URLs from the single latest confirmed-member announcement */
   webUrls: string[];
+  /** Upstream relationships from the same latest metadata announcement. */
+  upstreams: RepoUpstream[];
   /** Timestamp of the latest announcement (for display) */
   updatedAt: number;
 
@@ -832,6 +862,10 @@ export interface ResolvedRepo {
   graspServerAddresses: string[];
   /** All relay URLs across all maintainer announcements, deduplicated */
   relays: string[];
+  /** All Blossom server URLs across confirmed-member announcements. */
+  blossomUrls: string[];
+  /** True when any confirmed-member announcement marks the repository private. */
+  isPrivate: boolean;
 
   // --- Resolved membership and authority ---
   /** Maintainers in the reciprocal component; the sole state/merge authority set. */
@@ -854,7 +888,7 @@ export interface ResolvedRepo {
   departedModerators: string[];
   /** Pubkeys fetched while discovering active assignments; never an authority set. */
   discoveryPubkeys: string[];
-  /** Union of `t` tags across all announcements */
+  /** `t` tags from the single latest confirmed-member announcement. */
   labels: string[];
 
   // --- Graph / provenance data (for detailed view) ---
@@ -2337,7 +2371,7 @@ function resolvedRepoFromMembership(
 
   // --- Merge fields ---
 
-  // Latest-wins: name, description, webUrls
+  // All ordinary metadata comes from one NIP-01-latest authoritative event.
   let latestEv: NostrEvent | undefined;
   for (const ev of announcements) {
     if (
@@ -2349,58 +2383,25 @@ function resolvedRepoFromMembership(
     }
   }
 
-  // Find the latest announcement that actually has a name/description
-  // (fall back to overall latest if none have it)
-  const nameSource = announcements.reduce(
-    (best, ev) => {
-      const val = getRepoName(ev);
-      if (!val) return best;
-      return ev.created_at > best.createdAt ||
-        (ev.created_at === best.createdAt && ev.id < best.eventId)
-        ? {
-            pubkey: ev.pubkey,
-            createdAt: ev.created_at,
-            eventId: ev.id,
-            value: val,
-          }
-        : best;
-    },
-    {
-      pubkey: latestEv?.pubkey ?? selectedMaintainer,
-      createdAt: 0,
-      eventId: "f".repeat(64),
-      value: latestEv ? getRepoName(latestEv) : dTag,
-    },
-  );
+  const nameSource: FieldProvenance = {
+    pubkey: latestEv?.pubkey ?? selectedMaintainer,
+    createdAt: latestEv?.created_at ?? 0,
+    value: latestEv ? getRepoName(latestEv) : dTag,
+  };
+  const descriptionSource: FieldProvenance = {
+    pubkey: latestEv?.pubkey ?? selectedMaintainer,
+    createdAt: latestEv?.created_at ?? 0,
+    value: latestEv ? getRepoDescription(latestEv) : "",
+  };
 
-  const descriptionSource = announcements.reduce(
-    (best, ev) => {
-      const val = getRepoDescription(ev);
-      return ev.created_at > best.createdAt ||
-        (ev.created_at === best.createdAt && ev.id < best.eventId)
-        ? {
-            pubkey: ev.pubkey,
-            createdAt: ev.created_at,
-            eventId: ev.id,
-            value: val,
-          }
-        : best;
-    },
-    {
-      pubkey: latestEv?.pubkey ?? selectedMaintainer,
-      createdAt: 0,
-      eventId: "f".repeat(64),
-      value: latestEv ? getRepoDescription(latestEv) : "",
-    },
-  );
-
-  // Union: clone URLs and relays with provenance
+  // Infrastructure and privacy are the only component-wide union fields.
   const cloneUrlProvenance: FieldProvenance[] = [];
   const relayProvenance: FieldProvenance[] = [];
   const seenClone = new Set<string>();
   const seenRelay = new Set<string>();
-  const seenLabel = new Set<string>();
-  const labels: string[] = [];
+  const seenBlossom = new Set<string>();
+  const blossomUrls: string[] = [];
+  let isPrivate = false;
 
   for (const ev of announcements) {
     for (const v of getRepoCloneUrls(ev)) {
@@ -2425,13 +2426,20 @@ function resolvedRepoFromMembership(
         });
       }
     }
-    for (const [t, v] of ev.tags) {
-      if (t === "t" && v && !seenLabel.has(v)) {
-        seenLabel.add(v);
-        labels.push(v);
+    for (const value of getRepoBlossomUrls(ev)) {
+      if (!seenBlossom.has(value)) {
+        seenBlossom.add(value);
+        blossomUrls.push(value);
       }
     }
+    isPrivate ||= getRepoIsPrivate(ev);
   }
+
+  const labels = latestEv
+    ? latestEv.tags
+        .filter(([name, value]) => name === "t" && !!value)
+        .map(([, value]) => value)
+    : [];
 
   const selectedCoordinate = repoCoordinate(selectedMaintainer, dTag);
 
@@ -2463,6 +2471,7 @@ function resolvedRepoFromMembership(
     name: nameSource.value || dTag,
     description: descriptionSource.value,
     webUrls: latestEv ? getRepoWebUrls(latestEv) : [],
+    upstreams: latestEv ? getRepoUpstreams(latestEv) : [],
     updatedAt: latestEv?.created_at ?? selectedAnnouncement.created_at,
     cloneUrls: allCloneUrls,
     graspCloneUrls,
@@ -2470,6 +2479,8 @@ function resolvedRepoFromMembership(
     graspServerDomains,
     graspServerAddresses,
     relays: relayProvenance.map((p) => p.value),
+    blossomUrls,
+    isPrivate,
     confirmedMaintainers: membership.confirmedMaintainers,
     confirmedModerators: membership.confirmedModerators,
     confirmedMembers: membership.confirmedMembers,
@@ -2500,12 +2511,12 @@ function resolvedRepoFromMembership(
 
 /** Resolve one coordinate-rooted repository view before component deduplication. */
 function resolveRootedRepository(
-  events: NostrEvent[],
+  latestByPubkey: ReadonlyMap<string, NostrEvent>,
   selectedMaintainer: string,
   dTag: string,
 ): ResolvedRepo | undefined {
-  const membership = resolveRepositoryMembership(
-    events,
+  const membership = resolveRepositoryMembershipFromLatest(
+    latestByPubkey,
     selectedMaintainer,
     dTag,
   );
@@ -2622,25 +2633,19 @@ function uniqueRepositoryHealth(
 export function buildRepositoryComponentIndex(
   events: Iterable<NostrEvent>,
 ): RepositoryComponentIndex {
-  const sourceEvents = [...events];
-  const dTags = uniqueSorted(
-    sourceEvents.flatMap((event) => {
-      if (event.kind !== REPO_KIND) return [];
-      const dTag = getReplaceableIdentifier(event);
-      return dTag ? [dTag] : [];
-    }),
-  );
+  const latestByIdentifier = latestRepositoryAnnouncementsByIdentifier(events);
+  const dTags = uniqueSorted(latestByIdentifier.keys());
   const drafts: RepositoryComponentDraft[] = [];
   const rootedRepositories = new Map<string, ResolvedRepo>();
   const maintainerComponentIds = new Map<string, string>();
 
   for (const dTag of dTags) {
-    const latestByPubkey = latestRepositoryAnnouncements(sourceEvents, dTag);
+    const latestByPubkey = latestByIdentifier.get(dTag)!;
     const latestEvents = [...latestByPubkey.entries()]
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([, event]) => event);
     const views = latestEvents.flatMap((event) => {
-      const view = resolveRootedRepository(latestEvents, event.pubkey, dTag);
+      const view = resolveRootedRepository(latestByPubkey, event.pubkey, dTag);
       if (!view) return [];
       rootedRepositories.set(repoCoordinate(event.pubkey, dTag), view);
       if (view.confirmedMaintainers.length === 0) return [];

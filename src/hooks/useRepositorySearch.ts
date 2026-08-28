@@ -49,16 +49,15 @@ import { useActiveAccount } from "applesauce-react/hooks";
 import type { NostrEvent } from "nostr-tools";
 import { pool, eventStore } from "@/services/nostr";
 import { gitIndexRelays } from "@/services/settings";
-import {
-  REPO_KIND,
-  buildRepositoryComponentIndex,
-  getRepositoryComponentForCoordinate,
-  groupIntoResolvedRepos,
-  type ResolvedRepo,
-} from "@/lib/nip34";
+import { REPO_KIND, repoCoordinate, type ResolvedRepo } from "@/lib/nip34";
 import { use$ } from "./use$";
 import { useEventStore } from "./useEventStore";
-import { map, takeUntil } from "rxjs/operators";
+import {
+  distinctUntilChanged,
+  map,
+  switchMap,
+  takeUntil,
+} from "rxjs/operators";
 import type { Observable } from "rxjs";
 import {
   resilientSubscription,
@@ -70,7 +69,15 @@ import {
   type NamecoinSearchResolution,
 } from "./useNamecoinSearchResolution";
 import { rankProfileSearchCandidates } from "@/lib/profileSearchRanking";
-import { RepositoryModel } from "@/models/RepositoryModel";
+import { RepositoryListModel } from "@/models/RepositoryListModel";
+import {
+  RepositorySelectionModel,
+  repositorySelectionKey,
+} from "@/models/RepositorySelectionModel";
+import {
+  SettledRepositoryModel,
+  type SettledRepositorySnapshot,
+} from "@/models/SettledRepositoryModel";
 
 const PROFILE_SEARCH_RELAYS = [
   "wss://relay.ditto.pub",
@@ -269,17 +276,33 @@ export function useRepositorySearch(
   const allBrowseRepos = use$(() => {
     if (isSearchMode) return undefined;
 
+    if (!relayOverride || relayOverride.length === 0) {
+      return store.model(RepositoryListModel) as unknown as Observable<
+        ResolvedRepo[]
+      >;
+    }
+
     return store.timeline([{ kinds: [REPO_KIND] } as Filter]).pipe(
       map((events) => {
-        const scoped =
-          relayOverride && relayOverride.length > 0
-            ? events.filter((ev) =>
-                relayOverride.some((r) => isFromRelay(ev, r)),
-              )
-            : events;
-        return groupIntoResolvedRepos(scoped);
+        const coordinates = events
+          .filter((event) =>
+            relayOverride.some((relay) => isFromRelay(event, relay)),
+          )
+          .flatMap((event) => {
+            const dTag = getTagValue(event, "d");
+            return dTag ? [repoCoordinate(event.pubkey, dTag)] : [];
+          });
+        return repositorySelectionKey([...new Set(coordinates)].sort());
       }),
-    ) as unknown as Observable<ResolvedRepo[]>;
+      distinctUntilChanged(),
+      switchMap(
+        (coordinatesKey) =>
+          store.model(
+            RepositorySelectionModel,
+            coordinatesKey,
+          ) as unknown as Observable<ResolvedRepo[]>,
+      ),
+    );
   }, [isSearchMode, store, relayKey]);
 
   // Apply the display limit outside of use$ so advancing it never causes a
@@ -288,27 +311,6 @@ export function useRepositorySearch(
     () => allBrowseRepos?.slice(0, browseDisplayLimit),
     [allBrowseRepos, browseDisplayLimit],
   );
-
-  // Hydrate each visible repository's recursive maintainer graph. The global
-  // grouping already prefers a unique lead, but it can only do so after the
-  // related announcements have reached the EventStore.
-  useEffect(() => {
-    if (isSearchMode || !browseRepos) return;
-
-    const subscriptions = browseRepos.map((repo) =>
-      (
-        store.model(
-          RepositoryModel,
-          repo.selectedMaintainer,
-          repo.dTag,
-        ) as unknown as Observable<ResolvedRepo | undefined>
-      ).subscribe(),
-    );
-
-    return () => {
-      for (const subscription of subscriptions) subscription.unsubscribe();
-    };
-  }, [browseRepos, isSearchMode, store]);
 
   useEffect(() => {
     if (isSearchMode) return;
@@ -430,6 +432,9 @@ export function useRepositorySearch(
     let userSub: { unsubscribe(): void } | null = null;
     const userRepoSubs: { unsubscribe(): void }[] = [];
     const repoResolutionSubs = new Map<string, { unsubscribe(): void }>();
+    const repoResolutionStates = new Map<string, SettledRepositorySnapshot>();
+    let pushScheduled = false;
+    let disposed = false;
 
     setIsLoading(true);
 
@@ -467,63 +472,53 @@ export function useRepositorySearch(
       if (!repoResolutionSubs.has(coordinateKey)) {
         const resolutionSub = (
           store.model(
-            RepositoryModel,
+            SettledRepositoryModel,
             event.pubkey,
             dTag,
-          ) as unknown as Observable<ResolvedRepo | undefined>
-        ).subscribe(() => pushResults());
+          ) as unknown as Observable<SettledRepositorySnapshot>
+        ).subscribe((snapshot) => {
+          repoResolutionStates.set(coordinateKey, snapshot);
+          schedulePushResults();
+        });
         repoResolutionSubs.set(coordinateKey, resolutionSub);
       }
     };
 
     const pushResults = () => {
-      const activeDTags = new Set<string>();
-      for (const { dTag } of [
-        ...directRepoCoordinates.values(),
-        ...userRepoCoordinates.values(),
-      ]) {
-        activeDTags.add(dTag);
+      const byComponent = new Map<string, ResolvedRepo>();
+      for (const [coordinateKey] of directRepoCoordinates) {
+        const snapshot = repoResolutionStates.get(coordinateKey);
+        if (snapshot?.settled && snapshot.repository) {
+          byComponent.set(snapshot.repository.componentId, snapshot.repository);
+        }
       }
-      if (activeDTags.size === 0) {
-        subject.next([]);
-        return;
-      }
-
-      // Resolve each active coordinate with every current same-d announcement
-      // in the store so reciprocal maintainer chains and merged metadata remain
-      // intact. Filter the resolved components back to one with a confirmed
-      // coordinate received by this session; same-d repositories in unrelated
-      // components must not leak into the results.
-      const currentAnnouncements = eventStore.getByFilters([
-        {
-          kinds: [REPO_KIND],
-          "#d": [...activeDTags],
-        } as Filter,
-      ]);
-      const index = buildRepositoryComponentIndex(currentAnnouncements);
-      const componentIds = new Set<string>();
-      for (const { pubkey, dTag } of directRepoCoordinates.values()) {
-        const repository = getRepositoryComponentForCoordinate(
-          index,
-          pubkey,
-          dTag,
-        );
-        if (repository) componentIds.add(repository.componentId);
-      }
-      for (const { pubkey, dTag } of userRepoCoordinates.values()) {
-        const repository = getRepositoryComponentForCoordinate(
-          index,
-          pubkey,
-          dTag,
-          true,
-        );
-        if (repository) componentIds.add(repository.componentId);
+      for (const [coordinateKey, { pubkey }] of userRepoCoordinates) {
+        const snapshot = repoResolutionStates.get(coordinateKey);
+        if (
+          snapshot?.settled &&
+          snapshot.repository?.confirmedMembers.includes(pubkey)
+        ) {
+          byComponent.set(snapshot.repository.componentId, snapshot.repository);
+        }
       }
       subject.next(
-        index.components.filter((repository) =>
-          componentIds.has(repository.componentId),
+        [...byComponent.values()].sort(
+          (a, b) =>
+            b.updatedAt - a.updatedAt ||
+            a.componentId.localeCompare(b.componentId),
         ),
       );
+    };
+
+    const schedulePushResults = () => {
+      if (pushScheduled) return;
+      pushScheduled = true;
+      queueMicrotask(() => {
+        pushScheduled = false;
+        if (disposed) return;
+        pushResults();
+        maybeClearInitialLoading();
+      });
     };
 
     const paginate$ = new Subject<void>();
@@ -539,7 +534,19 @@ export function useRepositorySearch(
     let initialPageCount = 0;
 
     const maybeClearInitialLoading = () => {
-      if (!initialLoadingCleared && directInitialDone && userPathDone) {
+      const coordinateKeys = new Set([
+        ...directRepoCoordinates.keys(),
+        ...userRepoCoordinates.keys(),
+      ]);
+      const graphsSettled = [...coordinateKeys].every(
+        (coordinateKey) => repoResolutionStates.get(coordinateKey)?.settled,
+      );
+      if (
+        !initialLoadingCleared &&
+        directInitialDone &&
+        userPathDone &&
+        graphsSettled
+      ) {
         initialLoadingCleared = true;
         // Always push results so an empty search transitions undefined → []
         // only after neither path can still produce an initial result.
@@ -845,6 +852,7 @@ export function useRepositorySearch(
 
     return () => {
       repoSub?.unsubscribe();
+      disposed = true;
       userSub?.unsubscribe();
       for (const sub of userRepoSubs) sub.unsubscribe();
       for (const sub of repoResolutionSubs.values()) sub.unsubscribe();

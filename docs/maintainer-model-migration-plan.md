@@ -1,6 +1,6 @@
 # Maintainer Model Migration Plan
 
-> **Status:** Waves 1 and 2 implemented. Wave 3 is next.
+> **Status:** Waves 1 through 3 implemented. Wave 4 is next.
 >
 > **Approach:** Land the maintainer-model change in deployable waves. Each
 > wave must leave gitworkshop with one internally consistent authority model;
@@ -311,6 +311,14 @@ fields and stop recommending the removed directional set.
 - [x] Accepting the invitation moves the announcement into exactly one joined
       component after the new event is observed.
 - [x] Grouping is deterministic regardless of relay/event arrival order.
+- [x] Exact-coordinate lists refresh the complete referenced component rather
+      than relying on a bounded same-identifier result page.
+- [x] Browse, search, profile, pin, follow, star, and NIP-19 results remain in
+      resolution until the recursive announcement and mailbox snapshot settles.
+- [x] Ordinary metadata comes from one latest confirmed-member announcement;
+      clone URLs, relays, Blossom servers, and privacy match ngit's union rules.
+- [x] A root item that names multiple unrelated components fails closed instead
+      of choosing a repository by tag order.
 
 ## Wave 4 — Exits, history, and conservative mutations
 

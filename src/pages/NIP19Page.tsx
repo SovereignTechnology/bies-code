@@ -9,6 +9,7 @@ import { nip19 } from "nostr-tools";
 import { useEffect, useMemo, useState } from "react";
 import {
   catchError,
+  combineLatest,
   endWith,
   filter,
   ignoreElements,
@@ -24,8 +25,6 @@ import {
   PATCH_KIND,
   PR_KIND,
   PR_UPDATE_KIND,
-  buildRepositoryComponentIndex,
-  getRepositoryComponentForCoordinate,
   getRootRepositoryCoordinates,
 } from "../lib/nip34";
 import {
@@ -65,6 +64,10 @@ import {
   SOFTWARE_RELEASE_KIND,
 } from "@/casts/Software";
 import { ZAPSTORE_RELAY_URL } from "@/hooks/useSoftwareReleases";
+import {
+  SettledRepositoryModel,
+  type SettledRepositorySnapshot,
+} from "@/models/SettledRepositoryModel";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -142,48 +145,6 @@ function getRepoCoordFilters(coords: string[]): Filter[] {
           limit: 1,
         }) as Filter,
     );
-}
-
-function firstCoordWithAnnouncement(
-  coords: string[],
-  announcements: NostrEvent[],
-): string | undefined {
-  const announced = new Set(
-    announcements
-      .map((event) => {
-        const dTag = getReplaceableIdentifier(event);
-        return dTag && event.kind === REPO_KIND
-          ? `${REPO_KIND}:${event.pubkey}:${dTag}`
-          : undefined;
-      })
-      .filter((coord): coord is string => !!coord),
-  );
-
-  return coords.find((coord) => announced.has(coord));
-}
-
-function preferredRepoCoord(
-  coords: string[],
-  announcements: NostrEvent[],
-): string | undefined {
-  const fallbackCoord = firstCoordWithAnnouncement(coords, announcements);
-  if (!fallbackCoord) return undefined;
-
-  const index = buildRepositoryComponentIndex(announcements);
-  const repo = coords.flatMap((coordinate) => {
-    const parsed = parseRepoCoord(coordinate);
-    if (!parsed) return [];
-    const component = getRepositoryComponentForCoordinate(
-      index,
-      parsed.pubkey,
-      parsed.dTag,
-    );
-    return component ? [component] : [];
-  })[0];
-  if (!repo) return fallbackCoord;
-  return coords.includes(repo.selectedCoordinate)
-    ? repo.selectedCoordinate
-    : fallbackCoord;
 }
 
 /**
@@ -275,29 +236,67 @@ function RepoCoordsRedirect({
       ) as Observable<boolean>;
     }, [coordsKey, relaysKey]) ?? false;
 
-  const bestCoord = use$(() => {
+  const componentResolution = use$(() => {
     if (candidateCoords.length === 0 || filters.length === 0) {
-      return of(undefined);
+      return of({ settled: true, coordinate: undefined });
     }
 
-    return eventStore
-      .timeline(filters)
-      .pipe(
-        map((events) =>
-          preferredRepoCoord(
-            candidateCoords,
-            events as unknown as NostrEvent[],
+    const pointers = candidateCoords.flatMap((coordinate) => {
+      const parsed = parseRepoCoord(coordinate);
+      return parsed ? [{ coordinate, ...parsed }] : [];
+    });
+    return combineLatest(
+      pointers.map(
+        ({ pubkey, dTag }) =>
+          eventStore.model(
+            SettledRepositoryModel,
+            pubkey,
+            dTag,
+          ) as unknown as Observable<SettledRepositorySnapshot>,
+      ),
+    ).pipe(
+      map((snapshots) => {
+        if (snapshots.some((snapshot) => !snapshot.settled)) {
+          return { settled: false, coordinate: undefined };
+        }
+        const components = new Map(
+          snapshots.flatMap((snapshot) =>
+            snapshot.repository
+              ? [
+                  [
+                    snapshot.repository.componentId,
+                    snapshot.repository,
+                  ] as const,
+                ]
+              : [],
           ),
-        ),
-      ) as Observable<string | undefined>;
+        );
+        // A root item naming unrelated repository components is ambiguous.
+        // Refuse instead of granting tag order authority over the route.
+        if (components.size !== 1) {
+          return { settled: true, coordinate: undefined };
+        }
+        const repository = [...components.values()][0];
+        const canonical = pointers.find(
+          ({ coordinate }) => coordinate === repository.selectedCoordinate,
+        )?.coordinate;
+        const fallback = pointers.find(
+          (_, index) =>
+            snapshots[index].repository?.componentId === repository.componentId,
+        )?.coordinate;
+        return { settled: true, coordinate: canonical ?? fallback };
+      }),
+    );
   }, [coordsKey]);
 
-  const canRedirect = bestCoord && lookupComplete;
+  const redirectCoordinate = componentResolution?.settled
+    ? componentResolution.coordinate
+    : undefined;
 
-  if (canRedirect) {
+  if (redirectCoordinate && lookupComplete) {
     return (
       <RepoCoordRedirect
-        coord={bestCoord}
+        coord={redirectCoordinate}
         hintRelays={hintRelays}
         subPath={subPath}
         stargazerPubkey={stargazerPubkey}
@@ -305,7 +304,7 @@ function RepoCoordsRedirect({
     );
   }
 
-  if (lookupComplete) return <NotFound />;
+  if (lookupComplete && componentResolution?.settled) return <NotFound />;
   return <LoadingState message="Resolving repository…" />;
 }
 

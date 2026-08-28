@@ -108,25 +108,37 @@ function latestEventWins(candidate: NostrEvent, existing: NostrEvent): boolean {
   );
 }
 
+/**
+ * Reduce repository announcements once, partitioned by identifier and author.
+ * This avoids rescanning the complete repository timeline for every `d` tag.
+ */
+export function latestRepositoryAnnouncementsByIdentifier(
+  events: Iterable<NostrEvent>,
+): Map<string, Map<string, NostrEvent>> {
+  const latestByIdentifier = new Map<string, Map<string, NostrEvent>>();
+  for (const event of events) {
+    if (event.kind !== REPOSITORY_ANNOUNCEMENT_KIND) continue;
+    const dTag = getReplaceableIdentifier(event);
+    if (!dTag) continue;
+    const latest =
+      latestByIdentifier.get(dTag) ?? new Map<string, NostrEvent>();
+    const existing = latest.get(event.pubkey);
+    if (!existing || latestEventWins(event, existing)) {
+      latest.set(event.pubkey, event);
+    }
+    latestByIdentifier.set(dTag, latest);
+  }
+  return latestByIdentifier;
+}
+
 /** Select the latest addressable announcement for each author using NIP-01 ordering. */
 export function latestRepositoryAnnouncements(
   events: Iterable<NostrEvent>,
   dTag: string,
 ): Map<string, NostrEvent> {
-  const latest = new Map<string, NostrEvent>();
-  for (const event of events) {
-    if (
-      event.kind !== REPOSITORY_ANNOUNCEMENT_KIND ||
-      getReplaceableIdentifier(event) !== dTag
-    ) {
-      continue;
-    }
-    const existing = latest.get(event.pubkey);
-    if (!existing || latestEventWins(event, existing)) {
-      latest.set(event.pubkey, event);
-    }
-  }
-  return latest;
+  return (
+    latestRepositoryAnnouncementsByIdentifier(events).get(dTag) ?? new Map()
+  );
 }
 
 function parseRoleRecord(
@@ -165,7 +177,11 @@ function parseRoleRecord(
   };
 }
 
+const parsedAnnouncementCache = new WeakMap<NostrEvent, ParsedAnnouncement>();
+
 function parseAnnouncement(event: NostrEvent): ParsedAnnouncement {
+  const cached = parsedAnnouncementCache.get(event);
+  if (cached) return cached;
   const roleTags = event.tags.filter(([name]) =>
     ROLE_NAMES.has(name as RepositoryRole),
   );
@@ -305,7 +321,7 @@ function parseAnnouncement(event: NostrEvent): ParsedAnnouncement {
     authorHasModeratorEntry &&
     !selfModeratorRecords.some((record) => record.active);
 
-  return {
+  const parsed: ParsedAnnouncement = {
     event,
     roleRecords,
     activeMaintainers,
@@ -318,6 +334,8 @@ function parseAnnouncement(event: NostrEvent): ParsedAnnouncement {
     authorDeclinesModeratorship,
     health,
   };
+  parsedAnnouncementCache.set(event, parsed);
+  return parsed;
 }
 
 /** Active role subjects used for announcement discovery, never authorization. */
@@ -488,6 +506,19 @@ export function resolveRepositoryMembership(
   dTag: string,
 ): RepositoryMembershipResolution | undefined {
   const latestByPubkey = latestRepositoryAnnouncements(events, dTag);
+  return resolveRepositoryMembershipFromLatest(
+    latestByPubkey,
+    selectedMaintainer,
+    dTag,
+  );
+}
+
+/** Resolve one rooted view from an already reduced identifier partition. */
+export function resolveRepositoryMembershipFromLatest(
+  latestByPubkey: ReadonlyMap<string, NostrEvent>,
+  selectedMaintainer: string,
+  dTag: string,
+): RepositoryMembershipResolution | undefined {
   if (!latestByPubkey.has(selectedMaintainer)) return undefined;
 
   const parsedByPubkey = new Map<string, ParsedAnnouncement>();

@@ -35,6 +35,13 @@ member returns the same component. A unilateral same-identifier invitation may
 be shown as a relationship, but it cannot absorb the invitee's existing
 component or contribute its metadata, infrastructure, or privacy.
 
+Repository-card readers do not expose the first cached graph they can build.
+Each explicit coordinate is refreshed exactly, its active role subjects and
+NIP-65 relay hints are followed to a fixed point, and only that settled result
+becomes eligible for browse, search, profile, pin, follow, star, or NIP-19
+presentation. A later announcement or newly discovered author invalidates the
+settled snapshot and starts resolution again.
+
 ## Current role records
 
 Indexed role tags have the form:
@@ -138,9 +145,13 @@ Until then, these checks use current confirmed membership.
 
 Only confirmed member announcements contribute trusted repository fields:
 
-- Name, description, and web URLs follow the existing latest-wins rule.
-- Clone URLs, relays, labels, and other union fields are collected only across
+- One NIP-01-latest confirmed-member announcement supplies name, description,
+  web URLs, upstreams, and hashtags together. Empty or absent values in that
+  event do not fall back to an older member's metadata.
+- Clone URLs, relays, and Blossom servers are unioned across
   `repo.confirmedAnnouncements`.
+- Privacy is true when any confirmed-member announcement carries
+  `["private", "true"]` or the private `buzz-channel` transport marker.
 - Invited, departed, malformed-role, and unconfirmed moderator announcements
   contribute nothing to those fields.
 

@@ -1,7 +1,13 @@
 import type { NostrEvent } from "nostr-tools";
 import { describe, expect, it } from "vitest";
 
-import { repoCoordinate, resolveChain } from "@/lib/nip34";
+import {
+  buildRepositoryComponentIndex,
+  getRepositoryComponentForCoordinate,
+  repoCoordinate,
+  resolveChain,
+  selectRepositoryComponents,
+} from "@/lib/nip34";
 
 const owner = "a".repeat(64);
 const invitee = "b".repeat(64);
@@ -232,5 +238,154 @@ describe("reciprocal maintainer authorization", () => {
     expect(resolved?.confirmedMaintainers).toEqual([owner]);
     expect(resolved?.invitedMaintainers).toEqual([]);
     expect(resolved?.discoveredAnnouncements[0].id).toBe(lowerId);
+  });
+});
+
+describe("repository component indexing", () => {
+  it("keeps unrelated same-identifier repositories separate across invitation edges", () => {
+    const ownerEvent = legacyAnnouncement(owner, [invitee, recursiveInvitee]);
+    const inviteeEvent = legacyAnnouncement(invitee, [owner], 2);
+    const unrelatedEvent = announcement(recursiveInvitee, [], 3);
+
+    const forward = buildRepositoryComponentIndex([
+      ownerEvent,
+      inviteeEvent,
+      unrelatedEvent,
+    ]);
+    const reverse = buildRepositoryComponentIndex([
+      unrelatedEvent,
+      inviteeEvent,
+      ownerEvent,
+    ]);
+
+    expect(forward.components.map(({ componentId }) => componentId)).toEqual(
+      reverse.components.map(({ componentId }) => componentId),
+    );
+    expect(forward.components).toHaveLength(2);
+    const joined = getRepositoryComponentForCoordinate(forward, owner, repoId);
+    const reciprocal = getRepositoryComponentForCoordinate(
+      forward,
+      invitee,
+      repoId,
+    );
+    const unrelated = getRepositoryComponentForCoordinate(
+      forward,
+      recursiveInvitee,
+      repoId,
+    );
+    expect(reciprocal?.componentId).toBe(joined?.componentId);
+    expect(unrelated?.componentId).not.toBe(joined?.componentId);
+    expect(joined?.invitedMaintainers).toContain(recursiveInvitee);
+
+    const selected = selectRepositoryComponents(
+      [ownerEvent, inviteeEvent, unrelatedEvent],
+      [
+        repoCoordinate(invitee, repoId),
+        repoCoordinate(owner, repoId),
+        repoCoordinate(recursiveInvitee, repoId),
+      ],
+    );
+    expect(selected.map(({ componentId }) => componentId)).toEqual([
+      joined?.componentId,
+      unrelated?.componentId,
+    ]);
+  });
+
+  it("takes ordinary metadata from one latest member while unioning infrastructure and privacy", () => {
+    const ownerEvent = announcement(
+      owner,
+      [
+        ["M", owner],
+        ["m", invitee],
+        ["maintainers", owner, invitee],
+        ["name", "Old name"],
+        ["description", "Old description"],
+        ["web", "https://old.example"],
+        ["t", "old-label"],
+        ["clone", "https://git.old.example/repo.git"],
+        ["relays", "wss://relay.old.example"],
+        ["blossoms", "https://blossom.old.example"],
+        ["private", "true"],
+      ],
+      10,
+    );
+    const inviteeEvent = announcement(
+      invitee,
+      [
+        ["M", owner],
+        ["m", invitee],
+        ["maintainers", owner, invitee],
+        ["name", "Current name"],
+        ["description", "Current description"],
+        ["web", "https://current.example"],
+        ["u", `30617:${recursiveInvitee}:upstream`],
+        ["t", "current-label"],
+        ["clone", "https://git.current.example/repo.git"],
+        ["relays", "wss://relay.current.example"],
+        ["blossoms", "https://blossom.current.example"],
+      ],
+      20,
+    );
+
+    const resolved = resolveChain([inviteeEvent, ownerEvent], owner, repoId);
+
+    expect(resolved).toMatchObject({
+      name: "Current name",
+      description: "Current description",
+      webUrls: ["https://current.example"],
+      labels: ["current-label"],
+      isPrivate: true,
+    });
+    expect(resolved?.upstreams).toEqual([
+      { repository: `30617:${recursiveInvitee}:upstream` },
+    ]);
+    expect(new Set(resolved?.cloneUrls)).toEqual(
+      new Set([
+        "https://git.old.example/repo.git",
+        "https://git.current.example/repo.git",
+      ]),
+    );
+    expect(new Set(resolved?.relays)).toEqual(
+      new Set(["wss://relay.old.example", "wss://relay.current.example"]),
+    );
+    expect(new Set(resolved?.blossomUrls)).toEqual(
+      new Set([
+        "https://blossom.old.example/",
+        "https://blossom.current.example/",
+      ]),
+    );
+  });
+
+  it("assigns one moderator announcement to only one active component", () => {
+    const first = announcement(owner, [
+      ["M", owner],
+      ["o", moderator],
+      ["maintainers", owner],
+    ]);
+    const second = announcement(recursiveInvitee, [
+      ["M", recursiveInvitee],
+      ["o", moderator],
+      ["maintainers", recursiveInvitee],
+    ]);
+    const acknowledgement = announcement(moderator, [
+      ["M", owner],
+      ["m", recursiveInvitee],
+      ["o", moderator],
+      ["maintainers", owner, recursiveInvitee],
+    ]);
+    const index = buildRepositoryComponentIndex([
+      second,
+      acknowledgement,
+      first,
+    ]);
+
+    const owningComponents = index.components.filter(({ confirmedMembers }) =>
+      confirmedMembers.includes(moderator),
+    );
+    expect(owningComponents).toHaveLength(1);
+    expect(
+      getRepositoryComponentForCoordinate(index, moderator, repoId)
+        ?.componentId,
+    ).toBe(owningComponents[0].componentId);
   });
 });
