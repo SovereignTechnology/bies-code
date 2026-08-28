@@ -2,21 +2,9 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
-    rust-overlay.url = "github:oxalica/rust-overlay";
-
-    # ngit-grasp provides the GRASP server binary used by the optional e2e
-    # test harness (`pnpm test:e2e`, see e2e/README.md). Pinned to a specific
-    # rev so the harness is reproducible — bump it intentionally. This matches
-    # the pin used by ngit's own Rust test harness.
-    ngit-grasp = {
-      url = "git+https://gitnostr.com/npub15qydau2hjma6ngxkl2cyar74wzyjshvl65za5k5rl69264ar2exs5cyejr/ngit-grasp.git";
-      inputs.nixpkgs.follows = "nixpkgs";
-      inputs.rust-overlay.follows = "rust-overlay";
-      inputs.flake-utils.follows = "flake-utils";
-    };
   };
 
-  outputs = { nixpkgs, flake-utils, ngit-grasp, ... }:
+  outputs = { nixpkgs, flake-utils, ... }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs {
@@ -24,14 +12,22 @@
           config.allowUnfree = true;
           config.android_sdk.accept_license = true;
         };
-        # ngit-grasp's upstream derivation runs `cargo test` during the nix
-        # build; several of those tests need ambient state (git in PATH, etc.)
-        # and fail inside the build sandbox. We only want the binary for the
-        # e2e harness, so disable the test phase.
-        ngit-grasp-pkg =
-          ngit-grasp.packages.${system}.default.overrideAttrs (_: {
-            doCheck = false;
-          });
+        # The e2e harness needs a reproducible ngit-grasp binary. Build the
+        # published crate directly and leave its live-relay tests to the
+        # application's e2e suite.
+        ngit-grasp-pkg = pkgs.rustPlatform.buildRustPackage rec {
+          pname = "ngit-grasp";
+          version = "3.0.0";
+          src = pkgs.fetchCrate {
+            inherit pname version;
+            hash = "sha256-t14USfeuoXGKws1ueVXqQk+hjE2mGf1zjXMzHrTax58=";
+          };
+          NGIT_BUILD_REVISION = "bce30ef039ecbc8c2371008e1bd00eedd79bbccf";
+          cargoHash = "sha256-MACPKCWuUuMe37dE84AoWeWH2S4EIp/LFqihvwBzSiY=";
+          nativeBuildInputs = [ pkgs.pkg-config ];
+          buildInputs = [ pkgs.openssl ];
+          doCheck = false;
+        };
         android-sdk = pkgs.androidenv.composeAndroidPackages {
           platformVersions = [ "36" ];
           # Android Gradle Plugin 8.13 defaults to Build Tools 35.0.0. Include
