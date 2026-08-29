@@ -1,16 +1,15 @@
 import { useCallback, useState } from "react";
 import { useActiveAccount } from "applesauce-react/hooks";
 import type { Filter } from "applesauce-core/helpers";
-import { firstValueFrom, type Subscription } from "rxjs";
-import { filter, take, timeout } from "rxjs/operators";
+import type { Subscription } from "rxjs";
 import type { NostrEvent } from "nostr-tools";
 
 import type { RepositoryState } from "@/casts/RepositoryState";
+import { useMaintainerAcceptanceJob } from "@/hooks/useMaintainerAcceptanceJob";
 import { graspServiceAddressToRelayUrl, type GraspServer } from "@/lib/grasp";
 import {
   getRepoCloneUrls,
   getRepoHistorySubjects,
-  getRepoRelays,
   getRepoRoleSubjects,
   REPO_KIND,
   REPO_STATE_KIND,
@@ -31,9 +30,16 @@ import {
 import { resilientRequest } from "@/lib/resilientSubscription";
 import { normalizeUrl } from "@/lib/url";
 import {
+  getMaintainerAcceptanceJob,
+  isMaintainerAcceptanceJobExpired,
   maintainerAcceptanceKey,
+  publishAcceptanceToRelay,
+  recordMaintainerAcceptanceBroadcast,
+  recordMaintainerAcceptanceDeliveries,
   runMaintainerAcceptanceDelivery,
   saveMaintainerAcceptanceJob,
+  updateMaintainerAcceptanceJob,
+  type RelayDelivery,
 } from "@/services/maintainerAcceptance";
 import { eventStore, pool as relayPool, publish } from "@/services/nostr";
 import {
@@ -62,6 +68,7 @@ interface MutationSnapshot {
   deletionEvents: NostrEvent[];
   mailboxEvents: NostrEvent[];
   relayUrls: string[];
+  indexRelayUrls: string[];
 }
 
 interface CompleteRelayRead {
@@ -69,9 +76,9 @@ interface CompleteRelayRead {
   eoseRelays: string[];
 }
 
-const OBSERVATION_TIMEOUT_MS = 5_000;
 const SNAPSHOT_TIMEOUT_MS = 20_000;
 const GIT_OBJECT_TIMEOUT_MS = 15_000;
+const PUBLICATION_TIMEOUT_MS = 15_000;
 const MAX_SNAPSHOT_AUTHORS = 64;
 const MAX_SNAPSHOT_RELAYS = 64;
 
@@ -273,11 +280,12 @@ async function settleMutationSnapshot(
 ): Promise<MutationSnapshot> {
   const deadline = Date.now() + SNAPSHOT_TIMEOUT_MS;
   const authors = new Set(mutationAuthors(repo, actorPubkey, intent));
+  const indexRelayUrls = gitIndexRelays.getValue().map(normalizeUrl);
   const baseRelays = new Set(
     [
       ...relayUrls,
       ...repo.relays,
-      ...gitIndexRelays.getValue(),
+      ...indexRelayUrls,
       ...fallbackRelays.getValue(),
       ...lookupRelays.getValue(),
     ].map(normalizeUrl),
@@ -461,6 +469,7 @@ async function settleMutationSnapshot(
       deletionEvents,
       mailboxEvents: refreshedMailboxEvents,
       relayUrls: [...finalRelays].sort(),
+      indexRelayUrls: [...new Set(indexRelayUrls)].sort(),
     };
   }
 }
@@ -501,6 +510,72 @@ async function ensureStateObjectsAvailable(
   }
 }
 
+function publicationPending(
+  message: string,
+): RepositoryMembershipMutationRefusal {
+  return new RepositoryMembershipMutationRefusal(
+    "publication_pending",
+    `${message} The signed replacement remains queued for delivery. Do not retry this membership change; wait for delivery or use the recovery workflow.`,
+  );
+}
+
+function publishReplacementWithinDeadline(
+  event: NostrEvent,
+  relayUrl: string,
+  deadline: number,
+): Promise<RelayDelivery> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (delivery: RelayDelivery) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(delivery);
+    };
+    const timer = setTimeout(
+      () =>
+        finish({
+          relayUrl,
+          ok: false,
+          message: "Relay acknowledgement deadline expired.",
+        }),
+      Math.max(0, deadline - Date.now()),
+    );
+    void publishAcceptanceToRelay(event, relayUrl).then(finish, (error) =>
+      finish({
+        relayUrl,
+        ok: false,
+        message: error instanceof Error ? error.message : String(error),
+      }),
+    );
+  });
+}
+
+async function refetchAcknowledgedReplacement(
+  event: NostrEvent,
+  acknowledgedRelayUrls: string[],
+  deadline: number,
+): Promise<{ event: NostrEvent; relayUrl: string }> {
+  for (const relayUrl of acknowledgedRelayUrls) {
+    if (Date.now() >= deadline) break;
+    try {
+      const read = await requiredRelayRead(
+        [relayUrl],
+        [{ ids: [event.id], authors: [event.pubkey], kinds: [REPO_KIND] }],
+        Math.min(deadline, Date.now() + 5_000),
+        "Published replacement verification",
+      );
+      const refetched = read.events.find(({ id }) => id === event.id);
+      if (refetched) return { event: refetched, relayUrl };
+    } catch {
+      // A second acknowledged relay may still be able to return the event.
+    }
+  }
+  throw publicationPending(
+    "No acknowledged repository or index relay returned the exact replacement before the verification deadline.",
+  );
+}
+
 function graspServersForRepo(repo: ResolvedRepo): GraspServer[] {
   return repo.graspServerAddresses.map((serviceAddress) => ({
     serviceAddress,
@@ -516,6 +591,11 @@ export function useRepositoryMembershipMutation({
   repoState,
 }: UseRepositoryMembershipMutationOptions) {
   const account = useActiveAccount();
+  const persistedDelivery = useMaintainerAcceptanceJob(
+    account?.pubkey ?? "",
+    repo.selectedMaintainer,
+    repo.dTag,
+  );
   const [pendingIntent, setPendingIntent] =
     useState<RepositoryMembershipMutationIntent>();
   const [failure, setFailure] = useState<RepositoryMembershipMutationFailure>();
@@ -539,6 +619,21 @@ export function useRepositoryMembershipMutation({
       setPendingIntent(intent);
       setFailure(undefined);
       try {
+        const operationKey = maintainerAcceptanceKey(
+          account.pubkey,
+          repo.selectedMaintainer,
+          repo.dTag,
+        );
+        const existingDelivery = getMaintainerAcceptanceJob(operationKey);
+        if (
+          existingDelivery &&
+          !existingDelivery.completedAt &&
+          !isMaintainerAcceptanceJobExpired(existingDelivery)
+        ) {
+          throw publicationPending(
+            `A signed membership replacement for ${repo.selectedCoordinate} is already pending or quarantined.`,
+          );
+        }
         if (!announcementsSettled || !stateSettled) {
           throw new RepositoryMembershipMutationRefusal(
             "incomplete_relay_view",
@@ -611,7 +706,8 @@ export function useRepositoryMembershipMutation({
             first.deletionEvents.map(({ id }) => id),
             second.deletionEvents.map(({ id }) => id),
           ) ||
-          !arraysEqualAsSets(first.relayUrls, second.relayUrls)
+          !arraysEqualAsSets(first.relayUrls, second.relayUrls) ||
+          !arraysEqualAsSets(first.indexRelayUrls, second.indexRelayUrls)
         ) {
           throw new RepositoryMembershipMutationRefusal(
             "concurrent_change",
@@ -629,76 +725,145 @@ export function useRepositoryMembershipMutation({
           graspServers: graspServersForRepo(second.repo),
           createdAt: finalCreatedAt,
         });
-        const signedEvent = await account.signer.signEvent(proposal.template);
-        await publish(signedEvent, [
-          repoCoordinate(account.pubkey, second.repo.dTag),
-        ]);
-
-        await firstValueFrom(
-          eventStore
-            .addressable({
-              kind: REPO_KIND,
-              pubkey: account.pubkey,
-              identifier: second.repo.dTag,
-            })
-            .pipe(
-              filter(
-                (event): event is NostrEvent => event?.id === signedEvent.id,
-              ),
-              take(1),
-              timeout({ first: OBSERVATION_TIMEOUT_MS }),
+        const confirmationRelayUrls = [
+          ...new Set(
+            [...proposal.expectedRelayUrls, ...second.indexRelayUrls].map(
+              normalizeUrl,
             ),
+          ),
+        ];
+        if (confirmationRelayUrls.length === 0) {
+          throw new RepositoryMembershipMutationRefusal(
+            "incomplete_relay_view",
+            "No post-change repository or configured Git index relay is available to acknowledge the replacement. GitWorkshop does not yet support making this transition.",
+          );
+        }
+        const unsnapshottedConfirmationRelays = confirmationRelayUrls.filter(
+          (relayUrl) => !second.relayUrls.includes(relayUrl),
         );
+        if (unsnapshottedConfirmationRelays.length > 0) {
+          throw new RepositoryMembershipMutationRefusal(
+            "incomplete_relay_view",
+            `The post-change acknowledgement set introduced relays outside the settled safety snapshot (${unsnapshottedConfirmationRelays.join(", ")}). GitWorkshop does not yet support making this transition.`,
+          );
+        }
+        const deliveryRelayUrls = [
+          ...new Set(
+            [
+              ...second.relayUrls,
+              ...proposal.expectedRelayUrls,
+              ...second.indexRelayUrls,
+            ].map(normalizeUrl),
+          ),
+        ];
+        const signedEvent = await account.signer.signEvent(proposal.template);
+        const now = Date.now();
+        saveMaintainerAcceptanceJob({
+          key: operationKey,
+          accountPubkey: account.pubkey,
+          invitationAnchor: second.repo.selectedMaintainer,
+          dTag: second.repo.dTag,
+          announcement: signedEvent,
+          cloneUrls:
+            intent.type === "accept" ? getRepoCloneUrls(signedEvent) : [],
+          relayUrls: deliveryRelayUrls,
+          confirmationRelayUrls,
+          deliveredRelayUrls: [],
+          syncedCloneUrls: [],
+          relayErrors: {},
+          deliveryAttempt: 0,
+          broadcastReceived: false,
+          phase: "publishing",
+          stateRefs: intent.type === "accept" ? (repoState?.refs ?? []) : [],
+          knownHeadCommit:
+            intent.type === "accept" ? repoState?.headCommitId : undefined,
+          stateCreatedAt:
+            intent.type === "accept" ? repoState?.event.created_at : undefined,
+          createdAt: now,
+          updatedAt: now,
+        });
+
+        try {
+          await publish(
+            signedEvent,
+            [repoCoordinate(account.pubkey, second.repo.dTag)],
+            { optimistic: false },
+          );
+        } catch (error) {
+          updateMaintainerAcceptanceJob(operationKey, {
+            relayErrors: {
+              outbox: error instanceof Error ? error.message : String(error),
+            },
+          });
+        }
+
+        const publicationDeadline = Date.now() + PUBLICATION_TIMEOUT_MS;
+        const initialDeliveries = await Promise.all(
+          confirmationRelayUrls.map((relayUrl) =>
+            publishReplacementWithinDeadline(
+              signedEvent,
+              relayUrl,
+              publicationDeadline,
+            ),
+          ),
+        );
+        recordMaintainerAcceptanceDeliveries(
+          operationKey,
+          signedEvent.id,
+          initialDeliveries,
+        );
+        void runMaintainerAcceptanceDelivery(operationKey);
+
+        const acknowledgedRelayUrls = initialDeliveries
+          .filter(({ ok }) => ok)
+          .map(({ relayUrl }) => relayUrl);
+        if (acknowledgedRelayUrls.length === 0) {
+          throw publicationPending(
+            "No designated repository or index relay acknowledged the signed replacement before the publication deadline.",
+          );
+        }
+        const refetched = await refetchAcknowledgedReplacement(
+          signedEvent,
+          acknowledgedRelayUrls,
+          publicationDeadline,
+        );
+        const refetchedEvent = refetched.event;
+        eventStore.add(refetchedEvent);
+        recordMaintainerAcceptanceBroadcast(operationKey, refetchedEvent);
+
         const verifiedRepo = resolveChain(
           [
+            ...second.repo.historicalAnnouncements,
             ...second.announcements.filter(
               ({ pubkey }) => pubkey !== account.pubkey,
             ),
-            signedEvent,
+            ...second.deletionEvents,
+            refetchedEvent,
           ],
           second.repo.selectedMaintainer,
           second.repo.dTag,
         );
         if (!verifyRepositoryMembershipMutationResult(proposal, verifiedRepo)) {
-          throw new RepositoryMembershipMutationRefusal(
-            "membership_side_effect",
-            "The observed signed replacement did not resolve to the preflighted membership effect. GitWorkshop does not yet support making this transition.",
-          );
-        }
-
-        if (intent.type === "accept") {
-          const now = Date.now();
-          const acceptanceRelayUrls = [
-            ...new Set([...relayUrls, ...getRepoRelays(signedEvent)]),
-          ];
-          const key = maintainerAcceptanceKey(
-            account.pubkey,
-            second.repo.selectedMaintainer,
-            second.repo.dTag,
-          );
-          saveMaintainerAcceptanceJob({
-            key,
-            accountPubkey: account.pubkey,
-            invitationAnchor: second.repo.selectedMaintainer,
-            dTag: second.repo.dTag,
-            announcement: signedEvent,
-            cloneUrls: getRepoCloneUrls(signedEvent),
-            relayUrls: acceptanceRelayUrls,
-            deliveredRelayUrls: [],
-            syncedCloneUrls: [],
-            relayErrors: {},
-            deliveryAttempt: 0,
-            broadcastReceived: false,
-            phase: "publishing",
-            stateRefs: repoState?.refs ?? [],
-            knownHeadCommit: repoState?.headCommitId,
-            stateCreatedAt: repoState?.event.created_at,
-            createdAt: now,
-            updatedAt: now,
+          const currentDelivery = getMaintainerAcceptanceJob(operationKey);
+          updateMaintainerAcceptanceJob(operationKey, {
+            phase: "quarantined",
+            relayErrors: {
+              ...currentDelivery?.relayErrors,
+              verification:
+                "The relay-confirmed replacement did not resolve to its preflighted membership effect.",
+            },
+            nextDeliveryRetryAt: undefined,
           });
-          void runMaintainerAcceptanceDelivery(key);
+          throw new RepositoryMembershipMutationRefusal(
+            "publication_verification_failed",
+            "The relay-confirmed replacement did not resolve to the preflighted membership effect. Do not retry this membership change; use the recovery workflow.",
+          );
         }
-        return signedEvent;
+        updateMaintainerAcceptanceJob(operationKey, {
+          initialVerificationAt: Date.now(),
+          initialVerificationRelayUrl: refetched.relayUrl,
+        });
+        return refetchedEvent;
       } catch (error) {
         const refusal =
           error instanceof RepositoryMembershipMutationRefusal
@@ -716,11 +881,35 @@ export function useRepositoryMembershipMutation({
     [account, announcementsSettled, relayUrls, repo, repoState, stateSettled],
   );
 
+  const deliveryBlocked =
+    !!persistedDelivery &&
+    !persistedDelivery.completedAt &&
+    !isMaintainerAcceptanceJobExpired(persistedDelivery);
+  const persistedFailure: RepositoryMembershipMutationFailure | undefined =
+    deliveryBlocked &&
+    !persistedDelivery?.initialVerificationAt &&
+    !pendingIntent
+      ? persistedDelivery.relayErrors.verification
+        ? {
+            code: "publication_verification_failed",
+            message:
+              "A relay-confirmed membership replacement did not resolve to its preflighted effect. Do not retry this membership change; use the recovery workflow.",
+          }
+        : {
+            code: "publication_pending",
+            message:
+              "A signed membership replacement is queued, pending, or quarantined. Do not retry it; wait for delivery or use the recovery workflow.",
+          }
+      : undefined;
+
   return {
-    enabled: REPOSITORY_MEMBERSHIP_MUTATIONS_ENABLED,
+    enabled:
+      REPOSITORY_MEMBERSHIP_MUTATIONS_ENABLED &&
+      (!deliveryBlocked || !!pendingIntent),
+    deliveryBlocked,
     mutate,
     pendingIntent,
-    failure,
+    failure: failure ?? persistedFailure,
     clearFailure: () => setFailure(undefined),
   };
 }

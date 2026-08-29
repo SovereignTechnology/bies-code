@@ -938,7 +938,7 @@ function MaintainerInvitationSafetyBanner({
   relayUrls: string[];
   repoState?: RepositoryState | null;
 }) {
-  const { enabled, mutate, pendingIntent, failure } =
+  const { enabled, deliveryBlocked, mutate, pendingIntent, failure } =
     useRepositoryMembershipMutation({
       repo,
       announcementsSettled,
@@ -1017,8 +1017,9 @@ function MaintainerInvitationSafetyBanner({
               </Button>
             ) : (
               <p className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-sm leading-relaxed text-muted-foreground">
-                Browser membership changes are temporarily unavailable while
-                their safety checks are upgraded.
+                {deliveryBlocked
+                  ? "A signed membership replacement is already being delivered. Further membership changes stay disabled until that job settles."
+                  : "Browser membership changes are temporarily unavailable while their safety checks are upgraded."}
               </p>
             )}
             {failure && (

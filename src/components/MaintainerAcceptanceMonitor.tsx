@@ -46,6 +46,7 @@ function MaintainerAcceptanceJobMonitor({
   const relayKey = job.relayUrls.join(",");
   const shouldPollGit =
     active &&
+    job.cloneUrls.length > 0 &&
     job.deliveredRelayUrls.length > 0 &&
     !isMaintainerAcceptanceJobExpired(job);
   const { poolState, pool: gitPool } = useGitPool(
@@ -145,6 +146,7 @@ function MaintainerAcceptanceJobMonitor({
     active,
     job.broadcastReceived,
     job.deliveredRelayUrls,
+    job.initialVerificationAt,
     job.key,
     job.relayUrls,
     job.syncedCloneUrls,

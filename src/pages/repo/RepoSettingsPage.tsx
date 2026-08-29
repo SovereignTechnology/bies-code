@@ -1600,12 +1600,16 @@ function RepoSettingsForm({
               <AlertTitle>
                 {membershipMutation.enabled
                   ? "One relationship at a time"
-                  : "Membership changes temporarily unavailable"}
+                  : membershipMutation.deliveryBlocked
+                    ? "Membership delivery in progress"
+                    : "Membership changes temporarily unavailable"}
               </AlertTitle>
               <AlertDescription className="text-muted-foreground">
                 {membershipMutation.enabled
                   ? "Each operation refreshes the affected announcements and state, simulates the exact graph effect, rechecks predecessors before signing, and verifies the observed replacement. Unsupported topology, history, identity, and state cases publish nothing."
-                  : "The browser writer is paused while complete relay, history, Git-object, and publication checks are upgraded. Repository metadata remains editable."}
+                  : membershipMutation.deliveryBlocked
+                    ? "A signed replacement is queued or completing background delivery. Further membership changes stay disabled until it settles; repository metadata remains editable."
+                    : "The browser writer is paused while complete relay, history, Git-object, and publication checks are upgraded. Repository metadata remains editable."}
               </AlertDescription>
             </Alert>
 

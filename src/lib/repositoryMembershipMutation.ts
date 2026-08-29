@@ -29,7 +29,9 @@ export type RepositoryMembershipMutationRefusalCode =
   | "history_conflict"
   | "incomplete_relay_view"
   | "concurrent_change"
-  | "unavailable_git_object";
+  | "unavailable_git_object"
+  | "publication_pending"
+  | "publication_verification_failed";
 
 /**
  * Membership writers stay behind this safety rail until the complete relay,
@@ -65,6 +67,7 @@ export interface RepositoryMembershipMutationProposal {
   expectedModeratorInvitations: string[];
   expectedActorActiveRoles: string[];
   expectedCloneUrls: string[];
+  expectedRelayUrls: string[];
   expectedLead?: string;
 }
 
@@ -783,6 +786,7 @@ export function prepareRepositoryMembershipMutation({
     expectedModeratorInvitations: sorted(after?.invitedModerators ?? []),
     expectedActorActiveRoles: activeRoleKeys(simulated, lead),
     expectedCloneUrls: sorted(after?.cloneUrls ?? []),
+    expectedRelayUrls: sorted(after?.relays ?? []),
     expectedLead: after?.leadResolution.leadMaintainer,
   };
 }

@@ -43,11 +43,14 @@ function makeJob(): MaintainerAcceptanceJob {
       "https://two.example/owner/invited-repo.git",
     ],
     relayUrls: ["wss://one.example", "wss://two.example"],
+    confirmationRelayUrls: ["wss://one.example", "wss://two.example"],
     deliveredRelayUrls: [],
     syncedCloneUrls: [],
     relayErrors: {},
     deliveryAttempt: 0,
     broadcastReceived: false,
+    initialVerificationAt: Date.now(),
+    initialVerificationRelayUrl: "wss://one.example",
     phase: "publishing",
     stateRefs: [
       {

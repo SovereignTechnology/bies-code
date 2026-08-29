@@ -446,13 +446,17 @@ const GIT_INDEX_KINDS = new Set([
  * @param event          - The signed Nostr event to publish
  * @param extraGroupIds  - Additional group IDs to publish to alongside the
  *                         user's outbox (e.g. "index-relays").
+ * @param options        - Set optimistic to false when local insertion must
+ *                         wait for independent relay verification.
  */
 export async function publish(
   event: NostrEvent,
   extraGroupIds?: string[],
+  options?: { optimistic?: boolean },
 ): Promise<void> {
-  // Add to local store immediately for optimistic updates
-  eventStore.add(event);
+  // Safety-sensitive callers can defer local insertion until a relay has
+  // acknowledged and returned the exact event.
+  if (options?.optimistic !== false) eventStore.add(event);
 
   const groupIds = [`outbox:${event.pubkey}`, "fallback-relays"];
   if (extraGroupIds) groupIds.push(...extraGroupIds);
