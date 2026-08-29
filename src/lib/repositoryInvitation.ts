@@ -91,8 +91,12 @@ export function buildMaintainerAcceptanceTemplate(
   graspServers: GraspServer[],
   createdAt = Math.floor(Date.now() / 1000),
 ): EventTemplate {
-  const latestAnnouncement = repo.discoveredAnnouncements.reduce(
-    (latest, event) => (event.created_at > latest.created_at ? event : latest),
+  const latestAnnouncement = repo.confirmedAnnouncements.reduce(
+    (latest, event) =>
+      event.created_at > latest.created_at ||
+      (event.created_at === latest.created_at && event.id < latest.id)
+        ? event
+        : latest,
   );
   const existingMaintainers = ownAnnouncement
     ? getRepoMaintainers(ownAnnouncement)

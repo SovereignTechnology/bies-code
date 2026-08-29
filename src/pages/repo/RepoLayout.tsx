@@ -947,11 +947,13 @@ function MaintainerInvitationSafetyBanner({
       repoState,
     });
   const [accepted, setAccepted] = useState(false);
-  if (!repo.invitedMaintainers.includes(accountPubkey)) return null;
+  const invited = repo.invitedMaintainers.includes(accountPubkey);
+  const moderator = repo.confirmedModerators.includes(accountPubkey);
+  if (!invited && !moderator) return null;
 
   const inviters = Array.from(
     new Set(
-      repo.maintainerEdges
+      (invited ? repo.maintainerEdges : repo.moderatorEdges)
         .filter(({ to }) => to === accountPubkey)
         .map(({ from }) => from),
     ),
@@ -967,11 +969,13 @@ function MaintainerInvitationSafetyBanner({
             </div>
             <div className="min-w-0 space-y-1">
               <p className="font-semibold">
-                You’re invited to maintain {repo.name}
+                {invited
+                  ? `You’re invited to maintain ${repo.name}`
+                  : `You moderate ${repo.name}`}
               </p>
               {inviters.length > 0 && (
                 <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm text-muted-foreground">
-                  <span>Invited by</span>
+                  <span>{invited ? "Invited by" : "Assigned by"}</span>
                   {inviters.map((pubkey) => (
                     <UserLink
                       key={pubkey}
@@ -995,15 +999,21 @@ function MaintainerInvitationSafetyBanner({
                   !stateSettled
                 }
                 onClick={() => {
-                  void mutate({ type: "accept" })
+                  void mutate(invited ? { type: "accept" } : { type: "leave" })
                     .then(() => setAccepted(true))
                     .catch(() => undefined);
                 }}
               >
-                {pendingIntent?.type === "accept" && (
+                {pendingIntent?.type === (invited ? "accept" : "leave") && (
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                 )}
-                {accepted ? "Acceptance published" : "Accept invitation"}
+                {accepted
+                  ? invited
+                    ? "Acceptance published"
+                    : "Moderator exit published"
+                  : invited
+                    ? "Accept invitation"
+                    : "Leave moderator role"}
               </Button>
             ) : (
               <p className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-sm leading-relaxed text-muted-foreground">

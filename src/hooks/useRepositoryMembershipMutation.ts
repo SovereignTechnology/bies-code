@@ -293,7 +293,6 @@ export function useRepositoryMembershipMutation({
           );
         }
 
-        const createdAt = Math.floor(Date.now() / 1000);
         const first = await settleMutationSnapshot(
           repo,
           account.pubkey,
@@ -319,7 +318,7 @@ export function useRepositoryMembershipMutation({
           announcements: first.announcements,
           stateEvents: first.stateEvents,
           graspServers: graspServersForRepo(first.repo),
-          createdAt,
+          createdAt: Math.floor(Date.now() / 1000),
         });
 
         // Re-fetch every predecessor immediately before signing. A changed
@@ -346,6 +345,7 @@ export function useRepositoryMembershipMutation({
           );
         }
 
+        const finalCreatedAt = Math.floor(Date.now() / 1000);
         const proposal = prepareRepositoryMembershipMutation({
           repo: second.repo,
           actorPubkey: account.pubkey,
@@ -353,7 +353,7 @@ export function useRepositoryMembershipMutation({
           announcements: second.announcements,
           stateEvents: second.stateEvents,
           graspServers: graspServersForRepo(second.repo),
-          createdAt,
+          createdAt: finalCreatedAt,
         });
         const signedEvent = await account.signer.signEvent(proposal.template);
         await publish(signedEvent, [

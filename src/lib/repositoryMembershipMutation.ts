@@ -18,6 +18,10 @@ export type RepositoryMembershipMutationRefusalCode =
   | "membership_mutations_disabled"
   | "unsupported_component_join"
   | "unsupported_lead_transition"
+  | "unsupported_existing_announcement"
+  | "unsupported_immediate_confirmation"
+  | "unsupported_role_effect_import"
+  | "unsupported_existing_state"
   | "membership_side_effect"
   | "invitation_withdrawal"
   | "state_conflict"
@@ -50,6 +54,7 @@ export class RepositoryMembershipMutationRefusal extends Error {
 }
 
 export interface RepositoryMembershipMutationProposal {
+  actorPubkey: string;
   intent: RepositoryMembershipMutationIntent;
   template: EventTemplate;
   beforeAnnouncementIds: ReadonlyMap<string, string>;
@@ -57,6 +62,8 @@ export interface RepositoryMembershipMutationProposal {
   expectedMaintainers: string[];
   expectedModerators: string[];
   expectedInvitations: string[];
+  expectedModeratorInvitations: string[];
+  expectedActorActiveRoles: string[];
   expectedLead?: string;
 }
 
@@ -94,6 +101,61 @@ function setEqual(left: Iterable<string>, right: Iterable<string>): boolean {
 
 function sorted(values: Iterable<string>): string[] {
   return [...new Set(values)].sort();
+}
+
+function activeRoleKeys(
+  event: NostrEvent,
+  currentLead: string | undefined,
+): string[] {
+  return sorted(
+    materializedRoleRecords(event, currentLead)
+      .filter(({ active }) => active)
+      .map(({ role, subject }) => roleKey(role, subject)),
+  );
+}
+
+function assertExpectedAuthoredRoleDelta(
+  beforeAnnouncement: NostrEvent | undefined,
+  proposedAnnouncement: NostrEvent,
+  intent: RepositoryMembershipMutationIntent,
+  actorPubkey: string,
+  lead: string | undefined,
+  actorWasMaintainer: boolean,
+): void {
+  const expected = new Set(
+    beforeAnnouncement ? activeRoleKeys(beforeAnnouncement, lead) : [],
+  );
+  if (intent.type === "add") {
+    expected.delete(roleKey("m", actorPubkey));
+    expected.delete(roleKey("M", actorPubkey));
+    expected.add(roleKey("M", actorPubkey));
+    expected.add(roleKey("m", intent.targetPubkey));
+  } else if (intent.type === "accept") {
+    if (!lead) {
+      refuse(
+        "unsupported_lead_transition",
+        "The invitation has no resolved lead relationship.",
+      );
+    }
+    expected.add(roleKey("M", lead));
+    expected.add(roleKey("m", actorPubkey));
+  } else if (intent.type === "remove") {
+    expected.delete(roleKey("M", intent.targetPubkey));
+    expected.delete(roleKey("m", intent.targetPubkey));
+  } else if (actorWasMaintainer) {
+    expected.delete(roleKey("M", actorPubkey));
+    expected.delete(roleKey("m", actorPubkey));
+  } else {
+    expected.delete(roleKey("o", actorPubkey));
+  }
+
+  const actual = activeRoleKeys(proposedAnnouncement, lead);
+  if (!setEqual(actual, expected)) {
+    refuse(
+      "membership_side_effect",
+      `The proposed announcement changes authored active roles beyond the named intent (expected ${sorted(expected).join(",") || "none"}; got ${actual.join(",") || "none"}).`,
+    );
+  }
 }
 
 function latestByAuthor(events: NostrEvent[]): Map<string, NostrEvent> {
@@ -382,6 +444,8 @@ function assertExpectedEffect(
   }
   const expectedMaintainers = new Set(before.confirmedMaintainers);
   const expectedInvitations = new Set(before.invitedMaintainers);
+  const expectedModerators = new Set(before.confirmedModerators);
+  const expectedModeratorInvitations = new Set(before.invitedModerators);
   if (intent.type === "add") expectedInvitations.add(intent.targetPubkey);
   if (intent.type === "accept") {
     expectedMaintainers.add(actorPubkey);
@@ -391,12 +455,40 @@ function assertExpectedEffect(
     expectedMaintainers.delete(intent.targetPubkey);
     expectedInvitations.delete(intent.targetPubkey);
   }
-  if (intent.type === "leave") expectedMaintainers.delete(actorPubkey);
+  if (intent.type === "leave") {
+    if (before.confirmedMaintainers.includes(actorPubkey)) {
+      expectedMaintainers.delete(actorPubkey);
+    } else {
+      expectedModerators.delete(actorPubkey);
+    }
+  }
+
+  const maintainerInvitationsMatch = setEqual(
+    after.invitedMaintainers,
+    expectedInvitations,
+  );
+  const moderatorInvitationsMatch = setEqual(
+    after.invitedModerators,
+    expectedModeratorInvitations,
+  );
+  if (!maintainerInvitationsMatch || !moderatorInvitationsMatch) {
+    const withdrawn = [
+      ...[...expectedInvitations].filter(
+        (pubkey) => !after.invitedMaintainers.includes(pubkey),
+      ),
+      ...[...expectedModeratorInvitations].filter(
+        (pubkey) => !after.invitedModerators.includes(pubkey),
+      ),
+    ];
+    refuse(
+      withdrawn.length > 0 ? "invitation_withdrawal" : "membership_side_effect",
+      `The proposed announcement changes invitations beyond the named intent (${withdrawn.length > 0 ? `withdrawn ${sorted(withdrawn).join(",")}` : "unexpected invitation added"}).`,
+    );
+  }
 
   if (
     !setEqual(after.confirmedMaintainers, expectedMaintainers) ||
-    !setEqual(after.confirmedModerators, before.confirmedModerators) ||
-    !setEqual(after.invitedMaintainers, expectedInvitations) ||
+    !setEqual(after.confirmedModerators, expectedModerators) ||
     after.leadResolution.leadMaintainer !== before.leadResolution.leadMaintainer
   ) {
     refuse(
@@ -412,9 +504,21 @@ export function verifyRepositoryMembershipMutationResult(
 ): boolean {
   return (
     !!resolved &&
+    resolved.discoveredAnnouncements.some(
+      (event) =>
+        event.pubkey === proposal.actorPubkey &&
+        setEqual(
+          activeRoleKeys(event, proposal.expectedLead),
+          proposal.expectedActorActiveRoles,
+        ),
+    ) &&
     setEqual(resolved.confirmedMaintainers, proposal.expectedMaintainers) &&
     setEqual(resolved.confirmedModerators, proposal.expectedModerators) &&
     setEqual(resolved.invitedMaintainers, proposal.expectedInvitations) &&
+    setEqual(
+      resolved.invitedModerators,
+      proposal.expectedModeratorInvitations,
+    ) &&
     resolved.leadResolution.leadMaintainer === proposal.expectedLead
   );
 }
@@ -443,6 +547,24 @@ export function prepareRepositoryMembershipMutation({
   const targetAnnouncement = announcementsByAuthor.get(targetPubkey);
   const lead = repo.leadResolution.leadMaintainer;
   const actorIsMaintainer = repo.confirmedMaintainers.includes(actorPubkey);
+  const actorIsModerator = repo.confirmedModerators.includes(actorPubkey);
+
+  if (intent.type === "accept" && actorAnnouncement) {
+    refuse(
+      "unsupported_existing_announcement",
+      `Invitee ${actorPubkey} already has a same-identifier announcement that requires full reconciliation.`,
+    );
+  }
+
+  if (
+    (intent.type === "add" || intent.type === "accept") &&
+    stateEvents.some((event) => event.pubkey === targetPubkey)
+  ) {
+    refuse(
+      "unsupported_existing_state",
+      `Target ${targetPubkey} already authored repository state that requires full before-and-after reconciliation.`,
+    );
+  }
 
   ensureIdentityCompatible(repo, targetAnnouncement);
   if (targetAnnouncement) {
@@ -505,10 +627,16 @@ export function prepareRepositoryMembershipMutation({
         "The invitation has no distinct resolved lead to acknowledge.",
       );
     }
-    if (stateEvents.some((event) => event.pubkey === actorPubkey)) {
+    if (
+      repo.departedMaintainers.includes(actorPubkey) ||
+      repo.roleHistory.resolvedRecords.some(
+        (record) =>
+          record.subject === actorPubkey && record.boundaries.length >= 2,
+      )
+    ) {
       refuse(
-        "state_conflict",
-        `Invitee ${actorPubkey} already has repository state that could become authoritative.`,
+        "unsupported_role_effect_import",
+        `Invitee ${actorPubkey} has a prior role interval that could make historical role-scoped effects authoritative.`,
       );
     }
     const base = buildMaintainerAcceptanceTemplate(
@@ -562,10 +690,10 @@ export function prepareRepositoryMembershipMutation({
       createdAt,
     );
   } else {
-    if (!actorIsMaintainer || !actorAnnouncement) {
+    if ((!actorIsMaintainer && !actorIsModerator) || !actorAnnouncement) {
       refuse(
         "membership_side_effect",
-        `Actor ${actorPubkey} is not a current maintainer.`,
+        `Actor ${actorPubkey} is not a current maintainer or moderator.`,
       );
     }
     if (!lead || lead === actorPubkey) {
@@ -583,7 +711,10 @@ export function prepareRepositoryMembershipMutation({
         `Leaving would disconnect relationships authored by ${actorPubkey}.`,
       );
     }
-    if (stateEvents.some((event) => event.pubkey === actorPubkey)) {
+    if (
+      actorIsMaintainer &&
+      stateEvents.some((event) => event.pubkey === actorPubkey)
+    ) {
       refuse(
         "state_conflict",
         `Maintainer ${actorPubkey} has repository state that would leave the authority set.`,
@@ -619,9 +750,28 @@ export function prepareRepositoryMembershipMutation({
     repo.selectedMaintainer,
     repo.dTag,
   );
+  if (
+    intent.type === "add" &&
+    !repo.confirmedMaintainers.includes(intent.targetPubkey) &&
+    after?.confirmedMaintainers.includes(intent.targetPubkey)
+  ) {
+    refuse(
+      "unsupported_immediate_confirmation",
+      `Adding ${intent.targetPubkey} would confirm their standing acknowledgement immediately and requires full confirmation preflight.`,
+    );
+  }
+  assertExpectedAuthoredRoleDelta(
+    actorAnnouncement,
+    simulated,
+    intent,
+    actorPubkey,
+    lead,
+    actorIsMaintainer,
+  );
   assertExpectedEffect(repo, after, intent, actorPubkey);
 
   return {
+    actorPubkey,
     intent,
     template,
     beforeAnnouncementIds: repositoryMembershipSnapshotIds(announcements),
@@ -629,6 +779,8 @@ export function prepareRepositoryMembershipMutation({
     expectedMaintainers: sorted(after?.confirmedMaintainers ?? []),
     expectedModerators: sorted(after?.confirmedModerators ?? []),
     expectedInvitations: sorted(after?.invitedMaintainers ?? []),
+    expectedModeratorInvitations: sorted(after?.invitedModerators ?? []),
+    expectedActorActiveRoles: activeRoleKeys(simulated, lead),
     expectedLead: after?.leadResolution.leadMaintainer,
   };
 }

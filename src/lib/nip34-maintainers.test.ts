@@ -684,7 +684,7 @@ describe("conservative repository membership mutations", () => {
       }),
     ).toThrowError(
       expect.objectContaining<Partial<RepositoryMembershipMutationRefusal>>({
-        code: "state_conflict",
+        code: "unsupported_existing_state",
       }),
     );
   });
