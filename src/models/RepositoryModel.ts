@@ -145,3 +145,19 @@ export function RepositoryModel(
       };
     });
 }
+
+/**
+ * Cache by stable coordinate scalars and deletion-awareness mode. Hashing the
+ * Observable argument itself is unsafe because RxJS subscriber state is
+ * mutable, which would create duplicate model trees for the same repository.
+ */
+RepositoryModel.getKey = (
+  selectedMaintainer: string,
+  dTag: string,
+  deletionEvents?: Observable<NostrEvent[]>,
+) =>
+  JSON.stringify([
+    selectedMaintainer,
+    dTag,
+    deletionEvents ? "deletion-aware" : "current-only",
+  ]);
