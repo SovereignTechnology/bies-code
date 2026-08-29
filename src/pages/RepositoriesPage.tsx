@@ -146,6 +146,12 @@ export default function RepositoriesPage({
     repos === undefined || (isLoading && repos.length === 0);
   const showEmpty = !showSkeletons && repos !== undefined && repos.length === 0;
   const showList = !showSkeletons && repos !== undefined && repos.length > 0;
+  const relevantRelayStatuses = committedQuery
+    ? [...Object.values(relayStatuses), ...Object.values(profileRelayStatuses)]
+    : Object.values(relayStatuses);
+  const relayViewIncomplete = relevantRelayStatuses.some(
+    (status) => status !== "success",
+  );
 
   return (
     <div className="min-h-full">
@@ -224,16 +230,20 @@ export default function RepositoriesPage({
             <CardContent className="py-16 text-center">
               <GitBranch className="h-12 w-12 mx-auto text-muted-foreground/40 mb-4" />
               <p className="text-muted-foreground text-lg">
-                {committedQuery
-                  ? "No repositories match your search"
-                  : relayOverride
-                    ? "Search repositories on this relay"
-                    : "No repositories found"}
+                {relayViewIncomplete
+                  ? "No repositories found in the available responses"
+                  : committedQuery
+                    ? "No repositories match your search"
+                    : relayOverride
+                      ? "Search repositories on this relay"
+                      : "No repositories found"}
               </p>
               <p className="text-muted-foreground/60 text-sm mt-1">
-                {!committedQuery && relayOverride
-                  ? "Enter a repository or maintainer name above"
-                  : "Try a different search or check back later"}
+                {relayViewIncomplete
+                  ? "Some configured relays are unavailable or still searching"
+                  : !committedQuery && relayOverride
+                    ? "Enter a repository or maintainer name above"
+                    : "Try a different search or check back later"}
               </p>
             </CardContent>
           </Card>
