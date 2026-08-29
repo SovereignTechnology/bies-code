@@ -1,5 +1,6 @@
 import { DeleteManager, type DeleteEventNotification } from "applesauce-core";
 import type { NostrEvent } from "nostr-tools";
+import { BehaviorSubject } from "rxjs";
 
 export interface PersistentDeleteManagerOptions {
   /** Load previously accepted kind-5 events from durable storage. */
@@ -23,6 +24,9 @@ export interface PersistentDeleteManagerOptions {
 export class PersistentDeleteManager extends DeleteManager {
   private hydration: Promise<void> | undefined;
   private readonly pendingWrites = new Set<Promise<void>>();
+  private readonly evidenceById = new Map<string, NostrEvent>();
+  private readonly evidenceSubject = new BehaviorSubject<NostrEvent[]>([]);
+  readonly evidence$ = this.evidenceSubject.asObservable();
 
   constructor(private readonly options: PersistentDeleteManagerOptions) {
     super();
@@ -38,6 +42,12 @@ export class PersistentDeleteManager extends DeleteManager {
     }
   }
 
+  private retainEvidence(event: NostrEvent, emit = true): void {
+    if (this.evidenceById.has(event.id)) return;
+    this.evidenceById.set(event.id, event);
+    if (emit) this.evidenceSubject.next([...this.evidenceById.values()]);
+  }
+
   /** Restore tombstone state without writing the same events back to cache. */
   hydrate(): Promise<void> {
     if (!this.hydration) {
@@ -45,8 +55,11 @@ export class PersistentDeleteManager extends DeleteManager {
         .load()
         .then((events) => {
           for (const event of events) {
-            if (this.isValidDeletion(event)) super.add(event);
+            if (!this.isValidDeletion(event)) continue;
+            const notifications = super.add(event);
+            if (notifications.length > 0) this.retainEvidence(event, false);
           }
+          this.evidenceSubject.next([...this.evidenceById.values()]);
         })
         .catch((error: unknown) => {
           this.options.onError?.("load", error);
@@ -61,6 +74,7 @@ export class PersistentDeleteManager extends DeleteManager {
 
     const notifications = super.add(deleteEvent);
     if (notifications.length === 0) return notifications;
+    this.retainEvidence(deleteEvent);
 
     let write: Promise<void>;
     try {

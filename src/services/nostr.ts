@@ -105,6 +105,8 @@ persistEventsToCache(eventStore, saveEvents);
  * tombstone into the EventStore.
  */
 export const deletionCacheReady = deleteManager.hydrate();
+/** Verified signed deletion evidence retained outside the deleting EventStore. */
+export const deletionEvents$ = deleteManager.evidence$;
 
 // Register this store as the source for factory relay-hint resolution. Done
 // here (rather than `hints.ts` importing this module) so the factory layer has

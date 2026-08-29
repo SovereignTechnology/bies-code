@@ -17,6 +17,7 @@ import {
   pool,
   liveness,
   eventStore as globalEventStore,
+  deletionEvents$,
 } from "@/services/nostr";
 import {
   resilientSubscription,
@@ -247,9 +248,12 @@ export function useResolvedRepository(
   // Layer 2: subscribe to the model.
   const repo = use$(() => {
     if (!pubkey || !dTag) return undefined;
-    return store.model(RepositoryModel, pubkey, dTag) as unknown as Observable<
-      ResolvedRepo | undefined
-    >;
+    return store.model(
+      RepositoryModel,
+      pubkey,
+      dTag,
+      deletionEvents$,
+    ) as unknown as Observable<ResolvedRepo | undefined>;
   }, [key, store]);
 
   // Base RelayGroup: repo-declared relays + relay hints only.
@@ -336,12 +340,29 @@ export function useResolvedRepository(
 
     // Subscribe to all maintainer announcements on the repo's relays so
     // newly-published announcements arrive in real time.
+    const announcementIds = repo.discoveredAnnouncements.map(({ id }) => id);
     const filter: Filter[] = [
       {
         kinds: [REPO_KIND],
         authors: repo.discoveryPubkeys,
         "#d": [dTag],
       } as Filter,
+      {
+        kinds: [5],
+        authors: repo.discoveryPubkeys,
+        "#a": repo.discoveryPubkeys.map(
+          (author) => `${REPO_KIND}:${author}:${dTag}`,
+        ),
+      } as Filter,
+      ...(announcementIds.length > 0
+        ? [
+            {
+              kinds: [5],
+              authors: repo.discoveryPubkeys,
+              "#e": announcementIds,
+            } as Filter,
+          ]
+        : []),
     ];
     return resilientSubscription(pool, repoRelayGroup$, filter).pipe(
       onlyEvents(),
@@ -404,12 +425,31 @@ export function useResolvedRepository(
 
         // Subscribe to maintainer announcements on the extra mailbox relays so
         // newly-published announcements arrive in real time.
+        const announcementIds = repo.discoveredAnnouncements.map(
+          ({ id }) => id,
+        );
         const filter: Filter[] = [
           {
             kinds: [REPO_KIND],
             authors: repo.discoveryPubkeys,
             "#d": [dTag],
           } as Filter,
+          {
+            kinds: [5],
+            authors: repo.discoveryPubkeys,
+            "#a": repo.discoveryPubkeys.map(
+              (author) => `${REPO_KIND}:${author}:${dTag}`,
+            ),
+          } as Filter,
+          ...(announcementIds.length > 0
+            ? [
+                {
+                  kinds: [5],
+                  authors: repo.discoveryPubkeys,
+                  "#e": announcementIds,
+                } as Filter,
+              ]
+            : []),
         ];
         return resilientSubscription(pool, extraRelays$, filter).pipe(
           onlyEvents(),
@@ -438,6 +478,14 @@ export function useResolvedRepository(
       ...(repo?.historyPubkeys ?? []),
     ]),
   ].sort();
+  const announcementIds = [
+    ...new Set(
+      [
+        ...(repo?.discoveredAnnouncements ?? []),
+        ...(repo?.historicalAnnouncements ?? []),
+      ].map(({ id }) => id),
+    ),
+  ].sort();
   const announcementRelayUrls = [
     ...new Set(
       [
@@ -454,6 +502,7 @@ export function useResolvedRepository(
     pubkey ?? "",
     dTag ?? "",
     announcementAuthors,
+    announcementIds,
     announcementRelayUrls,
   ]);
   const announcementMailboxRelayGroup = extraRelaysForMaintainerMailboxCoverage;
@@ -493,12 +542,30 @@ export function useResolvedRepository(
               ),
             ]),
           ].sort();
-          const filter: Filter = {
-            kinds: [REPO_KIND],
-            authors: announcementAuthors,
-            "#d": [dTag],
-          } as Filter;
-          return resilientRequest(pool, refreshedRelayUrls, [filter]).pipe(
+          const filters: Filter[] = [
+            {
+              kinds: [REPO_KIND],
+              authors: announcementAuthors,
+              "#d": [dTag],
+            } as Filter,
+            {
+              kinds: [5],
+              authors: announcementAuthors,
+              "#a": announcementAuthors.map(
+                (author) => `${REPO_KIND}:${author}:${dTag}`,
+              ),
+            } as Filter,
+            ...(announcementIds.length > 0
+              ? [
+                  {
+                    kinds: [5],
+                    authors: announcementAuthors,
+                    "#e": announcementIds,
+                  } as Filter,
+                ]
+              : []),
+          ];
+          return resilientRequest(pool, refreshedRelayUrls, filters).pipe(
             onlyEvents(),
             mapEventsToStore(store),
             ignoreElements(),

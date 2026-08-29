@@ -35,6 +35,7 @@ import type { NostrEvent } from "nostr-tools";
 export function RepositoryModel(
   selectedMaintainer: string,
   dTag: string,
+  deletionEvents?: Observable<NostrEvent[]>,
 ): Model<ResolvedRepo | undefined> {
   return (store) =>
     new Observable<ResolvedRepo | undefined>((observer) => {
@@ -44,13 +45,37 @@ export function RepositoryModel(
       const subs = new Subscription();
       // Latest announcement event per pubkey
       const latestByPubkey = new Map<string, NostrEvent | undefined>();
+      const retainedAnnouncements = new Map<string, NostrEvent>();
+      let deletions: NostrEvent[] = [];
 
       // Emit a resolved repo from the current snapshot
       function emit() {
         const events = Array.from(latestByPubkey.values()).filter(
           (ev): ev is NostrEvent => ev !== undefined,
         );
-        observer.next(resolveChain(events, selectedMaintainer, dTag));
+        const currentIds = new Set(events.map(({ id }) => id));
+        const deletedEvents = [...retainedAnnouncements.values()].filter(
+          (event) =>
+            !currentIds.has(event.id) &&
+            deletions.some(
+              (deletion) =>
+                deletion.pubkey === event.pubkey &&
+                deletion.created_at >= event.created_at &&
+                deletion.tags.some(
+                  ([name, value]) =>
+                    (name === "e" && value === event.id) ||
+                    (name === "a" &&
+                      value === `${REPO_KIND}:${event.pubkey}:${dTag}`),
+                ),
+            ),
+        );
+        observer.next(
+          resolveChain(
+            [...events, ...deletedEvents, ...deletions],
+            selectedMaintainer,
+            dTag,
+          ),
+        );
       }
 
       // Subscribe to a pubkey's announcement and recursively subscribe to
@@ -85,6 +110,7 @@ export function RepositoryModel(
               latestByPubkey.set(pubkey, ev ?? undefined);
 
               if (ev) {
+                retainedAnnouncements.set(pubkey, ev);
                 // Subscribe to any newly-discovered co-maintainers.
                 // store.addressable() emits synchronously, so all their
                 // initial states are populated in latestByPubkey before
@@ -103,6 +129,14 @@ export function RepositoryModel(
 
       // Start from the selected maintainer
       subscribe(selectedMaintainer, true);
+      if (deletionEvents) {
+        subs.add(
+          deletionEvents.subscribe((events) => {
+            deletions = events;
+            emit();
+          }),
+        );
+      }
 
       return () => {
         // Unsubscribe all inner store.addressable() subscriptions collected

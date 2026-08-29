@@ -905,6 +905,8 @@ export interface ResolvedRepo {
   departedMaintainers: string[];
   /** Authors whose latest self-role explicitly ends or declines moderatorship. */
   departedModerators: string[];
+  /** Signed kind-5 end boundary for a latest repository announcement. */
+  deletedAnnouncementTimestamps: ReadonlyMap<string, number>;
   /** Pubkeys fetched while discovering active assignments; never an authority set. */
   discoveryPubkeys: string[];
   /** Historical role subjects fetched only for event-time authorization. */
@@ -2547,16 +2549,18 @@ function resolvedRepoFromMembership(
         record.boundaries.some((boundary) => boundary !== "defer"),
     );
   const coordinateStatus: ResolvedRepo["coordinateStatus"] =
-    aggressiveSelfLedRestart
-      ? "unsupported_restart"
-      : membership.confirmedMembers.includes(selectedMaintainer)
-        ? "active"
-        : membership.leadResolution.leadMaintainer
-          ? "redirect"
-          : membership.departedMaintainers.includes(selectedMaintainer) &&
-              membership.leadResolution.path.length === 1
-            ? "dead"
-            : "unresolved";
+    membership.deletedAnnouncementTimestamps.has(selectedMaintainer)
+      ? "dead"
+      : aggressiveSelfLedRestart
+        ? "unsupported_restart"
+        : membership.confirmedMembers.includes(selectedMaintainer)
+          ? "active"
+          : membership.leadResolution.leadMaintainer
+            ? "redirect"
+            : membership.departedMaintainers.includes(selectedMaintainer) &&
+                membership.leadResolution.path.length === 1
+              ? "dead"
+              : "unresolved";
 
   const allCloneUrls = cloneUrlProvenance.map((p) => p.value);
   const graspCloneUrls = allCloneUrls.filter(isGraspCloneUrl);
@@ -2610,6 +2614,7 @@ function resolvedRepoFromMembership(
     invitedModerators: membership.invitedModerators,
     departedMaintainers: membership.departedMaintainers,
     departedModerators: membership.departedModerators,
+    deletedAnnouncementTimestamps: membership.deletedAnnouncementTimestamps,
     discoveryPubkeys: membership.discoveryPubkeys,
     historyPubkeys: membership.historyPubkeys,
     labels,
@@ -2633,11 +2638,13 @@ function resolveRootedRepository(
   latestByPubkey: ReadonlyMap<string, NostrEvent>,
   selectedMaintainer: string,
   dTag: string,
+  deletionEvents: Iterable<NostrEvent>,
 ): ResolvedRepo | undefined {
   const membership = resolveRepositoryMembershipFromLatest(
     latestByPubkey,
     selectedMaintainer,
     dTag,
+    deletionEvents,
   );
   return membership ? resolvedRepoFromMembership(membership) : undefined;
 }
@@ -2752,7 +2759,9 @@ function uniqueRepositoryHealth(
 export function buildRepositoryComponentIndex(
   events: Iterable<NostrEvent>,
 ): RepositoryComponentIndex {
-  const latestByIdentifier = latestRepositoryAnnouncementsByIdentifier(events);
+  const snapshot = [...events];
+  const latestByIdentifier =
+    latestRepositoryAnnouncementsByIdentifier(snapshot);
   const dTags = uniqueSorted(latestByIdentifier.keys());
   const drafts: RepositoryComponentDraft[] = [];
   const rootedRepositories = new Map<string, ResolvedRepo>();
@@ -2764,7 +2773,12 @@ export function buildRepositoryComponentIndex(
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([, event]) => event);
     const views = latestEvents.flatMap((event) => {
-      const view = resolveRootedRepository(latestByPubkey, event.pubkey, dTag);
+      const view = resolveRootedRepository(
+        latestByPubkey,
+        event.pubkey,
+        dTag,
+        snapshot,
+      );
       if (!view) return [];
       rootedRepositories.set(repoCoordinate(event.pubkey, dTag), view);
       if (view.confirmedMaintainers.length === 0) return [];
@@ -2913,6 +2927,8 @@ export function buildRepositoryComponentIndex(
       departedModerators: uniqueSorted(
         draft.views.flatMap((view) => view.departedModerators),
       ),
+      deletedAnnouncementTimestamps:
+        draft.anchorView.deletedAnnouncementTimestamps,
       discoveryPubkeys,
       discoveredAnnouncements,
       historyPubkeys,

@@ -104,6 +104,8 @@ export interface RepositoryMembershipResolution {
   moderatorEdges: ModeratorEdge[];
   repositoryHealth: RepositoryHealthWarning[];
   leadResolution: LeadResolution;
+  /** Signed kind-5 end boundary for an author's latest announcement. */
+  deletedAnnouncementTimestamps: ReadonlyMap<string, number>;
 }
 
 export type HistoricalRoleState = "active" | "inactive" | "unknown";
@@ -177,6 +179,41 @@ export function latestRepositoryAnnouncements(
   return (
     latestRepositoryAnnouncementsByIdentifier(events).get(dTag) ?? new Map()
   );
+}
+
+/** Resolve applicable signed deletion boundaries for one repository identifier. */
+function repositoryAnnouncementDeletionTimes(
+  deletionEvents: Iterable<NostrEvent>,
+  dTag: string,
+  latestByPubkey: ReadonlyMap<string, NostrEvent>,
+): Map<string, number> {
+  const deletedAt = new Map<string, number>();
+  const latestById = new Map(
+    [...latestByPubkey.values()].map((event) => [event.id, event]),
+  );
+  const record = (pubkey: string, createdAt: number) => {
+    const announcement = latestByPubkey.get(pubkey);
+    if (announcement && createdAt < announcement.created_at) return;
+    deletedAt.set(pubkey, Math.max(deletedAt.get(pubkey) ?? 0, createdAt));
+  };
+
+  for (const deletion of deletionEvents) {
+    if (deletion.kind !== 5) continue;
+    for (const [name, value] of deletion.tags) {
+      if (name === "a") {
+        const prefix = `${REPOSITORY_ANNOUNCEMENT_KIND}:${deletion.pubkey}:`;
+        if (value === `${prefix}${dTag}`) {
+          record(deletion.pubkey, deletion.created_at);
+        }
+      } else if (name === "e") {
+        const announcement = latestById.get(value ?? "");
+        if (announcement?.pubkey === deletion.pubkey) {
+          record(deletion.pubkey, deletion.created_at);
+        }
+      }
+    }
+  }
+  return deletedAt;
 }
 
 export function parseRepositoryRoleRecord(
@@ -587,11 +624,13 @@ export function resolveRepositoryMembership(
   selectedMaintainer: string,
   dTag: string,
 ): RepositoryMembershipResolution | undefined {
-  const latestByPubkey = latestRepositoryAnnouncements(events, dTag);
+  const snapshot = [...events];
+  const latestByPubkey = latestRepositoryAnnouncements(snapshot, dTag);
   return resolveRepositoryMembershipFromLatest(
     latestByPubkey,
     selectedMaintainer,
     dTag,
+    snapshot,
   );
 }
 
@@ -600,8 +639,14 @@ export function resolveRepositoryMembershipFromLatest(
   latestByPubkey: ReadonlyMap<string, NostrEvent>,
   selectedMaintainer: string,
   dTag: string,
+  deletionEvents: Iterable<NostrEvent> = [],
 ): RepositoryMembershipResolution | undefined {
   if (!latestByPubkey.has(selectedMaintainer)) return undefined;
+  const deletedAnnouncementTimestamps = repositoryAnnouncementDeletionTimes(
+    deletionEvents,
+    dTag,
+    latestByPubkey,
+  );
 
   const parsedByPubkey = new Map<string, ParsedAnnouncement>();
   const discoveryPubkeys: string[] = [];
@@ -620,6 +665,7 @@ export function resolveRepositoryMembershipFromLatest(
     discoveryPubkeys.push(pubkey);
     const event = latestByPubkey.get(pubkey);
     if (!event) continue;
+    if (deletedAnnouncementTimestamps.has(pubkey)) continue;
     const parsed = parseAnnouncement(event);
     parsedByPubkey.set(pubkey, parsed);
     repositoryHealth.push(...parsed.health);
@@ -669,13 +715,27 @@ export function resolveRepositoryMembershipFromLatest(
     }
   }
 
-  const declinedMaintainers = new Set(
-    [...parsedByPubkey.values()]
+  const relevantDeletionPubkeys = new Set([
+    selectedMaintainer,
+    ...discoveryPubkeys,
+    ...[...parsedByPubkey.values()].flatMap(({ roleRecords }) =>
+      roleRecords.map(({ subject }) => subject),
+    ),
+  ]);
+  const applicableDeletedTimestamps = new Map(
+    [...deletedAnnouncementTimestamps].filter(([pubkey]) =>
+      relevantDeletionPubkeys.has(pubkey),
+    ),
+  );
+
+  const declinedMaintainers = new Set([
+    ...[...parsedByPubkey.values()]
       .filter(
         ({ authorDeclinesMaintainership }) => authorDeclinesMaintainership,
       )
       .map(({ event }) => event.pubkey),
-  );
+    ...applicableDeletedTimestamps.keys(),
+  ]);
   const confirmedMaintainerSet = new Set<string>();
   const seed = resolveConfirmationSeed(
     selectedMaintainer,
@@ -725,11 +785,12 @@ export function resolveRepositoryMembershipFromLatest(
       pushUnique(assignedModerators, moderator);
     }
   }
-  const declinedModerators = new Set(
-    [...parsedByPubkey.values()]
+  const declinedModerators = new Set([
+    ...[...parsedByPubkey.values()]
       .filter(({ authorDeclinesModeratorship }) => authorDeclinesModeratorship)
       .map(({ event }) => event.pubkey),
-  );
+    ...applicableDeletedTimestamps.keys(),
+  ]);
   const confirmedModerators: string[] = [];
   const confirmedMemberSet = new Set(confirmedMaintainers);
   changed = true;
@@ -812,11 +873,16 @@ export function resolveRepositoryMembershipFromLatest(
         )
       );
     }),
-    invitedModerators: assignedModerators.filter(
-      (pubkey) =>
-        !confirmedModerators.includes(pubkey) &&
-        !declinedModerators.has(pubkey),
-    ),
+    invitedModerators: assignedModerators.filter((pubkey) => {
+      if (confirmedModerators.includes(pubkey)) return false;
+      if (!declinedModerators.has(pubkey)) return true;
+      return moderatorEdges.some(
+        (edge) =>
+          edge.to === pubkey &&
+          confirmedMaintainerSet.has(edge.from) &&
+          edge.requiresFreshAcceptance,
+      );
+    }),
     departedMaintainers: [...declinedMaintainers],
     departedModerators: [...declinedModerators],
     discoveryPubkeys,
@@ -832,6 +898,7 @@ export function resolveRepositoryMembershipFromLatest(
       parsedByPubkey,
       confirmedMaintainerSet,
     ),
+    deletedAnnouncementTimestamps: applicableDeletedTimestamps,
   };
 }
 
@@ -839,7 +906,10 @@ function roleKey(role: RepositoryRole, subject: string): string {
   return `${role}:${subject}`;
 }
 
-function authorRoleHistory(event: NostrEvent): RepositoryAuthorRoleHistory {
+function authorRoleHistory(
+  event: NostrEvent,
+  deletedAt?: number,
+): RepositoryAuthorRoleHistory {
   const roleTags = event.tags.filter(([name]) =>
     ROLE_NAMES.has(name as RepositoryRole),
   );
@@ -851,15 +921,16 @@ function authorRoleHistory(event: NostrEvent): RepositoryAuthorRoleHistory {
         if (HEX_PUBKEY.test(subject)) subjects.add(subject);
       }
     }
+    const records = [...subjects].map((subject) => ({
+      author: event.pubkey,
+      role: "m" as const,
+      subject,
+      boundaries: [] as (number | "defer")[],
+      active: true,
+    }));
     return {
       author: event.pubkey,
-      records: [...subjects].map((subject) => ({
-        author: event.pubkey,
-        role: "m" as const,
-        subject,
-        boundaries: [],
-        active: true,
-      })),
+      records: closeDeletedRoleRecords(records, deletedAt),
       disputedKeys: [],
       implicitMaintainer: true,
     };
@@ -899,10 +970,29 @@ function authorRoleHistory(event: NostrEvent): RepositoryAuthorRoleHistory {
 
   return {
     author: event.pubkey,
-    records,
+    records: closeDeletedRoleRecords(records, deletedAt),
     disputedKeys: [...disputed].sort(),
     implicitMaintainer,
   };
+}
+
+function closeDeletedRoleRecords(
+  records: RepositoryRoleRecord[],
+  deletedAt: number | undefined,
+): RepositoryRoleRecord[] {
+  if (deletedAt === undefined) return records;
+  return records.map((record) =>
+    record.active
+      ? {
+          ...record,
+          boundaries:
+            record.boundaries.length === 0
+              ? [0, deletedAt]
+              : [...record.boundaries, deletedAt],
+          active: false,
+        }
+      : record,
+  );
 }
 
 function currentGraphDistances(
@@ -936,7 +1026,10 @@ export function resolveRepositoryRoleHistory(
   const histories = new Map(
     membership.historicalAnnouncements.map((event) => [
       event.pubkey,
-      authorRoleHistory(event),
+      authorRoleHistory(
+        event,
+        membership.deletedAnnouncementTimestamps.get(event.pubkey),
+      ),
     ]),
   );
   const sourceAuthors = new Set([
