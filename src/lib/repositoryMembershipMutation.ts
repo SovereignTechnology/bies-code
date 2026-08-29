@@ -33,11 +33,8 @@ export type RepositoryMembershipMutationRefusalCode =
   | "publication_pending"
   | "publication_verification_failed";
 
-/**
- * Membership writers stay behind this safety rail until the complete relay,
- * history, Git-object, and publication gates have landed together.
- */
-export const REPOSITORY_MEMBERSHIP_MUTATIONS_ENABLED = false;
+/** Every browser-supported membership intent is covered by the safety gate. */
+export const REPOSITORY_MEMBERSHIP_MUTATIONS_ENABLED = true;
 
 export type RepositoryMembershipMutationIntent =
   | { type: "add"; targetPubkey: string }

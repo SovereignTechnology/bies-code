@@ -4,7 +4,7 @@ import { pool } from "@/services/nostr";
 
 // Deliberately do not hydrate v2 jobs: they contain legacy roster-shaped
 // announcements that must never be delivered under the reciprocal model.
-// V3 jobs were signed before the complete Wave 4 preflight and remain
+// V3 jobs were signed before the complete stabilized preflight and remain
 // quarantined. Only V4 jobs may resume delivery after a reload.
 const LEGACY_STORAGE_KEY = "gitworkshop:maintainer-acceptance:v3";
 const STORAGE_KEY = "gitworkshop:maintainer-acceptance:v4";

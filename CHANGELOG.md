@@ -4,14 +4,14 @@
 
 ### Changed
 
-- Temporarily pause browser repository-membership writers and quarantine pre-stabilization acceptance delivery jobs while the complete relay, history, Git-object, and publication safety gates are upgraded.
-- Make reciprocal NIP-34 membership the repository authority boundary, add indexed `M`/`m`/`o` role and `defer` resolution, separate discovery from confirmed maintainer/member coordinates, and temporarily disable legacy browser membership writes while preserving membership tags through metadata edits.
+- Enable conservative one-at-a-time repository membership changes only after complete relay, history, network Git-object, and relay-publication verification; pre-stabilization acceptance delivery jobs remain quarantined.
+- Make reciprocal NIP-34 membership the repository authority boundary, add indexed `M`/`m`/`o` role and `defer` resolution, separate discovery from confirmed maintainer/member coordinates, retire legacy complete-roster browser writes, and preserve membership tags through metadata edits.
 - Resolve repository leads from the selected coordinate's signed `M` pointer path or legacy vote result, refresh the complete current announcement closure before redirecting, preserve the full URL, and leave unresolved or tied routes unchanged.
 - Remount account-authored repository settings when the active account changes so unsaved metadata cannot cross signer scopes.
 - Match ngit's duplicate active role-target handling while retaining a repository-health warning for malformed announcements.
 - Resolve repository discovery through a deterministic reciprocal-component index and exact settled graph refreshes, so browse, search, profile, pinned, followed, starred, and NIP-19 results show one card per active repository regardless of relay arrival order, keep same-identifier invitations separate, and match ngit's confirmed-member metadata, infrastructure, and privacy merging.
 - Resolve replicated role history for collaboration events at their publication time, retain historical authorization after ordinary exits, require a new acceptance interval after reinvitation, fail dead coordinates closed, and identify unsupported same-coordinate restarts.
-- Reintroduce maintainer add, invitation acceptance, direct relationship removal, and co-maintainer leave as guarded one-at-a-time operations that settle and recheck announcements, mailboxes, repository state, and required Git objects before signing; unsupported component, lead, history, identity, state, and concurrency cases publish nothing.
+- Support maintainer add, fresh invitation acceptance, direct relationship removal, maintainer leave, and moderator self-leave as exact one-at-a-time operations; signed replacements are durably queued, require a designated relay acknowledgement and exact refetch before success, and fail closed with named errors for unsupported component, lead, history, identity, state, and concurrency cases.
 
 ### Fixes
 

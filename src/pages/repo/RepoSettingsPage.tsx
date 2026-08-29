@@ -1202,7 +1202,7 @@ function RepoSettingsForm({
             ...(eucHash.trim()
               ? [["r", eucHash.trim(), "euc"] as string[]]
               : []),
-            // Membership is not editable in Wave 1. Preserve indexed roles,
+            // Membership is not editable through this metadata form. Preserve indexed roles,
             // history boundaries, and the legacy compatibility projection
             // exactly during every metadata-only edit.
             ...preservedMembershipTags,

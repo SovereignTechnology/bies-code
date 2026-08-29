@@ -178,10 +178,20 @@ path remain unavailable.
 Each intent refreshes the affected authors' mailbox lists, announcements, and
 state events, constructs the replacement in memory, simulates its exact member,
 moderator, invitation, and lead result, then repeats the settled fetch and
-compares every predecessor immediately before signing. Acceptance also proves
-that the current signed state objects are available from an announced Git
-server. The published replacement is observed and resolved again before the UI
-reports success.
+compares every announcement, state, deletion, mailbox, and relay frontier
+immediately before signing. Every relay in the recursively discovered safety
+set must return a real EOSE for both bounded snapshots. Every branch and tag
+OID in the current signed state must also be fetched from the simulated
+post-change component's advertised Git servers without using the local object
+cache as evidence.
+
+After signing, the replacement is saved as durable delivery work without an
+optimistic EventStore insertion. At least one settled post-change repository
+or configured Git-index relay must acknowledge it. GitWorkshop then refetches
+the exact event from an acknowledging relay and resolves the graph again; only
+a result identical to the preflighted effect is reported as successful. A
+signed event that has not passed those checks remains visibly queued or
+quarantined and blocks a competing membership replacement.
 
 The normal lead-shaped cases are intentionally narrow. Component joins, lead
 changes, leadless edits, additional membership side effects, invitation
@@ -191,8 +201,9 @@ return a stable refusal code and publish nothing. Those cases move forward one
 workflow at a time in Wave 5 rather than through a browser force switch.
 
 Metadata-only edits still preserve every existing `M`, `m`, `o`, and
-`maintainers` tag byte-for-byte. Persisted v2 acceptance jobs remain
-quarantined; only role-aware v3 jobs are delivered.
+`maintainers` tag byte-for-byte. Persisted v2 jobs are never hydrated and
+pre-stabilization v3 jobs remain quarantined; only fully preflighted v4 jobs
+resume delivery after reload.
 
 ## Resolver contract
 

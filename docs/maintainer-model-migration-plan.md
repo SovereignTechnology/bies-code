@@ -1,9 +1,9 @@
 # Maintainer Model Migration Plan
 
-> **Status:** Waves 1 through 3 are complete. Wave 4A through 4C have landed,
-> but an independent review reopened the Wave 4 release gate. Complete the
-> Wave 4D stabilization work below before enabling browser membership writes
-> or beginning Wave 5 edge-case workflows.
+> **Status:** Waves 1 through 4 are complete. The independent Wave 4 review is
+> closed, the four conservative browser membership intents are enabled behind
+> their complete preflight and publication contract, and future work proceeds
+> one named Wave 5 edge-case workflow at a time.
 >
 > **Approach:** Land the maintainer-model change in deployable waves. Each
 > wave must leave gitworkshop with one internally consistent authority model;
@@ -57,7 +57,7 @@ Waves 1 through 3 have replaced the outgoing directional-authority model:
 
 Wave 4A through 4C added replicated history, exit interpretation, and guarded
 one-at-a-time browser mutation intents. The 2026-08-29 independent review found
-that this work is not yet release-ready:
+four release-blocking classes in that initial work:
 
 - some current and historical read decisions disagree with the authoritative
   model;
@@ -69,10 +69,10 @@ that this work is not yet release-ready:
   have explicit refusal categories that distinguish them from implementation
   failures.
 
-Wave 4D below is therefore a stabilization wave, not an expansion into edge
-workflows. It restores the browser writer safety rail, fixes read-side
-semantics, narrows supported writes to cases that can be proved safe, and gives
-every remaining final-model operation a named refusal. The authoritative model
+Wave 4D closed those findings without expanding into edge workflows. It kept
+the browser writer safety rail closed while fixing read-side semantics,
+narrowed supported writes to cases that can be proved safe, and gave each
+remaining final-model operation a named refusal. The authoritative model
 permits more than current ngit v3 in areas such as accepting with an existing
 same-identifier announcement; Wave 4 follows ngit's conservative refusal there
 and Wave 5 implements the fuller model deliberately.
@@ -536,26 +536,26 @@ larger operation a specific refusal and leave its complete workflow to Wave 5.
 
 ### Wave 4 gate
 
-- [ ] Historical member actions remain effective only when their author held
+- [x] Historical member actions remain effective only when their author held
       the required role at publication time.
 - [x] A removed maintainer immediately loses current state and merge authority.
-- [ ] Standing acceptance survives reassignment until the candidate ends their
+- [x] Standing acceptance survives reassignment until the candidate ends their
       self-role; after that end, reinvitation requires a new acceptance interval.
-- [ ] A safe ordinary add, fresh accept, remove, maintainer leave, and moderator
+- [x] A safe ordinary add, fresh accept, remove, maintainer leave, and moderator
       leave changes exactly one intended relationship.
-- [ ] Existing-announcement acceptance, immediate-confirmation add, imported
+- [x] Existing-announcement acceptance, immediate-confirmation add, imported
       role effects, and existing target state have distinct fail-closed errors.
-- [ ] A supported mutation preserves metadata and unrelated current and
+- [x] A supported mutation preserves metadata and unrelated current and
       historical relationships byte-for-byte.
-- [ ] Every required safety relay returns EOSE twice within a bounded deadline,
+- [x] Every required safety relay returns EOSE twice within a bounded deadline,
       and any relay or predecessor-set change aborts before signing.
-- [ ] Git-object availability is proved from advertised servers without using
+- [x] Git-object availability is proved from advertised servers without using
       the local cache as evidence.
-- [ ] A signed replacement is acknowledged by a relay, refetched, and resolved
+- [x] A signed replacement is acknowledged by a relay, refetched, and resolved
       to the preview before the UI reports completion.
-- [ ] Every unsupported graph, identity, history, or state case refuses before
+- [x] Every unsupported graph, identity, history, or state case refuses before
       signing or publication.
-- [ ] A concurrent announcement, state, deletion, mailbox, or safety-relay
+- [x] A concurrent announcement, state, deletion, mailbox, or safety-relay
       replacement aborts the mutation.
 
 ## Wave 5 — Edge-case workflows
