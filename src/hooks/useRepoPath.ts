@@ -1,9 +1,5 @@
-import type { Observable } from "rxjs";
 import { parseRepoCoordinate, type ResolvedRepo } from "@/lib/nip34";
 import { repoToPath } from "@/lib/routeUtils";
-import { RepositoryModel } from "@/models/RepositoryModel";
-import { use$ } from "./use$";
-import { useEventStore } from "./useEventStore";
 import { useVerifiedNip05 } from "./useVerifiedNip05";
 
 /**
@@ -31,60 +27,28 @@ export function useRepoPath(
 /**
  * Build the default path for a discovered repository.
  *
- * Discovery links prefer a resolved explicit, inferred, or implicit lead once
- * the recursive graph is available. Explicit route rewriting is handled
- * separately and accepts a complete signed `M` path or unique legacy winner.
+ * Discovery links preserve the selected coordinate. The repository route
+ * performs canonical lead rewriting only after its bounded graph refresh, so
+ * a progressive card snapshot cannot choose a transient destination.
  */
 export function useDefaultRepoPath(repo: ResolvedRepo): string {
-  const store = useEventStore();
-  const resolvedRepo = use$(() => {
-    return store.model(
-      RepositoryModel,
-      repo.selectedMaintainer,
-      repo.dTag,
-    ) as unknown as Observable<ResolvedRepo | undefined>;
-  }, [store, repo.selectedMaintainer, repo.dTag]);
-  const routeRepo = resolvedRepo ?? repo;
-  const leadMaintainer = routeRepo.leadResolution.leadMaintainer;
-
-  return useRepoPath(
-    leadMaintainer ?? routeRepo.selectedMaintainer,
-    routeRepo.dTag,
-    routeRepo.relays,
-  );
+  return useRepoPath(repo.selectedMaintainer, repo.dTag, repo.relays);
 }
 
 /**
  * Build the default path for a raw repository coordinate.
  *
- * Used when a discovery surface has an `a` tag but not a ResolvedRepo. The
- * shared RepositoryModel hydrates the graph, so repeated coordinates reuse the
- * cached model and missing announcements are loaded through the batched store
- * loader.
+ * Used when a discovery surface has an `a` tag but not a ResolvedRepo. Keep the
+ * referenced coordinate intact and let the destination route resolve any
+ * canonical lead after its graph refresh.
  */
 export function useDefaultRepoCoordPath(
   coordinate: string,
 ): string | undefined {
-  const store = useEventStore();
   const parsed = parseRepoCoordinate(coordinate);
-  const resolvedRepo = use$(() => {
-    if (!parsed) return undefined;
-    return store.model(
-      RepositoryModel,
-      parsed.pubkey,
-      parsed.identifier,
-    ) as unknown as Observable<ResolvedRepo | undefined>;
-  }, [store, parsed?.pubkey, parsed?.identifier]);
-  const leadMaintainer = resolvedRepo?.leadResolution.leadMaintainer;
-  const routePubkey = leadMaintainer ?? parsed?.pubkey ?? "";
-  const verifiedNip05 = useVerifiedNip05(routePubkey);
+  const verifiedNip05 = useVerifiedNip05(parsed?.pubkey ?? "");
 
   if (!parsed) return undefined;
 
-  return repoToPath(
-    routePubkey,
-    parsed.identifier,
-    resolvedRepo?.relays ?? [],
-    verifiedNip05,
-  );
+  return repoToPath(parsed.pubkey, parsed.identifier, [], verifiedNip05);
 }
