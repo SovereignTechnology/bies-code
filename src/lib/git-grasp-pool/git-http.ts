@@ -1274,6 +1274,40 @@ export class GitHttpClient {
   }
 
   /**
+   * Prove that a server can supply a commit without consulting either object
+   * cache. The fetched commit is still cached as a side effect for later reads.
+   */
+  async fetchSingleCommitFromNetwork(
+    url: string,
+    commitHash: string,
+    signal: AbortSignal,
+  ): Promise<Commit | null> {
+    const effectiveUrl = this.cors.resolveUrl(url);
+    const serverCaps = await this.getServerCaps(url, signal);
+    if (signal.aborted) return null;
+
+    try {
+      const commits = await fetchCommitsOnly(
+        effectiveUrl,
+        commitHash,
+        1,
+        serverCaps,
+        signal,
+      );
+      if (signal.aborted || commits.length === 0) return null;
+      const commit = commits.find(
+        ({ hash }) => hash.toLowerCase() === commitHash.toLowerCase(),
+      );
+      if (!commit) return null;
+      this.cache.putCommit(commit);
+      return commit;
+    } catch {
+      if (signal.aborted) return null;
+      return null;
+    }
+  }
+
+  /**
    * Fetch raw, packable objects reachable from a commit.
    *
    * Browser PR merges cannot assume the target Grasp server already has the PR

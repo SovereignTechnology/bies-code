@@ -64,6 +64,7 @@ export interface RepositoryMembershipMutationProposal {
   expectedInvitations: string[];
   expectedModeratorInvitations: string[];
   expectedActorActiveRoles: string[];
+  expectedCloneUrls: string[];
   expectedLead?: string;
 }
 
@@ -781,6 +782,7 @@ export function prepareRepositoryMembershipMutation({
     expectedInvitations: sorted(after?.invitedMaintainers ?? []),
     expectedModeratorInvitations: sorted(after?.invitedModerators ?? []),
     expectedActorActiveRoles: activeRoleKeys(simulated, lead),
+    expectedCloneUrls: sorted(after?.cloneUrls ?? []),
     expectedLead: after?.leadResolution.leadMaintainer,
   };
 }

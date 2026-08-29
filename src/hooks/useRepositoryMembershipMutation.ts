@@ -1,15 +1,17 @@
 import { useCallback, useState } from "react";
 import { useActiveAccount } from "applesauce-react/hooks";
 import type { Filter } from "applesauce-core/helpers";
-import { firstValueFrom } from "rxjs";
-import { endWith, filter, ignoreElements, take, timeout } from "rxjs/operators";
+import { firstValueFrom, type Subscription } from "rxjs";
+import { filter, take, timeout } from "rxjs/operators";
 import type { NostrEvent } from "nostr-tools";
 
 import type { RepositoryState } from "@/casts/RepositoryState";
 import { graspServiceAddressToRelayUrl, type GraspServer } from "@/lib/grasp";
 import {
   getRepoCloneUrls,
+  getRepoHistorySubjects,
   getRepoRelays,
+  getRepoRoleSubjects,
   REPO_KIND,
   REPO_STATE_KIND,
   repoCoordinate,
@@ -27,17 +29,13 @@ import {
   type RepositoryMembershipMutationRefusalCode,
 } from "@/lib/repositoryMembershipMutation";
 import { resilientRequest } from "@/lib/resilientSubscription";
+import { normalizeUrl } from "@/lib/url";
 import {
   maintainerAcceptanceKey,
   runMaintainerAcceptanceDelivery,
   saveMaintainerAcceptanceJob,
 } from "@/services/maintainerAcceptance";
-import {
-  addressLoader,
-  eventStore,
-  pool as relayPool,
-  publish,
-} from "@/services/nostr";
+import { eventStore, pool as relayPool, publish } from "@/services/nostr";
 import {
   fallbackRelays,
   gitIndexRelays,
@@ -61,11 +59,21 @@ interface MutationSnapshot {
   repo: ResolvedRepo;
   announcements: NostrEvent[];
   stateEvents: NostrEvent[];
+  deletionEvents: NostrEvent[];
+  mailboxEvents: NostrEvent[];
+  relayUrls: string[];
+}
+
+interface CompleteRelayRead {
+  events: NostrEvent[];
+  eoseRelays: string[];
 }
 
 const OBSERVATION_TIMEOUT_MS = 5_000;
-const SNAPSHOT_TIMEOUT_MS = 10_000;
+const SNAPSHOT_TIMEOUT_MS = 20_000;
 const GIT_OBJECT_TIMEOUT_MS = 15_000;
+const MAX_SNAPSHOT_AUTHORS = 64;
+const MAX_SNAPSHOT_RELAYS = 64;
 
 function mapsEqual(
   left: ReadonlyMap<string, string>,
@@ -75,6 +83,147 @@ function mapsEqual(
     left.size === right.size &&
     [...left].every(([key, value]) => right.get(key) === value)
   );
+}
+
+function arraysEqualAsSets(left: string[], right: string[]): boolean {
+  return setEqual(left, right);
+}
+
+function setEqual(left: Iterable<string>, right: Iterable<string>): boolean {
+  const leftSet = new Set(left);
+  const rightSet = new Set(right);
+  return (
+    leftSet.size === rightSet.size &&
+    [...leftSet].every((value) => rightSet.has(value))
+  );
+}
+
+function latestEventsByAuthor(events: NostrEvent[]): NostrEvent[] {
+  return [
+    ...events
+      .reduce((latest, event) => {
+        const existing = latest.get(event.pubkey);
+        if (
+          !existing ||
+          event.created_at > existing.created_at ||
+          (event.created_at === existing.created_at && event.id < existing.id)
+        ) {
+          latest.set(event.pubkey, event);
+        }
+        return latest;
+      }, new Map<string, NostrEvent>())
+      .values(),
+  ];
+}
+
+function isDeletedBy(event: NostrEvent, deletions: NostrEvent[]): boolean {
+  const coordinate = `${event.kind}:${event.pubkey}:${
+    event.tags.find(([name]) => name === "d")?.[1] ?? ""
+  }`;
+  return deletions.some(
+    (deletion) =>
+      deletion.kind === 5 &&
+      deletion.pubkey === event.pubkey &&
+      deletion.created_at >= event.created_at &&
+      deletion.tags.some(
+        ([name, value]) =>
+          (name === "e" && value === event.id) ||
+          (name === "a" && value === coordinate),
+      ),
+  );
+}
+
+function withoutDeleted(
+  events: NostrEvent[],
+  deletions: NostrEvent[],
+): NostrEvent[] {
+  return events.filter((event) => !isDeletedBy(event, deletions));
+}
+
+function requiredRelayRead(
+  relays: string[],
+  filters: Filter[],
+  deadline: number,
+  label: string,
+): Promise<CompleteRelayRead> {
+  return new Promise((resolve, reject) => {
+    const required = new Set(relays.map(normalizeUrl));
+    const eose = new Set<string>();
+    const events = new Map<string, NostrEvent>();
+    const resources: {
+      subscription?: Subscription;
+      timerId?: ReturnType<typeof setTimeout>;
+    } = {};
+    let finished = false;
+    const remaining = deadline - Date.now();
+
+    const finish = (
+      result: CompleteRelayRead | undefined,
+      error?: RepositoryMembershipMutationRefusal,
+    ) => {
+      if (finished) return;
+      finished = true;
+      if (resources.timerId) clearTimeout(resources.timerId);
+      resources.subscription?.unsubscribe();
+      if (error) reject(error);
+      else if (result) resolve(result);
+    };
+    const fail = (message: string) =>
+      finish(
+        undefined,
+        new RepositoryMembershipMutationRefusal(
+          "incomplete_relay_view",
+          `${message} GitWorkshop does not yet support making this transition.`,
+        ),
+      );
+    resources.timerId = setTimeout(
+      () =>
+        fail(
+          `${label} did not receive EOSE from ${
+            [...required].filter((relay) => !eose.has(relay)).join(", ") ||
+            "every required relay"
+          } before the bounded deadline.`,
+        ),
+      Math.max(0, remaining),
+    );
+
+    if (remaining <= 0) {
+      fail(`${label} exhausted its bounded deadline.`);
+      return;
+    }
+
+    resources.subscription = resilientRequest(relayPool, relays, filters, {
+      settle: false,
+      retryCount: 0,
+      onRelayEose: (relay) => {
+        eose.add(normalizeUrl(relay));
+        if (eose.size === required.size) {
+          finish({ events: [...events.values()], eoseRelays: [...eose] });
+        }
+      },
+      onRelayError: (relay) => {
+        fail(`${label} failed on required relay ${normalizeUrl(relay)}.`);
+      },
+    }).subscribe({
+      next: (response) => {
+        if (response !== "EOSE") events.set(response.id, response);
+      },
+      error: (error) => {
+        fail(
+          `${label} failed (${error instanceof Error ? error.message : String(error)}).`,
+        );
+      },
+      complete: () => {
+        if (eose.size !== required.size) {
+          fail(
+            `${label} completed without EOSE from ${[...required]
+              .filter((relay) => !eose.has(relay))
+              .join(", ")}.`,
+          );
+        }
+      },
+    });
+  });
 }
 
 function winningCurrentState(
@@ -120,120 +269,224 @@ async function settleMutationSnapshot(
   actorPubkey: string,
   intent: RepositoryMembershipMutationIntent,
   relayUrls: string[],
+  knownTargetIds: string[] = [],
 ): Promise<MutationSnapshot> {
-  const authors = mutationAuthors(repo, actorPubkey, intent);
-  try {
-    await Promise.all(
-      authors.map((author) =>
-        firstValueFrom(
-          addressLoader({
-            kind: 10002,
-            pubkey: author,
-            cache: false,
-          }).pipe(
-            ignoreElements(),
-            endWith(null),
-            timeout({ first: SNAPSHOT_TIMEOUT_MS }),
-          ),
-        ),
-      ),
-    );
-  } catch (error) {
-    throw new RepositoryMembershipMutationRefusal(
-      "incomplete_relay_view",
-      `The affected mailbox relay lists did not settle (${error instanceof Error ? error.message : String(error)}). GitWorkshop does not yet support making this transition.`,
-    );
-  }
-  const mailboxRelays = eventStore
-    .getByFilters([{ kinds: [10002], authors }])
-    .flatMap((event) =>
-      event.tags.flatMap(([name, url]) =>
-        name === "r" && /^wss?:\/\//.test(url ?? "") ? [url] : [],
-      ),
-    );
-  const relays = [
-    ...new Set([
+  const deadline = Date.now() + SNAPSHOT_TIMEOUT_MS;
+  const authors = new Set(mutationAuthors(repo, actorPubkey, intent));
+  const baseRelays = new Set(
+    [
       ...relayUrls,
       ...repo.relays,
-      ...mailboxRelays,
       ...gitIndexRelays.getValue(),
       ...fallbackRelays.getValue(),
       ...lookupRelays.getValue(),
-    ]),
-  ];
-  if (relays.length === 0) {
+    ].map(normalizeUrl),
+  );
+  if (baseRelays.size === 0) {
     throw new RepositoryMembershipMutationRefusal(
       "incomplete_relay_view",
       "No repository, mailbox, index, lookup, or fallback relay is available. GitWorkshop does not yet support making this transition.",
     );
   }
+  const safetyRelays = new Set(baseRelays);
 
-  const filters: Filter[] = [
-    { kinds: [REPO_KIND], authors, "#d": [repo.dTag] } as Filter,
-    { kinds: [REPO_STATE_KIND], authors, "#d": [repo.dTag] } as Filter,
-  ];
-  try {
-    await new Promise<void>((resolve, reject) => {
-      resilientRequest(relayPool, relays, filters).subscribe({
-        next: (response) => {
-          if (response !== "EOSE") eventStore.add(response);
-        },
-        error: reject,
-        complete: resolve,
-      });
-    });
-  } catch (error) {
-    throw new RepositoryMembershipMutationRefusal(
-      "incomplete_relay_view",
-      `The affected announcement and state snapshot did not settle (${error instanceof Error ? error.message : String(error)}). GitWorkshop does not yet support making this transition.`,
-    );
-  }
+  while (true) {
+    if (authors.size > MAX_SNAPSHOT_AUTHORS) {
+      throw new RepositoryMembershipMutationRefusal(
+        "incomplete_relay_view",
+        `The affected closure exceeds ${MAX_SNAPSHOT_AUTHORS} authors. GitWorkshop does not yet support making this transition.`,
+      );
+    }
+    if (safetyRelays.size > MAX_SNAPSHOT_RELAYS) {
+      throw new RepositoryMembershipMutationRefusal(
+        "incomplete_relay_view",
+        `The safety set exceeds ${MAX_SNAPSHOT_RELAYS} relays. GitWorkshop does not yet support making this transition.`,
+      );
+    }
 
-  const announcementFilter: Filter = {
-    kinds: [REPO_KIND],
-    authors,
-    "#d": [repo.dTag],
-  } as Filter;
-  const stateFilter: Filter = {
-    kinds: [REPO_STATE_KIND],
-    authors,
-    "#d": [repo.dTag],
-  } as Filter;
-  const announcements = eventStore.getByFilters([announcementFilter]);
-  const stateEvents = eventStore.getByFilters([stateFilter]);
-  const refreshedRepo = resolveChain(
-    announcements,
-    repo.selectedMaintainer,
-    repo.dTag,
-  );
-  if (!refreshedRepo) {
-    throw new RepositoryMembershipMutationRefusal(
-      "concurrent_change",
-      `The selected component ${repo.selectedCoordinate} no longer resolves. GitWorkshop does not yet support making this transition.`,
+    const authorList = [...authors].sort();
+    const relayList = [...safetyRelays].sort();
+    const mailboxRead = await requiredRelayRead(
+      relayList,
+      [{ kinds: [10002], authors: authorList } as Filter],
+      deadline,
+      "Mailbox discovery",
     );
+    const mailboxEvents = latestEventsByAuthor(
+      mailboxRead.events.filter(({ kind }) => kind === 10002),
+    );
+    const discoveredMailboxRelays = mailboxEvents.flatMap((event) =>
+      event.tags.flatMap(([name, url]) =>
+        name === "r" && /^wss?:\/\//.test(url ?? "") ? [normalizeUrl(url)] : [],
+      ),
+    );
+    const relayCount = safetyRelays.size;
+    for (const relay of discoveredMailboxRelays) safetyRelays.add(relay);
+    if (safetyRelays.size !== relayCount) continue;
+
+    const addressCoordinates = authorList.flatMap((author) => [
+      `${REPO_KIND}:${author}:${repo.dTag}`,
+      `${REPO_STATE_KIND}:${author}:${repo.dTag}`,
+      `10002:${author}:`,
+    ]);
+    const candidateRead = await requiredRelayRead(
+      relayList,
+      [
+        { kinds: [10002], authors: authorList } as Filter,
+        {
+          kinds: [REPO_KIND],
+          authors: authorList,
+          "#d": [repo.dTag],
+        } as Filter,
+        {
+          kinds: [REPO_STATE_KIND],
+          authors: authorList,
+          "#d": [repo.dTag],
+        } as Filter,
+        {
+          kinds: [5],
+          authors: authorList,
+          "#a": addressCoordinates,
+        } as Filter,
+      ],
+      deadline,
+      "Announcement, state, and mailbox snapshot",
+    );
+    const rawCandidates = candidateRead.events;
+    const knownEventIds = [
+      ...new Set([
+        ...rawCandidates.map(({ id }) => id),
+        ...repo.discoveredAnnouncements.map(({ id }) => id),
+        ...repo.historicalAnnouncements.map(({ id }) => id),
+        ...knownTargetIds,
+      ]),
+    ];
+    const exactDeletionRead =
+      knownEventIds.length > 0
+        ? await requiredRelayRead(
+            relayList,
+            [
+              {
+                kinds: [5],
+                authors: authorList,
+                "#e": knownEventIds,
+              } as Filter,
+            ],
+            deadline,
+            "Exact deletion snapshot",
+          )
+        : { events: [], eoseRelays: relayList };
+    const deletionEvents = [
+      ...new Map(
+        [...rawCandidates, ...exactDeletionRead.events]
+          .filter(({ kind }) => kind === 5)
+          .map((event) => [event.id, event]),
+      ).values(),
+    ];
+    const announcements = withoutDeleted(
+      rawCandidates.filter(({ kind }) => kind === REPO_KIND),
+      deletionEvents,
+    );
+    const stateEvents = withoutDeleted(
+      rawCandidates.filter(({ kind }) => kind === REPO_STATE_KIND),
+      deletionEvents,
+    );
+    const refreshedMailboxEvents = latestEventsByAuthor(
+      withoutDeleted(
+        rawCandidates.filter(({ kind }) => kind === 10002),
+        deletionEvents,
+      ),
+    );
+
+    const nextAuthors = new Set(authors);
+    for (const announcement of announcements) {
+      for (const subject of [
+        ...getRepoRoleSubjects(announcement),
+        ...getRepoHistorySubjects(announcement),
+      ]) {
+        nextAuthors.add(subject);
+      }
+    }
+    if (nextAuthors.size !== authors.size) {
+      for (const author of nextAuthors) authors.add(author);
+      continue;
+    }
+
+    const retainedDeletedAnnouncements = [
+      ...new Map(
+        [...repo.discoveredAnnouncements, ...repo.historicalAnnouncements]
+          .filter((event) => isDeletedBy(event, deletionEvents))
+          .map((event) => [event.id, event]),
+      ).values(),
+    ];
+    const refreshedRepo = resolveChain(
+      [...announcements, ...retainedDeletedAnnouncements, ...deletionEvents],
+      repo.selectedMaintainer,
+      repo.dTag,
+    );
+    if (!refreshedRepo) {
+      throw new RepositoryMembershipMutationRefusal(
+        "concurrent_change",
+        `The selected component ${repo.selectedCoordinate} no longer resolves. GitWorkshop does not yet support making this transition.`,
+      );
+    }
+    const finalRelays = new Set(baseRelays);
+    for (const relay of [
+      ...refreshedRepo.relays,
+      ...refreshedMailboxEvents.flatMap((event) =>
+        event.tags.flatMap(([name, url]) =>
+          name === "r" && /^wss?:\/\//.test(url ?? "")
+            ? [normalizeUrl(url)]
+            : [],
+        ),
+      ),
+    ]) {
+      finalRelays.add(normalizeUrl(relay));
+    }
+    const missingFinalRelays = [...finalRelays].filter(
+      (relay) => !safetyRelays.has(relay),
+    );
+    if (missingFinalRelays.length > 0) {
+      for (const relay of missingFinalRelays) safetyRelays.add(relay);
+      continue;
+    }
+
+    for (const event of [...rawCandidates, ...exactDeletionRead.events]) {
+      eventStore.add(event);
+    }
+    return {
+      repo: refreshedRepo,
+      announcements,
+      stateEvents,
+      deletionEvents,
+      mailboxEvents: refreshedMailboxEvents,
+      relayUrls: [...finalRelays].sort(),
+    };
   }
-  return { repo: refreshedRepo, announcements, stateEvents };
 }
 
-async function ensureAcceptanceObjectsAvailable(
-  repo: ResolvedRepo,
+async function ensureStateObjectsAvailable(
+  cloneUrls: string[],
   repoState: RepositoryState | null | undefined,
 ): Promise<void> {
   if (!repoState || repoState.refs.length === 0) return;
-  if (repo.cloneUrls.length === 0) {
+  if (cloneUrls.length === 0) {
     throw new RepositoryMembershipMutationRefusal(
       "unavailable_git_object",
       `Repository state ${repoState.event.id} has refs but no clone URL can supply them. GitWorkshop does not yet support making this transition.`,
     );
   }
-  const gitPool = getOrCreatePool({ cloneUrls: repo.cloneUrls });
+  const gitPool = getOrCreatePool({ cloneUrls });
   const controller = new AbortController();
   const deadline = setTimeout(() => controller.abort(), GIT_OBJECT_TIMEOUT_MS);
   try {
     for (const commitId of new Set(
       repoState.refs.map(({ commitId }) => commitId),
     )) {
-      const commit = await gitPool.getSingleCommit(commitId, controller.signal);
+      const commit = await gitPool.probeCommitOnNetwork(
+        commitId,
+        controller.signal,
+      );
       if (!commit) {
         throw new Error(`commit ${commitId} is unavailable`);
       }
@@ -298,6 +551,7 @@ export function useRepositoryMembershipMutation({
           account.pubkey,
           intent,
           relayUrls,
+          repoState ? [repoState.event.id] : [],
         );
         if (
           winningCurrentState(first.repo, first.stateEvents)?.id !==
@@ -308,10 +562,7 @@ export function useRepositoryMembershipMutation({
             "The authoritative repository state changed after the page settled. GitWorkshop does not yet support making this transition.",
           );
         }
-        if (intent.type === "accept") {
-          await ensureAcceptanceObjectsAvailable(first.repo, repoState);
-        }
-        prepareRepositoryMembershipMutation({
+        const firstProposal = prepareRepositoryMembershipMutation({
           repo: first.repo,
           actorPubkey: account.pubkey,
           intent,
@@ -320,6 +571,10 @@ export function useRepositoryMembershipMutation({
           graspServers: graspServersForRepo(first.repo),
           createdAt: Math.floor(Date.now() / 1000),
         });
+        await ensureStateObjectsAvailable(
+          firstProposal.expectedCloneUrls,
+          repoState,
+        );
 
         // Re-fetch every predecessor immediately before signing. A changed
         // announcement or state aborts without asking the signer for an event.
@@ -328,6 +583,16 @@ export function useRepositoryMembershipMutation({
           account.pubkey,
           intent,
           relayUrls,
+          [
+            ...(repoState ? [repoState.event.id] : []),
+            ...first.announcements.map(({ id }) => id),
+            ...first.stateEvents.map(({ id }) => id),
+            ...first.deletionEvents.flatMap((event) =>
+              event.tags.flatMap(([name, value]) =>
+                name === "e" && value ? [value] : [],
+              ),
+            ),
+          ],
         );
         if (
           !mapsEqual(
@@ -337,7 +602,16 @@ export function useRepositoryMembershipMutation({
           !mapsEqual(
             repositoryMembershipSnapshotIds(first.stateEvents),
             repositoryMembershipSnapshotIds(second.stateEvents),
-          )
+          ) ||
+          !mapsEqual(
+            repositoryMembershipSnapshotIds(first.mailboxEvents),
+            repositoryMembershipSnapshotIds(second.mailboxEvents),
+          ) ||
+          !arraysEqualAsSets(
+            first.deletionEvents.map(({ id }) => id),
+            second.deletionEvents.map(({ id }) => id),
+          ) ||
+          !arraysEqualAsSets(first.relayUrls, second.relayUrls)
         ) {
           throw new RepositoryMembershipMutationRefusal(
             "concurrent_change",

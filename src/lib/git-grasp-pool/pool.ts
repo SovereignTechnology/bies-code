@@ -2305,6 +2305,40 @@ export class GitGraspPool {
   }
 
   /**
+   * Prove that an advertised server can supply an exact commit now. Unlike
+   * getSingleCommit, this deliberately bypasses both memory and IndexedDB.
+   */
+  async probeCommitOnNetwork(
+    commitHash: string,
+    signal: AbortSignal,
+    fallbackUrls?: string[],
+  ): Promise<Commit | null> {
+    if (!/^[0-9a-f]{40}$/i.test(commitHash)) {
+      throw new Error(
+        `Invalid commit ID "${commitHash}": expected a 40-character hexadecimal SHA-1`,
+      );
+    }
+
+    return this.withFallback(
+      signal,
+      async (url) => {
+        const start = Date.now();
+        const result = await this.http.fetchSingleCommitFromNetwork(
+          url,
+          commitHash,
+          signal,
+        );
+        if (result) {
+          const tracker = this.urlManager.get(url);
+          tracker?.recordOperationSuccess(Date.now() - start);
+        }
+        return result;
+      },
+      fallbackUrls,
+    );
+  }
+
+  /**
    * Find the merge base between a PR tip commit and the default branch.
    *
    * Strategy:
