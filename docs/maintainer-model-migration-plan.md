@@ -1,6 +1,9 @@
 # Maintainer Model Migration Plan
 
-> **Status:** Waves 1 through 4 implemented. Wave 5 edge-case workflows are next.
+> **Status:** Waves 1 through 3 are complete. Wave 4A through 4C have landed,
+> but an independent review reopened the Wave 4 release gate. Complete the
+> Wave 4D stabilization work below before enabling browser membership writes
+> or beginning Wave 5 edge-case workflows.
 >
 > **Approach:** Land the maintainer-model change in deployable waves. Each
 > wave must leave gitworkshop with one internally consistent authority model;
@@ -41,30 +44,38 @@ The alignment target is semantic parity, not a line-for-line TypeScript port.
 When `ngit` source and the desired model differ, record the discrepancy and
 follow the desired model unless the model or NIP is changed first.
 
-## Current gitworkshop gaps
+## Current implementation state
 
-The current implementation predates the new authority model:
+Waves 1 through 3 have replaced the outgoing directional-authority model:
 
-- `getRepoMaintainers()` reads only the deprecated `maintainers` tag.
-- `resolveChain()` follows every directional listing and places all reachable
-  pubkeys in `maintainerSet`.
-- `maintainerSet` is then used for kind `30618` state, collaboration-event
-  authority, releases, CI, relay discovery, and some mutation controls. An
-  unaccepted invitation can therefore affect trusted state.
-- `confirmedMaintainers` is primarily a display and publishing-control subset,
-  rather than the sole maintainer-authority boundary.
-- `computeMaintainerLeadership()` infers a lead from confirmed in-degree
-  instead of resolving signed `M` pointers from the selected coordinate.
-- Repository grouping repeatedly resolves directional closures and then tries
-  to deduplicate them. Invitations and same-identifier repositories require
-  special presentation logic as a result.
-- Repository settings rewrite a complete legacy roster. Metadata edits can
-  unintentionally change membership representation.
-- Browser acceptance publishes a legacy reciprocal announcement and performs
-  only a narrow state check. It does not implement the complete component,
-  identity, history, and state preflight required by the final model.
-- [`docs/matainership.md`](matainership.md), repository instructions, and parts
-  of [`NIP.md`](../NIP.md) describe the outgoing directional-authority model.
+- reciprocal components are the current authority boundary;
+- selected-coordinate lead resolution drives canonical routes;
+- repository cards and exact-coordinate readers share deterministic,
+  settled component selection; and
+- metadata, infrastructure, state, collaboration coordinates, releases, CI,
+  and settings consume explicit confirmed-role sets.
+
+Wave 4A through 4C added replicated history, exit interpretation, and guarded
+one-at-a-time browser mutation intents. The 2026-08-29 independent review found
+that this work is not yet release-ready:
+
+- some current and historical read decisions disagree with the authoritative
+  model;
+- some nominally supported mutations can discard data or miss consequential
+  graph changes;
+- relay, Git-object, and publication evidence is not strong enough to prove a
+  write safe; and
+- several final-model operations are conservatively rejected, but do not yet
+  have explicit refusal categories that distinguish them from implementation
+  failures.
+
+Wave 4D below is therefore a stabilization wave, not an expansion into edge
+workflows. It restores the browser writer safety rail, fixes read-side
+semantics, narrows supported writes to cases that can be proved safe, and gives
+every remaining final-model operation a named refusal. The authoritative model
+permits more than current ngit v3 in areas such as accepting with an existing
+same-identifier announcement; Wave 4 follows ngit's conservative refusal there
+and Wave 5 implements the fuller model deliberately.
 
 ## Non-negotiable migration rules
 
@@ -89,13 +100,13 @@ The current implementation predates the new authority model:
 
 ## Wave overview
 
-| Wave | Outcome                                                     | Release gate                                                                    |
-| ---- | ----------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| 1    | Reciprocal membership becomes the sole authority boundary   | No unaccepted invitee affects trusted state anywhere                            |
-| 2    | Signed lead resolution and browser redirects                | Redirects follow a complete `M` path or a unique legacy vote winner             |
-| 3    | One announcement belongs to one active repository component | Search shows one result per repository without invitations merging repositories |
-| 4    | Exits, history, and conservative normal mutations           | Every unsupported topology change publishes nothing                             |
-| 5    | Exceptional workflows replace individual refusal cases      | Each edge-case workflow is independently reviewable and verified                |
+| Wave | Outcome                                                     | Release gate                                                                     |
+| ---- | ----------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| 1    | Reciprocal membership becomes the sole authority boundary   | No unaccepted invitee affects trusted state anywhere                             |
+| 2    | Signed lead resolution and browser redirects                | Redirects follow a complete `M` path or a unique legacy vote winner              |
+| 3    | One announcement belongs to one active repository component | Search shows one result per repository without invitations merging repositories  |
+| 4    | Exits, history, conservative mutations, and stabilization   | The 4D audit closes; every unsupported or incompletely proved write fails closed |
+| 5    | Exceptional workflows replace individual refusal cases      | Each edge-case workflow is independently reviewable and verified                 |
 
 ## Wave 1 — Reciprocal authority
 
@@ -405,33 +416,181 @@ Each error names the affected people, paths, coordinates, or refs and states
 that gitworkshop does not yet support making that transition. A refusal must
 leave no signed event, relay publication, Git mutation, or route change.
 
+### 4D. Stabilize the supported subset
+
+The independent Wave 4 review found both fail-open defects and final-model
+operations that the current browser cannot yet prove safe. Treat those classes
+differently: repair current reads and supported normal writes now; give every
+larger operation a specific refusal and leave its complete workflow to Wave 5.
+
+#### 4D.0. Restore the writer safety rail
+
+- Disable add, accept, remove, and leave entry points while 4D is incomplete.
+  Metadata-only edits remain available with membership and history tags
+  preserved byte-for-byte.
+- Do not deploy an intermediate 4D commit that enables only part of the
+  preflight. Re-enable the four intents together only after the 4D gate passes.
+- Quarantine every durable acceptance job created by the pre-4D writer. Its
+  signed event may already exist locally or on a relay, so keep that fact
+  visible, but do not broaden delivery automatically. Resume only after the
+  stored proposal is revalidated under 4D or after an explicit recovery
+  workflow; never silently upgrade a legacy or partially preflighted job.
+
+#### 4D.1. Correct read-side authority and history
+
+- Preserve an uninterrupted active self-acknowledgement across an assignment
+  removal and restart. Require a fresh candidate start only after the candidate
+  ended their own self-role.
+- Compute replicated-history distance using confirmed-member graph edges only;
+  unconfirmed, invited, and departed edges cannot affect precedence.
+- Complete the publication-time authorization audit. PR stack inference,
+  merge-base updates, merged-PR matching, and every other immutable
+  role-scoped consumer must use `isItemEventAuthorisedAt` and the resolved role
+  history rather than the current member set.
+- Detect an ended old self-role followed by an active self-`M` as an unsupported
+  same-coordinate restart regardless of how many people later join the new
+  component.
+- Include signed kind `5` deletion evidence in departure and candidate-state
+  resolution. Missing data from one relay remains insufficient evidence of a
+  departure or deletion.
+
+#### 4D.2. Make normal mutation effects exact
+
+- Compare maintainers, moderators, maintainer invitations, moderator
+  invitations, lead, and the exact authored relationship delta before and
+  after every proposal. A lost invitation returns `invitation_withdrawal`.
+- Build a fresh acceptance only from the NIP-01-latest confirmed-member
+  announcement, including the lowest-event-ID tie-break. Unconfirmed and
+  invited announcements supply no shared metadata.
+- Preserve the final model's ordinary moderator self-leave: close the active
+  self-`o` while preserving unrelated roles, history, metadata, and the lead
+  redirect. Moderator assignment and removal remain Wave 5 workflows.
+- Capture a new role start at the final proposal construction immediately
+  before signing, after the second safety snapshot. The first simulation is a
+  shape check and must not freeze an earlier authorization boundary.
+- Refuse acceptance when the actor already has a same-identifier announcement.
+  Use `unsupported_existing_announcement`, preserve that announcement
+  unchanged, and defer full reconciliation to Wave 5.
+- Refuse an add that would confirm its target immediately. Use
+  `unsupported_immediate_confirmation` and defer its state, history, local-ref,
+  and role-scoped-action preflight to Wave 5.
+- Refuse any proposed confirmation that could import a prior role interval or
+  newly authoritative role-scoped result with
+  `unsupported_role_effect_import`. The supported fresh-acceptance subset has
+  no earlier candidate history; Wave 5 performs the full before/after event
+  evaluation.
+- Continue refusing any target-authored state event in Wave 4 even when it is
+  non-winning or data-equivalent. Use `unsupported_existing_state` rather than
+  claiming that safe state reconciliation has already been implemented.
+
+#### 4D.3. Require complete safety evidence
+
+- Give both mailbox discovery and announcement/state snapshots bounded
+  deadlines.
+- Track per-relay EOSE and error outcomes. Aggregate EOSE means the read is no
+  longer waiting; it is not proof of a complete write snapshot. Every relay in
+  the required safety set must return a real EOSE, otherwise refuse with
+  `incomplete_relay_view` before signing.
+- Define the required safety set from the selected component, named pubkeys,
+  refreshed NIP-65 mailbox lists, repository relays, and configured index,
+  lookup, and fallback relays. Record that exact set in both snapshots so a
+  mailbox or relay-set change is itself a concurrent change.
+- Recheck every latest kind `30617`, kind `30618`, and applicable deletion
+  event used by the decision. A changed winner or candidate aborts with
+  `concurrent_change`.
+- Verify every exact post-change branch and tag OID through a bounded,
+  cache-bypassing network probe against the post-change component's advertised
+  Git URLs. A warm memory or IndexedDB object is not availability evidence.
+
+#### 4D.4. Verify publication rather than local insertion
+
+- Do not treat the optimistic EventStore insertion as publication evidence.
+- Require at least one positive relay acknowledgement from a designated
+  repository or index relay, then refetch the exact replacement from an
+  acknowledged safety relay and resolve the graph again.
+- If signing succeeded but acknowledgement or refetch did not, expose the
+  operation as queued or pending delivery. Do not report it as completed and
+  do not encourage an immediate retry that could create a competing
+  replacement.
+- Keep durable delivery to additional relays and GRASP servers visible and
+  resumable without weakening the acknowledgement required for initial
+  success.
+
+#### Independent-review disposition
+
+| Finding                                                                 | Wave 4 disposition                                                      | Later workflow                                              |
+| ----------------------------------------------------------------------- | ----------------------------------------------------------------------- | ----------------------------------------------------------- |
+| Relay snapshot may hang or use an incomplete view                       | Fix in 4D.3; every required relay must EOSE before signing              | Relay-divergent reconciliation remains Wave 5               |
+| Existing-announcement acceptance can discard relationships and metadata | Refuse explicitly in 4D.2                                               | Reconcile and preserve the existing announcement in Wave 5  |
+| Moderator invitation withdrawal is not checked                          | Fix exact invitation and relationship effects in 4D.2                   | None                                                        |
+| Standing acceptance is lost after assignment restart                    | Fix current and historical resolution in 4D.1                           | None                                                        |
+| Acceptance can copy unconfirmed metadata                                | Fix the confirmed canonical source in 4D.2                              | None                                                        |
+| An add that immediately confirms is rejected generically                | Keep it refused with a precise 4D.2 category                            | Implement complete confirmation preflight in Wave 5         |
+| Role-scoped effects are absent from preflight                           | Restrict Wave 4 to fresh acceptance and refuse imported history/effects | Compare complete before/after role-scoped results in Wave 5 |
+| Git availability can pass from cache                                    | Require a network-only proof in 4D.3                                    | None                                                        |
+| Unconfirmed edges influence history precedence                          | Fix confirmed-graph distance in 4D.1                                    | None                                                        |
+| PR stack and merge attribution uses current roles                       | Finish the historical authorization audit in 4D.1                       | None                                                        |
+| Publication verification observes only local state                      | Require relay acknowledgement and refetch in 4D.4                       | Richer delivery policy may evolve independently             |
+| Multi-person coordinate restart evades the unsupported marker           | Fix restart classification in 4D.1                                      | An explicit restart/fork workflow remains Wave 5            |
+| Confirmed moderators cannot leave                                       | Support ordinary moderator self-leave in 4D.2                           | Moderator add/remove remains Wave 5                         |
+
 ### Wave 4 gate
 
-- [x] Historical member actions remain effective only when their author held
+- [ ] Historical member actions remain effective only when their author held
       the required role at publication time.
 - [x] A removed maintainer immediately loses current state and merge authority.
-- [x] Reinvitation requires a new acceptance interval.
-- [x] A safe ordinary add, accept, remove, and leave changes exactly one
-      intended relationship.
-- [x] Every unsupported graph, identity, history, or state case refuses before
+- [ ] Standing acceptance survives reassignment until the candidate ends their
+      self-role; after that end, reinvitation requires a new acceptance interval.
+- [ ] A safe ordinary add, fresh accept, remove, maintainer leave, and moderator
+      leave changes exactly one intended relationship.
+- [ ] Existing-announcement acceptance, immediate-confirmation add, imported
+      role effects, and existing target state have distinct fail-closed errors.
+- [ ] A supported mutation preserves metadata and unrelated current and
+      historical relationships byte-for-byte.
+- [ ] Every required safety relay returns EOSE twice within a bounded deadline,
+      and any relay or predecessor-set change aborts before signing.
+- [ ] Git-object availability is proved from advertised servers without using
+      the local cache as evidence.
+- [ ] A signed replacement is acknowledged by a relay, refetched, and resolved
+      to the preview before the UI reports completion.
+- [ ] Every unsupported graph, identity, history, or state case refuses before
       signing or publication.
-- [x] A concurrent announcement or state replacement aborts the mutation.
+- [ ] A concurrent announcement, state, deletion, mailbox, or safety-relay
+      replacement aborts the mutation.
 
 ## Wave 5 — Edge-case workflows
 
 Each item below replaces one narrow refusal with a complete workflow. Do not
 bundle unrelated exceptional transitions.
 
-Recommended order:
+Recommended order after the Wave 4D gate closes:
 
-1. Compatibility-roster mismatch health and standalone repair.
-2. Malformed acceptance and active third-party assignment convergence.
-3. Prepared lead handover and direct follow-lead convergence.
-4. Complete state-collision preview and narrowly scoped state-only force.
-5. Component adoption and deliberate repository merge.
-6. One-at-a-time moderator add and remove APIs.
-7. Relay-divergent history reconciliation and estimated departure boundaries.
-8. Abandoned redirects and aggressive same-identifier fork workflows.
+1. **Health and convergence repairs.** Add compatibility-roster mismatch
+   health and standalone repair, malformed-acceptance repair, and active
+   third-party assignment convergence.
+2. **Complete confirmation preflight.** Replace the Wave 4 refusals for an
+   existing invitee announcement and an immediately confirming add. Preserve
+   the invitee's relationships, metadata, personal infrastructure, identity,
+   and history; compare complete local and signed state; enumerate newly
+   authoritative role-scoped results; and invalidate former-component state
+   before the next push.
+3. **State collision and scoped force.** Accept equivalent state with distinct
+   event authors, show bidirectional ref changes for real conflicts, prove
+   every OID, and add only the narrowly scoped state-only force workflow.
+4. **Prepared lead handover and follow-lead convergence.** Implement complete
+   roster preparation, direct pointer convergence, history sync, and selected
+   coordinate changes.
+5. **Component adoption and deliberate repository merge.** Reconcile identity,
+   Git history and refs, imported members, role history, infrastructure, and
+   recovery without treating an ordinary add or accept as a merge command.
+6. **Moderator roster management.** Add one-at-a-time moderator invitation and
+   removal APIs. Ordinary moderator self-leave is already part of Wave 4D.
+7. **Relay-divergent history reconciliation.** Add signed deletion handling
+   beyond the deterministic Wave 4 read boundary, conflicting-copy repair, and
+   explicitly labelled estimated departure boundaries.
+8. **Redirect and coordinate-fork workflows.** Handle abandoned redirects and
+   aggressive same-identifier forks while recommending a new identifier for a
+   friendly fork.
 
 The existing
 [`repository-invitation-state-merge-prompt.md`](repository-invitation-state-merge-prompt.md)
@@ -448,9 +607,19 @@ The expected implementation sequence is:
    authorization consumers switched together.
 3. **Wave 2:** lead result, route behavior, and selected/lead UI.
 4. **Wave 3:** component index, discovery/search grouping, and documentation.
-5. **Wave 4A:** replicated history and exit interpretation.
-6. **Wave 4B:** safe normal one-at-a-time mutations and structured refusals.
-7. **Wave 5:** one exceptional workflow per independently reviewable change.
+5. **Wave 4A/4B:** replicated history and exit interpretation.
+6. **Wave 4C:** land the guarded one-at-a-time mutation architecture.
+7. **Wave 4D.0:** restore the membership-writer safety rail.
+8. **Wave 4D.1:** correct standing acceptance, confirmed-graph history,
+   historical consumers, deletion evidence, and restart classification.
+9. **Wave 4D.2:** preserve exact normal mutation effects, support moderator
+   self-leave, and install explicit refusals for larger confirmation cases.
+10. **Wave 4D.3:** require bounded relay-completeness and network-only Git
+    object evidence.
+11. **Wave 4D.4:** require relay acknowledgement, exact refetch, and resolved
+    verification before re-enabling writers.
+12. **Wave 5:** replace one explicit refusal at a time with a complete,
+    independently reviewable workflow.
 
 Each step should be an atomic commit or short atomic series. If splitting a
 step would expose mixed authority semantics, keep the changes in one PR and do
@@ -480,7 +649,21 @@ The shared scenario matrix must include:
 - two unrelated same-identifier components;
 - an invitation between those components;
 - an add that would confirm immediately;
+- an uninterrupted standing acknowledgement across removal and reassignment;
+- a fresh invitation after the candidate ends their own self-role;
+- acceptance with an existing same-identifier announcement and unknown tags;
+- a moderator invitation withdrawn as a removal side effect;
+- confirmed moderator self-leave;
+- history precedence in which an unconfirmed edge shortens a raw graph path;
+- a multi-person component rooted at an aggressive same-coordinate restart;
 - state events from invited and departed authors;
+- equivalent, non-winning, and conflicting target-authored state events;
+- warm cached OIDs with every advertised Git server unavailable;
+- successful and failed relay acknowledgement followed by exact refetch;
+- required safety relays that EOSE, fail, hang, or change between snapshots;
+- signed deletion requests that affect announcement or state eligibility;
+- publication-time PR updates, stack inference, status, and merged-commit
+  matching before, during, and after a role interval;
 - metadata and infrastructure from invited, moderator, departed, and confirmed
   member announcements;
 - every structured mutation refusal with proof that nothing was published.
