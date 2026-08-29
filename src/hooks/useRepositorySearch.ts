@@ -69,6 +69,7 @@ import {
   type NamecoinSearchResolution,
 } from "./useNamecoinSearchResolution";
 import { rankProfileSearchCandidates } from "@/lib/profileSearchRanking";
+import { DEFAULT_MAX_SETTLE_TIME } from "@/lib/settleSignal";
 import { RepositoryListModel } from "@/models/RepositoryListModel";
 import {
   RepositorySelectionModel,
@@ -97,6 +98,10 @@ const EMPTY_PUBKEYS: string[] = [];
 // the page is done. Covers both the normal case (events arrive then stop) and
 // the zero-events case (relay exhausted — timer fires with count=0).
 const PAGE_SETTLE_MS = 600;
+// Relay EOSE can beat the debounced repository model by a render. When the
+// relay delivered announcements, keep the initial skeleton until the model
+// catches up, but do not let malformed or deleted results hold it forever.
+const BROWSE_MODEL_SETTLE_TIMEOUT_MS = 2_000;
 
 /**
  * Per-relay query outcome for the current search/browse subscription.
@@ -246,6 +251,11 @@ export function useRepositorySearch(
   // (handles zero-events case) and reset on each incoming event. When it fires,
   // the page is considered done.
   const pageSettleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const browseModelSettleTimerRef = useRef<ReturnType<
+    typeof setTimeout
+  > | null>(null);
+  const browseAwaitingModelRef = useRef(false);
+  const allBrowseReposRef = useRef<ResolvedRepo[] | undefined>(undefined);
   // Count of events received in the current pagination page.
   const pageEventCountRef = useRef(0);
   // Whether we are currently waiting for a pagination page to settle.
@@ -314,6 +324,22 @@ export function useRepositorySearch(
   );
 
   useEffect(() => {
+    allBrowseReposRef.current = allBrowseRepos;
+    if (
+      !isSearchMode &&
+      browseAwaitingModelRef.current &&
+      (allBrowseRepos?.length ?? 0) > 0
+    ) {
+      browseAwaitingModelRef.current = false;
+      if (browseModelSettleTimerRef.current) {
+        clearTimeout(browseModelSettleTimerRef.current);
+        browseModelSettleTimerRef.current = null;
+      }
+      setIsLoading(false);
+    }
+  }, [allBrowseRepos, isSearchMode]);
+
+  useEffect(() => {
     if (isSearchMode) return;
 
     setIsLoading(true);
@@ -321,6 +347,11 @@ export function useRepositorySearch(
     setProfileRelayStatuses({});
     setBrowseDisplayLimit(PAGE_SIZE);
     paginatingRef.current = false;
+    browseAwaitingModelRef.current = false;
+    if (browseModelSettleTimerRef.current) {
+      clearTimeout(browseModelSettleTimerRef.current);
+      browseModelSettleTimerRef.current = null;
+    }
 
     // Initialise all relays as "searching" for this subscription.
     setRelayStatuses(Object.fromEntries(relays.map((r) => [r, "searching"])));
@@ -330,6 +361,39 @@ export function useRepositorySearch(
 
     // Events received before EOSE (the initial page).
     let initialPageCount = 0;
+    let initialFinished = false;
+    let initialRequestTimer: ReturnType<typeof setTimeout> | null = null;
+    const requiredRelayCount = new Set(relays).size;
+    const terminalRelays = new Set<string>();
+
+    const finishInitial = () => {
+      if (initialFinished) return;
+      initialFinished = true;
+      if (initialRequestTimer) {
+        clearTimeout(initialRequestTimer);
+        initialRequestTimer = null;
+      }
+      setHasMore(initialPageCount >= PAGE_SIZE);
+      if ((allBrowseReposRef.current?.length ?? 0) > 0) {
+        setIsLoading(false);
+        return;
+      }
+
+      browseAwaitingModelRef.current = true;
+      browseModelSettleTimerRef.current = setTimeout(() => {
+        browseAwaitingModelRef.current = false;
+        browseModelSettleTimerRef.current = null;
+        setIsLoading(false);
+      }, BROWSE_MODEL_SETTLE_TIMEOUT_MS);
+    };
+
+    const finishRelay = (relay: string) => {
+      terminalRelays.add(relay);
+      if (terminalRelays.size >= requiredRelayCount) finishInitial();
+    };
+
+    initialRequestTimer = setTimeout(finishInitial, DEFAULT_MAX_SETTLE_TIME);
+    if (requiredRelayCount === 0) finishInitial();
 
     const sub = resilientSubscription(
       pool,
@@ -338,16 +402,18 @@ export function useRepositorySearch(
       {
         manualPaginate$: paginate$,
         limit: PAGE_SIZE,
-        onRelayEose: (relay) =>
-          setRelayStatuses((prev) => ({ ...prev, [relay]: "success" })),
-        onRelayError: (relay) =>
-          setRelayStatuses((prev) => ({ ...prev, [relay]: "error" })),
+        onRelayEose: (relay) => {
+          setRelayStatuses((prev) => ({ ...prev, [relay]: "success" }));
+          finishRelay(relay);
+        },
+        onRelayError: (relay) => {
+          setRelayStatuses((prev) => ({ ...prev, [relay]: "error" }));
+          finishRelay(relay);
+        },
       },
     ).subscribe({
       next: (msg) => {
         if (msg === "EOSE") {
-          setHasMore(initialPageCount >= PAGE_SIZE);
-          setIsLoading(false);
           return;
         }
         const ev = msg as NostrEvent;
@@ -367,11 +433,13 @@ export function useRepositorySearch(
       },
       error: () => {
         clearPageSettleTimer();
-        setIsLoading(false);
+        if (initialFinished) setIsLoading(false);
+        else finishInitial();
       },
       complete: () => {
         clearPageSettleTimer();
-        setIsLoading(false);
+        if (initialFinished) setIsLoading(false);
+        else finishInitial();
       },
     });
 
@@ -380,6 +448,12 @@ export function useRepositorySearch(
       paginate$.complete();
       paginateSubRef.current = null;
       clearPageSettleTimer();
+      if (initialRequestTimer) clearTimeout(initialRequestTimer);
+      browseAwaitingModelRef.current = false;
+      if (browseModelSettleTimerRef.current) {
+        clearTimeout(browseModelSettleTimerRef.current);
+        browseModelSettleTimerRef.current = null;
+      }
     };
   }, [relayKey, isSearchMode, armPageSettleTimer, clearPageSettleTimer]); // eslint-disable-line react-hooks/exhaustive-deps
 

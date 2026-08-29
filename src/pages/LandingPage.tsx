@@ -9,6 +9,7 @@
  *   5. Footer CTA — repeat the two buttons
  */
 
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   GitBranch,
@@ -109,9 +110,28 @@ function FeaturedReposSkeleton() {
 function FeaturedRepos() {
   const { repos, isLoading } = useRepositorySearch("");
 
-  const graspRepos = repos?.filter((r) => r.graspCloneUrls.length > 0);
+  const graspRepos = useMemo(
+    () => repos?.filter((r) => r.graspCloneUrls.length > 0),
+    [repos],
+  );
+  const [emptyGraspResultsSettled, setEmptyGraspResultsSettled] =
+    useState(false);
+
+  useEffect(() => {
+    if (graspRepos === undefined || graspRepos.length > 0 || isLoading) {
+      setEmptyGraspResultsSettled(false);
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      setEmptyGraspResultsSettled(true);
+    }, 2_000);
+    return () => clearTimeout(timer);
+  }, [graspRepos, isLoading]);
+
   const showSkeletons =
-    graspRepos === undefined || (isLoading && graspRepos.length === 0);
+    graspRepos === undefined ||
+    (graspRepos.length === 0 && (isLoading || !emptyGraspResultsSettled));
   const featured = graspRepos?.slice(0, 6) ?? [];
 
   return (
