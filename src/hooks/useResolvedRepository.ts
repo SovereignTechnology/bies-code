@@ -13,7 +13,6 @@ import { RelayGroup } from "applesauce-relay";
 import type { RelayGroup as RelayGroupType } from "applesauce-relay";
 import { ignoreUnhealthyRelaysOnPointers } from "applesauce-relay/operators";
 import {
-  addressLoader,
   pool,
   liveness,
   eventStore as globalEventStore,
@@ -24,12 +23,16 @@ import {
   resilientRequest,
 } from "@/lib/resilientSubscription";
 import { REPO_KIND, type ResolvedRepo } from "@/lib/nip34";
-import { gitIndexRelays, fallbackRelays } from "@/services/settings";
+import {
+  gitIndexRelays,
+  fallbackRelays,
+  lookupRelays,
+} from "@/services/settings";
 import { RepositoryModel } from "@/models/RepositoryModel";
 import { RepositoryRelayGroup } from "@/models/RepositoryRelayGroup";
 import type { Filter } from "applesauce-core/helpers";
 import type { Observable } from "rxjs";
-import { BehaviorSubject, combineLatest, concat, forkJoin, of } from "rxjs";
+import { BehaviorSubject, combineLatest, concat, of } from "rxjs";
 import {
   catchError,
   distinctUntilChanged,
@@ -37,6 +40,8 @@ import {
   ignoreElements,
   map,
   switchMap,
+  takeWhile,
+  tap,
 } from "rxjs/operators";
 import { normalizeUrl } from "@/lib/url";
 
@@ -214,6 +219,7 @@ export function useResolvedRepository(
   const repoSearch = useEventSearch(searchTarget, searchGroups);
   const configuredGitIndexRelays = use$(gitIndexRelays) ?? [];
   const configuredFallbackRelays = use$(fallbackRelays) ?? [];
+  const configuredLookupRelays = use$(lookupRelays) ?? [];
 
   // Background refresh: when the event is already in the store (e.g. navigated
   // from the landing page which pre-fetched it), useEventSearch is skipped
@@ -498,12 +504,20 @@ export function useResolvedRepository(
       ].map(normalizeUrl),
     ),
   ].sort();
+  const announcementMailboxLookupUrls = [
+    ...new Set(
+      [...configuredLookupRelays, ...configuredFallbackRelays].map(
+        normalizeUrl,
+      ),
+    ),
+  ].sort();
   const announcementGraphKey = JSON.stringify([
     pubkey ?? "",
     dTag ?? "",
     announcementAuthors,
     announcementIds,
     announcementRelayUrls,
+    announcementMailboxLookupUrls,
   ]);
   const announcementMailboxRelayGroup = extraRelaysForMaintainerMailboxCoverage;
   const announcementGraphState = use$(() => {
@@ -520,16 +534,26 @@ export function useResolvedRepository(
       return of(unsettled);
     }
 
-    const mailboxRefreshes = announcementAuthors.map((author) =>
-      addressLoader({ kind: 10002, pubkey: author, cache: false }).pipe(
-        ignoreElements(),
-        endWith(null),
-        catchError(() => of(null)),
-      ),
-    );
+    const mailboxRefresh =
+      announcementMailboxLookupUrls.length === 0
+        ? of(null)
+        : resilientRequest(pool, announcementMailboxLookupUrls, [
+            {
+              kinds: [10002],
+              authors: announcementAuthors,
+            } as Filter,
+          ]).pipe(
+            tap((response) => {
+              if (response !== "EOSE") store.add(response);
+            }),
+            takeWhile((response) => response !== "EOSE"),
+            ignoreElements(),
+            endWith(null),
+            catchError(() => of(null)),
+          );
     return concat(
       of(unsettled),
-      forkJoin(mailboxRefreshes).pipe(
+      mailboxRefresh.pipe(
         switchMap(() => {
           // Mailbox subscriptions above update this shared group before their
           // loaders complete. Read it at request time so a freshly discovered
@@ -566,8 +590,10 @@ export function useResolvedRepository(
               : []),
           ];
           return resilientRequest(pool, refreshedRelayUrls, filters).pipe(
-            onlyEvents(),
-            mapEventsToStore(store),
+            tap((response) => {
+              if (response !== "EOSE") store.add(response);
+            }),
+            takeWhile((response) => response !== "EOSE"),
             ignoreElements(),
             endWith<AnnouncementGraphSettleState>({
               key: announcementGraphKey,
