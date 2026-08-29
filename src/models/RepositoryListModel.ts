@@ -18,7 +18,7 @@ const repoFilter: Filter[] = [{ kinds: [REPO_KIND] }];
 
 /**
  * RepositoryListModel — subscribes to all 30617 events in the store and
- * emits a settled, deduplicated list of resolved repositories.
+ * emits a deduplicated list of resolved repositories.
  *
  * Multi-maintainer repos (where pubkeys mutually list each other) are merged
  * into a single ResolvedRepo.
@@ -33,10 +33,15 @@ const repoFilter: Filter[] = [{ kinds: [REPO_KIND] }];
  * (or one global instance when called with no args).
  *
  * debounceTime(150) batches bulk-fetch insertion. Each coordinate then flows
- * through RepositorySelectionModel, which withholds it until its recursive
- * graph refresh has settled and collapses references to the same component.
+ * through RepositorySelectionModel, which resolves the current recursive
+ * graph and collapses references to the same component. Presentation callers
+ * can opt into progressive snapshots; trust-sensitive callers wait for the
+ * settled graph by default.
  */
-export function RepositoryListModel(forPubkey?: string): Model<ResolvedRepo[]> {
+export function RepositoryListModel(
+  forPubkey?: string,
+  requireSettled = true,
+): Model<ResolvedRepo[]> {
   return (store) => {
     const filters = forPubkey
       ? ([{ kinds: [REPO_KIND], authors: [forPubkey] } as Filter] as Filter[])
@@ -63,6 +68,7 @@ export function RepositoryListModel(forPubkey?: string): Model<ResolvedRepo[]> {
             RepositorySelectionModel,
             coordinatesKey,
             forPubkey,
+            requireSettled,
           ) as unknown as Observable<ResolvedRepo[]>
         ).pipe(
           map((repositories) =>

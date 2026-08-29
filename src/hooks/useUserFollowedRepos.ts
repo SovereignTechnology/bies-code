@@ -95,6 +95,8 @@ export function useUserFollowedRepos(
         return store.model(
           RepositorySelectionModel,
           repositorySelectionKey(coords),
+          undefined,
+          false,
         ) as unknown as Observable<ResolvedRepo[]>;
       }),
     );

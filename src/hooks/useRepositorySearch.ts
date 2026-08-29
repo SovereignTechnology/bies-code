@@ -47,7 +47,7 @@ import {
 import type { Filter } from "applesauce-core/helpers";
 import { useActiveAccount } from "applesauce-react/hooks";
 import type { NostrEvent } from "nostr-tools";
-import { pool, eventStore } from "@/services/nostr";
+import { pool, eventStore, deletionEvents$ } from "@/services/nostr";
 import { gitIndexRelays } from "@/services/settings";
 import { REPO_KIND, repoCoordinate, type ResolvedRepo } from "@/lib/nip34";
 import { use$ } from "./use$";
@@ -74,10 +74,7 @@ import {
   RepositorySelectionModel,
   repositorySelectionKey,
 } from "@/models/RepositorySelectionModel";
-import {
-  SettledRepositoryModel,
-  type SettledRepositorySnapshot,
-} from "@/models/SettledRepositoryModel";
+import { RepositoryModel } from "@/models/RepositoryModel";
 
 const PROFILE_SEARCH_RELAYS = [
   "wss://relay.ditto.pub",
@@ -277,9 +274,11 @@ export function useRepositorySearch(
     if (isSearchMode) return undefined;
 
     if (!relayOverride || relayOverride.length === 0) {
-      return store.model(RepositoryListModel) as unknown as Observable<
-        ResolvedRepo[]
-      >;
+      return store.model(
+        RepositoryListModel,
+        undefined,
+        false,
+      ) as unknown as Observable<ResolvedRepo[]>;
     }
 
     return store.timeline([{ kinds: [REPO_KIND] } as Filter]).pipe(
@@ -300,6 +299,8 @@ export function useRepositorySearch(
           store.model(
             RepositorySelectionModel,
             coordinatesKey,
+            undefined,
+            false,
           ) as unknown as Observable<ResolvedRepo[]>,
       ),
     );
@@ -432,7 +433,7 @@ export function useRepositorySearch(
     let userSub: { unsubscribe(): void } | null = null;
     const userRepoSubs: { unsubscribe(): void }[] = [];
     const repoResolutionSubs = new Map<string, { unsubscribe(): void }>();
-    const repoResolutionStates = new Map<string, SettledRepositorySnapshot>();
+    const repoResolutionStates = new Map<string, ResolvedRepo | undefined>();
     let pushScheduled = false;
     let disposed = false;
 
@@ -472,12 +473,13 @@ export function useRepositorySearch(
       if (!repoResolutionSubs.has(coordinateKey)) {
         const resolutionSub = (
           store.model(
-            SettledRepositoryModel,
+            RepositoryModel,
             event.pubkey,
             dTag,
-          ) as unknown as Observable<SettledRepositorySnapshot>
-        ).subscribe((snapshot) => {
-          repoResolutionStates.set(coordinateKey, snapshot);
+            deletionEvents$,
+          ) as unknown as Observable<ResolvedRepo | undefined>
+        ).subscribe((repository) => {
+          repoResolutionStates.set(coordinateKey, repository);
           schedulePushResults();
         });
         repoResolutionSubs.set(coordinateKey, resolutionSub);
@@ -487,18 +489,15 @@ export function useRepositorySearch(
     const pushResults = () => {
       const byComponent = new Map<string, ResolvedRepo>();
       for (const [coordinateKey] of directRepoCoordinates) {
-        const snapshot = repoResolutionStates.get(coordinateKey);
-        if (snapshot?.settled && snapshot.repository) {
-          byComponent.set(snapshot.repository.componentId, snapshot.repository);
+        const repository = repoResolutionStates.get(coordinateKey);
+        if (repository) {
+          byComponent.set(repository.componentId, repository);
         }
       }
       for (const [coordinateKey, { pubkey }] of userRepoCoordinates) {
-        const snapshot = repoResolutionStates.get(coordinateKey);
-        if (
-          snapshot?.settled &&
-          snapshot.repository?.confirmedMembers.includes(pubkey)
-        ) {
-          byComponent.set(snapshot.repository.componentId, snapshot.repository);
+        const repository = repoResolutionStates.get(coordinateKey);
+        if (repository?.confirmedMembers.includes(pubkey)) {
+          byComponent.set(repository.componentId, repository);
         }
       }
       subject.next(
@@ -524,28 +523,24 @@ export function useRepositorySearch(
     const paginate$ = new Subject<void>();
     paginateSubRef.current = paginate$;
 
-    // Initial loading ends after both independent search paths have produced
-    // their first settled response: direct repository search, and profile
-    // resolution followed by its first author-scoped repository request.
-    // Slower relays keep streaming results and updating statuses afterward.
+    // A direct repository match can render as soon as its initial query
+    // settles; it must not stay behind the unrelated profile-search path.
+    // Empty searches wait for both paths. Slower relays keep streaming results
+    // and updating statuses afterward.
     let initialLoadingCleared = false;
     let directInitialDone = false;
     let userPathDone = false;
     let initialPageCount = 0;
 
     const maybeClearInitialLoading = () => {
-      const coordinateKeys = new Set([
-        ...directRepoCoordinates.keys(),
-        ...userRepoCoordinates.keys(),
-      ]);
-      const graphsSettled = [...coordinateKeys].every(
-        (coordinateKey) => repoResolutionStates.get(coordinateKey)?.settled,
+      const hasDirectResult = [...directRepoCoordinates.keys()].some(
+        (coordinateKey) =>
+          repoResolutionStates.get(coordinateKey) !== undefined,
       );
       if (
         !initialLoadingCleared &&
         directInitialDone &&
-        userPathDone &&
-        graphsSettled
+        (userPathDone || hasDirectResult)
       ) {
         initialLoadingCleared = true;
         // Always push results so an empty search transitions undefined → []
@@ -628,7 +623,6 @@ export function useRepositorySearch(
     let profileStatusTrackingFinished = false;
     let profileSearchTimeout: ReturnType<typeof setTimeout> | null = null;
     let profileIntegrationTimer: ReturnType<typeof setTimeout> | null = null;
-
     const startUserRepoFetch = (authors: string[]) => {
       if (authors.length === 0) {
         finishUserPath();

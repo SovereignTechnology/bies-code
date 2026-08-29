@@ -46,8 +46,10 @@ export function useUserRepositories(
   // Layer 2: subscribe to the model scoped to this pubkey.
   return use$(() => {
     if (!pubkey) return undefined;
-    return store.model(RepositoryListModel, pubkey) as unknown as Observable<
-      ResolvedRepo[]
-    >;
+    return store.model(
+      RepositoryListModel,
+      pubkey,
+      false,
+    ) as unknown as Observable<ResolvedRepo[]>;
   }, [pubkey, store]);
 }

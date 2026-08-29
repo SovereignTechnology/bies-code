@@ -4,10 +4,12 @@ import { combineLatest, of, type Observable } from "rxjs";
 import { map } from "rxjs/operators";
 
 import { parseRepoCoordinate, REPO_KIND, type ResolvedRepo } from "@/lib/nip34";
+import { RepositoryModel } from "@/models/RepositoryModel";
 import {
   SettledRepositoryModel,
   type SettledRepositorySnapshot,
 } from "@/models/SettledRepositoryModel";
+import { deletionEvents$ } from "@/services/nostr";
 
 /** Stable serialized argument for the EventStore model cache. */
 export function repositorySelectionKey(coordinates: Iterable<string>): string {
@@ -34,12 +36,17 @@ export function repositoryCoordinateFilters(
 }
 
 /**
- * Resolve explicit coordinates in input order, omitting unresolved snapshots
- * and collapsing references that settle into the same component.
+ * Resolve explicit coordinates in input order from the current EventStore
+ * snapshot and collapse references that belong to the same component.
+ *
+ * Trust-sensitive callers use settled snapshots by default. Presentation
+ * callers can opt into progressive updates as missing linked announcements
+ * arrive; those snapshots must not drive routing or authority decisions.
  */
 export function RepositorySelectionModel(
   coordinatesKey: string,
   confirmedForPubkey?: string,
+  requireSettled = true,
 ): Model<ResolvedRepo[]> {
   return (store) => {
     let coordinates: string[] = [];
@@ -60,20 +67,30 @@ export function RepositorySelectionModel(
     });
     if (pointers.length === 0) return of([]);
 
-    return combineLatest(
-      pointers.map(
-        ({ pubkey, identifier }) =>
-          store.model(
-            SettledRepositoryModel,
-            pubkey,
-            identifier,
-          ) as unknown as Observable<SettledRepositorySnapshot>,
-      ),
-    ).pipe(
-      map((snapshots) => {
+    const repositories = pointers.map(({ pubkey, identifier }) => {
+      if (!requireSettled) {
+        return store.model(
+          RepositoryModel,
+          pubkey,
+          identifier,
+          deletionEvents$,
+        ) as unknown as Observable<ResolvedRepo | undefined>;
+      }
+      return (
+        store.model(
+          SettledRepositoryModel,
+          pubkey,
+          identifier,
+        ) as unknown as Observable<SettledRepositorySnapshot>
+      ).pipe(
+        map((snapshot) => (snapshot.settled ? snapshot.repository : undefined)),
+      );
+    });
+
+    return combineLatest(repositories).pipe(
+      map((repositories) => {
         const byComponent = new Map<string, ResolvedRepo>();
-        for (const snapshot of snapshots) {
-          const repository = snapshot.settled ? snapshot.repository : undefined;
+        for (const repository of repositories) {
           if (
             !repository ||
             (confirmedForPubkey &&
