@@ -35,8 +35,8 @@ const repoFilter: Filter[] = [{ kinds: [REPO_KIND] }];
  * debounceTime(150) batches bulk-fetch insertion. Each coordinate then flows
  * through RepositorySelectionModel, which resolves the current recursive
  * graph and collapses references to the same component. Presentation callers
- * can opt into progressive snapshots; trust-sensitive callers wait for the
- * settled graph by default.
+ * can opt into progressive snapshots; other callers wait for the bounded
+ * stabilized graph by default.
  */
 export function RepositoryListModel(
   forPubkey?: string,

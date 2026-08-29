@@ -6,15 +6,17 @@
 
 - Enable conservative one-at-a-time repository membership changes only after complete relay, history, network Git-object, and relay-publication verification; pre-stabilization acceptance delivery jobs remain quarantined.
 - Make reciprocal NIP-34 membership the repository authority boundary, add indexed `M`/`m`/`o` role and `defer` resolution, separate discovery from confirmed maintainer/member coordinates, retire legacy complete-roster browser writes, and preserve membership tags through metadata edits.
-- Resolve repository leads from the selected coordinate's signed `M` pointer path or legacy vote result, refresh the complete current announcement closure before redirecting, preserve the full URL, and leave unresolved or tied routes unchanged.
+- Resolve repository leads from the selected coordinate's signed `M` pointer path or legacy vote result, apply redirects only after a bounded current-announcement refresh, preserve the full URL, and leave unresolved or tied routes unchanged.
 - Remount account-authored repository settings when the active account changes so unsaved metadata cannot cross signer scopes.
 - Match ngit's duplicate active role-target handling while retaining a repository-health warning for malformed announcements.
-- Resolve repository discovery through a deterministic reciprocal-component index and exact settled graph refreshes, so browse, search, profile, pinned, followed, starred, and NIP-19 results show one card per active repository regardless of relay arrival order, keep same-identifier invitations separate, and match ngit's confirmed-member metadata, infrastructure, and privacy merging.
+- Resolve repository discovery through a deterministic reciprocal-component index, progressively group browse, search, profile, pinned, followed, and starred cards without per-coordinate safety requests, keep same-identifier invitations separate, and match ngit's confirmed-member metadata, infrastructure, and privacy merging.
 - Resolve replicated role history for collaboration events at their publication time, retain historical authorization after ordinary exits, require a new acceptance interval after reinvitation, fail dead coordinates closed, and identify unsupported same-coordinate restarts.
 - Support maintainer add, fresh invitation acceptance, direct relationship removal, maintainer leave, and moderator self-leave as exact one-at-a-time operations; signed replacements are durably queued, require a designated relay acknowledgement and exact refetch before success, and fail closed with named errors for unsupported component, lead, history, identity, state, and concurrency cases.
 
 ### Fixes
 
+- Keep cold repository discovery on structured loading states until both the base component list and the landing page's GRASP subset are observable, while bounding genuine empty results and labelling incomplete relay views honestly.
+- Bound direct repository graph refreshes on failed relays, stabilize deletion-aware repository-model cache identity, preserve observed coordinates in progressive discovery links, and fast-path unambiguous single-coordinate item routes.
 - Finish repository search component settling when unavailable graph relays reach a terminal error, so successful results no longer remain behind loading placeholders.
 - Recognize open stacked pull requests before warning about an incorrect merge base, wait for the parent to land before enabling merge actions, and keep inferred stack titles current after authorized renames.
 - Keep unavailable repository code pages settled on their error state instead of repeatedly flashing loading placeholders and polling Git servers for stale Nostr state.
@@ -39,7 +41,7 @@
 - Load direct links to historical commits reliably across initial Git discovery races, while rejecting malformed commit IDs before contacting a server.
 - Exclude legacy repository mentions from issue and pull request attribution so work filed elsewhere no longer appears in mentioned repositories.
 - Resolve repository searches through ranked, validated user profiles across multiple NIP-50 relays.
-- Route repository discovery, search results, notifications, and item permalinks through the lead maintainer so multi-maintainer repositories open at their canonical paths.
+- Preserve repository discovery, search, notification, and item coordinates until the destination route can apply its guarded lead redirect.
 - Start release discovery from repository and Zapstore relays without waiting for publisher outbox discovery to finish.
 
 ### Features

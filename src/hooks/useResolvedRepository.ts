@@ -69,7 +69,7 @@ export interface ResolvedRepositoryResult {
   /** Search state for the repo announcement — undefined if the event was
    *  already in the store (no search needed). */
   repoSearch: EventSearchState | undefined;
-  /** True once the exact current announcement-author/relay closure has been refreshed. */
+  /** True once the bounded announcement-author/relay refresh has stabilized. */
   announcementsSettled: boolean;
 }
 
@@ -473,8 +473,8 @@ export function useResolvedRepository(
   ]);
 
   // A cached RepositoryModel snapshot is useful for immediate rendering but
-  // cannot safely drive canonical routing until its complete current closure
-  // has been refreshed. Query every discovered announcement author across all
+  // does not drive canonical routing until the bounded current-closure refresh
+  // has stabilized. Query every discovered announcement author across all
   // currently known discovery sources. The state carries its closure key so a
   // synchronous render after authors or relays change cannot reuse a stale
   // `settled: true` value from the previous observable.
@@ -557,7 +557,7 @@ export function useResolvedRepository(
         switchMap(() => {
           // Mailbox subscriptions above update this shared group before their
           // loaders complete. Read it at request time so a freshly discovered
-          // author relay participates in the same settled snapshot.
+          // author relay participates in the same stabilized snapshot.
           const refreshedRelayUrls = [
             ...new Set([
               ...announcementRelayUrls,

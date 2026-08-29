@@ -41,9 +41,15 @@ function addRelay(relays: Set<string>, value: string | undefined): void {
 }
 
 /**
- * Resolve one coordinate only after its current recursive announcement graph
- * has completed an exact refresh. A changed announcement, discovered author,
- * or configured relay invalidates the previous settled snapshot.
+ * Resolve one coordinate after a bounded refresh of its current recursive
+ * announcement graph. A changed announcement, discovered author, or
+ * configured relay invalidates the previous stabilized snapshot.
+ *
+ * `settled` means the aggregate relay window ended; it does not prove that
+ * every relay returned an actual EOSE. Mutation safety uses a stricter
+ * complete-relay snapshot. The follow-up settlement contract must expose
+ * complete versus degraded results before this model can provide fail-closed
+ * route or trust proof.
  */
 export function SettledRepositoryModel(
   selectedMaintainer: string,

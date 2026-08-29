@@ -39,9 +39,10 @@ export function repositoryCoordinateFilters(
  * Resolve explicit coordinates in input order from the current EventStore
  * snapshot and collapse references that belong to the same component.
  *
- * Trust-sensitive callers use settled snapshots by default. Presentation
- * callers can opt into progressive updates as missing linked announcements
- * arrive; those snapshots must not drive routing or authority decisions.
+ * Callers that need bounded graph stabilization use settled snapshots by
+ * default. Presentation callers can opt into progressive updates as missing
+ * linked announcements arrive; those snapshots must not drive routing or
+ * authority decisions.
  */
 export function RepositorySelectionModel(
   coordinatesKey: string,

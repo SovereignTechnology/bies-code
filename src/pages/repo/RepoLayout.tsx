@@ -615,8 +615,8 @@ function RepoLayoutResolved({
     [cloneUrls.join(","), basePath],
   );
 
-  // Route only after the exact current announcement closure has refreshed.
-  // Keeping this after every hook makes closure changes safe across renders.
+  // Route only after the bounded current announcement refresh has stabilized.
+  // Keeping this after every hook invalidates stale decisions across renders.
   const leadRedirectPath = repo
     ? getRepositoryLeadRedirectPath({
         selectedPubkey: pubkey,
