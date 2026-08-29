@@ -18,7 +18,7 @@ import {
   startWith,
   tap,
 } from "rxjs";
-import { eventStore, pool } from "../services/nostr";
+import { deletionEvents$, eventStore, pool } from "../services/nostr";
 import {
   REPO_KIND,
   ISSUE_KIND,
@@ -26,6 +26,7 @@ import {
   PR_KIND,
   PR_UPDATE_KIND,
   getRootRepositoryCoordinates,
+  type ResolvedRepo,
 } from "../lib/nip34";
 import {
   eventIdToNevent,
@@ -68,6 +69,7 @@ import {
   SettledRepositoryModel,
   type SettledRepositorySnapshot,
 } from "@/models/SettledRepositoryModel";
+import { RepositoryModel } from "@/models/RepositoryModel";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -245,6 +247,27 @@ function RepoCoordsRedirect({
       const parsed = parseRepoCoord(coordinate);
       return parsed ? [{ coordinate, ...parsed }] : [];
     });
+    // A single repository pointer is unambiguous. Once the exact-coordinate
+    // lookup above finishes, route through its current deletion-aware model
+    // without adding two component-settlement network stages. Multi-pointer
+    // items still need component comparison before choosing a destination.
+    if (pointers.length === 1) {
+      const pointer = pointers[0];
+      return (
+        eventStore.model(
+          RepositoryModel,
+          pointer.pubkey,
+          pointer.dTag,
+          deletionEvents$,
+        ) as unknown as Observable<ResolvedRepo | undefined>
+      ).pipe(
+        map((repository) => ({
+          settled: true,
+          coordinate: repository ? pointer.coordinate : undefined,
+        })),
+      );
+    }
+
     return combineLatest(
       pointers.map(
         ({ pubkey, dTag }) =>
