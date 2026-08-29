@@ -7,6 +7,7 @@ import {
   endWith,
   ignoreElements,
   switchMap,
+  takeWhile,
   tap,
 } from "rxjs/operators";
 
@@ -112,6 +113,10 @@ export function SettledRepositoryModel(
                     store.add(response);
                   }
                 }),
+                // Transport failures are terminal for this snapshot and are
+                // included in resilientRequest's aggregate EOSE. Stop there
+                // instead of waiting indefinitely for dormant reconnects.
+                takeWhile((response) => response !== "EOSE"),
                 ignoreElements(),
                 endWith(null),
                 catchError(() => of(null)),
@@ -150,6 +155,7 @@ export function SettledRepositoryModel(
                 tap((response: NostrEvent | "EOSE") => {
                   if (response !== "EOSE") store.add(response);
                 }),
+                takeWhile((response) => response !== "EOSE"),
                 ignoreElements(),
                 endWith(null),
                 catchError(() => of(null)),

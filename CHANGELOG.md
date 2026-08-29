@@ -14,6 +14,7 @@
 
 ### Fixes
 
+- Finish repository search component settling when unavailable graph relays reach a terminal error, so successful results no longer remain behind loading placeholders.
 - Recognize open stacked pull requests before warning about an incorrect merge base, wait for the parent to land before enabling merge actions, and keep inferred stack titles current after authorized renames.
 - Keep unavailable repository code pages settled on their error state instead of repeatedly flashing loading placeholders and polling Git servers for stale Nostr state.
 - Reconcile issue and pull-request descendants across repository and mailbox relays, and persist verified deletion tombstones before cache hydration so split-relay deletions remain authoritative after reloads.
