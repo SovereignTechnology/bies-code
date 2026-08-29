@@ -457,6 +457,7 @@ export default function PRPage() {
     gitPoolState,
     repoState,
     prs,
+    repo?.roleHistory,
   );
   const inferredParent = prId ? inferredParents?.get(prId) : undefined;
   const openStackParent = getOpenInferredPRParent(inferredParent, prs);

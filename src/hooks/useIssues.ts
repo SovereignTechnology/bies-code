@@ -69,10 +69,10 @@ export function useIssues(
   // singleton loader instances.
   use$(() => {
     if (!coords || coords.length === 0 || !repoRelayGroup) return undefined;
-    return nip34RepoLoader(coords, repoRelayGroup).pipe(
+    return nip34RepoLoader(coords, repoRelayGroup, roleHistory).pipe(
       catchError(() => EMPTY),
     );
-  }, [cacheKey, repoRelayGroup]);
+  }, [cacheKey, repoRelayGroup, roleHistory]);
 
   // Subscribe to the model — cached by the store, shared across components.
   return use$(() => {

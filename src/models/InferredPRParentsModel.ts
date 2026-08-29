@@ -3,7 +3,11 @@ import { map, switchMap } from "rxjs/operators";
 import type { Model } from "applesauce-core/event-store";
 import type { Filter } from "applesauce-core/helpers";
 import type { NostrEvent } from "nostr-tools";
-import { PR_KIND, PR_UPDATE_KIND } from "@/lib/nip34";
+import {
+  PR_KIND,
+  PR_UPDATE_KIND,
+  type RepositoryRoleHistory,
+} from "@/lib/nip34";
 import {
   buildStackCandidateFilter,
   resolveInferredPRParents,
@@ -12,6 +16,7 @@ import {
 
 export function InferredPRParentsModel(
   coordsCacheKey: string,
+  roleHistory?: RepositoryRoleHistory,
 ): Model<Map<string, InferredPRParentRelation>> {
   return (store) => {
     const coords = coordsCacheKey ? coordsCacheKey.split(",") : [];
@@ -32,7 +37,9 @@ export function InferredPRParentsModel(
           .filter((value): value is string => Boolean(value));
         const filter = buildStackCandidateFilter(coords, mergeBases);
         if (!filter)
-          return of(resolveInferredPRParents(roots, updates, [], coords));
+          return of(
+            resolveInferredPRParents(roots, updates, [], coords, roleHistory),
+          );
         return store
           .timeline([filter])
           .pipe(
@@ -42,6 +49,7 @@ export function InferredPRParentsModel(
                 updates,
                 events as NostrEvent[],
                 coords,
+                roleHistory,
               ),
             ),
           );

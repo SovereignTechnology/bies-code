@@ -6,6 +6,7 @@ import { useEventStore } from "@/hooks/useEventStore";
 import {
   coordsCacheKey,
   hasAcceptedRepositoryReference,
+  isItemEventAuthorisedAt,
   STATUS_RESOLVED,
   type ResolvedPRLite,
   type ResolvedRepo,
@@ -75,6 +76,7 @@ export function useMergedPRCommitMatch(
       candidateEvents,
       coords,
       validCommitId,
+      repo.roleHistory,
     )
       .map((root) => byRootId.get(root.id))
       .filter(
@@ -102,10 +104,13 @@ export function useMergedPRCommitMatch(
     if (!parentStatusEvents) return undefined;
 
     const mergedAt = parentStatusEvents
-      .filter(
-        (ev) =>
-          ev.pubkey === parent.pubkey ||
-          repo.confirmedMembers.includes(ev.pubkey),
+      .filter((ev) =>
+        isItemEventAuthorisedAt(
+          ev,
+          parent.pubkey,
+          new Set(repo.confirmedMembers),
+          repo.roleHistory,
+        ),
       )
       .reduce((max, ev) => Math.max(max, ev.created_at), 0);
     if (mergedAt === 0 || currentCreatedAt >= mergedAt) return null;

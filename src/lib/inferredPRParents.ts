@@ -5,7 +5,8 @@ import {
   PR_UPDATE_KIND,
   compareNip01Chronologically,
   getRootRepositoryCoordinates,
-  isItemEventAuthorised,
+  isItemEventAuthorisedAt,
+  type RepositoryRoleHistory,
   type ResolvedPRLite,
 } from "@/lib/nip34";
 
@@ -210,6 +211,7 @@ function getPRRootsByAdvertisedCommit(
   roots: NostrEvent[],
   candidates: NostrEvent[],
   repoCoordinates: string[],
+  roleHistory?: RepositoryRoleHistory,
 ): Map<string, Map<string, NostrEvent>> {
   const coordinates = new Set(repoCoordinates);
   const repoRoots = roots.filter(
@@ -236,7 +238,7 @@ function getPRRootsByAdvertisedCommit(
     if (!root) continue;
     if (
       event.kind === PR_UPDATE_KIND &&
-      !isItemEventAuthorised(event.pubkey, root.pubkey, maintainers)
+      !isItemEventAuthorisedAt(event, root.pubkey, maintainers, roleHistory)
     )
       continue;
 
@@ -254,9 +256,15 @@ export function getPRRootsAdvertisingCommit(
   candidates: NostrEvent[],
   repoCoordinates: string[],
   commit: string,
+  roleHistory?: RepositoryRoleHistory,
 ): NostrEvent[] {
   return [
-    ...(getPRRootsByAdvertisedCommit(roots, candidates, repoCoordinates)
+    ...(getPRRootsByAdvertisedCommit(
+      roots,
+      candidates,
+      repoCoordinates,
+      roleHistory,
+    )
       .get(commit)
       ?.values() ?? []),
   ].sort((a, b) => a.id.localeCompare(b.id));
@@ -267,6 +275,7 @@ export function getEffectivePRMergeBases(
   roots: NostrEvent[],
   updates: NostrEvent[],
   repoCoordinates: string[],
+  roleHistory?: RepositoryRoleHistory,
 ): Map<string, string> {
   const coordinates = new Set(repoCoordinates);
   const repoRoots = roots.filter(
@@ -285,7 +294,7 @@ export function getEffectivePRMergeBases(
       update.kind !== PR_UPDATE_KIND ||
       !root ||
       !belongsToRepository(update, coordinates) ||
-      !isItemEventAuthorised(update.pubkey, root.pubkey, maintainers)
+      !isItemEventAuthorisedAt(update, root.pubkey, maintainers, roleHistory)
     )
       continue;
     const previous = latestUpdates.get(root.id);
@@ -311,6 +320,7 @@ export function resolveInferredPRParents(
   updates: NostrEvent[],
   candidates: NostrEvent[],
   repoCoordinates: string[],
+  roleHistory?: RepositoryRoleHistory,
 ): Map<string, InferredPRParentRelation> {
   const coordinates = new Set(repoCoordinates);
   const repoRoots = roots.filter(
@@ -328,7 +338,7 @@ export function resolveInferredPRParents(
       event.kind === PR_UPDATE_KIND &&
       root !== undefined &&
       belongsToRepository(event, coordinates) &&
-      isItemEventAuthorised(event.pubkey, root.pubkey, maintainers)
+      isItemEventAuthorisedAt(event, root.pubkey, maintainers, roleHistory)
     );
   });
 
@@ -336,12 +346,14 @@ export function resolveInferredPRParents(
     repoRoots,
     authorisedUpdates,
     repoCoordinates,
+    roleHistory,
   );
 
   const candidateRootsByCommit = getPRRootsByAdvertisedCommit(
     repoRoots,
     candidates,
     repoCoordinates,
+    roleHistory,
   );
 
   const result = new Map<string, InferredPRParentRelation>();

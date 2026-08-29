@@ -2535,8 +2535,6 @@ function resolvedRepoFromMembership(
       : [];
   });
   const aggressiveSelfLedRestart =
-    membership.confirmedMaintainers.length === 1 &&
-    membership.confirmedMaintainers[0] === selectedMaintainer &&
     selectedSelfRoles.some(
       (record) =>
         record.role === "M" &&

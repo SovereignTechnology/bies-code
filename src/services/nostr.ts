@@ -55,6 +55,7 @@ import {
   parseRepoCoordinate,
   isRepositoryRootItem,
   resolveChain,
+  type RepositoryRoleHistory,
 } from "@/lib/nip34";
 import { CI_EVENT_KINDS, CI_RUN_KIND } from "@/lib/ci";
 import { SOFTWARE_APPLICATION_KIND } from "@/casts/Software";
@@ -967,6 +968,7 @@ export function nip34SupplementalRelayLoader(
 export function nip34RepoLoader(
   coords: string[],
   relayGroup: RelayGroup,
+  roleHistory?: RepositoryRoleHistory,
 ): Observable<NostrEvent> {
   const resolveAuthorInbox = relayCurationMode.getValue() === "outbox";
   const coordinateSet = new Set(coords);
@@ -1118,6 +1120,7 @@ export function nip34RepoLoader(
                 repositoryEvents.filter((event) => event.kind === 1618),
                 repositoryEvents.filter((event) => event.kind === 1619),
                 coords,
+                roleHistory,
               ).values(),
             ),
           ].sort();

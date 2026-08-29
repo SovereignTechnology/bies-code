@@ -563,8 +563,6 @@ function selfAcceptanceCoversAssignment(
   candidate: ParsedAnnouncement | undefined,
   edge: {
     role: RepositoryRole;
-    activeSince?: number;
-    requiresFreshAcceptance: boolean;
   },
 ): boolean {
   if (!candidate) return false;
@@ -578,13 +576,10 @@ function selfAcceptanceCoversAssignment(
       acceptedRoles.has(record.role) &&
       record.active,
   );
-  if (!edge.requiresFreshAcceptance) {
-    return selfRecords.length > 0 || !candidate.authorDeclinesMaintainership;
-  }
-  return selfRecords.some((record) => {
-    const start = record.boundaries[record.boundaries.length - 1];
-    return typeof start === "number" && start >= (edge.activeSince ?? 0);
-  });
+  return (
+    selfRecords.length > 0 ||
+    (edge.role !== "o" && !candidate.authorDeclinesMaintainership)
+  );
 }
 
 export function resolveRepositoryMembership(
@@ -916,10 +911,11 @@ function currentGraphDistances(
   const distances = new Map<string, number>([
     [membership.selectedMaintainer, 0],
   ]);
+  const confirmed = new Set(membership.confirmedMembers);
   const edges = [
     ...membership.maintainerEdges.map(({ from, to }) => [from, to] as const),
     ...membership.moderatorEdges.map(({ from, to }) => [from, to] as const),
-  ];
+  ].filter(([from, to]) => confirmed.has(from) && confirmed.has(to));
   const queue = [membership.selectedMaintainer];
   while (queue.length > 0) {
     const author = queue.shift()!;
@@ -1087,7 +1083,6 @@ function authorHasSelfRoleAt(
 
 function historicalSelfAcceptanceCoversAssignment(
   candidateHistory: RepositoryAuthorRoleHistory | undefined,
-  assignment: ResolvedRepositoryRoleRecord,
   createdAt: number,
   roles: ReadonlySet<RepositoryRole>,
 ): boolean {
@@ -1101,15 +1096,7 @@ function historicalSelfAcceptanceCoversAssignment(
       ) &&
       repositoryRoleStateAt(record, createdAt) === "active",
   );
-  if (assignment.boundaries.length < 3) return selfRecords.length > 0;
-  const assignmentStart = assignment.boundaries.at(-1);
-  if (typeof assignmentStart !== "number") return false;
-  return selfRecords.some((record) => {
-    const acceptanceStart = record.boundaries.at(-1);
-    return (
-      typeof acceptanceStart === "number" && acceptanceStart >= assignmentStart
-    );
-  });
+  return selfRecords.length > 0;
 }
 
 const MAINTAINER_ROLES = new Set<RepositoryRole>(["M", "m"]);
@@ -1183,13 +1170,10 @@ function historicalMaintainersFromRoot(
       );
       if (assignments.length === 0) continue;
       const candidateHistory = byAuthor.get(candidate);
-      const acceptsAssignment = assignments.some((assignment) =>
-        historicalSelfAcceptanceCoversAssignment(
-          candidateHistory,
-          assignment,
-          createdAt,
-          MAINTAINER_ROLES,
-        ),
+      const acceptsAssignment = historicalSelfAcceptanceCoversAssignment(
+        candidateHistory,
+        createdAt,
+        MAINTAINER_ROLES,
       );
       const acknowledgesMember = activeAuthorTargets(
         candidateHistory,
@@ -1256,13 +1240,10 @@ export function historicalRepositoryMembersAt(
     );
     if (assignments.length === 0) continue;
     const candidateHistory = byAuthor.get(candidate);
-    const acceptsAssignment = assignments.some((assignment) =>
-      historicalSelfAcceptanceCoversAssignment(
-        candidateHistory,
-        assignment,
-        createdAt,
-        MODERATOR_ROLE,
-      ),
+    const acceptsAssignment = historicalSelfAcceptanceCoversAssignment(
+      candidateHistory,
+      createdAt,
+      MODERATOR_ROLE,
     );
     const acknowledgesMember = activeAuthorTargets(
       candidateHistory,

@@ -8,6 +8,7 @@ import {
   getPRTargetBranch,
   PR_KIND,
   PR_UPDATE_KIND,
+  type RepositoryRoleHistory,
   type ResolvedPRLite,
 } from "@/lib/nip34";
 import {
@@ -58,6 +59,7 @@ export function useInferredPRParents(
   gitPoolState: PoolState,
   repoState: RepositoryState | null | undefined,
   prs: ResolvedPRLite[] | undefined,
+  roleHistory?: RepositoryRoleHistory,
 ) {
   const store = useEventStore();
   const key = useMemo(
@@ -67,10 +69,12 @@ export function useInferredPRParents(
   const coords = useMemo(() => (key ? key.split(",") : []), [key]);
   const inferredParents = use$(() => {
     if (!key) return undefined;
-    return store.model(InferredPRParentsModel, key) as unknown as Observable<
-      Map<string, InferredPRParentRelation>
-    >;
-  }, [key, store]);
+    return store.model(
+      InferredPRParentsModel,
+      key,
+      roleHistory,
+    ) as unknown as Observable<Map<string, InferredPRParentRelation>>;
+  }, [key, roleHistory, store]);
 
   // Store read only: RepoLayout's NIP-34 loaders already fetch these events.
   // We need the effective child merge base and declared target branch because
@@ -91,7 +95,12 @@ export function useInferredPRParents(
     const updates = topologyEvents.filter(
       (event) => event.kind === PR_UPDATE_KIND,
     );
-    const mergeBases = getEffectivePRMergeBases(roots, updates, coords);
+    const mergeBases = getEffectivePRMergeBases(
+      roots,
+      updates,
+      coords,
+      roleHistory,
+    );
     const rootsById = new Map(roots.map((event) => [event.id, event]));
 
     return [...inferredParents.keys()].flatMap((childId) => {
@@ -106,7 +115,7 @@ export function useInferredPRParents(
         },
       ];
     });
-  }, [coords, inferredParents, topologyEvents]);
+  }, [coords, inferredParents, roleHistory, topologyEvents]);
 
   const checksKey = checks
     .map(({ childId, mergeBase, targetBranch }) =>

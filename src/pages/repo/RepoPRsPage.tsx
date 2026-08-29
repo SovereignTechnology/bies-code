@@ -77,6 +77,7 @@ export default function RepoPRsPage() {
     gitPoolState,
     repoState,
     prs,
+    repo?.roleHistory,
   );
   const ciRuns = useRepoCI(
     repo?.confirmedMaintainerCoordinates,
