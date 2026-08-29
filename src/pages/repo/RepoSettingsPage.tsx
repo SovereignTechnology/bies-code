@@ -1589,14 +1589,23 @@ function RepoSettingsForm({
               ) : null}
             </div>
 
-            <Alert className="border-sky-500/40 bg-sky-500/5">
+            <Alert
+              className={
+                membershipMutation.enabled
+                  ? "border-sky-500/40 bg-sky-500/5"
+                  : "border-amber-500/40 bg-amber-500/5"
+              }
+            >
               <Users className="h-4 w-4 text-sky-600 dark:text-sky-400" />
-              <AlertTitle>One relationship at a time</AlertTitle>
+              <AlertTitle>
+                {membershipMutation.enabled
+                  ? "One relationship at a time"
+                  : "Membership changes temporarily unavailable"}
+              </AlertTitle>
               <AlertDescription className="text-muted-foreground">
-                Each operation refreshes the affected announcements and state,
-                simulates the exact graph effect, rechecks predecessors before
-                signing, and verifies the observed replacement. Unsupported
-                topology, history, identity, and state cases publish nothing.
+                {membershipMutation.enabled
+                  ? "Each operation refreshes the affected announcements and state, simulates the exact graph effect, rechecks predecessors before signing, and verifies the observed replacement. Unsupported topology, history, identity, and state cases publish nothing."
+                  : "The browser writer is paused while complete relay, history, Git-object, and publication checks are upgraded. Repository metadata remains editable."}
               </AlertDescription>
             </Alert>
 
@@ -1623,12 +1632,16 @@ function RepoSettingsForm({
                       }}
                       placeholder="npub1… or hex pubkey"
                       className="font-mono"
-                      disabled={!!membershipMutation.pendingIntent}
+                      disabled={
+                        !membershipMutation.enabled ||
+                        !!membershipMutation.pendingIntent
+                      }
                     />
                     <Button
                       type="button"
                       onClick={handleSafeAddMaintainer}
                       disabled={
+                        !membershipMutation.enabled ||
                         !!membershipMutation.pendingIntent ||
                         !announcementsSettled ||
                         !stateSettled
@@ -1683,7 +1696,10 @@ function RepoSettingsForm({
                             type="button"
                             variant="outline"
                             size="sm"
-                            disabled={!!membershipMutation.pendingIntent}
+                            disabled={
+                              !membershipMutation.enabled ||
+                              !!membershipMutation.pendingIntent
+                            }
                             onClick={() =>
                               void runMembershipIntent({
                                 type: "remove",
@@ -1718,7 +1734,10 @@ function RepoSettingsForm({
                   <Button
                     type="button"
                     variant="outline"
-                    disabled={!!membershipMutation.pendingIntent}
+                    disabled={
+                      !membershipMutation.enabled ||
+                      !!membershipMutation.pendingIntent
+                    }
                     onClick={() => void runMembershipIntent({ type: "leave" })}
                   >
                     {membershipMutation.pendingIntent?.type === "leave" && (

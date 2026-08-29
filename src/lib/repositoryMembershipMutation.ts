@@ -15,6 +15,7 @@ import {
 import { buildMaintainerAcceptanceTemplate } from "@/lib/repositoryInvitation";
 
 export type RepositoryMembershipMutationRefusalCode =
+  | "membership_mutations_disabled"
   | "unsupported_component_join"
   | "unsupported_lead_transition"
   | "membership_side_effect"
@@ -25,6 +26,12 @@ export type RepositoryMembershipMutationRefusalCode =
   | "incomplete_relay_view"
   | "concurrent_change"
   | "unavailable_git_object";
+
+/**
+ * Membership writers stay behind this safety rail until the complete relay,
+ * history, Git-object, and publication gates have landed together.
+ */
+export const REPOSITORY_MEMBERSHIP_MUTATIONS_ENABLED = false;
 
 export type RepositoryMembershipMutationIntent =
   | { type: "add"; targetPubkey: string }

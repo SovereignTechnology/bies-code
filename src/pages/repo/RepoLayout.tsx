@@ -938,13 +938,14 @@ function MaintainerInvitationSafetyBanner({
   relayUrls: string[];
   repoState?: RepositoryState | null;
 }) {
-  const { mutate, pendingIntent, failure } = useRepositoryMembershipMutation({
-    repo,
-    announcementsSettled,
-    stateSettled,
-    relayUrls,
-    repoState,
-  });
+  const { enabled, mutate, pendingIntent, failure } =
+    useRepositoryMembershipMutation({
+      repo,
+      announcementsSettled,
+      stateSettled,
+      relayUrls,
+      repoState,
+    });
   const [accepted, setAccepted] = useState(false);
   if (!repo.invitedMaintainers.includes(accountPubkey)) return null;
 
@@ -984,25 +985,32 @@ function MaintainerInvitationSafetyBanner({
             </div>
           </div>
           <div className="max-w-md space-y-2">
-            <Button
-              type="button"
-              disabled={
-                !!pendingIntent ||
-                accepted ||
-                !announcementsSettled ||
-                !stateSettled
-              }
-              onClick={() => {
-                void mutate({ type: "accept" })
-                  .then(() => setAccepted(true))
-                  .catch(() => undefined);
-              }}
-            >
-              {pendingIntent?.type === "accept" && (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              )}
-              {accepted ? "Acceptance published" : "Accept invitation"}
-            </Button>
+            {enabled ? (
+              <Button
+                type="button"
+                disabled={
+                  !!pendingIntent ||
+                  accepted ||
+                  !announcementsSettled ||
+                  !stateSettled
+                }
+                onClick={() => {
+                  void mutate({ type: "accept" })
+                    .then(() => setAccepted(true))
+                    .catch(() => undefined);
+                }}
+              >
+                {pendingIntent?.type === "accept" && (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                )}
+                {accepted ? "Acceptance published" : "Accept invitation"}
+              </Button>
+            ) : (
+              <p className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-sm leading-relaxed text-muted-foreground">
+                Browser membership changes are temporarily unavailable while
+                their safety checks are upgraded.
+              </p>
+            )}
             {failure && (
               <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
                 <span className="font-mono text-amber-700 dark:text-amber-300">

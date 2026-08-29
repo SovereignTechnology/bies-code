@@ -4,6 +4,7 @@
 
 ### Changed
 
+- Temporarily pause browser repository-membership writers and quarantine pre-stabilization acceptance delivery jobs while the complete relay, history, Git-object, and publication safety gates are upgraded.
 - Make reciprocal NIP-34 membership the repository authority boundary, add indexed `M`/`m`/`o` role and `defer` resolution, separate discovery from confirmed maintainer/member coordinates, and temporarily disable legacy browser membership writes while preserving membership tags through metadata edits.
 - Resolve repository leads from the selected coordinate's signed `M` pointer path or legacy vote result, refresh the complete current announcement closure before redirecting, preserve the full URL, and leave unresolved or tied routes unchanged.
 - Remount account-authored repository settings when the active account changes so unsaved metadata cannot cross signer scopes.

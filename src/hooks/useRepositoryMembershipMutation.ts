@@ -19,6 +19,7 @@ import {
 import { getOrCreatePool } from "@/lib/git-grasp-pool";
 import {
   prepareRepositoryMembershipMutation,
+  REPOSITORY_MEMBERSHIP_MUTATIONS_ENABLED,
   repositoryMembershipSnapshotIds,
   RepositoryMembershipMutationRefusal,
   verifyRepositoryMembershipMutationResult,
@@ -268,6 +269,14 @@ export function useRepositoryMembershipMutation({
 
   const mutate = useCallback(
     async (intent: RepositoryMembershipMutationIntent): Promise<NostrEvent> => {
+      if (!REPOSITORY_MEMBERSHIP_MUTATIONS_ENABLED) {
+        const refusal = new RepositoryMembershipMutationRefusal(
+          "membership_mutations_disabled",
+          "Repository membership changes are temporarily disabled while their safety checks are upgraded.",
+        );
+        setFailure({ code: refusal.code, message: refusal.message });
+        throw refusal;
+      }
       if (!account) {
         throw new RepositoryMembershipMutationRefusal(
           "membership_side_effect",
@@ -434,6 +443,7 @@ export function useRepositoryMembershipMutation({
   );
 
   return {
+    enabled: REPOSITORY_MEMBERSHIP_MUTATIONS_ENABLED,
     mutate,
     pendingIntent,
     failure,

@@ -42,9 +42,12 @@ function MaintainerAcceptanceJobMonitor({
 }: {
   job: MaintainerAcceptanceJob;
 }) {
+  const active = job.phase !== "quarantined";
   const relayKey = job.relayUrls.join(",");
   const shouldPollGit =
-    job.deliveredRelayUrls.length > 0 && !isMaintainerAcceptanceJobExpired(job);
+    active &&
+    job.deliveredRelayUrls.length > 0 &&
+    !isMaintainerAcceptanceJobExpired(job);
   const { poolState, pool: gitPool } = useGitPool(
     shouldPollGit ? job.cloneUrls : [],
     {
@@ -61,7 +64,7 @@ function MaintainerAcceptanceJobMonitor({
   }, [gitPool, shouldPollGit]);
 
   use$(() => {
-    if (job.relayUrls.length === 0) return undefined;
+    if (!active || job.relayUrls.length === 0) return undefined;
     const filter: Filter = {
       kinds: [job.announcement.kind],
       authors: [job.accountPubkey],
@@ -73,7 +76,14 @@ function MaintainerAcceptanceJobMonitor({
       tap((event) => recordMaintainerAcceptanceBroadcast(job.key, event)),
       mapEventsToStore(eventStore),
     );
-  }, [job.accountPubkey, job.announcement.id, job.dTag, job.key, relayKey]);
+  }, [
+    active,
+    job.accountPubkey,
+    job.announcement.id,
+    job.dTag,
+    job.key,
+    relayKey,
+  ]);
 
   useEffect(() => {
     const expiresAt = job.createdAt + MAINTAINER_ACCEPTANCE_JOB_MAX_AGE_MS;
@@ -90,6 +100,7 @@ function MaintainerAcceptanceJobMonitor({
   }, [job.createdAt, job.key]);
 
   useEffect(() => {
+    if (!active) return;
     const allDelivered = job.relayUrls.every((url) =>
       job.deliveredRelayUrls.includes(url),
     );
@@ -103,6 +114,7 @@ function MaintainerAcceptanceJobMonitor({
     return () => window.clearTimeout(timeout);
   }, [
     job.createdAt,
+    active,
     job.deliveredRelayUrls,
     job.key,
     job.nextDeliveryRetryAt,
@@ -120,14 +132,17 @@ function MaintainerAcceptanceJobMonitor({
   );
 
   useEffect(() => {
+    if (!active) return;
     for (const cloneUrl of newlySyncedCloneUrls) {
       recordMaintainerAcceptanceCloneSync(job.key, cloneUrl);
     }
-  }, [job.key, newlySyncedCloneUrls]);
+  }, [active, job.key, newlySyncedCloneUrls]);
 
   useEffect(() => {
+    if (!active) return;
     settleMaintainerAcceptanceJob(job.key);
   }, [
+    active,
     job.broadcastReceived,
     job.deliveredRelayUrls,
     job.key,

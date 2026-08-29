@@ -11,6 +11,7 @@ const DELIVERY_RETRY_INITIAL_MS = 5_000;
 const DELIVERY_RETRY_MAX_MS = 5 * 60 * 1000;
 
 export type MaintainerAcceptancePhase =
+  | "quarantined"
   | "publishing"
   | "delivery-error"
   | "syncing"
@@ -91,7 +92,8 @@ function isStoredJob(value: unknown): value is MaintainerAcceptanceJob {
     typeof candidate.relayErrors === "object" &&
     typeof candidate.deliveryAttempt === "number" &&
     typeof candidate.broadcastReceived === "boolean" &&
-    (candidate.phase === "publishing" ||
+    (candidate.phase === "quarantined" ||
+      candidate.phase === "publishing" ||
       candidate.phase === "delivery-error" ||
       candidate.phase === "syncing" ||
       candidate.phase === "synced") &&
@@ -119,17 +121,13 @@ function ensureHydrated(): void {
         syncedCloneUrls: Array.isArray(value.syncedCloneUrls)
           ? value.syncedCloneUrls
           : [],
-        phase: value.phase === "publishing" ? "delivery-error" : value.phase,
-        nextDeliveryRetryAt:
-          value.phase === "publishing" ? Date.now() : value.nextDeliveryRetryAt,
-        relayErrors:
-          value.phase === "publishing"
-            ? {
-                ...value.relayErrors,
-                interrupted:
-                  "Publishing was interrupted. Retry to finish delivering the invitation.",
-              }
-            : value.relayErrors,
+        phase: "quarantined",
+        nextDeliveryRetryAt: undefined,
+        relayErrors: {
+          ...value.relayErrors,
+          quarantined:
+            "Automatic delivery is paused until this signed announcement is revalidated against the stabilized membership model.",
+        },
       });
     }
     refreshSnapshot();
@@ -193,6 +191,7 @@ export function updateMaintainerAcceptanceJob(
 ): MaintainerAcceptanceJob | undefined {
   const current = getMaintainerAcceptanceJob(key);
   if (!current) return undefined;
+  if (current.phase === "quarantined") return current;
   const next = { ...current, ...update, updatedAt: Date.now() };
   jobs.set(key, next);
   emit();
@@ -273,6 +272,7 @@ export async function deliverMaintainerAcceptance(
 ): Promise<MaintainerAcceptanceJob | undefined> {
   const current = getMaintainerAcceptanceJob(key);
   if (!current) return undefined;
+  if (current.phase === "quarantined") return current;
 
   updateMaintainerAcceptanceJob(key, {
     phase:
