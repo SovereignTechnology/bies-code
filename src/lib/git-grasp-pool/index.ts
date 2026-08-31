@@ -13,6 +13,7 @@ export {
   peekPool,
   removePool,
   clearRegistry,
+  clearPrivateRegistry,
 } from "./registry";
 export type { GetPoolOptions } from "./registry";
 
@@ -58,7 +59,7 @@ export { selectCommitRange } from "./commit-range";
 export { CorsProxyManager, DEFAULT_CORS_PROXY_BASE } from "./cors-proxy";
 
 // --- Cache (for advanced consumers that need direct cache access) ---
-export { GitObjectCache } from "./cache";
+export { GitObjectCache, clearPrivateGitObjectCache } from "./cache";
 
 // --- Git HTTP (for advanced consumers) ---
 export {

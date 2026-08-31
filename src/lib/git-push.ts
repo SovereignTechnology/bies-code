@@ -73,6 +73,11 @@ export interface PushResult {
   rawResponse: string;
 }
 
+/** Resolve repository-root authorization headers for a Smart HTTP request. */
+export type GitHttpHeaderProvider = (
+  repoUrl: string,
+) => Promise<Record<string, string> | undefined>;
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -449,6 +454,13 @@ export function buildReceivePackRequest(
 // HTTP operations
 // ---------------------------------------------------------------------------
 
+function throwIfAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) return;
+  throw signal.reason instanceof Error
+    ? signal.reason
+    : new DOMException("Aborted", "AbortError");
+}
+
 /**
  * Discover refs from a git server's receive-pack endpoint.
  *
@@ -463,13 +475,18 @@ export function buildReceivePackRequest(
 export async function getReceivePackRefs(
   repoUrl: string,
   signal?: AbortSignal,
+  getHeaders?: GitHttpHeaderProvider,
 ): Promise<InfoRefsReceivePackResponse> {
+  throwIfAborted(signal);
   const url = `${repoUrl}/info/refs?service=git-receive-pack`;
+  const authorizationHeaders = await getHeaders?.(repoUrl);
+  throwIfAborted(signal);
 
   const response = await fetch(url, {
     method: "GET",
     headers: {
       Accept: "application/x-git-receive-pack-advertisement",
+      ...authorizationHeaders,
     },
     signal,
   });
@@ -493,6 +510,7 @@ export async function getReceivePackRefs(
   }
 
   const text = await response.text();
+  throwIfAborted(signal);
   const result = parseInfoRefsResponse(text);
 
   // Sanity check: an empty response likely means the server returned a
@@ -529,7 +547,9 @@ export async function pushToGitServer(
   refUpdates: RefUpdate[],
   packfile: Uint8Array,
   signal?: AbortSignal,
+  getHeaders?: GitHttpHeaderProvider,
 ): Promise<PushResult> {
+  throwIfAborted(signal);
   if (refUpdates.length === 0) {
     return {
       unpackOk: true,
@@ -539,22 +559,54 @@ export async function pushToGitServer(
   }
 
   // First discover server capabilities
-  const infoRefs = await getReceivePackRefs(repoUrl, signal);
+  const infoRefs = await getReceivePackRefs(repoUrl, signal, getHeaders);
+  throwIfAborted(signal);
+
+  // A previous receive-pack may have applied an update even when its response
+  // never reached the client. Treat an already-matching ref as an idempotent
+  // success, but leave every other update's expected old hash untouched so a
+  // retry can never overwrite a concurrent ref change.
+  const alreadyApplied = new Set(
+    refUpdates.filter((update) => {
+      const advertisedHash = infoRefs.refs[update.refName];
+      return (
+        advertisedHash === update.newHash ||
+        (update.newHash === ZERO_HASH && advertisedHash === undefined)
+      );
+    }),
+  );
+  const pendingRefUpdates = refUpdates.filter(
+    (update) => !alreadyApplied.has(update),
+  );
+
+  if (pendingRefUpdates.length === 0) {
+    return {
+      unpackOk: true,
+      refResults: refUpdates.map((update) => ({
+        refName: update.refName,
+        ok: true,
+      })),
+      rawResponse: "",
+    };
+  }
 
   // Build the request body
   const body = buildReceivePackRequest(
-    refUpdates,
+    pendingRefUpdates,
     packfile,
     infoRefs.capabilities,
   );
 
   // POST to git-receive-pack
   const url = `${repoUrl}/git-receive-pack`;
+  const authorizationHeaders = await getHeaders?.(repoUrl);
+  throwIfAborted(signal);
   const response = await fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/x-git-receive-pack-request",
       Accept: "application/x-git-receive-pack-result",
+      ...authorizationHeaders,
     },
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     body: body as any,
@@ -580,10 +632,26 @@ export async function pushToGitServer(
   }
 
   const responseText = await response.text();
+  throwIfAborted(signal);
 
   // If the server supports report-status, parse the response
   if (infoRefs.capabilities.includes("report-status")) {
-    return parseReportStatus(responseText);
+    const result = parseReportStatus(responseText);
+    const reportedByRef = new Map(
+      result.refResults.map((refResult) => [refResult.refName, refResult]),
+    );
+
+    return {
+      ...result,
+      refResults: refUpdates.flatMap((update): RefResult[] => {
+        if (alreadyApplied.has(update)) {
+          return [{ refName: update.refName, ok: true }];
+        }
+
+        const reported = reportedByRef.get(update.refName);
+        return reported ? [reported] : [];
+      }),
+    };
   }
 
   // No report-status: assume success if HTTP was 200

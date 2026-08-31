@@ -23,17 +23,53 @@ export interface GraspAccessSummary {
   criteria: string | undefined;
 }
 
+const BUZZ_SOFTWARE_URL = "https://github.com/block/buzz";
+const privateServiceClassificationCache = new Set<string>();
+
+/**
+ * Classify the two private Git transports supported by ngit v3.
+ * Advertising generic NIP-42/NIP-98 support is deliberately insufficient.
+ */
+export function isPrivateGitServiceDocument(document: Nip11Document): boolean {
+  const supportsGrasp08 = (document.supported_grasps ?? []).some(
+    (value) => value.trim().toUpperCase() === "GRASP-08",
+  );
+  const software = document.software?.trim().replace(/\/+$/, "").toLowerCase();
+  return supportsGrasp08 || software === BUZZ_SOFTWARE_URL.toLowerCase();
+}
+
+/**
+ * Classify a route-hint relay before sending it a repository coordinate.
+ * Only successful NIP-11 reads are cached; network and JSON failures remain
+ * unknown so callers cannot accidentally treat them as public.
+ */
+export async function classifyPrivateGitServiceRelay(
+  relayUrl: string,
+): Promise<boolean> {
+  const serviceAddress = normalizeGraspServiceAddress(relayUrl);
+  if (!serviceAddress) throw new Error("Invalid repository relay hint");
+  const key = graspServiceAddressToRelayUrl(serviceAddress);
+  if (privateServiceClassificationCache.has(key)) return true;
+  const document = await fetchGraspServerInformation(
+    serviceAddress,
+    AbortSignal.timeout(5_000),
+  );
+  const result = isPrivateGitServiceDocument(document);
+  // Positive capability is safe to retain for this page session. A negative
+  // can become stale when a service enables GRASP-08/Buzz, so callers must
+  // revalidate it before treating a hint as public.
+  if (result) privateServiceClassificationCache.add(key);
+  return result;
+}
+
 /** Describe a service's advertised repository-admission policy conservatively. */
 export function getGraspAccessSummary(
   document: Nip11Document,
 ): GraspAccessSummary {
   const criteria = document.repo_acceptance_criteria?.trim() || undefined;
   const normalizedCriteria = criteria?.toLowerCase() ?? "";
-  const grasps = new Set(
-    (document.supported_grasps ?? []).map((value) => value.toUpperCase()),
-  );
 
-  if (grasps.has("GRASP-08")) {
+  if (isPrivateGitServiceDocument(document)) {
     return {
       mode: "private",
       title: "Private service",
@@ -205,6 +241,7 @@ export async function fetchGraspServerInformation(
 ): Promise<Nip11Document> {
   const response = await fetch(graspServiceAddressToHttpUrl(serviceAddress), {
     headers: { Accept: "application/nostr+json" },
+    redirect: "error",
     signal: signal ?? AbortSignal.timeout(8000),
   });
   if (!response.ok) {
@@ -350,8 +387,11 @@ export async function validateGraspServer(
   }
 
   const grasps = doc.supported_grasps;
+  const advertised = new Set(
+    (grasps ?? []).map((grasp) => grasp.trim().toUpperCase()),
+  );
   const missing = requiredGrasps.filter(
-    (grasp) => !Array.isArray(grasps) || !grasps.includes(grasp),
+    (grasp) => !advertised.has(grasp.trim().toUpperCase()),
   );
   if (missing.length > 0) {
     return `Server does not advertise ${missing.join(" and ")} support in NIP-11`;

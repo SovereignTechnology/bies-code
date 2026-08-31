@@ -38,6 +38,10 @@ import {
   type RefUpdate,
 } from "@/lib/git-push";
 import { assertFastForwardSafe } from "@/lib/patch-merge";
+import {
+  gitAuthorizationHeaders,
+  type GitHttpAuthorizationProvider,
+} from "@/lib/git-http-auth";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -90,6 +94,7 @@ export type CatchUpObjectFetcher = (
   tipCommitId: string,
   stopAtCommitId: string,
   includeObjectIds?: string[],
+  signal?: AbortSignal,
 ) => Promise<PackableObject[] | null>;
 
 /**
@@ -106,6 +111,8 @@ export interface GraspPushContext {
   sharedPackfile: Uint8Array;
   desiredRefs: DesiredStateRef[];
   fetchCatchUpObjects: CatchUpObjectFetcher;
+  authorizationProvider?: GitHttpAuthorizationProvider;
+  signal: AbortSignal;
 }
 
 /** Inputs for {@link pushRefUpdateToGraspServers}. */
@@ -123,6 +130,9 @@ export interface PushRefUpdateParams {
   currentStateEvent?: NostrEvent | null;
   /** Fetches catch-up objects for lagging or fresh servers. */
   fetchCatchUpObjects: CatchUpObjectFetcher;
+  authorizationProvider?: GitHttpAuthorizationProvider;
+  /** Cancels authorization, receive-pack, verification, and background mirrors. */
+  signal?: AbortSignal;
   /**
    * Called with a fresh summary snapshot every time a server settles,
    * including servers that settle after the returned promise has already
@@ -176,6 +186,16 @@ export function uniquePackableObjects(
   return [...byHash.values()];
 }
 
+function abortError(signal: AbortSignal): Error {
+  return signal.reason instanceof Error
+    ? signal.reason
+    : new DOMException("Aborted", "AbortError");
+}
+
+function throwIfAborted(signal: AbortSignal): void {
+  if (signal.aborted) throw abortError(signal);
+}
+
 /**
  * Compact a raw receive-pack response body for inclusion in a user-facing
  * error message. Strips control characters (pkt-line framing, side-band
@@ -193,10 +213,18 @@ function summarizeRawPushResponse(raw: string): string {
 
 async function getAdvertisedRefs(
   cloneUrl: string,
+  authorizationProvider?: GitHttpAuthorizationProvider,
+  signal?: AbortSignal,
 ): Promise<Record<string, string> | null> {
   try {
-    return (await getReceivePackRefs(cloneUrl)).refs;
+    if (signal) throwIfAborted(signal);
+    return (
+      await getReceivePackRefs(cloneUrl, signal, (url) =>
+        gitAuthorizationHeaders(authorizationProvider, url, signal),
+      )
+    ).refs;
   } catch {
+    if (signal?.aborted) throw abortError(signal);
     return null;
   }
 }
@@ -275,8 +303,14 @@ export function getPostPushStateRefs(
 async function serverRefsMatch(
   cloneUrl: string,
   desiredRefs: DesiredStateRef[],
+  authorizationProvider?: GitHttpAuthorizationProvider,
+  signal?: AbortSignal,
 ): Promise<boolean> {
-  const advertisedRefs = await getAdvertisedRefs(cloneUrl);
+  const advertisedRefs = await getAdvertisedRefs(
+    cloneUrl,
+    authorizationProvider,
+    signal,
+  );
   if (!advertisedRefs) return false;
 
   return desiredRefs.every(({ refName, commitHash }) =>
@@ -294,10 +328,15 @@ export async function pushToGraspServer(
   refUpdate: RefUpdate,
   ctx: GraspPushContext,
 ): Promise<PushDeliveryOutcome> {
+  throwIfAborted(ctx.signal);
   // Read the server's actual advertised ref. Grasp servers can lag behind the
   // signed Nostr state (missed earlier pushes), so the consensus old hash is
   // not necessarily what this server has.
-  const advertisedRefs = await getAdvertisedRefs(cloneUrl);
+  const advertisedRefs = await getAdvertisedRefs(
+    cloneUrl,
+    ctx.authorizationProvider,
+    ctx.signal,
+  );
   const serverHead = advertisedRefs
     ? getAdvertisedRef(advertisedRefs, refUpdate.refName)
     : null;
@@ -335,7 +374,13 @@ export async function pushToGraspServer(
       // Create it, sending a bounded catch-up pack of recent history alongside
       // the base objects. If the repo is deeper than the bound, the server's
       // connectivity check fails and the outcome reports it.
-      const catchUp = await ctx.fetchCatchUpObjects(refUpdate.oldHash, "");
+      const catchUp = await ctx.fetchCatchUpObjects(
+        refUpdate.oldHash,
+        "",
+        undefined,
+        ctx.signal,
+      );
+      throwIfAborted(ctx.signal);
       primaryCatchUpObjects = catchUp ?? [];
       effectiveUpdates.push({ ...refUpdate, oldHash: ZERO_HASH });
     } else if (serverHead !== null && serverHead !== refUpdate.oldHash) {
@@ -349,7 +394,10 @@ export async function pushToGraspServer(
       const catchUp = await ctx.fetchCatchUpObjects(
         refUpdate.oldHash,
         serverHead,
+        undefined,
+        ctx.signal,
       );
+      throwIfAborted(ctx.signal);
       if (!catchUp) {
         return {
           cloneUrl,
@@ -393,7 +441,9 @@ export async function pushToGraspServer(
             tipCommitId,
             existingHash ?? "",
             includeObjectIds,
+            ctx.signal,
           );
+          throwIfAborted(ctx.signal);
 
           if (!catchUp) {
             return {
@@ -415,6 +465,7 @@ export async function pushToGraspServer(
     const needsCustomPackfile =
       primaryCatchUpObjects.length > 0 || supplementalObjects.length > 0;
     if (needsCustomPackfile) {
+      throwIfAborted(ctx.signal);
       packfile = await createPackfile(
         uniquePackableObjects([
           ...ctx.baseObjects,
@@ -422,15 +473,29 @@ export async function pushToGraspServer(
           ...supplementalObjects,
         ]),
       );
+      throwIfAborted(ctx.signal);
     }
 
-    const result = await pushToGitServer(cloneUrl, effectiveUpdates, packfile);
+    const result = await pushToGitServer(
+      cloneUrl,
+      effectiveUpdates,
+      packfile,
+      ctx.signal,
+      (url) =>
+        gitAuthorizationHeaders(ctx.authorizationProvider, url, ctx.signal),
+    );
+    throwIfAborted(ctx.signal);
     const refFailures = result.refResults.filter((r) => !r.ok);
 
     if (
       result.unpackOk &&
       refFailures.length === 0 &&
-      (await serverRefsMatch(cloneUrl, ctx.desiredRefs))
+      (await serverRefsMatch(
+        cloneUrl,
+        ctx.desiredRefs,
+        ctx.authorizationProvider,
+        ctx.signal,
+      ))
     ) {
       return {
         cloneUrl,
@@ -439,7 +504,14 @@ export async function pushToGraspServer(
       };
     }
 
-    if (await serverRefsMatch(cloneUrl, ctx.desiredRefs)) {
+    if (
+      await serverRefsMatch(
+        cloneUrl,
+        ctx.desiredRefs,
+        ctx.authorizationProvider,
+        ctx.signal,
+      )
+    ) {
       return {
         cloneUrl,
         ok: true,
@@ -480,7 +552,15 @@ export async function pushToGraspServer(
       message: failures || "ref update rejected",
     };
   } catch (err) {
-    if (await serverRefsMatch(cloneUrl, ctx.desiredRefs)) {
+    if (ctx.signal.aborted) throw abortError(ctx.signal);
+    if (
+      await serverRefsMatch(
+        cloneUrl,
+        ctx.desiredRefs,
+        ctx.authorizationProvider,
+        ctx.signal,
+      )
+    ) {
       return {
         cloneUrl,
         ok: true,
@@ -522,7 +602,9 @@ export async function pushRefUpdateToGraspServers(
   params: PushRefUpdateParams,
 ): Promise<PushDeliverySummary> {
   const { cloneUrls, objects, refUpdate, currentStateEvent } = params;
+  const signal = params.signal ?? new AbortController().signal;
 
+  throwIfAborted(signal);
   assertFastForwardSafe(objects, refUpdate.oldHash, refUpdate.newHash);
 
   if (cloneUrls.length === 0) {
@@ -533,11 +615,16 @@ export async function pushRefUpdateToGraspServers(
   }
 
   const baseObjects = uniquePackableObjects(objects);
+  throwIfAborted(signal);
+  const sharedPackfile = await createPackfile(baseObjects);
+  throwIfAborted(signal);
   const ctx: GraspPushContext = {
     baseObjects,
-    sharedPackfile: await createPackfile(baseObjects),
+    sharedPackfile,
     desiredRefs: getPostPushStateRefs(currentStateEvent, refUpdate),
     fetchCatchUpObjects: params.fetchCatchUpObjects,
+    authorizationProvider: params.authorizationProvider,
+    signal,
   };
 
   const outcomes: PushDeliveryOutcome[] = cloneUrls.map((cloneUrl) => ({
@@ -577,6 +664,11 @@ export async function pushRefUpdateToGraspServers(
 
       if (!firstSettled) {
         firstSettled = true;
+        if (signal.aborted) {
+          reject(abortError(signal));
+          resolveSettled(summary);
+          return;
+        }
         const reasons = summary.outcomes
           .map(
             (each) => `${formatCloneUrlHost(each.cloneUrl)}: ${each.message}`,

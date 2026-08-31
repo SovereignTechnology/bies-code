@@ -1,6 +1,9 @@
 /**
  * Vendored from @fiatjaf/git-natural-api v0.2.4
  * https://jsr.io/@fiatjaf/git-natural-api
+ *
+ * Local modification: info/refs requests accept an AbortSignal so an
+ * account-scoped private Git pool cannot complete after it is disposed.
  */
 
 /** Repository information from the Git protocol */
@@ -15,7 +18,10 @@ const capabilitiesCache = new Map<string, string[]>();
 export async function getCapabilities(
   url: string,
   weAlreadyHaveSomeInfoRefsResponse?: InfoRefsUploadPackResponse,
+  headers?: Record<string, string>,
+  signal?: AbortSignal,
 ): Promise<string[]> {
+  if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
   if (weAlreadyHaveSomeInfoRefsResponse) {
     // if this was passed just extract the capabilities from it and update the cache
     capabilitiesCache.set(url, weAlreadyHaveSomeInfoRefsResponse.capabilities);
@@ -25,7 +31,8 @@ export async function getCapabilities(
   const cached = capabilitiesCache.get(url);
   if (cached) return cached;
 
-  const info = await getInfoRefs(url);
+  const info = await getInfoRefs(url, headers, signal);
+  if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
   capabilitiesCache.set(url, info.capabilities);
   return info.capabilities;
 }
@@ -37,10 +44,23 @@ export async function getCapabilities(
  */
 export async function getInfoRefs(
   url: string,
+  headers?: Record<string, string>,
+  signal?: AbortSignal,
 ): Promise<InfoRefsUploadPackResponse> {
-  const response = await (
-    await fetch(`${url}/info/refs?service=git-upload-pack`)
-  ).text();
+  if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+  const httpResponse = await fetch(`${url}/info/refs?service=git-upload-pack`, {
+    headers,
+    signal,
+  });
+  if (!httpResponse.ok) {
+    throw new Response(null, {
+      status: httpResponse.status,
+      statusText: httpResponse.statusText,
+      headers: httpResponse.headers,
+    });
+  }
+  const response = await httpResponse.text();
+  if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
   const result: InfoRefsUploadPackResponse = {
     refs: {},
     capabilities: [],

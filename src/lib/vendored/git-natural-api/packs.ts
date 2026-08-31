@@ -61,18 +61,27 @@ export async function fetchPackfile(
   url: string,
   want: string,
   signal?: AbortSignal,
+  authorizationHeaders?: Record<string, string>,
 ): Promise<PackfileResult> {
   const resp = await fetch(`${url}/git-upload-pack`, {
     method: "POST",
     headers: {
       "Content-Type": "application/x-git-upload-pack-request",
       Accept: "application/x-git-upload-pack-result",
+      ...authorizationHeaders,
     },
     body: want,
     signal,
   });
 
   if (resp.status !== 200) {
+    if (resp.status === 401 || resp.status === 403) {
+      throw new Response(null, {
+        status: resp.status,
+        statusText: resp.statusText,
+        headers: resp.headers,
+      });
+    }
     throw new Error(`failed to call git-upload-pack: ${await resp.text()}`);
   }
 
