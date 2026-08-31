@@ -11,14 +11,24 @@
 
 import type { Filter } from "applesauce-core/helpers";
 import type { NostrEvent } from "nostr-tools";
-import { combineLatest, of, type Observable } from "rxjs";
+import {
+  combineLatest,
+  defer,
+  of,
+  ReplaySubject,
+  Subject,
+  timer,
+  type Observable,
+} from "rxjs";
 import {
   distinctUntilChanged,
   map,
+  share,
   shareReplay,
   switchMap,
 } from "rxjs/operators";
 import type { RelayGroup } from "applesauce-relay";
+import type { AdditiveFilterChunk } from "@/lib/resilientSubscription";
 import {
   CI_COORDINATOR_ADVERTISEMENT_KIND,
   CI_EVENT_KINDS,
@@ -30,7 +40,7 @@ import {
   CI_SERVICE_STOP_KIND,
 } from "@/lib/ci";
 import { REPO_KIND, parseRepoCoordinate } from "@/lib/nip34";
-import { keyedShared } from "@/lib/keyedShared";
+import { KEYED_SHARE_LINGER_MS, keyedShared } from "@/lib/keyedShared";
 import {
   RepositoryRelayGroup,
   relayGroupUrls$,
@@ -63,6 +73,74 @@ function discoveryRelays$(): Observable<string[]> {
     map(([lookup, indexes]) => sortedUnique([...lookup, ...indexes])),
     distinctUntilChanged<string[]>(sameList),
   );
+}
+
+/** Index relays as a deduplicated, order-stable reactive list. */
+function indexRelays$(): Observable<string[]> {
+  return gitIndexRelays.pipe(
+    map((relays) => sortedUnique(relays)),
+    distinctUntilChanged<string[]>(sameList),
+  );
+}
+
+/**
+ * A keyed additive query owner: the accumulated chunk set plus the stream
+ * feeding chunks added while the shared query is live.
+ */
+interface AdditiveOwner {
+  chunks: Map<string, AdditiveFilterChunk>;
+  additions: Subject<AdditiveFilterChunk>;
+  query$: Observable<RelayQuerySettlement>;
+}
+
+/**
+ * Return a per-key shared additive settlement query, folding `chunks` into
+ * the owner's accumulated set. New chunk keys reach a live query as delta
+ * REQs via additions$; already-known keys are no-ops, so covered values are
+ * never re-fetched. Sharing mirrors keyedShared: the latest settlement is
+ * replayed and the source lingers KEYED_SHARE_LINGER_MS past the last
+ * unsubscribe. After the linger elapses the next subscriber re-runs the
+ * query from scratch with every chunk accumulated so far, refreshing cached
+ * results. Chunks are never retracted — the union only grows.
+ */
+function additiveOwnerQuery(
+  cache: Map<string, AdditiveOwner>,
+  key: string,
+  relays: () => Observable<string[]>,
+  chunks: readonly AdditiveFilterChunk[],
+): Observable<RelayQuerySettlement> {
+  let owner = cache.get(key);
+  if (!owner) {
+    const created: AdditiveOwner = {
+      chunks: new Map(),
+      additions: new Subject<AdditiveFilterChunk>(),
+      query$: of(SETTLED_EMPTY),
+    };
+    created.query$ = defer(() =>
+      loadAdditiveRelayQueryUntilSettled(
+        pool,
+        relays(),
+        {
+          initial: [...created.chunks.values()],
+          additions$: created.additions,
+        },
+        eventStore,
+      ),
+    ).pipe(
+      share({
+        connector: () => new ReplaySubject<RelayQuerySettlement>(1),
+        resetOnRefCountZero: () => timer(KEYED_SHARE_LINGER_MS),
+      }),
+    );
+    cache.set(key, created);
+    owner = created;
+  }
+  for (const chunk of chunks) {
+    if (owner.chunks.has(chunk.key)) continue;
+    owner.chunks.set(chunk.key, chunk);
+    owner.additions.next(chunk);
+  }
+  return owner.query$;
 }
 
 /**
@@ -319,16 +397,19 @@ export function ciSocialActivity$(
   });
 }
 
-const coordinatorDiscovery = new Map<
-  string,
-  Observable<RelayQuerySettlement>
->();
+const coordinatorDiscovery = new Map<string, AdditiveOwner>();
 
 /**
  * Coordinator discovery on the index relays: every coordinator advertisement
  * plus request readiness targeting any of the repository's confirmed
  * coordinates or maintainers. Shared by the Actions-tab presence probe in
  * RepoLayout and every repository surface that lists coordinators.
+ *
+ * The owner is keyed by the repository's first sorted coordinate, so a
+ * coordinate or maintainer confirmed later grows the live query with one
+ * delta REQ per relay instead of restarting it, and an index relay added
+ * later joins with one REQ of its own. Both call sites derive their inputs
+ * from the same confirmed sets, so they keep sharing one owner per repo.
  */
 export function ciCoordinatorDiscovery$(
   repositoryCoordinates: readonly string[],
@@ -336,30 +417,41 @@ export function ciCoordinatorDiscovery$(
 ): Observable<RelayQuerySettlement> {
   const coordinates = sortedUnique(repositoryCoordinates);
   const pubkeys = sortedUnique(maintainers);
-  const key = `${coordinates.join(",")}|${pubkeys.join(",")}`;
-  return keyedShared(coordinatorDiscovery, key, () =>
-    gitIndexRelays.pipe(
-      map((relays) => sortedUnique(relays)),
-      distinctUntilChanged<string[]>(sameList),
-      switchMap((relays) => {
-        const filters: Filter[] = [
-          { kinds: [CI_COORDINATOR_ADVERTISEMENT_KIND] } as Filter,
-        ];
-        if (coordinates.length) {
-          filters.push({
-            kinds: [CI_REQUEST_READINESS_KIND],
-            "#a": coordinates,
-          } as Filter);
-        }
-        if (pubkeys.length) {
-          filters.push({
-            kinds: [CI_REQUEST_READINESS_KIND],
-            "#p": pubkeys,
-          } as Filter);
-        }
-        return loadRelayQueryUntilSettled(pool, relays, filters, eventStore);
-      }),
-    ),
+  return additiveOwnerQuery(
+    coordinatorDiscovery,
+    coordinates[0] ?? "",
+    indexRelays$,
+    [
+      {
+        key: "advertisements",
+        filters: [{ kinds: [CI_COORDINATOR_ADVERTISEMENT_KIND] } as Filter],
+        deltaSafe: true,
+      },
+      ...coordinates.map(
+        (coordinate): AdditiveFilterChunk => ({
+          key: `a:${coordinate}`,
+          filters: [
+            {
+              kinds: [CI_REQUEST_READINESS_KIND],
+              "#a": [coordinate],
+            } as Filter,
+          ],
+          deltaSafe: true,
+        }),
+      ),
+      ...pubkeys.map(
+        (pubkey): AdditiveFilterChunk => ({
+          key: `p:${pubkey}`,
+          filters: [
+            {
+              kinds: [CI_REQUEST_READINESS_KIND],
+              "#p": [pubkey],
+            } as Filter,
+          ],
+          deltaSafe: true,
+        }),
+      ),
+    ],
   );
 }
 
