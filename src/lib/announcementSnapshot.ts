@@ -229,11 +229,16 @@ export function announcementSnapshot({
 
     emit();
     wave(primary, [identifierFilter], true, () => {
-      // Deferred fallback tier: only when the immediate tier could not
-      // produce a resolvable coordinate (repos not indexed by the git index
-      // are still findable on fallback relays). The cached RepositoryModel
-      // reads the store synchronously, so anything this wave added — or a
-      // previously cached announcement — is visible here.
+      // Deferred fallback tier: when the immediate tier could not produce a
+      // resolvable coordinate (repos not indexed by the git index are still
+      // findable on fallback relays), OR when it produced no fresh EOSE at
+      // all (every primary relay failed). The second condition matters when
+      // a cached announcement resolves the coordinate: without it the
+      // fallback wave would be skipped and firstFreshEose could never become
+      // true, permanently fail-closing the lead redirect for the session
+      // while the page renders normally from cache. The cached
+      // RepositoryModel reads the store synchronously, so anything this wave
+      // added — or a previously cached announcement — is visible here.
       subs.add(
         (
           store.model(RepositoryModel, pubkey, dTag) as unknown as Observable<
@@ -242,7 +247,7 @@ export function announcementSnapshot({
         )
           .pipe(take(1))
           .subscribe((repository) => {
-            if (!repository && deferred.length > 0) {
+            if ((!repository || !firstFreshEose) && deferred.length > 0) {
               relayCount += deferred.length;
               emit();
               wave(deferred, [identifierFilter], true, () =>
