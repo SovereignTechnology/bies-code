@@ -65,10 +65,6 @@ import {
   SOFTWARE_RELEASE_KIND,
 } from "@/casts/Software";
 import { ZAPSTORE_RELAY_URL } from "@/hooks/useSoftwareReleases";
-import {
-  SettledRepositoryModel,
-  type SettledRepositorySnapshot,
-} from "@/models/SettledRepositoryModel";
 import { RepositoryModel } from "@/models/RepositoryModel";
 
 // ---------------------------------------------------------------------------
@@ -210,10 +206,29 @@ function RepoCoordsRedirect({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [coordsKey]);
 
-  const filters = useMemo(
-    () => getRepoCoordFilters(candidateCoords),
-    [candidateCoords],
-  );
+  // Single pointer: exact-coordinate lookup (authors-scoped fast path from
+  // b19fba4b). Multi-pointer: ONE identifier-only wave covering the whole
+  // pointer set — a relay holding any of these repositories returns every
+  // announcement for their identifiers in a single round trip, replacing the
+  // former per-pointer sequential settlement stages. Authority is never
+  // derived from this fetch (AGENTS.md §Repository authorization model
+  // carve-out): each pointer is compared through reciprocal resolution below.
+  const filters = useMemo<Filter[]>(() => {
+    if (candidateCoords.length <= 1) {
+      return getRepoCoordFilters(candidateCoords);
+    }
+    const dTags = [
+      ...new Set(
+        candidateCoords.flatMap((coord) => {
+          const parsed = parseRepoCoord(coord);
+          return parsed ? [parsed.dTag] : [];
+        }),
+      ),
+    ];
+    return dTags.length > 0
+      ? [{ kinds: [REPO_KIND], "#d": dTags } as Filter]
+      : [];
+  }, [candidateCoords]);
 
   const lookupComplete =
     use$(() => {
@@ -268,30 +283,27 @@ function RepoCoordsRedirect({
       );
     }
 
+    // Multi-pointer: compare each pointer's reciprocal component from the
+    // store. The relay work is the single identifier-only wave above
+    // (lookupComplete); these deletion-aware models are pure store
+    // projections, so the comparison itself is always concluded here and the
+    // redirect / ambiguity refusal below act on it only once the wave has
+    // settled on every relay — completeness claims need full coverage.
     return combineLatest(
       pointers.map(
         ({ pubkey, dTag }) =>
           eventStore.model(
-            SettledRepositoryModel,
+            RepositoryModel,
             pubkey,
             dTag,
-          ) as unknown as Observable<SettledRepositorySnapshot>,
+            deletionEvents$,
+          ) as unknown as Observable<ResolvedRepo | undefined>,
       ),
     ).pipe(
-      map((snapshots) => {
-        if (snapshots.some((snapshot) => !snapshot.settled)) {
-          return { settled: false, coordinate: undefined };
-        }
+      map((repositories) => {
         const components = new Map(
-          snapshots.flatMap((snapshot) =>
-            snapshot.repository
-              ? [
-                  [
-                    snapshot.repository.componentId,
-                    snapshot.repository,
-                  ] as const,
-                ]
-              : [],
+          repositories.flatMap((repository) =>
+            repository ? [[repository.componentId, repository] as const] : [],
           ),
         );
         // A root item naming unrelated repository components is ambiguous.
@@ -305,7 +317,7 @@ function RepoCoordsRedirect({
         )?.coordinate;
         const fallback = pointers.find(
           (_, index) =>
-            snapshots[index].repository?.componentId === repository.componentId,
+            repositories[index]?.componentId === repository.componentId,
         )?.coordinate;
         return { settled: true, coordinate: canonical ?? fallback };
       }),

@@ -16,6 +16,7 @@
 
 ### Fixes
 
+- Resolve item links that name several repositories (multi-pointer `nevent` routes) through one identifier-scoped announcement wave instead of sequential per-repository settlement stages, while keeping the component-ambiguity refusal gated on complete relay coverage.
 - Restart repository issue and pull-request relay subscriptions only when role-history content actually changes, so announcement refetches and deletion-list emissions no longer re-request the repository's full item backlog from every relay.
 - Grow repository issue and pull-request relay subscriptions additively when a maintainer confirms later: the new coordinate joins the live queries as one delta request per relay instead of restarting them and re-fetching every already-seen item's details, and an unchanged coordinate set costs no relay traffic at all.
 - Keep the repository state query alive while the repository's relay and confirmed maintainer sets grow during resolution: a joining relay costs one state request on that relay only, a newly confirmed maintainer joins as one delta request per relay, and the state-settled gate behind membership actions and settings controls no longer flickers on growth.
