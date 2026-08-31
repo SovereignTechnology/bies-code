@@ -284,7 +284,7 @@ export type ResilientSubscriptionResponse = NostrEvent | "EOSE";
 function processRelay(
   pool: RelayPool,
   relay: string,
-  filters: Filter[],
+  filters: Filter[] | (() => Filter[]),
   opts: Required<
     Pick<
       ResilientSubscriptionOptions,
@@ -302,25 +302,40 @@ function processRelay(
     onRelaySettle: ((relay: string) => void) | undefined;
     onRelayEose: ((relay: string) => void) | undefined;
     onRelayError: ((relay: string) => void) | undefined;
+    /**
+     * Internal hook for the additive coordinator: called at the start of
+     * every buildLiveSub re-execution (retry or graceful-close repeat, never
+     * the first cycle). Signals that the next REQ re-reads the filter
+     * provider, so delta REQs opened since the last cycle are now redundant
+     * and can be consolidated away.
+     */
+    onCycleRestart?: (relay: string) => void;
   },
   signal: SettleSignal,
 ): Observable<NostrEvent> {
   const limit = opts.limit;
 
-  // Live filters: keep limit so the relay returns at most `limit` historical
+  // Filters may be a provider function (additive subscriptions grow the set
+  // over time). Live filters are re-read on every subscription cycle so a
+  // reconnect REQ covers everything added since the previous cycle. Static
+  // callers pass a fixed array, which behaves exactly as before.
+  const getFilters = typeof filters === "function" ? filters : () => filters;
+
+  // Live filters keep limit so the relay returns at most `limit` historical
   // events before EOSE. New events published after the subscription opens are
   // always forwarded regardless of limit — it only caps the backfill.
   // On reconnect, since: lastReceivedAt is injected (see buildLiveSub) which
   // already scopes the backfill to the gap window, so limit is less relevant
   // there but harmless to keep.
-  const liveFilters: Filter[] = filters.map((f) => ({ ...f }));
 
-  // Pagination filters: strip since/until/limit (TimelessFilter).
+  // Pagination filters: strip since/until/limit (TimelessFilter). Pagination
+  // is only supported for static filter sets, so a one-time snapshot is fine.
   // NOTE: mergeFilters (used by loadBlocksFromRelay) only handles kinds, ids,
   // authors, tag filters, limit, since, and until — it silently drops scalar
   // fields like `search`. We preserve those extras here and re-apply them in
   // extendingPool after the merge so they survive into every page REQ.
-  const paginationFilters: TimelessFilter[] = filters.map((f) => {
+  const filtersSnapshot = getFilters();
+  const paginationFilters: TimelessFilter[] = filtersSnapshot.map((f) => {
     const pf: TimelessFilter = { ...f };
     delete (pf as Filter).since;
     delete (pf as Filter).until;
@@ -330,7 +345,7 @@ function processRelay(
 
   // Scalar fields that mergeFilters drops — keyed by filter index so we can
   // restore them per-filter after the merge.
-  const scalarExtras: Array<Partial<Filter>> = filters.map((f) => {
+  const scalarExtras: Array<Partial<Filter>> = filtersSnapshot.map((f) => {
     const extras: Partial<Filter> = {};
     for (const key of Object.keys(f) as Array<keyof Filter>) {
       if (
@@ -363,6 +378,9 @@ function processRelay(
     // EOSE is received so that a relay that has been healthy for a long time
     // starts its next reconnect from 1s rather than the capped maximum.
     let reconnectAttempts = 0;
+    // Counts buildLiveSub executions so onCycleRestart fires only on
+    // re-executions (reconnects), never on the first cycle.
+    let cycleCount = 0;
     let paginateSub: { unsubscribe(): void } | undefined;
     let manualSub: { unsubscribe(): void } | undefined;
     let gapFillSub: { unsubscribe(): void } | undefined;
@@ -462,8 +480,9 @@ function processRelay(
       // so the reconnect REQ uses since: lastReceivedAt - gapFillBuffer.
       eoseSeen = false;
       countBeforeEose = 0;
+      if (cycleCount++ > 0) opts.onCycleRestart?.(relay);
 
-      const filtersWithSince: Filter[] = liveFilters.map((f) => ({
+      const filtersWithSince: Filter[] = getFilters().map((f) => ({
         ...f,
         ...(opts.reconnect && lastReceivedAt !== undefined
           ? { since: lastReceivedAt - opts.gapFillBuffer }
@@ -757,7 +776,7 @@ function processRelay(
       ? foregroundResume$.subscribe(() => {
           if (lastReceivedAt === undefined) return;
           gapFillSub?.unsubscribe();
-          const gapFilters: Filter[] = liveFilters.map((f) => ({
+          const gapFilters: Filter[] = getFilters().map((f) => ({
             ...f,
             since: lastReceivedAt! - opts.gapFillBuffer,
           }));
@@ -1035,6 +1054,489 @@ function resilientSubscriptionReactive(
       for (const sub of activeRelays.values()) sub.unsubscribe();
       activeRelays.clear();
     };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// resilientAdditiveSubscription — keyed additive filter chunks
+// ---------------------------------------------------------------------------
+
+/**
+ * A keyed, immutable unit of filters accepted by an additive subscription.
+ *
+ * The key is the chunk's identity: submitting the same key again with
+ * canonically identical filters is a no-op, while reusing a key with
+ * different filters raises AdditiveFilterConflictError.
+ */
+export interface AdditiveFilterChunk {
+  /** Caller-defined identity used to deduplicate repeated submissions. */
+  readonly key: string;
+  /** Exact Nostr filter clauses sent together. Clauses are never merged. */
+  readonly filters: readonly Filter[];
+  /**
+   * Declares that this chunk's filters are safe to send as a later delta REQ
+   * — i.e. an existing REQ plus a delta REQ with these filters returns the
+   * same events as one REQ that had included them from the start.
+   *
+   * Added tag values, exact authors, kinds, and full 64-char ids are safe.
+   * `limit`, `since`, `until`, `search`, and prefix ids are not — their
+   * meaning depends on the REQ they ride in. The declaration is validated
+   * cheaply: a chunk declared deltaSafe whose filters use one of those
+   * fields is rejected with a TypeError.
+   *
+   * Chunks delivered via `additions$` MUST declare `deltaSafe: true`.
+   * Initial chunks may omit it — they only ever ride full REQs.
+   */
+  readonly deltaSafe?: boolean;
+}
+
+/** The initial query plan plus an optional stream of later chunk additions. */
+export interface AdditiveFilterPlan {
+  /** Chunks available before relay work starts. */
+  readonly initial: readonly AdditiveFilterChunk[];
+  /**
+   * Later chunk additions, accepted for the subscription's whole lifetime.
+   * Each must declare `deltaSafe: true`. Completion of this observable has
+   * no effect on the subscription — the caller owns its lifetime; an error
+   * tears the subscription down.
+   */
+  readonly additions$?: Observable<AdditiveFilterChunk>;
+}
+
+/** Raised when a chunk key is reused with different filter clauses. */
+export class AdditiveFilterConflictError extends Error {
+  constructor(key: string) {
+    super(`additive filter chunk "${key}" was reused with different clauses`);
+    this.name = "AdditiveFilterConflictError";
+  }
+}
+
+export interface ResilientAdditiveSubscriptionOptions extends Omit<
+  ResilientSubscriptionOptions,
+  "autoClose" | "paginate" | "manualPaginate$"
+> {
+  /**
+   * Buffer window in ms coalescing chunk additions into one delta REQ per
+   * relay. Default: 25
+   */
+  deltaBufferTime?: number;
+  /** Maximum chunks per buffered delta REQ. Default: 200 */
+  deltaBufferSize?: number;
+}
+
+/** Filter fields whose meaning depends on the REQ they ride in. */
+const DELTA_UNSAFE_FIELDS = ["limit", "since", "until", "search"] as const;
+
+interface StoredAdditiveChunk {
+  /** Canonical JSON of the sorted, deduplicated clauses — used for identity. */
+  canonical: string;
+  /** Private clones of the caller's filters, safe from later mutation. */
+  filters: Filter[];
+}
+
+/** Deep-clone a JSON-ish value, dropping undefined object entries. */
+function cloneJson(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(cloneJson);
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([, entry]) => entry !== undefined)
+        .map(([key, entry]) => [key, cloneJson(entry)]),
+    );
+  }
+  return value;
+}
+
+/**
+ * Canonicalize a filter for identity comparison: object keys sorted, arrays
+ * sorted and deduplicated (Nostr filter arrays are sets — order and repeats
+ * carry no meaning).
+ */
+function canonicalFilter(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    const entries = value.map(canonicalFilter).map((entry) => ({
+      entry,
+      key: JSON.stringify(entry),
+    }));
+    return [...new Map(entries.map(({ key, entry }) => [key, entry])).entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([, entry]) => entry);
+  }
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([, entry]) => entry !== undefined)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([key, entry]) => [key, canonicalFilter(entry)]),
+    );
+  }
+  return value;
+}
+
+/** Structural validation + canonicalization for one chunk. */
+function storeAdditiveChunk(chunk: AdditiveFilterChunk): StoredAdditiveChunk {
+  if (chunk.key.length === 0)
+    throw new TypeError("additive filter chunk keys must not be empty");
+  if (chunk.filters.length === 0)
+    throw new TypeError(`additive filter chunk "${chunk.key}" has no clauses`);
+
+  const filters = chunk.filters.map((filter) => cloneJson(filter) as Filter);
+  const clauses = filters
+    .map((filter) => JSON.stringify(canonicalFilter(filter)))
+    .filter((clause, index, all) => all.indexOf(clause) === index)
+    .sort();
+  return { canonical: JSON.stringify(clauses), filters };
+}
+
+/**
+ * Cheap validation of a deltaSafe declaration. Delta-safety is a property of
+ * filter shape: added tag values and exact authors/kinds/ids are safe, while
+ * limits, time ranges, prefix ids, and search are not. This is a lie
+ * detector, not an inference engine — callers own the declaration.
+ */
+function assertDeltaSafeShape(key: string, filters: Filter[]): void {
+  for (const filter of filters) {
+    for (const field of DELTA_UNSAFE_FIELDS) {
+      if (filter[field] !== undefined)
+        throw new TypeError(
+          `additive filter chunk "${key}" is declared deltaSafe but uses "${field}"`,
+        );
+    }
+    if (filter.ids?.some((id) => id.length !== 64))
+      throw new TypeError(
+        `additive filter chunk "${key}" is declared deltaSafe but uses prefix ids`,
+      );
+  }
+}
+
+/** Shared no-op settle signal for streams that must not drive settlement. */
+const noopSettleSignal: SettleSignal = {
+  extend: () => {},
+  settle: () => {},
+  error: () => {},
+  addRelay: () => {},
+  removeRelay: () => {},
+  eose$: EMPTY as Observable<"EOSE">,
+};
+
+/**
+ * Subscribe to a growing set of keyed filter chunks without tearing down
+ * existing relay REQs.
+ *
+ * The caller supplies an initial plan (relays + keyed chunks) and may later
+ * add chunks via `plan.additions$`. The caller owns query scope entirely;
+ * this primitive owns only transport continuity and delta reconciliation:
+ *
+ *   - Each relay gets one long-lived "main" stream (a full processRelay
+ *     pipeline — reconnect with since gap-fill, foreground-resume gap-fill,
+ *     rate-limit backoff, per-relay error isolation). Its filters are a
+ *     provider over the full current chunk set, so every reconnect or
+ *     foreground gap-fill REQ covers all active chunks.
+ *   - Chunk additions are buffered (deltaBufferTime/deltaBufferSize) and
+ *     each batch opens one delta REQ per relay containing only the batch's
+ *     filters. Relays whose transport is currently failed are skipped — a
+ *     failed relay's reconnect re-reads the full chunk set, so the batch is
+ *     covered there without a delta.
+ *   - When a relay's main stream starts a new cycle (reconnect after error
+ *     or graceful close), its delta streams are closed: the new REQ already
+ *     contains their chunks. A healthy relay's delta REQs stay open until
+ *     then, so additions accumulate REQs only between reconnects.
+ *   - A relay joining later (reactive relay list) receives the full current
+ *     chunk set in its initial REQ. A removed relay is closed alone.
+ *
+ * Settlement is monotonic and reuses the standard settle semantics: the
+ * "EOSE" sentinel fires once when the initial plan reaches EOSE on every
+ * relay (or errors/caps out), and later chunk additions never unsettle it.
+ * Delta streams never drive the settle signal. There is no per-chunk
+ * completion signal and no chunk retraction.
+ *
+ * Duplicate events across overlapping REQs are expected and harmless —
+ * EventStore deduplication handles them downstream.
+ *
+ * Returns Observable<NostrEvent | "EOSE"> like resilientSubscription. Pipe
+ * through onlyEvents() if the settle sentinel is not needed. Does NOT add
+ * mapEventsToStore or filterDuplicateEvents — callers handle that. The
+ * stream never completes on its own; the caller owns its lifetime.
+ */
+export function resilientAdditiveSubscription(
+  pool: RelayPool,
+  relays: string[] | Observable<string[]>,
+  plan: AdditiveFilterPlan,
+  opts: ResilientAdditiveSubscriptionOptions = {},
+): Observable<ResilientSubscriptionResponse> {
+  const guarded = opts as ResilientSubscriptionOptions;
+  if (guarded.manualPaginate$ !== undefined)
+    throw new TypeError("additive queries do not support manual pagination");
+  if (guarded.paginate === true)
+    throw new TypeError(
+      "live additive subscriptions do not support automatic pagination",
+    );
+
+  const reconnect = opts.reconnect ?? true;
+  const gapFill = opts.gapFill ?? true;
+  const gapFillBuffer = opts.gapFillBuffer ?? 600;
+  const settle = opts.settle ?? true;
+  const settleTime = opts.settleTime ?? DEFAULT_SETTLE_TIME;
+  const limit = opts.limit ?? 500;
+  const retryCount = opts.retryCount ?? 3;
+  const retryDelay = opts.retryDelay ?? defaultRetryDelay;
+  const deltaBufferTime = opts.deltaBufferTime ?? 25;
+  const deltaBufferSize = Math.max(1, Math.floor(opts.deltaBufferSize ?? 200));
+
+  const mainStreamOpts = {
+    reconnect,
+    gapFill,
+    gapFillBuffer,
+    paginate: false,
+    limit,
+    retryCount,
+    retryDelay,
+    autoClose: false,
+    manualPaginate$: undefined,
+    onRelaySettle: opts.onRelaySettle,
+    onRelayEose: opts.onRelayEose,
+    onRelayError: opts.onRelayError,
+  };
+  // Delta streams: no foreground gap-fill (the main stream's gap-fill reads
+  // the full chunk set, covering every delta chunk) and no relay callbacks
+  // (the main stream is the authoritative per-relay lifecycle).
+  const deltaStreamOpts = {
+    ...mainStreamOpts,
+    gapFill: false,
+    onRelaySettle: undefined,
+    onRelayEose: undefined,
+    onRelayError: undefined,
+  };
+
+  const staticRelays = Array.isArray(relays) ? [...new Set(relays)] : undefined;
+
+  return new Observable<ResilientSubscriptionResponse>((subscriber) => {
+    const chunks = new Map<string, StoredAdditiveChunk>();
+    interface RelayStreams {
+      main: Subscription | undefined;
+      /** Container for this relay's delta streams; replaced when closed. */
+      deltas: Subscription;
+    }
+    const relayStates = new Map<string, RelayStreams>();
+    const root = new Subscription();
+    const pendingKeys = new Set<string>();
+    let bufferTimer: ReturnType<typeof setTimeout> | undefined;
+    // While true, accepted additions are folded into the initial REQs opened
+    // below instead of scheduling delta REQs.
+    let initializing = true;
+
+    const signal: SettleSignal = settle
+      ? makeSettleSignal(
+          staticRelays
+            ? { settleTime, relayIds: staticRelays }
+            : { settleTime },
+        )
+      : noopSettleSignal;
+
+    // Register teardown with the subscriber before subscribing to any cold
+    // input. A source may synchronously emit a valid chunk and then error
+    // before setup finishes — relying on a returned teardown would register
+    // it too late to disarm the buffer timer.
+    subscriber.add(() => {
+      if (bufferTimer !== undefined) clearTimeout(bufferTimer);
+      bufferTimer = undefined;
+      root.unsubscribe();
+      for (const state of relayStates.values()) {
+        state.main?.unsubscribe();
+        state.deltas.unsubscribe();
+      }
+      relayStates.clear();
+    });
+
+    const allFilters = (): Filter[] =>
+      [...chunks.values()].flatMap((chunk) => chunk.filters);
+
+    const subscribeStream = (stream: Observable<NostrEvent>): Subscription =>
+      stream.subscribe({
+        next: (event) => subscriber.next(event),
+        error: (err) => {
+          // Per-relay errors are already handled inside processRelay
+          // (catchError → signal.error). Guard defensively like the
+          // reactive implementation.
+          console.error(
+            "[resilientAdditiveSubscription] unexpected relay stream error:",
+            err,
+          );
+        },
+      });
+
+    const closeDeltas = (relay: string) => {
+      const state = relayStates.get(relay);
+      if (!state) return;
+      state.deltas.unsubscribe();
+      state.deltas = new Subscription();
+    };
+
+    const openMain = (relay: string, state: RelayStreams) => {
+      state.main = subscribeStream(
+        processRelay(
+          pool,
+          relay,
+          allFilters,
+          // The reconnect REQ re-reads allFilters, so any delta REQs opened
+          // since the last cycle are consolidated into it.
+          { ...mainStreamOpts, onCycleRestart: closeDeltas },
+          signal,
+        ),
+      );
+    };
+
+    const joinRelay = (relay: string) => {
+      if (relayStates.has(relay)) return;
+      signal.addRelay(relay);
+      const state: RelayStreams = {
+        main: undefined,
+        deltas: new Subscription(),
+      };
+      relayStates.set(relay, state);
+      if (chunks.size > 0) {
+        openMain(relay, state);
+      } else {
+        // Empty initial plan: this relay has no initial work, so it settles
+        // immediately. Its main stream opens with the first chunk batch.
+        signal.settle(relay);
+        opts.onRelaySettle?.(relay);
+      }
+    };
+
+    const leaveRelay = (relay: string) => {
+      const state = relayStates.get(relay);
+      if (!state) return;
+      state.main?.unsubscribe();
+      state.deltas.unsubscribe();
+      relayStates.delete(relay);
+      signal.removeRelay(relay);
+    };
+
+    const flush = () => {
+      bufferTimer = undefined;
+      if (pendingKeys.size === 0) return;
+      const batch = [...pendingKeys];
+      pendingKeys.clear();
+      const deltaFilters = batch.flatMap(
+        (key) => chunks.get(key)?.filters ?? [],
+      );
+      for (const [relay, state] of relayStates) {
+        if (!state.main) {
+          // First chunks for a relay that joined while the plan was empty —
+          // its full REQ (allFilters) covers this batch.
+          openMain(relay, state);
+          continue;
+        }
+        // Delta REQs go only to relays whose transport is currently healthy.
+        // A failed relay's main stream is waiting to reconnect, and its
+        // reconnect REQ re-reads the full chunk set (cycle restart), so the
+        // batch is covered there without a delta.
+        if (pool.relay(relay).error$.value !== null) continue;
+        // Delta streams never drive settlement — hence the no-op signal.
+        state.deltas.add(
+          subscribeStream(
+            processRelay(
+              pool,
+              relay,
+              deltaFilters,
+              deltaStreamOpts,
+              noopSettleSignal,
+            ),
+          ),
+        );
+      }
+    };
+
+    const scheduleFlush = () => {
+      if (pendingKeys.size >= deltaBufferSize) {
+        if (bufferTimer !== undefined) clearTimeout(bufferTimer);
+        flush();
+      } else if (bufferTimer === undefined) {
+        bufferTimer = setTimeout(flush, deltaBufferTime);
+      }
+    };
+
+    const acceptChunk = (chunk: AdditiveFilterChunk, initial: boolean) => {
+      const stored = storeAdditiveChunk(chunk);
+      const existing = chunks.get(chunk.key);
+      if (existing) {
+        if (existing.canonical !== stored.canonical)
+          throw new AdditiveFilterConflictError(chunk.key);
+        return; // canonical duplicate — no new work
+      }
+      if (chunk.deltaSafe === true)
+        assertDeltaSafeShape(chunk.key, stored.filters);
+      if (!initial && chunk.deltaSafe !== true)
+        throw new TypeError(
+          `additive filter chunk "${chunk.key}" must declare deltaSafe: true to be added after subscription start`,
+        );
+      chunks.set(chunk.key, stored);
+      if (initial || initializing) return;
+      pendingKeys.add(chunk.key);
+      scheduleFlush();
+    };
+
+    try {
+      for (const chunk of plan.initial) acceptChunk(chunk, true);
+    } catch (err) {
+      subscriber.error(err);
+      return;
+    }
+
+    // Subscribe the settle sentinel before any relay work: an empty static
+    // relay list (or an empty initial plan) settles synchronously during
+    // joinRelay, and allSettled$/firstSettle$ are plain Subjects whose
+    // emissions would be lost to a later subscriber.
+    if (settle) {
+      root.add(
+        signal.eose$.subscribe({
+          next: (v) => subscriber.next(v),
+          error: (err) => subscriber.error(err),
+        }),
+      );
+    }
+
+    if (plan.additions$) {
+      root.add(
+        plan.additions$.subscribe({
+          next: (chunk) => {
+            try {
+              acceptChunk(chunk, false);
+            } catch (err) {
+              subscriber.error(err);
+            }
+          },
+          error: (err) => subscriber.error(err),
+          // Completion means no more additions — existing streams live on.
+        }),
+      );
+    }
+
+    if (subscriber.closed) return;
+
+    if (staticRelays) {
+      for (const relay of staticRelays) joinRelay(relay);
+    } else {
+      let currentRelays = new Set<string>();
+      root.add(
+        (relays as Observable<string[]>).subscribe({
+          next: (urls) => {
+            const nextRelays = new Set(urls);
+            for (const relay of nextRelays)
+              if (!currentRelays.has(relay)) joinRelay(relay);
+            for (const relay of currentRelays)
+              if (!nextRelays.has(relay)) leaveRelay(relay);
+            currentRelays = nextRelays;
+          },
+          error: (err) => subscriber.error(err),
+          // Completion keeps the existing per-relay streams alive — same as
+          // the reactive relay-list handling in resilientSubscription.
+        }),
+      );
+    }
+
+    initializing = false;
   });
 }
 
