@@ -46,6 +46,7 @@ import { useRepoPath } from "@/hooks/useRepoPath";
 import { usePublish } from "@/hooks/usePublish";
 import { GraspServerSelector } from "@/components/GraspServerSelector";
 import { graspServerFromAddress } from "@/lib/grasp";
+import { usePrivateGitRelays } from "@/hooks/usePrivateGitRelays";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -192,11 +193,13 @@ export function CreateRepoDialog({ isOpen, onClose }: CreateRepoDialogProps) {
   } = useGraspServers(pubkey);
 
   const { state, execute, retryPush, reset } = useCreateRepo();
+  const { state: privateRelayState } = usePrivateGitRelays();
   const { publishEvent } = usePublish();
 
   // Form state
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [privateRepository, setPrivateRepository] = useState(false);
 
   // Advanced section state
   const [advancedOpen, setAdvancedOpen] = useState(false);
@@ -213,32 +216,52 @@ export function CreateRepoDialog({ isOpen, onClose }: CreateRepoDialogProps) {
     [name, identifier],
   );
 
+  const privateServers = useMemo(
+    () =>
+      privateRelayState.status === "ready"
+        ? privateRelayState.relayUrls.flatMap((relay) => {
+            const server = graspServerFromAddress(relay);
+            return server ? [server] : [];
+          })
+        : [],
+    [privateRelayState],
+  );
+  const selectableServers = privateRepository
+    ? privateServers
+    : resolvedServers;
+
   // Build the effective GraspServer list from selectedAddresses.
   const selectedServers = useMemo<GraspServer[]>(() => {
     return selectedAddresses.flatMap((address) => {
-      // Prefer the wsUrl from resolvedServers if available
-      const existing = resolvedServers.find(
+      const existing = selectableServers.find(
         (server) => server.serviceAddress === address,
       );
-      const server = existing ?? graspServerFromAddress(address);
+      // Private creation never accepts an endpoint outside the current
+      // decrypted list. Public creation retains the advanced custom input.
+      const server =
+        existing ??
+        (privateRepository ? undefined : graspServerFromAddress(address));
       return server ? [server] : [];
     });
-  }, [selectedAddresses, resolvedServers]);
+  }, [selectedAddresses, selectableServers, privateRepository]);
 
   // Initialise selectedAddresses when servers load or the dialog opens.
   useEffect(() => {
-    if (resolvedServers.length > 0 && selectedAddresses.length === 0) {
+    if (selectableServers.length > 0 && selectedAddresses.length === 0) {
       setSelectedAddresses(
-        resolvedServers.map((server) => server.serviceAddress),
+        privateRepository
+          ? [selectableServers[0].serviceAddress]
+          : selectableServers.map((server) => server.serviceAddress),
       );
     }
-  }, [resolvedServers, selectedAddresses.length]);
+  }, [selectableServers, selectedAddresses.length, privateRepository]);
 
   // Reset form when dialog opens
   useEffect(() => {
     if (isOpen) {
       setName("");
       setDescription("");
+      setPrivateRepository(false);
       setSelectedAddresses(
         resolvedServers.map((server) => server.serviceAddress),
       );
@@ -252,12 +275,14 @@ export function CreateRepoDialog({ isOpen, onClose }: CreateRepoDialogProps) {
   // When resolvedServers change (e.g. after load) and we haven't customised yet,
   // sync selectedAddresses to the new resolved list.
   useEffect(() => {
-    if (!advancedOpen) {
+    if (!advancedOpen || privateRepository) {
       setSelectedAddresses(
-        resolvedServers.map((server) => server.serviceAddress),
+        privateRepository
+          ? privateServers.slice(0, 1).map((server) => server.serviceAddress)
+          : resolvedServers.map((server) => server.serviceAddress),
       );
     }
-  }, [resolvedServers, advancedOpen]);
+  }, [resolvedServers, privateServers, advancedOpen, privateRepository]);
 
   const handleClose = useCallback(() => {
     if (
@@ -274,13 +299,15 @@ export function CreateRepoDialog({ isOpen, onClose }: CreateRepoDialogProps) {
     name.trim().length > 0 &&
     !identifierError &&
     selectedServers.length > 0 &&
+    (!privateRepository ||
+      (privateRelayState.status === "ready" && selectedServers.length === 1)) &&
     state.step === "idle";
 
   const handleSubmit = useCallback(async () => {
     if (!canSubmit) return;
 
     // Optionally save as defaults before creating
-    if (saveAsDefaults && account) {
+    if (!privateRepository && saveAsDefaults && account) {
       try {
         const tags = selectedServers.map((s) => ["g", s.wsUrl]);
         await publishEvent({
@@ -299,6 +326,7 @@ export function CreateRepoDialog({ isOpen, onClose }: CreateRepoDialogProps) {
       description: description.trim(),
       identifier,
       graspServers: selectedServers,
+      private: privateRepository,
     };
 
     await execute(input);
@@ -312,6 +340,7 @@ export function CreateRepoDialog({ isOpen, onClose }: CreateRepoDialogProps) {
     description,
     identifier,
     execute,
+    privateRepository,
   ]);
 
   const handleRetry = useCallback(async () => {
@@ -322,6 +351,7 @@ export function CreateRepoDialog({ isOpen, onClose }: CreateRepoDialogProps) {
       description: description.trim(),
       identifier,
       graspServers: selectedServers,
+      private: privateRepository,
     };
 
     await retryPush(input, state.commitHash);
@@ -332,6 +362,7 @@ export function CreateRepoDialog({ isOpen, onClose }: CreateRepoDialogProps) {
     identifier,
     selectedServers,
     retryPush,
+    privateRepository,
   ]);
 
   const isInProgress =
@@ -436,6 +467,26 @@ export function CreateRepoDialog({ isOpen, onClose }: CreateRepoDialogProps) {
               </div>
             </div>
 
+            <label className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-border/60 px-3 py-3">
+              <Checkbox
+                checked={privateRepository}
+                onCheckedChange={(value) => {
+                  setPrivateRepository(!!value);
+                  setSelectedAddresses([]);
+                  setSaveAsDefaults(false);
+                }}
+                id="private-repository"
+                className="mt-0.5"
+              />
+              <div className="space-y-0.5">
+                <span className="text-sm font-medium">Private repository</span>
+                <p className="text-xs text-muted-foreground">
+                  Create on one GRASP-08 service from your encrypted Private Git
+                  services list.
+                </p>
+              </div>
+            </label>
+
             {/* ── Advanced / Grasp servers ──────────────────────────── */}
             <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
               <CollapsibleTrigger asChild>
@@ -449,11 +500,17 @@ export function CreateRepoDialog({ isOpen, onClose }: CreateRepoDialogProps) {
                     ) : (
                       <ChevronRight className="h-3.5 w-3.5" />
                     )}
-                    GRASP servers
+                    {privateRepository
+                      ? "Private GRASP-08 service"
+                      : "GRASP servers"}
                   </span>
                   {!advancedOpen && (
                     <span className="text-xs font-mono text-muted-foreground/70 flex items-center gap-1">
-                      {serversLoading ? (
+                      {(
+                        privateRepository
+                          ? privateRelayState.status === "loading"
+                          : serversLoading
+                      ) ? (
                         <Loader2 className="h-3 w-3 animate-spin" />
                       ) : (
                         <>
@@ -469,40 +526,83 @@ export function CreateRepoDialog({ isOpen, onClose }: CreateRepoDialogProps) {
               </CollapsibleTrigger>
 
               <CollapsibleContent className="space-y-3 pt-2">
-                {serversLoading ? (
+                {(
+                  privateRepository
+                    ? privateRelayState.status === "loading"
+                    : serversLoading
+                ) ? (
                   <div className="flex items-center gap-2 text-sm text-muted-foreground px-1">
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
                     Loading your server list...
                   </div>
                 ) : (
                   <>
-                    <GraspServerSelector
-                      selectedAddresses={selectedAddresses}
-                      onSelectedAddressesChange={setSelectedAddresses}
-                      resolvedServers={resolvedServers}
-                      isFromUserList={isFromUserList}
-                      showTitle={false}
-                    />
+                    {privateRepository ? (
+                      privateRelayState.status !== "ready" ? (
+                        <p className="text-sm text-amber-600 dark:text-amber-400">
+                          Your encrypted Private Git services list is
+                          unavailable.
+                        </p>
+                      ) : privateServers.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">
+                          Add a GRASP-08 service in Settings before creating a
+                          private repository.
+                        </p>
+                      ) : (
+                        <div className="space-y-2">
+                          {privateServers.map((server) => (
+                            <label
+                              key={server.wsUrl}
+                              className="flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-sm"
+                            >
+                              <input
+                                type="radio"
+                                name="private-grasp-service"
+                                checked={selectedAddresses.includes(
+                                  server.serviceAddress,
+                                )}
+                                onChange={() =>
+                                  setSelectedAddresses([server.serviceAddress])
+                                }
+                              />
+                              <span className="font-mono text-xs">
+                                {server.serviceAddress}
+                              </span>
+                            </label>
+                          ))}
+                        </div>
+                      )
+                    ) : (
+                      <GraspServerSelector
+                        selectedAddresses={selectedAddresses}
+                        onSelectedAddressesChange={setSelectedAddresses}
+                        resolvedServers={resolvedServers}
+                        isFromUserList={isFromUserList}
+                        showTitle={false}
+                      />
+                    )}
 
                     {/* Save as defaults */}
-                    <label className="flex items-start gap-2.5 cursor-pointer rounded-md px-2.5 py-2 hover:bg-muted/40 transition-colors border border-border/40">
-                      <Checkbox
-                        checked={saveAsDefaults}
-                        onCheckedChange={(v) => setSaveAsDefaults(!!v)}
-                        id="save-defaults"
-                        className="mt-0.5"
-                      />
-                      <div className="space-y-0.5">
-                        <span className="text-sm font-medium">
-                          Save as my Grasp defaults
-                        </span>
-                        <p className="text-xs text-muted-foreground">
-                          {isFromUserList
-                            ? "Overwrite your saved server list with this selection."
-                            : "Save this selection so future repositories use these servers by default."}
-                        </p>
-                      </div>
-                    </label>
+                    {!privateRepository && (
+                      <label className="flex items-start gap-2.5 cursor-pointer rounded-md px-2.5 py-2 hover:bg-muted/40 transition-colors border border-border/40">
+                        <Checkbox
+                          checked={saveAsDefaults}
+                          onCheckedChange={(v) => setSaveAsDefaults(!!v)}
+                          id="save-defaults"
+                          className="mt-0.5"
+                        />
+                        <div className="space-y-0.5">
+                          <span className="text-sm font-medium">
+                            Save as my Grasp defaults
+                          </span>
+                          <p className="text-xs text-muted-foreground">
+                            {isFromUserList
+                              ? "Overwrite your saved server list with this selection."
+                              : "Save this selection so future repositories use these servers by default."}
+                          </p>
+                        </div>
+                      </label>
+                    )}
                   </>
                 )}
               </CollapsibleContent>
