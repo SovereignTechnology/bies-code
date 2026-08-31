@@ -455,17 +455,19 @@ export function ciCoordinatorDiscovery$(
   );
 }
 
-const repositoryCoordinatorStatus = new Map<
-  string,
-  Observable<RelayQuerySettlement>
->();
+const repositoryCoordinatorStatus = new Map<string, AdditiveOwner>();
 
 /**
  * Repository status claims plus maintainer-authored service controls for the
  * selected coordinate, fetched from the repository relays. The relay set is
  * derived from the model-cached RepositoryRelayGroup for the selected
  * coordinate (falling back to the first coordinate), so it is a pure
- * function of the cache key rather than a captured caller argument.
+ * function of the owner key rather than a captured caller argument.
+ *
+ * The owner is keyed by that same anchor coordinate: a coordinate or
+ * maintainer confirmed later grows the live query with one delta REQ per
+ * relay, and a repository relay discovered later joins with one REQ of its
+ * own, instead of restarting the whole query.
  */
 export function ciRepositoryCoordinatorStatus$(
   repositoryCoordinates: readonly string[],
@@ -474,23 +476,40 @@ export function ciRepositoryCoordinatorStatus$(
 ): Observable<RelayQuerySettlement> {
   const coordinates = sortedUnique(repositoryCoordinates);
   const pubkeys = sortedUnique(maintainers);
-  const key = `${coordinates.join(",")}|${selectedCoordinate ?? ""}|${pubkeys.join(",")}`;
-  return keyedShared(repositoryCoordinatorStatus, key, () =>
-    repositoryRelays$(selectedCoordinate ?? coordinates[0]).pipe(
-      switchMap((relays) => {
-        const filters: Filter[] = [
-          { kinds: [CI_REPOSITORY_STATUS_KIND], "#a": coordinates } as Filter,
-        ];
-        if (selectedCoordinate && pubkeys.length) {
-          filters.push({
-            kinds: [CI_SERVICE_REQUEST_KIND, CI_SERVICE_STOP_KIND],
-            authors: pubkeys,
-            "#a": [selectedCoordinate],
-          } as Filter);
-        }
-        return loadRelayQueryUntilSettled(pool, relays, filters, eventStore);
-      }),
-    ),
+  const anchor = selectedCoordinate ?? coordinates[0];
+  return additiveOwnerQuery(
+    repositoryCoordinatorStatus,
+    anchor ?? "",
+    () => repositoryRelays$(anchor),
+    [
+      ...coordinates.map(
+        (coordinate): AdditiveFilterChunk => ({
+          key: `status:${coordinate}`,
+          filters: [
+            {
+              kinds: [CI_REPOSITORY_STATUS_KIND],
+              "#a": [coordinate],
+            } as Filter,
+          ],
+          deltaSafe: true,
+        }),
+      ),
+      ...(selectedCoordinate
+        ? pubkeys.map(
+            (pubkey): AdditiveFilterChunk => ({
+              key: `control:${pubkey}`,
+              filters: [
+                {
+                  kinds: [CI_SERVICE_REQUEST_KIND, CI_SERVICE_STOP_KIND],
+                  authors: [pubkey],
+                  "#a": [selectedCoordinate],
+                } as Filter,
+              ],
+              deltaSafe: true,
+            }),
+          )
+        : []),
+    ],
   );
 }
 
