@@ -30,6 +30,10 @@ import { REPO_KIND, type ResolvedRepo } from "@/lib/nip34";
 import { loadRelayQueryUntilSettled } from "@/lib/relayQuerySettlement";
 import { standardizeNip05 } from "@/lib/routeUtils";
 import { RepositoryListModel } from "@/models/RepositoryListModel";
+import {
+  ciIdentityEnrichment$,
+  combineSettlements,
+} from "@/services/ciQueries";
 import { dnsIdentityLoader, nip05WarmupReady, pool } from "@/services/nostr";
 import { gitIndexRelays, lookupRelays } from "@/services/settings";
 
@@ -156,21 +160,16 @@ function useVerifiedCIIdentities(
     () => (repositoryDomainKey ? repositoryDomainKey.split(",") : []),
     [repositoryDomainKey],
   );
-  const lookup = use$(() => lookupRelays, []) ?? [];
-  const indexes = use$(() => gitIndexRelays, []) ?? [];
-  const relays = [...new Set([...lookup, ...indexes])];
-  const relayKey = relays.join(",");
+  // One shared enrichment query per identity — a new identity triggers one
+  // new fetch instead of restarting a bulk query for the whole set.
   const profileQuery = use$(() => {
     if (stablePubkeys.length === 0) {
       return of({ settled: true, relayCount: 0, failedRelayCount: 0 });
     }
-    return loadRelayQueryUntilSettled(
-      pool,
-      relays,
-      [{ kinds: [0], authors: stablePubkeys } as Filter],
-      store,
-    );
-  }, [pubkeyKey, relayKey, store]);
+    return combineLatest(
+      stablePubkeys.map((pubkey) => ciIdentityEnrichment$(pubkey)),
+    ).pipe(map(combineSettlements));
+  }, [pubkeyKey]);
 
   const profileRevision = use$(() => {
     if (stablePubkeys.length === 0) return of("");

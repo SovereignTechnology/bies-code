@@ -8,8 +8,9 @@ import { use$ } from "@/hooks/use$";
 import { useEventStore } from "@/hooks/useEventStore";
 import { CI_JOB_RESULT_KIND } from "@/lib/ci";
 import { loadRelayQueryUntilSettled } from "@/lib/relayQuerySettlement";
+import { ciIdentityEnrichment$ } from "@/services/ciQueries";
 import { pool } from "@/services/nostr";
-import { gitIndexRelays, lookupRelays } from "@/services/settings";
+import { gitIndexRelays } from "@/services/settings";
 
 const JOB_RESULT_LIMIT = 100;
 
@@ -36,21 +37,14 @@ export function useCIProviderJobs(
   const store = useEventStore();
   const castStore = store as unknown as CastRefEventStore;
   const indexes = use$(() => gitIndexRelays, []) ?? [];
-  const lookup = use$(() => lookupRelays, []) ?? [];
-  const discoveryRelays = [...new Set([...indexes, ...lookup])];
-  const discoveryRelayKey = discoveryRelays.join(",");
 
+  // NIP-65 relay lists arrive via the shared per-pubkey enrichment query.
   const mailboxQuery = use$(() => {
     if (!pubkey) {
       return of({ settled: true, relayCount: 0, failedRelayCount: 0 });
     }
-    return loadRelayQueryUntilSettled(
-      pool,
-      discoveryRelays,
-      [{ kinds: [10002], authors: [pubkey] } as Filter],
-      store,
-    );
-  }, [pubkey, discoveryRelayKey, store]);
+    return ciIdentityEnrichment$(pubkey);
+  }, [pubkey]);
 
   const mailboxes = use$(() => {
     if (!pubkey) return undefined;

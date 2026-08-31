@@ -10,9 +10,7 @@ import {
 import { use$ } from "@/hooks/use$";
 import { useEventStore } from "@/hooks/useEventStore";
 import { CI_NIX_PROVIDER_ADVERTISEMENT_KIND } from "@/lib/ci";
-import { loadRelayQueryUntilSettled } from "@/lib/relayQuerySettlement";
-import { pool } from "@/services/nostr";
-import { gitIndexRelays, lookupRelays } from "@/services/settings";
+import { ciIdentityEnrichment$ } from "@/services/ciQueries";
 
 export interface CIProviderAdvertisementState {
   advertisement: CIProviderAdvertisement | undefined;
@@ -26,27 +24,13 @@ export function useCIProviderAdvertisement(
 ): CIProviderAdvertisementState {
   const store = useEventStore();
   const castStore = store as unknown as CastRefEventStore;
-  const indexes = use$(() => gitIndexRelays, []) ?? [];
-  const lookup = use$(() => lookupRelays, []) ?? [];
-  const relays = [...new Set([...indexes, ...lookup])];
-  const relayKey = relays.join(",");
 
   const query = use$(() => {
     if (!pubkey) {
       return of({ settled: true, relayCount: 0, failedRelayCount: 0 });
     }
-    return loadRelayQueryUntilSettled(
-      pool,
-      relays,
-      [
-        {
-          kinds: [CI_NIX_PROVIDER_ADVERTISEMENT_KIND],
-          authors: [pubkey],
-        } as Filter,
-      ],
-      store,
-    );
-  }, [pubkey, relayKey, store]);
+    return ciIdentityEnrichment$(pubkey);
+  }, [pubkey]);
 
   const advertisement = use$(() => {
     if (!pubkey) return of(undefined);

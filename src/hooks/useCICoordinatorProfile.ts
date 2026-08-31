@@ -23,8 +23,9 @@ import { normalizeUrl } from "@/lib/url";
 import { RepositoryListModel } from "@/models/RepositoryListModel";
 import { resilientSubscription } from "@/lib/resilientSubscription";
 import { loadRelayQueryUntilSettled } from "@/lib/relayQuerySettlement";
+import { ciIdentityEnrichment$ } from "@/services/ciQueries";
 import { pool } from "@/services/nostr";
-import { gitIndexRelays, lookupRelays } from "@/services/settings";
+import { gitIndexRelays } from "@/services/settings";
 import { use$ } from "@/hooks/use$";
 import { useEventStore } from "@/hooks/useEventStore";
 
@@ -66,27 +67,13 @@ export function useCICoordinatorAdvertisement(
 ): CICoordinatorAdvertisementState {
   const store = useEventStore();
   const castStore = store as unknown as CastRefEventStore;
-  const indexRelays = use$(() => gitIndexRelays, []) ?? [];
-  const lookup = use$(() => lookupRelays, []) ?? [];
-  const relays = [...new Set([...indexRelays, ...lookup])];
-  const relayKey = relays.join(",");
 
   const query = use$(() => {
     if (!pubkey) {
       return of({ settled: true, relayCount: 0, failedRelayCount: 0 });
     }
-    return loadRelayQueryUntilSettled(
-      pool,
-      relays,
-      [
-        {
-          kinds: [CI_COORDINATOR_ADVERTISEMENT_KIND],
-          authors: [pubkey],
-        } as Filter,
-      ],
-      store,
-    );
-  }, [pubkey, relayKey, store]);
+    return ciIdentityEnrichment$(pubkey);
+  }, [pubkey]);
 
   const advertisement = use$(() => {
     if (!pubkey) return undefined;
@@ -159,31 +146,15 @@ export function useCICoordinatorProfile(
 ): CICoordinatorProfileState | undefined {
   const store = useEventStore();
   const castStore = store as unknown as CastRefEventStore;
-  const indexRelays = use$(() => gitIndexRelays, []) ?? [];
-  const lookup = use$(() => lookupRelays, []) ?? [];
-  const discoveryRelays = [...new Set([...indexRelays, ...lookup])];
-  const discoveryRelayKey = discoveryRelays.join(",");
 
+  // Relay list, advertisement, and readiness arrive via the shared per-pubkey
+  // enrichment query (deduped with every other surface showing this identity).
   const discoveryQuery = use$(() => {
     if (!pubkey) {
       return of({ settled: true, relayCount: 0, failedRelayCount: 0 });
     }
-    return loadRelayQueryUntilSettled(
-      pool,
-      discoveryRelays,
-      [
-        {
-          kinds: [
-            10002,
-            CI_COORDINATOR_ADVERTISEMENT_KIND,
-            CI_REQUEST_READINESS_KIND,
-          ],
-          authors: [pubkey],
-        } as Filter,
-      ],
-      store,
-    );
-  }, [pubkey, discoveryRelayKey, store]);
+    return ciIdentityEnrichment$(pubkey);
+  }, [pubkey]);
 
   const mailboxes = use$(() => {
     if (!pubkey) return undefined;
