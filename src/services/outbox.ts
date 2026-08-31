@@ -33,10 +33,12 @@ import { ignoreElements } from "rxjs/operators";
 import type { NostrEvent } from "nostr-tools";
 import type { RelayPool, PublishResponse } from "applesauce-relay";
 import { normalizeUrl } from "@/lib/url";
+import { getRepoIsPrivate, REPO_KIND } from "@/lib/nip34";
 import {
   getPrivateRelayTrustSession,
   getPrivateRepositoryRelays,
   isPrivateRepositoryCoordinate,
+  isPrivateRepositoryEvent,
   markPrivateRelayEvent,
 } from "@/services/privateRepositoryScope";
 
@@ -452,12 +454,20 @@ class OutboxStore {
     const privateRepositoryGroups = repositoryGroups.filter(
       isPrivateRepositoryCoordinate,
     );
+    const hasPrivateIntent =
+      isPrivateRepositoryEvent(event) ||
+      (event.kind === REPO_KIND && getRepoIsPrivate(event));
 
-    if (privateRepositoryGroups.length > 0) {
+    if (privateRepositoryGroups.length > 0 || hasPrivateIntent) {
+      if (repositoryGroups.length === 0) {
+        throw new Error(
+          "Private repository publication is missing its repository coordinate",
+        );
+      }
       await this.publishPrivateRepositoryEvent(
         event,
         repositoryGroups,
-        privateRepositoryGroups,
+        repositoryGroups,
       );
       return;
     }

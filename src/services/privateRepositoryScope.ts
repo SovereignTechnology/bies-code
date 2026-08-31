@@ -10,6 +10,9 @@ interface PrivateRelayTrustSession {
 }
 
 const privateEventIds = new Set<string>();
+// Page-lifetime quarantine. Active relay mappings are account-scoped below,
+// but a coordinate once proven private must never become eligible for public
+// delivery merely because an account switch cleared its current access.
 const privateRepositoryCoordinates = new Set<string>();
 const privateRepositoryRelays = new Map<string, Set<string>>();
 const privateRelaySessions = new Map<string, PrivateRelayTrustSession>();
@@ -129,7 +132,6 @@ export function clearPrivateRepositoryScope(): ClearedPrivateRepositoryScope {
     relayUrls: [...privateRelaySessions.keys()],
   };
   privateEventIds.clear();
-  privateRepositoryCoordinates.clear();
   privateRepositoryRelays.clear();
   privateRelaySessions.clear();
   emitRevision();

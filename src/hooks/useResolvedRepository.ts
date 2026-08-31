@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { use$ } from "./use$";
 import { useEventStore } from "./useEventStore";
 import {
@@ -41,6 +41,7 @@ import {
   usePrivateRepositoryProbe,
   type PrivateRepositoryProbeState,
 } from "@/hooks/usePrivateRepositoryProbe";
+import { markPrivateRepositoryCoordinate } from "@/services/privateRepositoryScope";
 
 /** Max healthy mailbox relays to take per maintainer when querying NIP-65 relays. */
 const MAX_MAILBOX_RELAYS_PER_USER = 3;
@@ -250,6 +251,16 @@ export function useResolvedRepository(
     ) as unknown as Observable<ResolvedRepo | undefined>;
   }, [key, store, privateProbeStatus]);
   const repo = privateProbeStatus === "found" ? privateProbe?.repo : publicRepo;
+  const privateCoordinateKey = repo?.isPrivate
+    ? repo.confirmedMemberCoordinates.join(",")
+    : "";
+  useEffect(() => {
+    if (!repo?.isPrivate) return;
+    markPrivateRepositoryCoordinate(repo.selectedCoordinate);
+    for (const coordinate of repo.confirmedMemberCoordinates) {
+      markPrivateRepositoryCoordinate(coordinate);
+    }
+  }, [repo, privateCoordinateKey]);
 
   // Base RelayGroup: repo-declared relays + relay hints only.
   // Backed by the RepositoryRelayGroup model so it's cached and shared.
