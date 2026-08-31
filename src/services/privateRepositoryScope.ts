@@ -11,6 +11,7 @@ interface PrivateRelayTrustSession {
 
 const privateEventIds = new Set<string>();
 const privateRepositoryCoordinates = new Set<string>();
+const privateRepositoryRelays = new Map<string, Set<string>>();
 const privateRelaySessions = new Map<string, PrivateRelayTrustSession>();
 
 export const privateRepositoryScopeRevision$ = new BehaviorSubject(0);
@@ -63,6 +64,34 @@ export function markPrivateRepositoryCoordinate(coordinate: string): void {
   }
 }
 
+export function installPrivateRepositoryRelays(
+  coordinates: readonly string[],
+  relayUrls: readonly string[],
+): void {
+  const relays = new Set(relayUrls.map(normalizeUrl));
+  let changed = false;
+  for (const coordinate of coordinates) {
+    markPrivateRepositoryCoordinate(coordinate);
+    const previous = privateRepositoryRelays.get(coordinate);
+    if (
+      !previous ||
+      previous.size !== relays.size ||
+      [...relays].some((relay) => !previous.has(relay))
+    ) {
+      privateRepositoryRelays.set(coordinate, new Set(relays));
+      changed = true;
+    }
+  }
+  if (changed) emitRevision();
+}
+
+export function getPrivateRepositoryRelays(
+  coordinate: string,
+): string[] | undefined {
+  const relays = privateRepositoryRelays.get(coordinate);
+  return relays ? [...relays] : undefined;
+}
+
 export function isPrivateRepositoryCoordinate(coordinate: string): boolean {
   return privateRepositoryCoordinates.has(coordinate);
 }
@@ -75,7 +104,14 @@ export function markPrivateRelayEvent(event: NostrEvent): void {
 }
 
 export function isPrivateRepositoryEvent(event: NostrEvent): boolean {
-  return privateEventIds.has(event.id);
+  if (privateEventIds.has(event.id)) return true;
+  return event.tags.some(
+    ([name, value]) =>
+      ((name === "a" || name === "A") &&
+        privateRepositoryCoordinates.has(value)) ||
+      ((name === "e" || name === "E" || name === "q") &&
+        privateEventIds.has(value)),
+  );
 }
 
 export function isPrivateRepositoryEventId(eventId: string): boolean {
@@ -94,6 +130,7 @@ export function clearPrivateRepositoryScope(): ClearedPrivateRepositoryScope {
   };
   privateEventIds.clear();
   privateRepositoryCoordinates.clear();
+  privateRepositoryRelays.clear();
   privateRelaySessions.clear();
   emitRevision();
   return cleared;

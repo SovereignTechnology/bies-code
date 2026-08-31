@@ -33,6 +33,16 @@ import { ignoreElements } from "rxjs/operators";
 import type { NostrEvent } from "nostr-tools";
 import type { RelayPool, PublishResponse } from "applesauce-relay";
 import { normalizeUrl } from "@/lib/url";
+import {
+  getPrivateRelayTrustSession,
+  getPrivateRepositoryRelays,
+  isPrivateRepositoryCoordinate,
+  markPrivateRelayEvent,
+} from "@/services/privateRepositoryScope";
+
+const PRIVATE_REPOSITORY_MUTATION_KINDS = new Set([
+  5, 1111, 1617, 1618, 1619, 1621, 1630, 1631, 1632, 1633, 30617, 30618,
+]);
 
 // ---------------------------------------------------------------------------
 // URL normalization
@@ -436,6 +446,21 @@ class OutboxStore {
   ): Promise<void> {
     // Deduplicate group IDs
     const uniqueGroupIds = [...new Set(groupIds)];
+    const repositoryGroups = uniqueGroupIds.filter((groupId) =>
+      groupId.startsWith("30617:"),
+    );
+    const privateRepositoryGroups = repositoryGroups.filter(
+      isPrivateRepositoryCoordinate,
+    );
+
+    if (privateRepositoryGroups.length > 0) {
+      await this.publishPrivateRepositoryEvent(
+        event,
+        repositoryGroups,
+        privateRepositoryGroups,
+      );
+      return;
+    }
 
     // Insert a provisional item immediately (no relays yet) so the
     // OutboxStatusBadge appears on the event card without any delay while
@@ -492,6 +517,67 @@ class OutboxStore {
 
     await this.upsert(item);
     this.sendToRelays(item);
+  }
+
+  /** Publish private repository events without UI or durable outbox state. */
+  private async publishPrivateRepositoryEvent(
+    event: NostrEvent,
+    repositoryGroups: string[],
+    privateRepositoryGroups: string[],
+  ): Promise<void> {
+    if (!this.pool) throw new Error("The relay pool is not ready");
+    if (!PRIVATE_REPOSITORY_MUTATION_KINDS.has(event.kind)) {
+      throw new Error(
+        `Event kind ${event.kind} is not enabled for private repositories`,
+      );
+    }
+    if (privateRepositoryGroups.length !== repositoryGroups.length) {
+      throw new Error(
+        "Private repository publication contains an unresolved repository coordinate",
+      );
+    }
+
+    const relayUrls = new Set<string>();
+    let generation: number | undefined;
+    for (const coordinate of privateRepositoryGroups) {
+      const relays = getPrivateRepositoryRelays(coordinate);
+      if (!relays?.length) {
+        throw new Error(
+          `No admitted private relay is available for ${coordinate}`,
+        );
+      }
+      for (const relay of relays) {
+        const trust = getPrivateRelayTrustSession(relay);
+        if (!trust || trust.pubkey !== event.pubkey) {
+          throw new Error(
+            "The active account no longer owns this private relay session",
+          );
+        }
+        if (generation !== undefined && trust.generation !== generation) {
+          throw new Error("Private relay destinations cross account sessions");
+        }
+        generation = trust.generation;
+        relayUrls.add(normalizeUrl(relay));
+      }
+    }
+    if (relayUrls.size === 0) {
+      throw new Error("Private repository publication has no destination");
+    }
+
+    markPrivateRelayEvent(event);
+    const destinations = [...relayUrls];
+    const responses = await this.pool.publish(destinations, event);
+    const accepted = new Set(
+      responses
+        .filter((response) => response.ok)
+        .map((response) => normalizeUrl(response.from)),
+    );
+    const missing = destinations.filter((relay) => !accepted.has(relay));
+    if (missing.length > 0) {
+      throw new Error(
+        `Private event was not accepted by every repository relay: ${missing.join(", ")}`,
+      );
+    }
   }
 
   /**

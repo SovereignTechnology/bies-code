@@ -82,7 +82,9 @@ import {
 } from "@/lib/inferredPRParents";
 import { loadEventReferenceClosure } from "@/lib/eventReferenceClosure";
 import {
+  getPrivateRepositoryRelays,
   getPrivateRelayTrustSession,
+  isPrivateRepositoryCoordinate,
   isTrustedPrivateRepositoryRelay,
   markPrivateRelayEvent,
 } from "@/services/privateRepositoryScope";
@@ -406,6 +408,9 @@ const relayGroupResolver: RelayGroupResolver = async (groupId) => {
   // target. Any announcements arriving later are picked up when the outbox
   // re-resolves relay groups.
   if (groupId.startsWith("30617:")) {
+    if (isPrivateRepositoryCoordinate(groupId)) {
+      return getPrivateRepositoryRelays(groupId) ?? [];
+    }
     const parts = groupId.split(":");
     const pubkey = parts[1];
     const d = parts.slice(2).join(":");

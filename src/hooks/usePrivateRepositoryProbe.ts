@@ -29,6 +29,7 @@ import { normalizeUrl } from "@/lib/url";
 import { eventStore, pool } from "@/services/nostr";
 import { privateGitRelayList$ } from "@/services/privateGitRelays";
 import {
+  installPrivateRepositoryRelays,
   markPrivateRelayEvent,
   markPrivateRepositoryCoordinate,
 } from "@/services/privateRepositoryScope";
@@ -238,6 +239,10 @@ async function probePrivateRepository(
       error: "The private repository has no admitted repository relay.",
     };
   }
+  installPrivateRepositoryRelays(
+    [...resolved.confirmedMemberCoordinates, repoCoordinate(pubkey, dTag)],
+    repositoryRelays,
+  );
   return {
     status: "found",
     relayUrls: repositoryRelays,
