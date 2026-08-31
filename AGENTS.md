@@ -94,6 +94,10 @@ fi
 
 [grasp]: https://github.com/ — see `../ngit-grasp`
 
+### Benchmarks (`benchmarks/`) — manual only
+
+`pnpm bench` runs the browser-driven relay query-budget benchmark (currently a stub that only verifies browser availability). It drives a production build in headless Playwright Chromium and is never part of pre-commit, `pnpm test`, or CI. The default devShell deliberately omits the ~1 GB browser bundle — run it via `nix develop .#bench --command pnpm bench`, or outside Nix provision a browser once with `npx playwright-core install chromium`. The `playwright-core` devDependency must stay pinned to the exact version of `pkgs.playwright-driver` in `flake.nix`; see `benchmarks/README.md`.
+
 ## Nostr Protocol Integration
 
 ### Choosing kinds, designing tags, content vs. tags

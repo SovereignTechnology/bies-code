@@ -43,7 +43,7 @@
           # cannot install its default version at build time.
           buildToolsVersions = [ "35.0.0" "36.0.0" ];
         };
-      in {
+      in rec {
         devShell = pkgs.mkShell {
           buildInputs = [
             pkgs.nodejs
@@ -52,11 +52,6 @@
             android-sdk.androidsdk
             ngit-grasp-pkg
           ];
-          # playwright-core downloads no browsers at install time; point it at
-          # the Nix-provided bundle. Host-requirement validation checks FHS
-          # paths that don't exist on NixOS, so skip it.
-          PLAYWRIGHT_BROWSERS_PATH = playwright-browsers;
-          PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS = "true";
           # Point the e2e harness at the pinned ngit-grasp binary. Without this
           # the harness falls back to the sibling-clone heuristic
           # (../ngit-grasp/target/release/ngit-grasp), which is fine for local
@@ -148,6 +143,24 @@ EOF
               fi
             fi
           '';
+        };
+
+        devShells = {
+          default = devShell;
+          # Browser-benchmark shell (`nix develop .#bench`). Kept separate so
+          # ordinary `nix develop` entries don't realise the ~1 GB Chromium
+          # bundle that only `pnpm bench` needs.
+          bench = pkgs.mkShell {
+            buildInputs = [
+              pkgs.nodejs
+              pkgs.pnpm
+            ];
+            # playwright-core downloads no browsers at install time; point it
+            # at the Nix-provided bundle. Host-requirement validation checks
+            # FHS paths that don't exist on NixOS, so skip it.
+            PLAYWRIGHT_BROWSERS_PATH = playwright-browsers;
+            PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS = "true";
+          };
         };
       });
 }
