@@ -4,6 +4,7 @@ import { useEventStore } from "./useEventStore";
 import type { RelayGroup } from "applesauce-relay";
 import {
   coordsCacheKey,
+  roleHistoryCacheKey,
   type RepositoryRoleHistory,
   type ResolvedPRLite,
   type RepoQueryOptions,
@@ -40,6 +41,15 @@ export function usePRs(
 
   const cacheKey = coords ? coordsCacheKey(coords) : "";
 
+  // Structural key: the resolver rebuilds roleHistory on every
+  // announcement-graph emission, so identity-based deps would restart the
+  // relay subscription (fresh seenIds, full re-fetch) on emissions that did
+  // not change role content.
+  const roleHistoryKey = useMemo(
+    () => roleHistoryCacheKey(roleHistory),
+    [roleHistory],
+  );
+
   // Fetch PRs/patches from relay and pipe each newly discovered root item ID
   // into nip34ListLoader via nip34RepoLoader. The factory handles dedup
   // (seenIds in closure) and closes cleanly on unsubscribe. Filter merging
@@ -50,7 +60,7 @@ export function usePRs(
     return nip34RepoLoader(coords, repoRelayGroup, roleHistory).pipe(
       catchError(() => EMPTY),
     );
-  }, [cacheKey, repoRelayGroup, roleHistory]);
+  }, [cacheKey, repoRelayGroup, roleHistoryKey]);
 
   // Subscribe to the model — cached by the store, shared across components.
   return use$(() => {
@@ -60,5 +70,5 @@ export function usePRs(
       cacheKey,
       roleHistory,
     ) as unknown as Observable<ResolvedPRLite[]>;
-  }, [cacheKey, roleHistory, store]);
+  }, [cacheKey, roleHistoryKey, store]);
 }

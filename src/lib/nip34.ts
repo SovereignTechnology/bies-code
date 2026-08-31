@@ -44,6 +44,8 @@ export type {
   RepositoryRoleHistory,
 } from "@/lib/nip34-maintainer-model";
 
+export { roleHistoryCacheKey } from "@/lib/nip34-maintainer-model";
+
 // ---------------------------------------------------------------------------
 // Patch-chain identification tags — excluded from user-visible labels
 // ---------------------------------------------------------------------------

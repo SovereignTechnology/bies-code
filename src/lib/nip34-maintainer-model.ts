@@ -134,6 +134,17 @@ export interface RepositoryRoleHistory {
   resolvedRecords: ResolvedRepositoryRoleRecord[];
 }
 
+/**
+ * Stable structural key for a role history. The resolver rebuilds the
+ * history object on every announcement-graph emission, so identity-based
+ * React dependency comparisons would treat content-identical histories as
+ * changes. History derivation is deterministic over the announcement set,
+ * making this serialization a reliable equality key.
+ */
+export function roleHistoryCacheKey(history?: RepositoryRoleHistory): string {
+  return history ? JSON.stringify(history) : "";
+}
+
 const ROLE_NAMES = new Set<RepositoryRole>(["M", "m", "o"]);
 const HEX_PUBKEY = /^[0-9a-f]{64}$/;
 
