@@ -6,10 +6,11 @@
 // switching to the PRs tab (warm switch). WebSocket traffic is recorded by an
 // init script that wraps window.WebSocket before any app code runs.
 //
-// REQ frame count and REQ filter JSON bytes are the hard budget: they are
+// REQ frame count and REQ filter JSON bytes are the primary budget: they are
 // properties of the client's behaviour and near-deterministic across runs.
-// Wall-clock timings run against live public relays and are only a coarse
-// smoke test (they exist to catch a 0.5s -> 15s cliff, not a 10% wobble).
+// Wall-clock timings run against live public relays and are noisier, so they
+// are budgeted with absolute ceilings rather than tight relative ones — they
+// exist to catch a 0.4s -> 9s cliff, not a 10% wobble.
 //
 // See benchmarks/README.md for usage and the baseline workflow.
 
@@ -312,21 +313,52 @@ function printScenario(name, s) {
   console.log(`  tabs settled at:     ${JSON.stringify(s.tabText)}`);
 }
 
-// Hard budget: client-behaviour metrics. In principle near-deterministic,
-// but on current main the measurement window ends only when the streaming
-// tab badges settle, so reconnect/backoff churn accumulates during slow
-// runs and REQ counts vary up to ~2x (observed 1,538–2,427 cold across the
-// baseline runs). Limits are therefore generous — their job is to catch
-// order-of-magnitude cliffs. Tighten them as subscription work makes the
-// query behaviour deterministic. distinctRelays was exactly reproducible
-// across baseline runs; its slack only covers live NIP-65 outbox drift.
-const HARD_BUDGET = {
-  reqFrames: { pct: 1.0, abs: 50 },
-  reqFilterBytes: { pct: 2.0, abs: 65536 },
-  distinctRelays: { pct: 0.3, abs: 3 },
+// Budgets are per scenario, because cold load and warm switch now have very
+// different shapes. Query limits are `base * (1 + pct) + abs`; timing limits
+// are `max(base * mult, floor)` so that a sub-second baseline still gets an
+// absolute ceiling rather than an absurdly tight relative one.
+//
+// Cold load is close to reproducible: across the three baseline runs REQ
+// frames spanned 1,400–1,631 (±13% of the median) and filter bytes
+// 2.11–2.36 MB (±6%), so a ~35% band plus a small absolute allowance leaves
+// room for live churn and for the reference repo accumulating items without
+// hiding a real regression. distinctRelays was identical (54) in all three
+// runs; its slack only covers live NIP-65 outbox drift.
+//
+// Warm switch is now single-digit REQs (9, 9, 89 across the baseline runs),
+// so its limits are deliberately absolute rather than relative: one run had
+// the tail of cold-load identity enrichment reconnect onto four relays after
+// the scenario boundary, costing ~80 extra REQs. Percentages of a median of
+// 9 would be meaningless; the ceilings still fail an order of magnitude
+// below the pre-additive-subscription behaviour (636 REQs / 1.29 MB).
+const BUDGET = {
+  coldLoad: {
+    query: {
+      reqFrames: { pct: 0.35, abs: 50 },
+      reqFilterBytes: { pct: 0.35, abs: 65536 },
+      distinctRelays: { pct: 0.3, abs: 3 },
+    },
+    timing: {
+      navToTabsVisibleMs: { mult: 3, floor: 8_000 },
+      timeToStableMs: { mult: 2, floor: 60_000 },
+    },
+  },
+  warmSwitch: {
+    query: {
+      reqFrames: { pct: 1.0, abs: 120 },
+      reqFilterBytes: { pct: 1.0, abs: 40_960 },
+      distinctRelays: { pct: 0.3, abs: 3 },
+    },
+    // A warm tab switch is a store read; it must never quietly return to
+    // seconds. Thresholds are generous against live-relay noise (baseline
+    // 0.4s, slowest baseline run 1.6s) but well below the ~9s it used to
+    // take, and below the 3s at which the switch stops feeling instant.
+    timing: {
+      tabSwitchMs: { mult: 3, floor: 2_000 },
+      timeToStableMs: { mult: 3, floor: 6_000 },
+    },
+  },
 };
-// Soft smoke test: live-relay latency is noisy; only a cliff should fail.
-const SOFT_LIMIT = (base) => Math.max(base * 3, base + 10_000);
 
 function compare(baseline, report) {
   let failed = false;
@@ -335,7 +367,9 @@ function compare(baseline, report) {
     const cur = report[scenario];
     if (!base || !cur) continue;
     console.log(`\n${scenario} vs baseline:`);
-    for (const [metric, { pct, abs }] of Object.entries(HARD_BUDGET)) {
+    for (const [metric, { pct, abs }] of Object.entries(
+      BUDGET[scenario].query,
+    )) {
       const limit = Math.ceil(base[metric] * (1 + pct)) + abs;
       const ok = cur[metric] <= limit;
       if (!ok) failed = true;
@@ -343,13 +377,15 @@ function compare(baseline, report) {
         `  ${ok ? "PASS" : "FAIL"}  ${metric}: ${fmt(cur[metric])} (baseline ${fmt(base[metric])}, limit ${fmt(limit)})`,
       );
     }
-    for (const metric of ["timeToStableMs", "tabSwitchMs"]) {
+    for (const [metric, { mult, floor }] of Object.entries(
+      BUDGET[scenario].timing,
+    )) {
       if (base[metric] === undefined || cur[metric] === undefined) continue;
-      const limit = SOFT_LIMIT(base[metric]);
+      const limit = Math.max(base[metric] * mult, floor);
       const ok = cur[metric] <= limit;
       if (!ok) failed = true;
       console.log(
-        `  ${ok ? "PASS" : "FAIL"}  ${metric} (soft): ${fmtSec(cur[metric])} (baseline ${fmtSec(base[metric])}, limit ${fmtSec(limit)})`,
+        `  ${ok ? "PASS" : "FAIL"}  ${metric}: ${fmtSec(cur[metric])} (baseline ${fmtSec(base[metric])}, limit ${fmtSec(limit)})`,
       );
     }
     if (!cur.stable) {
