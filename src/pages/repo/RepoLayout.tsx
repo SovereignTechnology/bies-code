@@ -194,12 +194,8 @@ function RepoLayoutResolved({
   location: ReturnType<typeof useLocation>;
   nip05?: string;
 }) {
-  const { resolved, repoSearch, announcementsSettled } = useResolvedRepository(
-    pubkey,
-    repoId,
-    relayHints,
-    nip05Relays,
-  );
+  const { resolved, repoSearch, announcementsFreshEose, announcementsSettled } =
+    useResolvedRepository(pubkey, repoId, relayHints, nip05Relays);
   const repo = resolved?.repo;
 
   // Build an encoded base path for intra-repository links. Route wildcard
@@ -662,8 +658,12 @@ function RepoLayoutResolved({
     [cloneUrls.join(","), basePath],
   );
 
-  // Route only after the bounded current announcement refresh has stabilized.
-  // Keeping this after every hook invalidates stale decisions across renders.
+  // Route at the first fresh announcement EOSE (both explicit and
+  // legacy-inferred leads): the lead path is fail-closed on partial data, and
+  // a grasp/index relay holding any maintainer's announcement for a repo
+  // holds the whole group's, so the first fresh view is graph-complete in
+  // practice. Keeping this after every hook invalidates stale decisions
+  // across renders; a later correction is another replace-navigation.
   const leadRedirectPath = repo
     ? getRepositoryLeadRedirectPath({
         selectedPubkey: pubkey,
@@ -673,12 +673,15 @@ function RepoLayoutResolved({
         search: location.search,
         hash: location.hash,
         leadResolution: repo.leadResolution,
-        announcementsSettled,
+        announcementsFreshEose,
       })
     : undefined;
   if (leadRedirectPath) {
     return <Navigate to={leadRedirectPath} replace state={location.state} />;
   }
+  // Absence conclusions assert that no relay in the snapshot holds a live
+  // announcement — they need the full all-relay settle (announcement wave +
+  // deletion follow-up), not just the first fresh EOSE.
   if (repo?.coordinateStatus === "dead" && announcementsSettled) {
     return <DeadRepositoryCoordinate />;
   }

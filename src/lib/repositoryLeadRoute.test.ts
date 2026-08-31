@@ -20,7 +20,7 @@ function redirect(
     | "none"
     | "pending"
     | "conflict",
-  announcementsSettled = true,
+  announcementsFreshEose = true,
 ) {
   return getRepositoryLeadRedirectPath({
     selectedPubkey: selected,
@@ -34,13 +34,13 @@ function redirect(
       source,
       path: [selected, lead],
     },
-    announcementsSettled,
+    announcementsFreshEose,
   });
 }
 
 describe("repository lead redirects", () => {
   it.each(["explicit", "legacy_inferred"] as const)(
-    "preserves the complete URL for a settled %s lead",
+    "preserves the complete URL for a fresh %s lead",
     (source) => {
       expect(redirect(source)).toBe(
         `${repoToPath(lead, dTag, relayHints)}${pageSuffix}${search}${hash}`,
@@ -49,7 +49,7 @@ describe("repository lead redirects", () => {
   );
 
   it.each(["explicit", "legacy_inferred"] as const)(
-    "does not redirect an unsettled %s result",
+    "does not redirect a %s result before any fresh relay EOSE",
     (source) => {
       expect(redirect(source, false)).toBeUndefined();
     },
@@ -79,7 +79,7 @@ describe("repository lead redirects", () => {
           source: "explicit",
           path: [lead],
         },
-        announcementsSettled: true,
+        announcementsFreshEose: true,
       }),
     ).toBeUndefined();
   });

@@ -4,6 +4,7 @@
 
 ### Changed
 
+- Settle repository resolution once over a monotonic initial relay snapshot — one identifier-scoped announcement wave plus a bounded deletion follow-up, with relay failures counted so settlement is always finite. Maintainers, relays, and mailboxes discovered later enrich the page progressively instead of restarting settlement; canonical lead redirects now fire at the first fresh relay EOSE, while dead-coordinate and unsupported-restart conclusions and the membership safety gates keep waiting for the full snapshot.
 - Enable conservative one-at-a-time repository membership changes only after complete relay, history, network Git-object, and relay-publication verification; pre-stabilization acceptance delivery jobs remain quarantined.
 - Make reciprocal NIP-34 membership the repository authority boundary, add indexed `M`/`m`/`o` role and `defer` resolution, separate discovery from confirmed maintainer/member coordinates, retire legacy complete-roster browser writes, and preserve membership tags through metadata edits.
 - Resolve repository leads from the selected coordinate's signed `M` pointer path or legacy vote result, apply redirects only after a bounded current-announcement refresh, preserve the full URL, and leave unresolved or tied routes unchanged.

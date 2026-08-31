@@ -36,11 +36,16 @@ be shown as a relationship, but it cannot absorb the invitee's existing
 component or contribute its metadata, infrastructure, or privacy.
 
 Repository-card readers do not expose the first cached graph they can build.
-Each explicit coordinate is refreshed exactly, its active role subjects and
-NIP-65 relay hints are followed to a fixed point, and only that settled result
-becomes eligible for browse, search, profile, pin, follow, star, or NIP-19
-presentation. A later announcement or newly discovered author invalidates the
-settled snapshot and starts resolution again.
+Each explicit coordinate settles once over a monotonic initial snapshot: one
+identifier-scoped announcement wave over the relays known at the start of
+resolution, followed by one bounded deletion follow-up, with relay failures
+counting toward completion so settlement is always finite. Only a settled
+result becomes eligible for browse, search, profile, pin, follow, star, or
+NIP-19 presentation. Announcements, authors, and relays discovered after the
+snapshot are progressive enrichment: they update presentation and the
+confirmed authority sets as they arrive, but they never re-arm the settled
+snapshot and never re-gate routing or eligibility. Action-time authority
+keeps its own stricter snapshot (§Browser mutation safety).
 
 ## Current role records
 

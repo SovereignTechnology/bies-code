@@ -22,6 +22,8 @@ import {
   resilientSubscription,
   resilientRequest,
 } from "@/lib/resilientSubscription";
+import { announcementSnapshot } from "@/lib/announcementSnapshot";
+import type { RelayQuerySettlement } from "@/lib/relayQuerySettlement";
 import { REPO_KIND, type ResolvedRepo } from "@/lib/nip34";
 import {
   gitIndexRelays,
@@ -32,17 +34,8 @@ import { RepositoryModel } from "@/models/RepositoryModel";
 import { RepositoryRelayGroup } from "@/models/RepositoryRelayGroup";
 import type { Filter } from "applesauce-core/helpers";
 import type { Observable } from "rxjs";
-import { BehaviorSubject, combineLatest, concat, of } from "rxjs";
-import {
-  catchError,
-  distinctUntilChanged,
-  endWith,
-  ignoreElements,
-  map,
-  switchMap,
-  takeWhile,
-  tap,
-} from "rxjs/operators";
+import { BehaviorSubject, combineLatest, defer, of } from "rxjs";
+import { distinctUntilChanged, map, switchMap } from "rxjs/operators";
 import { normalizeUrl } from "@/lib/url";
 
 /** Max healthy mailbox relays to take per maintainer when querying NIP-65 relays. */
@@ -69,13 +62,24 @@ export interface ResolvedRepositoryResult {
   /** Search state for the repo announcement — undefined if the event was
    *  already in the store (no search needed). */
   repoSearch: EventSearchState | undefined;
-  /** True once the bounded announcement-author/relay refresh has stabilized. */
+  /**
+   * First-fresh-EOSE readiness tier: true once any initial-snapshot relay has
+   * delivered an actual EOSE for the identifier-only announcement wave this
+   * session. Cached store data alone never sets it, so a stale cached graph
+   * from a previous visit cannot cause a redirect-then-bounce. Gates the
+   * lead-maintainer redirect.
+   */
+  announcementsFreshEose: boolean;
+  /**
+   * Full-snapshot readiness tier: true once the identifier-only announcement
+   * wave plus the one-shot deletion follow-up have settled on every initial
+   * relay. Monotonic — enrichment discovery never resets it. Gates absence
+   * conclusions (dead coordinate / unsupported restart) and the fail-closed
+   * membership surfaces.
+   */
   announcementsSettled: boolean;
-}
-
-interface AnnouncementGraphSettleState {
-  key: string;
-  settled: boolean;
+  /** Coverage detail for the full snapshot (relay and failure counts). */
+  announcementSettlement: RelayQuerySettlement;
 }
 
 /**
@@ -217,39 +221,11 @@ export function useResolvedRepository(
   }, [pubkey, dTag, alreadyInStore]);
 
   const repoSearch = useEventSearch(searchTarget, searchGroups);
-  const configuredGitIndexRelays = use$(gitIndexRelays) ?? [];
-  const configuredFallbackRelays = use$(fallbackRelays) ?? [];
-  const configuredLookupRelays = use$(lookupRelays) ?? [];
 
-  // Background refresh: when the event is already in the store (e.g. navigated
-  // from the landing page which pre-fetched it), useEventSearch is skipped
-  // entirely — meaning the git index relays are never queried for a fresh copy.
-  // Fire a one-shot background subscription to the git index relays + relay
-  // hints so the store is updated with the latest version of the announcement.
-  // This mirrors what useEventSearch would have done, but without any UI state.
-  use$(() => {
-    if (!pubkey || !dTag || !alreadyInStore) return undefined;
-
-    const filter: Filter = {
-      kinds: [REPO_KIND],
-      authors: [pubkey],
-      "#d": [dTag],
-    } as Filter;
-
-    // Build the relay list: relay hints first, then git index relays.
-    const allHints = new Set([...nip05Relays, ...relayHints].map(normalizeUrl));
-    const gitRelays = gitIndexRelays
-      .getValue()
-      .filter((r) => !allHints.has(normalizeUrl(r)));
-    const backgroundRelays = [...allHints, ...gitRelays];
-
-    if (backgroundRelays.length === 0) return undefined;
-
-    return resilientRequest(pool, backgroundRelays, [filter]).pipe(
-      onlyEvents(),
-      mapEventsToStore(store),
-    );
-  }, [pubkey, dTag, alreadyInStore, hintsKey, nip05RelaysKey, store]);
+  // No separate background refresh is needed when the event is already in the
+  // store: the monotonic snapshot below always sends the identifier-only
+  // announcement wave over the same hint + git index relays at mount, which
+  // is a strict superset of the old authors-scoped refresh.
 
   // Layer 2: subscribe to the model.
   const repo = use$(() => {
@@ -300,7 +276,37 @@ export function useResolvedRepository(
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [key],
   );
-  const extraMailboxRelayUrls = use$(extraRelays$) ?? [];
+
+  // Live identifier-only announcement subscription over every enrichment
+  // relay (relay hints + repo-declared relays via repoRelayGroup, plus the
+  // maintainer-mailbox delta relays). The filter carries no `authors`, so
+  // newly discovered maintainers never change it — relay growth is purely
+  // additive via the reactive relay-list overload, and this subscription is
+  // keyed on repository identity alone. Trust is never derived from the
+  // fetch: authority comes exclusively from reciprocal resolution rooted at
+  // the route pubkey (AGENTS.md §Repository authorization model carve-out).
+  use$(() => {
+    if (!pubkey || !dTag || !repoRelayGroup || !extraRelays$) return undefined;
+    const repoRelayUrls$ = (
+      store.model(
+        RepositoryRelayGroup,
+        pubkey,
+        dTag,
+      ) as unknown as Observable<RelayGroupType>
+    ).pipe(map((g) => g.relays.map((r) => r.url)));
+    const enrichmentRelays$ = combineLatest([
+      repoRelayUrls$,
+      extraRelays$,
+    ]).pipe(
+      map(([base, extra]) => [...new Set([...base, ...extra])]),
+      distinctUntilChanged(
+        (a, b) => a.length === b.length && a.every((v, i) => v === b[i]),
+      ),
+    );
+    return resilientSubscription(pool, enrichmentRelays$, [
+      { kinds: [REPO_KIND], "#d": [dTag] } as Filter,
+    ]).pipe(onlyEvents(), mapEventsToStore(store));
+  }, [key, store, repoRelayGroup, extraRelays$]);
 
   // Layer 3: once we know the repo's own relay list, add any relays not yet
   // in repoRelayGroup. Also subscribes to maintainer announcements on those relays.
@@ -344,15 +350,12 @@ export function useResolvedRepository(
       ),
     );
 
-    // Subscribe to all maintainer announcements on the repo's relays so
-    // newly-published announcements arrive in real time.
+    // Subscribe to deletion requests targeting the discovered announcements
+    // on the repo's relays so revocations arrive in real time. Announcements
+    // themselves are covered by the identifier-only enrichment subscription
+    // above; these author-derived clauses keep their current shape.
     const announcementIds = repo.discoveredAnnouncements.map(({ id }) => id);
     const filter: Filter[] = [
-      {
-        kinds: [REPO_KIND],
-        authors: repo.discoveryPubkeys,
-        "#d": [dTag],
-      } as Filter,
       {
         kinds: [5],
         authors: repo.discoveryPubkeys,
@@ -429,17 +432,13 @@ export function useResolvedRepository(
 
         if (urls.length === 0) return of(null);
 
-        // Subscribe to maintainer announcements on the extra mailbox relays so
-        // newly-published announcements arrive in real time.
+        // Subscribe to deletion requests on the extra mailbox relays so
+        // revocations arrive in real time. Announcements on these relays are
+        // covered by the identifier-only enrichment subscription above.
         const announcementIds = repo.discoveredAnnouncements.map(
           ({ id }) => id,
         );
         const filter: Filter[] = [
-          {
-            kinds: [REPO_KIND],
-            authors: repo.discoveryPubkeys,
-            "#d": [dTag],
-          } as Filter,
           {
             kinds: [5],
             authors: repo.discoveryPubkeys,
@@ -472,147 +471,76 @@ export function useResolvedRepository(
     extraRelays$,
   ]);
 
-  // A cached RepositoryModel snapshot is useful for immediate rendering but
-  // does not drive canonical routing until the bounded current-closure refresh
-  // has stabilized. Query every discovered announcement author across all
-  // currently known discovery sources. The state carries its closure key so a
-  // synchronous render after authors or relays change cannot reuse a stale
-  // `settled: true` value from the previous observable.
-  const announcementAuthors = [
-    ...new Set([
-      ...(repo?.discoveryPubkeys ?? []),
-      ...(repo?.historyPubkeys ?? []),
-    ]),
-  ].sort();
-  const announcementIds = [
-    ...new Set(
-      [
-        ...(repo?.discoveredAnnouncements ?? []),
-        ...(repo?.historicalAnnouncements ?? []),
-      ].map(({ id }) => id),
-    ),
-  ].sort();
-  const announcementRelayUrls = [
-    ...new Set(
-      [
-        ...nip05Relays,
-        ...relayHints,
-        ...(repo?.relays ?? []),
-        ...extraMailboxRelayUrls,
-        ...configuredGitIndexRelays,
-        ...configuredFallbackRelays,
-      ].map(normalizeUrl),
-    ),
-  ].sort();
-  const announcementMailboxLookupUrls = [
-    ...new Set(
-      [...configuredLookupRelays, ...configuredFallbackRelays].map(
-        normalizeUrl,
+  // Mailbox enrichment (kind 10002): demoted from the settlement critical
+  // path unconditionally. Resolving maintainer relay lists only widens the
+  // Layer 4 mailbox coverage above and never gates readiness — announcements
+  // that exist solely on a maintainer's mailbox relays arrive progressively.
+  const historyKey = repo?.historyPubkeys.join(",") ?? "";
+  use$(() => {
+    if (!repo || repo.discoveryPubkeys.length === 0) return undefined;
+    const authors = [
+      ...new Set([...repo.discoveryPubkeys, ...repo.historyPubkeys]),
+    ];
+    const relays = [
+      ...new Set(
+        [...lookupRelays.getValue(), ...fallbackRelays.getValue()].map(
+          normalizeUrl,
+        ),
       ),
-    ),
-  ].sort();
-  const announcementGraphKey = JSON.stringify([
-    pubkey ?? "",
-    dTag ?? "",
-    announcementAuthors,
-    announcementIds,
-    announcementRelayUrls,
-    announcementMailboxLookupUrls,
-  ]);
-  const announcementMailboxRelayGroup = extraRelaysForMaintainerMailboxCoverage;
-  const announcementGraphState = use$(() => {
-    const unsettled: AnnouncementGraphSettleState = {
-      key: announcementGraphKey,
-      settled: false,
-    };
-    if (
-      !dTag ||
-      !announcementMailboxRelayGroup ||
-      announcementAuthors.length === 0 ||
-      announcementRelayUrls.length === 0
-    ) {
-      return of(unsettled);
-    }
+    ];
+    if (relays.length === 0) return undefined;
+    return resilientRequest(pool, relays, [
+      { kinds: [10002], authors } as Filter,
+    ]).pipe(onlyEvents(), mapEventsToStore(store));
+  }, [discoveryKey, historyKey, store]);
 
-    const mailboxRefresh =
-      announcementMailboxLookupUrls.length === 0
-        ? of(null)
-        : resilientRequest(pool, announcementMailboxLookupUrls, [
-            {
-              kinds: [10002],
-              authors: announcementAuthors,
-            } as Filter,
-          ]).pipe(
-            tap((response) => {
-              if (response !== "EOSE") store.add(response);
-            }),
-            takeWhile((response) => response !== "EOSE"),
-            ignoreElements(),
-            endWith(null),
-            catchError(() => of(null)),
-          );
-    return concat(
-      of(unsettled),
-      mailboxRefresh.pipe(
-        switchMap(() => {
-          // Mailbox subscriptions above update this shared group before their
-          // loaders complete. Read it at request time so a freshly discovered
-          // author relay participates in the same stabilized snapshot.
-          const refreshedRelayUrls = [
-            ...new Set([
-              ...announcementRelayUrls,
-              ...announcementMailboxRelayGroup.relays.map((relay) =>
-                normalizeUrl(relay.url),
-              ),
-            ]),
-          ].sort();
-          const filters: Filter[] = [
-            {
-              kinds: [REPO_KIND],
-              authors: announcementAuthors,
-              "#d": [dTag],
-            } as Filter,
-            {
-              kinds: [5],
-              authors: announcementAuthors,
-              "#a": announcementAuthors.map(
-                (author) => `${REPO_KIND}:${author}:${dTag}`,
-              ),
-            } as Filter,
-            ...(announcementIds.length > 0
-              ? [
-                  {
-                    kinds: [5],
-                    authors: announcementAuthors,
-                    "#e": announcementIds,
-                  } as Filter,
-                ]
-              : []),
-          ];
-          return resilientRequest(pool, refreshedRelayUrls, filters).pipe(
-            tap((response) => {
-              if (response !== "EOSE") store.add(response);
-            }),
-            takeWhile((response) => response !== "EOSE"),
-            ignoreElements(),
-            endWith<AnnouncementGraphSettleState>({
-              key: announcementGraphKey,
-              settled: true,
-            }),
-          );
-        }),
-        catchError(() => of(unsettled)),
-      ),
+  // ── Monotonic initial routing snapshot ────────────────────────────────────
+  // Keyed once per route: (pubkey, dTag, relay hints). R0 is read at
+  // subscription time — NIP-05/URL hints plus the configured git index
+  // relays, with the fallback relays as a deferred tier that joins only when
+  // the immediate tier yields no announcement (mirrors the useEventSearch
+  // group ordering above). The identifier-only filter never changes as
+  // maintainers are discovered, so the snapshot settles exactly once; the
+  // authors, repo-declared relays, and mailbox relays discovered later feed
+  // the enrichment subscriptions above and never re-gate any readiness tier.
+  // The snapshot also settles with failedRelayCount > 0 — degraded coverage
+  // is surfaced through announcementSettlement, not blocking.
+  const snapshotState = use$(() => {
+    if (!pubkey || !dTag) return undefined;
+    return defer(() =>
+      announcementSnapshot({
+        pool,
+        store,
+        pubkey,
+        dTag,
+        primaryRelays: [
+          ...nip05Relays,
+          ...relayHints,
+          ...gitIndexRelays.getValue(),
+        ],
+        deferredRelays: fallbackRelays.getValue(),
+      }),
     );
-  }, [announcementGraphKey, store, announcementMailboxRelayGroup]);
-  const announcementsSettled =
-    announcementGraphState?.key === announcementGraphKey &&
-    announcementGraphState.settled;
+  }, [key, hintsKey, nip05RelaysKey, store]);
+  const announcementsFreshEose = snapshotState?.firstFreshEose ?? false;
+  const announcementSettlement: RelayQuerySettlement =
+    snapshotState?.settlement ?? {
+      settled: false,
+      relayCount: 0,
+      failedRelayCount: 0,
+    };
+  const announcementsSettled = announcementSettlement.settled;
 
   const resolved: ResolvedRepository | undefined =
     repo && repoRelayGroup && extraRelaysForMaintainerMailboxCoverage
       ? { repo, repoRelayGroup, extraRelaysForMaintainerMailboxCoverage }
       : undefined;
 
-  return { resolved, repoSearch, announcementsSettled };
+  return {
+    resolved,
+    repoSearch,
+    announcementsFreshEose,
+    announcementsSettled,
+    announcementSettlement,
+  };
 }

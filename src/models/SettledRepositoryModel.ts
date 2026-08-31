@@ -1,55 +1,44 @@
 import type { Model } from "applesauce-core/event-store";
-import type { Filter } from "applesauce-core/helpers";
-import type { NostrEvent } from "nostr-tools";
-import { combineLatest, forkJoin, of, Observable, Subscription } from "rxjs";
-import {
-  catchError,
-  endWith,
-  ignoreElements,
-  switchMap,
-  takeWhile,
-  tap,
-} from "rxjs/operators";
+import { Observable, Subscription } from "rxjs";
 
-import { REPO_KIND, type ResolvedRepo } from "@/lib/nip34";
-import { normalizeUrl } from "@/lib/url";
-import { resilientRequest } from "@/lib/resilientSubscription";
+import {
+  announcementSnapshot,
+  type AnnouncementSnapshotState,
+} from "@/lib/announcementSnapshot";
+import type { ResolvedRepo } from "@/lib/nip34";
 import { RepositoryModel } from "@/models/RepositoryModel";
 import { pool } from "@/services/nostr";
-import {
-  fallbackRelays,
-  gitIndexRelays,
-  lookupRelays,
-} from "@/services/settings";
-
-const MAILBOX_KIND = 10002;
+import { fallbackRelays, gitIndexRelays } from "@/services/settings";
 
 export interface SettledRepositorySnapshot {
   repository?: ResolvedRepo;
   settled: boolean;
-}
-
-function addRelay(relays: Set<string>, value: string | undefined): void {
-  if (!value || (!value.startsWith("ws://") && !value.startsWith("wss://"))) {
-    return;
-  }
-  try {
-    relays.add(normalizeUrl(value));
-  } catch {
-    // Malformed hints cannot participate in a settled relay request.
-  }
+  /**
+   * Snapshot relays whose announcement or deletion query failed. The snapshot
+   * still settles boundedly — degraded coverage is visible, not blocking.
+   */
+  failedRelayCount: number;
 }
 
 /**
- * Resolve one coordinate after a bounded refresh of its current recursive
- * announcement graph. A changed announcement, discovered author, or
- * configured relay invalidates the previous stabilized snapshot.
+ * Resolve one coordinate behind a monotonic initial snapshot: one
+ * identifier-only announcement wave `{kinds: [30617], "#d": [dTag]}` over the
+ * relays known at start (git index ∪ fallback ∪ repo-declared), followed by
+ * one bounded deletion follow-up computed from the closure resolvable at the
+ * wave's completion. Relay failures count toward completion, so `settled`
+ * latches true exactly once and never re-arms.
  *
- * `settled` means the aggregate relay window ended; it does not prove that
- * every relay returned an actual EOSE. Mutation safety uses a stricter
- * complete-relay snapshot. The follow-up settlement contract must expose
- * complete versus degraded results before this model can provide fail-closed
- * route or trust proof.
+ * Everything discovered afterwards — new authors, announcements, relays — is
+ * progressive enrichment: `repository` keeps updating from the reciprocal
+ * resolution model, but eligibility (the `settled` flag consumed by
+ * `RepositorySelectionModel`) is never re-gated. Mailbox (kind 10002)
+ * resolution is enrichment handled elsewhere and no longer participates in
+ * settlement. Authority is never derived from the identifier-only fetch; it
+ * comes exclusively from reciprocal resolution rooted at the selected
+ * maintainer (AGENTS.md §Repository authorization model carve-out).
+ *
+ * `settled` with `failedRelayCount > 0` means bounded-but-degraded coverage.
+ * Mutation safety keeps its own stricter complete-relay snapshot.
  */
 export function SettledRepositoryModel(
   selectedMaintainer: string,
@@ -57,134 +46,23 @@ export function SettledRepositoryModel(
 ): Model<SettledRepositorySnapshot> {
   return (store) =>
     new Observable<SettledRepositorySnapshot>((observer) => {
-      const subscriptions = new Subscription();
-      let refreshSubscription: Subscription | undefined;
+      const subs = new Subscription();
       let repository: ResolvedRepo | undefined;
-      let settings: [string[], string[], string[]] = [[], [], []];
-      let graphKey = "";
-      let generation = 0;
-
-      const refresh = () => {
-        const authors = [
-          ...new Set([
-            selectedMaintainer,
-            ...(repository?.discoveryPubkeys ?? []),
-            ...(repository?.historyPubkeys ?? []),
-          ]),
-        ].sort();
-        const [indexRelays, configuredFallbacks, configuredLookups] = settings;
-        const nextKey = JSON.stringify([
-          selectedMaintainer,
-          dTag,
-          authors,
-          repository?.discoveredAnnouncements
-            .map((event) => `${event.pubkey}:${event.id}`)
-            .sort() ?? [],
-          repository?.historicalAnnouncements
-            .map((event) => `${event.pubkey}:${event.id}`)
-            .sort() ?? [],
-          [...indexRelays].sort(),
-          [...configuredFallbacks].sort(),
-          [...configuredLookups].sort(),
-          [...(repository?.relays ?? [])].sort(),
-        ]);
-        if (nextKey === graphKey) return;
-        graphKey = nextKey;
-        generation += 1;
-        const activeGeneration = generation;
-        observer.next({ repository, settled: false });
-        refreshSubscription?.unsubscribe();
-
-        const mailboxEvents = new Map<string, NostrEvent>();
-        const mailboxRelays = new Set<string>();
-        for (const relay of [...configuredLookups, ...configuredFallbacks]) {
-          addRelay(mailboxRelays, relay);
-        }
-        const mailboxRefresh =
-          mailboxRelays.size === 0
-            ? of(null)
-            : resilientRequest(
-                pool,
-                [...mailboxRelays],
-                [
-                  {
-                    kinds: [MAILBOX_KIND],
-                    authors,
-                  } as Filter,
-                ],
-              ).pipe(
-                tap((response: NostrEvent | "EOSE") => {
-                  if (response !== "EOSE") {
-                    mailboxEvents.set(response.pubkey, response);
-                    store.add(response);
-                  }
-                }),
-                // Transport failures are terminal for this snapshot and are
-                // included in resilientRequest's aggregate EOSE. Stop there
-                // instead of waiting indefinitely for dormant reconnects.
-                takeWhile((response) => response !== "EOSE"),
-                ignoreElements(),
-                endWith(null),
-                catchError(() => of(null)),
-              );
-
-        refreshSubscription = forkJoin([mailboxRefresh])
-          .pipe(
-            switchMap(() => {
-              const announcementRelays = new Set<string>();
-              for (const relay of [
-                ...indexRelays,
-                ...configuredFallbacks,
-                ...(repository?.relays ?? []),
-              ]) {
-                addRelay(announcementRelays, relay);
-              }
-              for (const author of authors) {
-                const mailbox = mailboxEvents.get(author);
-                for (const [name, relay] of mailbox?.tags ?? []) {
-                  if (name === "r") addRelay(announcementRelays, relay);
-                }
-              }
-
-              if (announcementRelays.size === 0) return of(null);
-              return resilientRequest(
-                pool,
-                [...announcementRelays],
-                [
-                  {
-                    kinds: [REPO_KIND],
-                    authors,
-                    "#d": [dTag],
-                  } as Filter,
-                ],
-              ).pipe(
-                tap((response: NostrEvent | "EOSE") => {
-                  if (response !== "EOSE") store.add(response);
-                }),
-                takeWhile((response) => response !== "EOSE"),
-                ignoreElements(),
-                endWith(null),
-                catchError(() => of(null)),
-              );
-            }),
-          )
-          .subscribe(() => {
-            if (activeGeneration === generation) {
-              observer.next({ repository, settled: true });
-            }
-          });
+      let snapshot: AnnouncementSnapshotState = {
+        firstFreshEose: false,
+        settlement: { settled: false, relayCount: 0, failedRelayCount: 0 },
       };
+      const emit = () =>
+        observer.next({
+          repository,
+          settled: snapshot.settlement.settled,
+          failedRelayCount: snapshot.settlement.failedRelayCount,
+        });
 
-      subscriptions.add(
-        combineLatest([gitIndexRelays, fallbackRelays, lookupRelays]).subscribe(
-          (nextSettings) => {
-            settings = nextSettings;
-            graphKey = "";
-            refresh();
-          },
-        ),
-      );
-      subscriptions.add(
+      // Progressive resolution — RepositoryModel emits synchronously with the
+      // current store state, so `repository` (and its declared relays, read
+      // below) is populated before the snapshot's relay set is fixed.
+      subs.add(
         (
           store.model(
             RepositoryModel,
@@ -193,13 +71,27 @@ export function SettledRepositoryModel(
           ) as unknown as Observable<ResolvedRepo | undefined>
         ).subscribe((nextRepository) => {
           repository = nextRepository;
-          refresh();
+          emit();
         }),
       );
 
-      return () => {
-        refreshSubscription?.unsubscribe();
-        subscriptions.unsubscribe();
-      };
+      subs.add(
+        announcementSnapshot({
+          pool,
+          store,
+          pubkey: selectedMaintainer,
+          dTag,
+          primaryRelays: [
+            ...gitIndexRelays.getValue(),
+            ...fallbackRelays.getValue(),
+            ...(repository?.relays ?? []),
+          ],
+        }).subscribe((nextSnapshot) => {
+          snapshot = nextSnapshot;
+          emit();
+        }),
+      );
+
+      return () => subs.unsubscribe();
     });
 }
