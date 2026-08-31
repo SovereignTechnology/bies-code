@@ -28,6 +28,14 @@
           buildInputs = [ pkgs.openssl ];
           doCheck = false;
         };
+        # Headless Chromium for browser automation (benchmarks/). The npm
+        # playwright-core devDependency in package.json must be pinned to the
+        # exact version of pkgs.playwright-driver so the browser revisions in
+        # this bundle match what the library looks for.
+        playwright-browsers = pkgs.playwright-driver.browsers.override {
+          withFirefox = false;
+          withWebkit = false;
+        };
         android-sdk = pkgs.androidenv.composeAndroidPackages {
           platformVersions = [ "36" ];
           # Android Gradle Plugin 8.13 defaults to Build Tools 35.0.0. Include
@@ -44,6 +52,11 @@
             android-sdk.androidsdk
             ngit-grasp-pkg
           ];
+          # playwright-core downloads no browsers at install time; point it at
+          # the Nix-provided bundle. Host-requirement validation checks FHS
+          # paths that don't exist on NixOS, so skip it.
+          PLAYWRIGHT_BROWSERS_PATH = playwright-browsers;
+          PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS = "true";
           # Point the e2e harness at the pinned ngit-grasp binary. Without this
           # the harness falls back to the sibling-clone heuristic
           # (../ngit-grasp/target/release/ngit-grasp), which is fine for local
