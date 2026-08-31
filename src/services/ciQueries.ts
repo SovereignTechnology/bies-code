@@ -513,33 +513,36 @@ export function ciRepositoryCoordinatorStatus$(
   );
 }
 
-const repoCIActivityQueries = new Map<
-  string,
-  Observable<RelayQuerySettlement>
->();
+const repoCIActivityQueries = new Map<string, AdditiveOwner>();
 
 /**
  * Live repo-wide CI activity (every CI kind by #a) on the repository relays.
  * One shared subscription per repository serves the PR list, Actions, and
  * coordinator surfaces; RepoLayout pins it while the repository shows CI
  * signals so tab navigation reuses it instead of reopening it per page.
+ *
+ * The owner is keyed by the anchor coordinate (the selected coordinate,
+ * falling back to the first sorted coordinate): a coordinate confirmed
+ * later grows the live query with one delta REQ per relay, and a repository
+ * relay discovered later joins with one REQ of its own, instead of
+ * restarting the whole query.
  */
 export function repoCIActivity$(
   repositoryCoordinates: readonly string[],
   selectedCoordinate: string | undefined,
 ): Observable<RelayQuerySettlement> {
   const coordinates = sortedUnique(repositoryCoordinates);
-  const key = `${coordinates.join(",")}|${selectedCoordinate ?? ""}`;
-  return keyedShared(repoCIActivityQueries, key, () =>
-    repositoryRelays$(selectedCoordinate ?? coordinates[0]).pipe(
-      switchMap((relays) =>
-        loadRelayQueryUntilSettled(
-          pool,
-          relays,
-          [{ kinds: [...CI_EVENT_KINDS], "#a": coordinates } as Filter],
-          eventStore,
-        ),
-      ),
+  const anchor = selectedCoordinate ?? coordinates[0];
+  return additiveOwnerQuery(
+    repoCIActivityQueries,
+    anchor ?? "",
+    () => repositoryRelays$(anchor),
+    coordinates.map(
+      (coordinate): AdditiveFilterChunk => ({
+        key: `a:${coordinate}`,
+        filters: [{ kinds: [...CI_EVENT_KINDS], "#a": [coordinate] } as Filter],
+        deltaSafe: true,
+      }),
     ),
   );
 }
