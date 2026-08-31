@@ -36,6 +36,7 @@ import {
   relayGroupUrls$,
 } from "@/models/RepositoryRelayGroup";
 import {
+  loadAdditiveRelayQueryUntilSettled,
   loadRelayQueryUntilSettled,
   type RelayQuerySettlement,
 } from "@/lib/relayQuerySettlement";
@@ -108,26 +109,31 @@ const identityEnrichment = new Map<string, Observable<RelayQuerySettlement>>();
 /**
  * Shared per-pubkey enrichment fetch for CI provider / coordinator
  * identities on the lookup + index relays. All consumers of the same pubkey
- * share one live query; results are read back from the EventStore.
+ * share one live query; results are read back from the EventStore. A relay
+ * added to the discovery lists later joins the live query with one REQ of
+ * its own instead of restarting the REQs already open.
  */
 export function ciIdentityEnrichment$(
   pubkey: string,
 ): Observable<RelayQuerySettlement> {
   return keyedShared(identityEnrichment, pubkey, () =>
-    discoveryRelays$().pipe(
-      switchMap((relays) =>
-        loadRelayQueryUntilSettled(
-          pool,
-          relays,
-          [
-            {
-              kinds: [...CI_IDENTITY_ENRICHMENT_KINDS],
-              authors: [pubkey],
-            } as Filter,
-          ],
-          eventStore,
-        ),
-      ),
+    loadAdditiveRelayQueryUntilSettled(
+      pool,
+      discoveryRelays$(),
+      {
+        initial: [
+          {
+            key: pubkey,
+            filters: [
+              {
+                kinds: [...CI_IDENTITY_ENRICHMENT_KINDS],
+                authors: [pubkey],
+              } as Filter,
+            ],
+          },
+        ],
+      },
+      eventStore,
     ),
   );
 }
