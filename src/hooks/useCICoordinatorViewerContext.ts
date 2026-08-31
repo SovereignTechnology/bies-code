@@ -21,14 +21,14 @@ import {
   CI_SERVICE_REQUEST_KIND,
   CI_SERVICE_STOP_KIND,
 } from "@/lib/ci";
-import { REPO_KIND, type ResolvedRepo } from "@/lib/nip34";
+import { type ResolvedRepo } from "@/lib/nip34";
 import { loadRelayQueryUntilSettled } from "@/lib/relayQuerySettlement";
 import { standardizeNip05 } from "@/lib/routeUtils";
 import { RepositoryListModel } from "@/models/RepositoryListModel";
+import { viewerSocialGraph$ } from "@/services/ciQueries";
 import { pool } from "@/services/nostr";
-import { gitIndexRelays, lookupRelays } from "@/services/settings";
+import { gitIndexRelays } from "@/services/settings";
 
-const CONTACT_KINDS = [3, 10017] as const;
 const EMPTY_CONTROLS: readonly CIServiceControl[] = [];
 
 export interface CICoordinatorContactContext {
@@ -138,21 +138,13 @@ export function useCICoordinatorViewerContext(
   const account = useActiveAccount();
   const accountPubkey = account?.pubkey;
   const indexes = use$(() => gitIndexRelays, []) ?? [];
-  const lookup = use$(() => lookupRelays, []) ?? [];
-  const discoveryRelays = [...new Set([...lookup, ...indexes])];
-  const discoveryRelayKey = discoveryRelays.join(",");
 
-  const contactsQuery = use$(() => {
-    if (!accountPubkey) {
-      return of({ settled: true, relayCount: 0, failedRelayCount: 0 });
-    }
-    return loadRelayQueryUntilSettled(
-      pool,
-      discoveryRelays,
-      [{ kinds: [...CONTACT_KINDS], authors: [accountPubkey] } as Filter],
-      store,
-    );
-  }, [accountPubkey, discoveryRelayKey, store]);
+  // Contacts, direct repositories, and the completing #d graph come from the
+  // shared viewer-scoped owner (also used by the repository CI trust context).
+  const graphState = use$(() => {
+    if (!accountPubkey) return undefined;
+    return viewerSocialGraph$(accountPubkey);
+  }, [accountPubkey]);
 
   const follows = use$(() => {
     if (!accountPubkey) return of([] as string[]);
@@ -173,63 +165,6 @@ export function useCICoordinatorViewerContext(
     ? [...new Set([accountPubkey, ...(follows ?? [])])]
     : [];
   const peopleKey = [...people].sort().join(",");
-  const indexKey = indexes.join(",");
-
-  const directRepositoriesQuery = use$(() => {
-    if (!accountPubkey || !contactsQuery?.settled) {
-      return of({
-        settled: false,
-        relayCount: indexes.length,
-        failedRelayCount: 0,
-      });
-    }
-    return loadRelayQueryUntilSettled(
-      pool,
-      indexes,
-      [{ kinds: [REPO_KIND], authors: people } as Filter],
-      store,
-      { paginate: true },
-    );
-  }, [accountPubkey, contactsQuery?.settled, indexKey, peopleKey, store]);
-
-  const directRepositoryEvents = use$(() => {
-    if (people.length === 0) return of([] as NostrEvent[]);
-    return store.timeline([
-      { kinds: [REPO_KIND], authors: people } as Filter,
-    ]) as Observable<NostrEvent[]>;
-  }, [peopleKey, store]);
-  const repositoryDTags = [
-    ...new Set(
-      (directRepositoryEvents ?? []).flatMap((event) =>
-        eventTagValues(event, "d"),
-      ),
-    ),
-  ];
-  const repositoryDTagKey = [...repositoryDTags].sort().join(",");
-
-  const repositoryGraphQuery = use$(() => {
-    if (!directRepositoriesQuery?.settled) {
-      return of({
-        settled: false,
-        relayCount: indexes.length,
-        failedRelayCount: 0,
-      });
-    }
-    if (repositoryDTags.length === 0) {
-      return of({
-        settled: true,
-        relayCount: indexes.length,
-        failedRelayCount: 0,
-      });
-    }
-    return loadRelayQueryUntilSettled(
-      pool,
-      indexes,
-      [{ kinds: [REPO_KIND], "#d": repositoryDTags } as Filter],
-      store,
-      { paginate: true },
-    );
-  }, [directRepositoriesQuery?.settled, indexKey, repositoryDTagKey, store]);
 
   const repositories = use$(() => {
     if (!accountPubkey) return of([] as ResolvedRepo[]);
@@ -261,7 +196,7 @@ export function useCICoordinatorViewerContext(
   const repositoryRelayKey = [...repositoryRelays].sort().join(",");
 
   const contextEventsQuery = use$(() => {
-    if (!repositoryGraphQuery?.settled || repositories === undefined) {
+    if (!graphState?.graph.settled || repositories === undefined) {
       return of({
         settled: false,
         relayCount: repositoryRelays.length,
@@ -303,7 +238,7 @@ export function useCICoordinatorViewerContext(
     coordinateKey,
     peopleKey,
     repositories !== undefined,
-    repositoryGraphQuery?.settled,
+    graphState?.graph.settled,
     repositoryRelayKey,
     store,
   ]);
@@ -402,9 +337,9 @@ export function useCICoordinatorViewerContext(
   }
 
   const settled =
-    contactsQuery?.settled === true &&
-    directRepositoriesQuery?.settled === true &&
-    repositoryGraphQuery?.settled === true &&
+    graphState?.contacts.settled === true &&
+    graphState?.repositories.settled === true &&
+    graphState?.graph.settled === true &&
     repositories !== undefined &&
     contextEventsQuery?.settled === true &&
     identitySettled;
@@ -501,9 +436,9 @@ export function useCICoordinatorViewerContext(
       ).length
     : 0;
   const queryStates = [
-    contactsQuery,
-    directRepositoriesQuery,
-    repositoryGraphQuery,
+    graphState?.contacts,
+    graphState?.repositories,
+    graphState?.graph,
     contextEventsQuery,
   ];
 

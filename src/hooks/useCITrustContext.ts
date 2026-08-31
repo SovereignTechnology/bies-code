@@ -26,18 +26,18 @@ import {
   type CITrustContextState,
   type CITrustEvidence,
 } from "@/lib/ciTrustContext";
-import { REPO_KIND, type ResolvedRepo } from "@/lib/nip34";
-import { loadRelayQueryUntilSettled } from "@/lib/relayQuerySettlement";
+import { type ResolvedRepo } from "@/lib/nip34";
 import { standardizeNip05 } from "@/lib/routeUtils";
 import { RepositoryListModel } from "@/models/RepositoryListModel";
 import {
   ciIdentityEnrichment$,
+  ciSocialActivity$,
   combineSettlements,
+  viewerSocialGraph$,
 } from "@/services/ciQueries";
-import { dnsIdentityLoader, nip05WarmupReady, pool } from "@/services/nostr";
-import { gitIndexRelays, lookupRelays } from "@/services/settings";
+import { dnsIdentityLoader, nip05WarmupReady } from "@/services/nostr";
+import { gitIndexRelays } from "@/services/settings";
 
-const CONTACT_KINDS = [3, 10017] as const;
 const IDENTITY_TIMEOUT_MS = 5_000;
 
 interface VerifiedIdentity {
@@ -294,22 +294,16 @@ function useCISocialEvidence(
   const account = useActiveAccount();
   const accountPubkey = account?.pubkey;
   const identityKey = [...identities].sort().join(",");
-  const lookup = use$(() => lookupRelays, []) ?? [];
+  const hasIdentities = identities.length > 0;
   const indexes = use$(() => gitIndexRelays, []) ?? [];
-  const contactRelays = [...new Set([...lookup, ...indexes])];
-  const contactRelayKey = contactRelays.join(",");
 
-  const contactsQuery = use$(() => {
-    if (!accountPubkey || identities.length === 0) {
-      return of({ settled: true, relayCount: 0, failedRelayCount: 0 });
-    }
-    return loadRelayQueryUntilSettled(
-      pool,
-      contactRelays,
-      [{ kinds: [...CONTACT_KINDS], authors: [accountPubkey] } as Filter],
-      store,
-    );
-  }, [accountPubkey, contactRelayKey, identityKey, store]);
+  // Viewer-scoped social graph (contacts, repositories by follows, repo
+  // graph) — one shared owner per account, independent of which identities
+  // are being classified, so it is not restarted when a new identity appears.
+  const graphState = use$(() => {
+    if (!accountPubkey || !hasIdentities) return undefined;
+    return viewerSocialGraph$(accountPubkey);
+  }, [accountPubkey, hasIdentities]);
 
   const follows = use$(() => {
     if (!accountPubkey) return of([] as string[]);
@@ -327,75 +321,6 @@ function useCISocialEvidence(
     );
   }, [accountPubkey, store]);
   const followKey = [...(follows ?? [])].sort().join(",");
-  const indexKey = indexes.join(",");
-
-  const directReposQuery = use$(() => {
-    if (!accountPubkey || identities.length === 0 || !contactsQuery?.settled) {
-      return of({
-        settled: false,
-        relayCount: indexes.length,
-        failedRelayCount: 0,
-      });
-    }
-    if (!follows?.length) {
-      return of({
-        settled: true,
-        relayCount: indexes.length,
-        failedRelayCount: 0,
-      });
-    }
-    return loadRelayQueryUntilSettled(
-      pool,
-      indexes,
-      [{ kinds: [REPO_KIND], authors: follows } as Filter],
-      store,
-      { paginate: true },
-    );
-  }, [
-    accountPubkey,
-    contactsQuery?.settled,
-    followKey,
-    identityKey,
-    indexKey,
-    store,
-  ]);
-
-  const directRepoEvents = use$(() => {
-    if (!follows?.length) return of([] as NostrEvent[]);
-    return store.timeline([
-      { kinds: [REPO_KIND], authors: follows } as Filter,
-    ]) as Observable<NostrEvent[]>;
-  }, [followKey, store]);
-  const repoDTags = [
-    ...new Set(
-      (directRepoEvents ?? []).flatMap((event) => eventTagValues(event, "d")),
-    ),
-  ];
-  const repoDTagKey = [...repoDTags].sort().join(",");
-
-  const graphQuery = use$(() => {
-    if (!directReposQuery?.settled) {
-      return of({
-        settled: false,
-        relayCount: indexes.length,
-        failedRelayCount: 0,
-      });
-    }
-    if (repoDTags.length === 0) {
-      return of({
-        settled: true,
-        relayCount: indexes.length,
-        failedRelayCount: 0,
-      });
-    }
-    return loadRelayQueryUntilSettled(
-      pool,
-      indexes,
-      [{ kinds: [REPO_KIND], "#d": repoDTags } as Filter],
-      store,
-      { paginate: true },
-    );
-  }, [directReposQuery?.settled, indexKey, repoDTagKey, store]);
 
   const socialRepositories = use$(() => {
     if (!follows?.length) return of([] as ResolvedRepo[]);
@@ -428,8 +353,10 @@ function useCISocialEvidence(
   const socialCoordinateKey = [...socialCoordinates].sort().join(",");
   const socialRelayKey = [...socialRelays].sort().join(",");
 
+  // One shared activity query per identity — a newly appearing identity
+  // fetches only itself, and identical queries on other surfaces share REQs.
   const activityQuery = use$(() => {
-    if (!graphQuery?.settled) {
+    if (!graphState?.graph.settled) {
       return of({
         settled: false,
         relayCount: socialRelays.length,
@@ -443,29 +370,20 @@ function useCISocialEvidence(
         failedRelayCount: 0,
       });
     }
-    const filters: Filter[] = [
-      {
-        kinds: [...CI_EVENT_KINDS],
-        authors: [...identities],
-        "#a": socialCoordinates,
-      } as Filter,
-    ];
-    if (follows?.length) {
-      filters.push({
-        kinds: [CI_MANUAL_TRIGGER_KIND, CI_SERVICE_REQUEST_KIND],
-        authors: follows,
-        "#p": [...identities],
-        "#a": socialCoordinates,
-      } as Filter);
-    }
-    return loadRelayQueryUntilSettled(pool, socialRelays, filters, store, {
-      paginate: true,
-    });
+    return combineLatest(
+      identities.map((identity) =>
+        ciSocialActivity$(
+          identity,
+          follows ?? [],
+          socialCoordinates,
+          socialRelays,
+        ),
+      ),
+    ).pipe(map(combineSettlements));
   }, [
     activityQueryDependency(identityKey, socialCoordinateKey, socialRelayKey),
     followKey,
-    graphQuery?.settled,
-    store,
+    graphState?.graph.settled,
   ]);
 
   const evidence = use$(() => {
@@ -561,14 +479,14 @@ function useCISocialEvidence(
 
   if (!accountPubkey || identities.length === 0) return SETTLED_EMPTY_SOCIAL;
   const settled =
-    !!contactsQuery?.settled &&
-    !!directReposQuery?.settled &&
-    !!graphQuery?.settled &&
-    !!activityQuery?.settled;
+    graphState?.contacts.settled === true &&
+    graphState?.repositories.settled === true &&
+    graphState?.graph.settled === true &&
+    activityQuery?.settled === true;
   const queryStates = [
-    contactsQuery,
-    directReposQuery,
-    graphQuery,
+    graphState?.contacts,
+    graphState?.repositories,
+    graphState?.graph,
     activityQuery,
   ];
   return {
