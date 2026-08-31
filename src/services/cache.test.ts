@@ -55,7 +55,11 @@ describe("saveDeletionEvent", () => {
     const rejection = expect(saved).rejects.toThrow(
       /was not durably stored within 5000ms/,
     );
-    await vi.runAllTimersAsync();
+    // Advance just past the durability deadline instead of running all
+    // timers: the global window.nostrdb polyfill's flush loop reschedules
+    // itself unconditionally, so runAllTimersAsync aborts at its loop limit
+    // whenever the polyfill's async start lands inside the fake-timer window.
+    await vi.advanceTimersByTimeAsync(5_100);
     await rejection;
   });
 });
