@@ -14,8 +14,11 @@ import { NostrConnectSigner } from "applesauce-signers";
 import type { NostrEvent } from "nostr-tools";
 import { verifyEvent } from "nostr-tools";
 import {
+  BehaviorSubject,
   Observable,
+  Subject,
   Subscription,
+  combineLatest,
   merge,
   distinctUntilChanged,
   firstValueFrom,
@@ -29,6 +32,7 @@ import {
   filter,
   map,
   mergeMap,
+  switchMap,
   take,
   timeout,
 } from "rxjs/operators";
@@ -56,6 +60,7 @@ import {
   parseRepoCoordinate,
   isRepositoryRootItem,
   resolveChain,
+  roleHistoryCacheKey,
   type RepositoryRoleHistory,
 } from "@/lib/nip34";
 import { CI_EVENT_KINDS, CI_RUN_KIND } from "@/lib/ci";
@@ -66,7 +71,6 @@ import {
 } from "@/lib/tagValuePaginatedLoader";
 import {
   resilientAdditiveSubscription,
-  resilientSubscription,
   type AdditiveFilterChunk,
 } from "@/lib/resilientSubscription";
 import { outboxStore, type RelayGroupResolver } from "./outbox";
@@ -839,6 +843,74 @@ export function nip34ListLoader(
 const MAX_AUTHOR_INBOX_RELAYS = 3;
 
 /**
+ * Reactive inputs for nip34RepoLoader.
+ *
+ * Emitted whenever the resolver's confirmed member coordinate set or role
+ * history changes. Coordinate growth folds into the live subscription as
+ * delta REQs; re-presenting an unchanged set is a strict no-op. Coordinate
+ * removal is deliberately ignored — a removed coordinate's REQs stay live
+ * until the loader unsubscribes. A repository identity change (different
+ * selected pubkey/dTag) must be a new loader subscription, not an emission.
+ */
+export interface Nip34RepoLoaderInputs {
+  /** Confirmed member coordinate strings for the repository. */
+  coords: string[];
+  /** Role history used to authorise PR updates for merge-base inference. */
+  roleHistory?: RepositoryRoleHistory;
+}
+
+/** One immutable additive chunk: all root item kinds for one coordinate. */
+function repoItemChunk(coord: string): AdditiveFilterChunk {
+  return {
+    key: `item:${coord}`,
+    filters: [{ kinds: [...REPO_ITEM_KINDS], "#a": [coord] } as Filter],
+    deltaSafe: true,
+  };
+}
+
+/** One immutable additive chunk: repo meta kinds for one coordinate. */
+function repoMetaChunk(coord: string): AdditiveFilterChunk {
+  return {
+    key: `meta:${coord}`,
+    // Reactions (stars), follow lists, zaps — plus kind:39842 CI workflow
+    // progress markers. The markers carry a NIP-40 expiration so the live
+    // set for a repo stays small; fetching them repo-wide via #a keeps
+    // pending indicators available everywhere (PR lists, PR pages) without
+    // per-item subscriptions.
+    filters: [
+      {
+        kinds: [REACTION_KIND, GIT_REPOS_FOLLOW_KIND, 9735, CI_RUN_KIND],
+        "#a": [coord],
+      } as Filter,
+    ],
+    deltaSafe: true,
+  };
+}
+
+/**
+ * One immutable additive chunk: software applications by one maintainer
+ * pubkey tagging one coordinate. Keyed per (author, coordinate) pair so both
+ * dimensions can grow additively without ever reusing a chunk key with
+ * different clauses.
+ */
+function softwareApplicationChunk(
+  pubkey: string,
+  coord: string,
+): AdditiveFilterChunk {
+  return {
+    key: `app:${pubkey}:${coord}`,
+    filters: [
+      {
+        kinds: [SOFTWARE_APPLICATION_KIND],
+        authors: [pubkey],
+        "#a": [coord],
+      } as Filter,
+    ],
+    deltaSafe: true,
+  };
+}
+
+/**
  * Supplemental relay loader for outbox/uncensored mode.
  *
  * Mirrors nip34RepoLoader but targets the extra maintainer mailbox relay group
@@ -851,20 +923,28 @@ const MAX_AUTHOR_INBOX_RELAYS = 3;
  * Does NOT subscribe to meta events (reactions, follow lists) — those are
  * covered by nip34RepoLoader against the base relay group.
  *
- * @param coords     - Sorted array of repo coordinate strings
+ * Coordinates arrive reactively: a coordinate confirmed after subscribe
+ * joins the live item subscription as one delta REQ per relay (the
+ * per-coordinate keyed chunks below); an unchanged coordinate list is a
+ * strict no-op; removal is ignored until unsubscribe. seenIds and
+ * knownRelayUrls persist across growth, so already-seen items never re-fire
+ * their loaders.
+ *
+ * @param coords$    - Reactive array of repo coordinate strings (grow-only)
  * @param relayGroup - The supplemental RelayGroup (extra maintainer mailboxes)
  */
 export function nip34SupplementalRelayLoader(
-  coords: string[],
+  coords$: Observable<string[]>,
   relayGroup: RelayGroup,
 ): Observable<NostrEvent> {
   const resolveAuthorInbox = relayCurationMode.getValue() === "outbox";
-  const coordinateSet = new Set(coords);
 
   return new Observable<NostrEvent>((subscriber) => {
     const seenIds = new Set<string>();
     const knownRelayUrls = new Set<string>();
     const inboxSubs = new Subscription();
+    const coordinateSet = new Set<string>();
+    const itemAdditions = new Subject<AdditiveFilterChunk>();
 
     function fireLoaders(id: string, relays: string[]): void {
       nip34ListLoader(id, relays).subscribe({
@@ -917,16 +997,11 @@ export function nip34SupplementalRelayLoader(
         }
       });
 
-    const filters = [{ kinds: [...REPO_ITEM_KINDS], "#a": coords } as Filter];
-    const itemSub = resilientSubscription(
+    const itemSub = resilientAdditiveSubscription(
       pool,
       relayGroupUrls$(relayGroup),
-      filters,
-      {
-        reconnect: true,
-        gapFill: true,
-        settle: false,
-      },
+      { initial: [], additions$: itemAdditions },
+      { reconnect: true, gapFill: true, settle: false },
     )
       .pipe(
         onlyEvents(),
@@ -942,12 +1017,29 @@ export function nip34SupplementalRelayLoader(
             if (resolveAuthorInbox) fireAuthorInboxLoaders(ev);
           }
         },
-        complete: () => subscriber.complete(),
+        error: (err) => subscriber.error(err),
       });
+
+    // Subscribed after the additive subscription above so a synchronous
+    // first emission (BehaviorSubject) reaches a live additions$ consumer.
+    // Only genuinely new coordinates emit chunks — an unchanged list is a
+    // strict no-op (zero REQs).
+    const coordsSub = coords$.subscribe({
+      next: (coords) => {
+        for (const coord of new Set(coords)) {
+          if (coordinateSet.has(coord)) continue;
+          coordinateSet.add(coord);
+          itemAdditions.next(repoItemChunk(coord));
+        }
+      },
+      error: (err) => subscriber.error(err),
+      // Completion means no further growth — the subscription lives on.
+    });
 
     return () => {
       relaySub.unsubscribe();
       itemSub.unsubscribe();
+      coordsSub.unsubscribe();
       inboxSubs.unsubscribe();
     };
   });
@@ -957,10 +1049,27 @@ export function nip34SupplementalRelayLoader(
  * Repo-level observable factory.
  *
  * Subscribes to all NIP-34 root items (issues + PR/patch roots) and trusted
- * software applications for the given repository coordinates via the relay
- * group. For each newly discovered root item ID, calls nip34ListLoader so
- * essentials and comments are fetched. Software applications are written to
- * the EventStore as priority repository data but do not fire item loaders.
+ * software applications for the repository's confirmed coordinates via the
+ * relay group. For each newly discovered root item ID, calls nip34ListLoader
+ * so essentials and comments are fetched. Software applications are written
+ * to the EventStore as priority repository data but do not fire item loaders.
+ *
+ * Inputs are reactive: the confirmed coordinate set and role history arrive
+ * via inputs$ and may change while the subscription is live.
+ *
+ *   - Coordinate growth (a maintainer confirming later) folds into the live
+ *     relay subscriptions as content-keyed additive chunks — one delta REQ
+ *     per relay carrying only the new coordinate's filters. Existing REQs,
+ *     seenIds, and knownRelayUrls are untouched, so already-seen items never
+ *     re-fire their essentials/comments loaders.
+ *   - Re-presenting an unchanged coordinate set and role history is a strict
+ *     no-op: zero REQs, zero loader re-fires.
+ *   - Coordinate removal is ignored: the removed coordinate's REQs stay live
+ *     until the subscription ends. Authority is enforced by the list models
+ *     reading the store, never by what this loader fetched.
+ *   - A repository identity change (different selected pubkey/dTag) must be
+ *     a new subscription — callers key their use$ on the relay group, which
+ *     is model-cached per (pubkey, dTag).
  *
  * Deduplication: a seenIds Set in the closure ensures each item ID is
  * submitted to the loaders exactly once, regardless of how many times the
@@ -973,29 +1082,35 @@ export function nip34SupplementalRelayLoader(
  * bufferTime window are collapsed into a single relay subscription — so N
  * items produce one essentials REQ and one comments REQ, not 2N REQs.
  *
- * @param coords     - Sorted array of repo coordinate strings
+ * @param inputs$    - Reactive coordinates + role history (grow-only coords)
  * @param relayGroup - Relay group from useResolvedRepository
  */
 export function nip34RepoLoader(
-  coords: string[],
+  inputs$: Observable<Nip34RepoLoaderInputs>,
   relayGroup: RelayGroup,
-  roleHistory?: RepositoryRoleHistory,
 ): Observable<NostrEvent> {
   const resolveAuthorInbox = relayCurationMode.getValue() === "outbox";
-  const coordinateSet = new Set(coords);
 
   return new Observable<NostrEvent>((subscriber) => {
     const seenIds = new Set<string>();
     const knownRelayUrls = new Set<string>();
     const inboxSubs = new Subscription();
-    const maintainerPubkeys = [
-      ...new Set(
-        coords.flatMap((coord) => {
-          const parsed = parseRepoCoordinate(coord);
-          return parsed ? [parsed.pubkey] : [];
-        }),
-      ),
-    ];
+
+    // Grow-only coordinate state shared by every subscription below.
+    // coordinateSet is read by isRepositoryRootItem at delivery time, so
+    // items tagged only with a late coordinate pass once it has joined.
+    const coordinateSet = new Set<string>();
+    const maintainerPubkeys = new Set<string>();
+    const emittedAppChunkKeys = new Set<string>();
+    const coordsList$ = new BehaviorSubject<string[]>([]);
+    const roleHistory$ = new BehaviorSubject<RepositoryRoleHistory | undefined>(
+      undefined,
+    );
+    let lastRoleHistoryKey = roleHistoryCacheKey(undefined);
+
+    const itemAdditions = new Subject<AdditiveFilterChunk>();
+    const appAdditions = new Subject<AdditiveFilterChunk>();
+    const metaAdditions = new Subject<AdditiveFilterChunk>();
 
     function fireLoaders(id: string, relays: string[]): void {
       nip34ListLoader(id, relays).subscribe({
@@ -1049,32 +1164,25 @@ export function nip34RepoLoader(
         }
       });
 
-    // Fetch software applications in their own REQ, before the potentially
-    // large issue/PR query. Some relays merge and chronologically order all
-    // filters in a single REQ before sending any events, which can leave an
-    // older application event behind the repository's item backlog.
-    const softwareApplicationSub = resilientSubscription(
+    // Fetch software applications in their own REQ, separate from the
+    // potentially large issue/PR query. Some relays merge and
+    // chronologically order all filters in a single REQ before sending any
+    // events, which can leave an older application event behind the
+    // repository's item backlog. Chunks are keyed per (author, coordinate)
+    // pair so a maintainer confirmed later adds delta REQs only.
+    const softwareApplicationSub = resilientAdditiveSubscription(
       pool,
       relayGroupUrls$(relayGroup),
-      [
-        {
-          kinds: [SOFTWARE_APPLICATION_KIND],
-          authors: maintainerPubkeys,
-          "#a": coords,
-        } as Filter,
-      ],
+      { initial: [], additions$: appAdditions },
       { reconnect: true, gapFill: true, settle: false },
     )
       .pipe(onlyEvents(), mapEventsToStore(eventStore))
-      .subscribe();
+      .subscribe({ error: (err) => subscriber.error(err) });
 
-    const itemFilters = [
-      { kinds: [...REPO_ITEM_KINDS], "#a": coords } as Filter,
-    ];
-    const itemSub = resilientSubscription(
+    const itemSub = resilientAdditiveSubscription(
       pool,
       relayGroupUrls$(relayGroup),
-      itemFilters,
+      { initial: [], additions$: itemAdditions },
       { reconnect: true, gapFill: true, settle: false },
     )
       .pipe(
@@ -1095,74 +1203,76 @@ export function nip34RepoLoader(
             if (resolveAuthorInbox) fireAuthorInboxLoaders(ev);
           }
         },
-        complete: () => subscriber.complete(),
+        error: (err) => subscriber.error(err),
       });
 
-    const repoMetaFilters = [
-      {
-        // Reactions (stars), follow lists, zaps — plus kind:39842 CI
-        // workflow progress markers. The markers carry a NIP-40
-        // expiration so the live set for a repo stays small; fetching them
-        // repo-wide via #a keeps pending indicators available everywhere
-        // (PR lists, PR pages) without per-item subscriptions.
-        kinds: [REACTION_KIND, GIT_REPOS_FOLLOW_KIND, 9735, CI_RUN_KIND],
-        "#a": coords,
-      } as Filter,
-    ];
-    const repoMetaSub = resilientSubscription(
+    const repoMetaSub = resilientAdditiveSubscription(
       pool,
       relayGroupUrls$(relayGroup),
-      repoMetaFilters,
+      { initial: [], additions$: metaAdditions },
       { reconnect: true, gapFill: true, settle: false },
     )
       .pipe(onlyEvents(), mapEventsToStore(eventStore))
-      .subscribe();
+      .subscribe({ error: (err) => subscriber.error(err) });
 
-    // Discover inferred stack parents in one repository-scoped #c query.
+    // Discover inferred stack parents via repository-scoped #c queries.
     // Historical PR updates loaded by the list loaders participate too.
-    // Each merge base is one immutable keyed chunk: a commit discovered
-    // later (e.g. a merge base arriving asynchronously) opens a single
-    // delta REQ per relay instead of restarting the whole subscription.
-    const stackCandidateChunks$ = eventStore
-      .timeline([{ kinds: [1618, 1619], "#a": coords } as Filter])
-      .pipe(
-        map((events) => {
-          const repositoryEvents = events as NostrEvent[];
-          return [
-            ...new Set(
-              getEffectivePRMergeBases(
-                repositoryEvents.filter((event) => event.kind === 1618),
-                repositoryEvents.filter((event) => event.kind === 1619),
-                coords,
-                roleHistory,
-              ).values(),
+    // Each (coordinate, merge base) pair is one immutable keyed chunk: a
+    // commit or coordinate discovered later (a merge base arriving
+    // asynchronously, a maintainer confirming late) opens a single delta
+    // REQ per relay instead of restarting the whole subscription.
+    const emittedStackChunkKeys = new Set<string>();
+    const stackCandidateChunks$ = combineLatest([
+      coordsList$,
+      roleHistory$,
+    ]).pipe(
+      switchMap(([coords, roleHistory]) => {
+        if (coords.length === 0) return EMPTY;
+        return eventStore
+          .timeline([{ kinds: [1618, 1619], "#a": coords } as Filter])
+          .pipe(
+            map((events) => {
+              const repositoryEvents = events as NostrEvent[];
+              return [
+                ...new Set(
+                  getEffectivePRMergeBases(
+                    repositoryEvents.filter((event) => event.kind === 1618),
+                    repositoryEvents.filter((event) => event.kind === 1619),
+                    coords,
+                    roleHistory,
+                  ).values(),
+                ),
+              ].sort();
+            }),
+            // Scoped inside switchMap so every coordinate/role-history
+            // epoch re-presents its merge bases once; emittedStackChunkKeys
+            // keeps that re-presentation a no-op for known pairs.
+            distinctUntilChanged(
+              (a, b) =>
+                a.length === b.length &&
+                a.every((value, index) => b[index] === value),
             ),
-          ].sort();
-        }),
-        distinctUntilChanged(
-          (a, b) =>
-            a.length === b.length &&
-            a.every((value, index) => b[index] === value),
-        ),
-        mergeMap((mergeBases) =>
-          from(
-            mergeBases.flatMap((mergeBase): AdditiveFilterChunk[] => {
-              const candidateFilter = buildStackCandidateFilter(coords, [
-                mergeBase,
-              ]);
-              return candidateFilter
-                ? [
-                    {
-                      key: mergeBase,
-                      filters: [candidateFilter],
-                      deltaSafe: true,
-                    },
-                  ]
-                : [];
+            map((mergeBases) => ({ coords, mergeBases })),
+          );
+      }),
+      mergeMap(({ coords, mergeBases }) =>
+        from(
+          mergeBases.flatMap((mergeBase) =>
+            coords.flatMap((coord): AdditiveFilterChunk[] => {
+              const key = `${coord}|${mergeBase}`;
+              if (emittedStackChunkKeys.has(key)) return [];
+              const candidateFilter = buildStackCandidateFilter(
+                [coord],
+                [mergeBase],
+              );
+              if (!candidateFilter) return [];
+              emittedStackChunkKeys.add(key);
+              return [{ key, filters: [candidateFilter], deltaSafe: true }];
             }),
           ),
         ),
-      );
+      ),
+    );
     const stackCandidateSub = resilientAdditiveSubscription(
       pool,
       relayGroupUrls$(relayGroup),
@@ -1176,12 +1286,56 @@ export function nip34RepoLoader(
       )
       .subscribe();
 
+    // Subscribed after every consumer above so a synchronous first emission
+    // (BehaviorSubject) reaches the live additive subscriptions. Growth is
+    // content-keyed: only genuinely new coordinates or changed role-history
+    // content produce chunk emissions; anything else is a strict no-op.
+    const inputsSub = inputs$.subscribe({
+      next: ({ coords, roleHistory }) => {
+        const newCoords = [...new Set(coords)].filter(
+          (coord) => !coordinateSet.has(coord),
+        );
+        const roleHistoryKey = roleHistoryCacheKey(roleHistory);
+        const roleHistoryChanged = roleHistoryKey !== lastRoleHistoryKey;
+        if (newCoords.length === 0 && !roleHistoryChanged) return;
+        for (const coord of newCoords) {
+          coordinateSet.add(coord);
+          const parsed = parseRepoCoordinate(coord);
+          if (parsed) maintainerPubkeys.add(parsed.pubkey);
+        }
+        // Software applications span authors × coordinates; emit the pairs
+        // not yet covered (new author × all coordinates, all authors × new
+        // coordinates), pushed before the item chunks so the small
+        // application REQ is not queued behind the item backlog.
+        for (const pubkey of maintainerPubkeys) {
+          for (const coord of coordinateSet) {
+            const chunk = softwareApplicationChunk(pubkey, coord);
+            if (emittedAppChunkKeys.has(chunk.key)) continue;
+            emittedAppChunkKeys.add(chunk.key);
+            appAdditions.next(chunk);
+          }
+        }
+        for (const coord of newCoords) {
+          itemAdditions.next(repoItemChunk(coord));
+          metaAdditions.next(repoMetaChunk(coord));
+        }
+        if (newCoords.length > 0) coordsList$.next([...coordinateSet].sort());
+        if (roleHistoryChanged) {
+          lastRoleHistoryKey = roleHistoryKey;
+          roleHistory$.next(roleHistory);
+        }
+      },
+      error: (err) => subscriber.error(err),
+      // Completion means no further growth — the subscription lives on.
+    });
+
     return () => {
       relaySub.unsubscribe();
       softwareApplicationSub.unsubscribe();
       itemSub.unsubscribe();
       repoMetaSub.unsubscribe();
       stackCandidateSub.unsubscribe();
+      inputsSub.unsubscribe();
       inboxSubs.unsubscribe();
     };
   });

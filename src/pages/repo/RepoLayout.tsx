@@ -82,7 +82,7 @@ import {
 import { RepoRelaysContext } from "@/contexts/RepoRelaysContext";
 import { relayGroupUrls$ } from "@/models/RepositoryRelayGroup";
 import { getRepositoryLeadRedirectPath } from "@/lib/repositoryLeadRoute";
-import { EMPTY, merge } from "rxjs";
+import { BehaviorSubject, EMPTY, merge } from "rxjs";
 import { catchError } from "rxjs/operators";
 import {
   ciRepositoryCoordinatorStatus$,
@@ -241,20 +241,41 @@ function RepoLayoutResolved({
   // nip34SupplementalRelayLoader which — unlike a plain subscription — also
   // calls nip34ListLoader for each newly found item, ensuring status events
   // (1630-1633) and other essentials on author/maintainer outbox relays are
-  // fetched, not just the root events.
+  // fetched, not just the root events. Coordinates are fed in reactively so
+  // a maintainer confirming later grows the live subscription with delta
+  // REQs instead of restarting it.
   const coordKey = repo?.confirmedMemberCoordinates.join(",") ?? "";
+  const supplementalCoords$ = useMemo(
+    () => new BehaviorSubject<string[]>(repo?.confirmedMemberCoordinates ?? []),
+    // Intentionally NOT keyed on the coordinates — they are fed in below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [extraRelaysForMaintainerMailboxCoverage],
+  );
+  useEffect(() => {
+    if (repo?.confirmedMemberCoordinates.length)
+      supplementalCoords$.next(repo.confirmedMemberCoordinates);
+    // Content-keyed dep: pushes happen only when the coordinate set changes;
+    // the loader additionally no-ops on unchanged lists.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [supplementalCoords$, coordKey]);
+  const hasMemberCoords = !!repo?.confirmedMemberCoordinates.length;
   use$(() => {
     if (
       curationMode !== "outbox" ||
       !extraRelaysForMaintainerMailboxCoverage ||
-      !repo?.confirmedMemberCoordinates.length
+      !hasMemberCoords
     )
       return undefined;
     return nip34SupplementalRelayLoader(
-      repo.confirmedMemberCoordinates,
+      supplementalCoords$,
       extraRelaysForMaintainerMailboxCoverage,
     ).pipe(catchError(() => EMPTY));
-  }, [curationMode, extraRelaysForMaintainerMailboxCoverage, coordKey]);
+  }, [
+    curationMode,
+    extraRelaysForMaintainerMailboxCoverage,
+    hasMemberCoords,
+    supplementalCoords$,
+  ]);
 
   const queryOptions: RepoQueryOptions = useMemo(
     () => ({

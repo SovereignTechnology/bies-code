@@ -77,7 +77,7 @@ describe("nip34RepoLoader stack-candidate subscription", () => {
     const mergeBase2 = "2".repeat(40);
 
     const group = new RelayGroup([pool.relay(RELAY_URL)]);
-    loaderSub = nip34RepoLoader([coord], group).subscribe();
+    loaderSub = nip34RepoLoader(of({ coords: [coord] }), group).subscribe();
 
     // The loader's fixed queries (software app, items, repo meta) open
     // first; no #c query exists while no merge base is known.
