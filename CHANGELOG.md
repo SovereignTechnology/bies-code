@@ -56,7 +56,7 @@
   collaboration totals, protocol metadata, and repository search, linked to
   but kept distinct from the matching CI coordinator profile.
 - Classify CI coordinators and providers with settled maintainer-directed,
-  operationally associated, socially corroborated, or no-known-context
+  operationally associated, seen-in-your-network, or no-known-context
   evidence across Actions, pull requests, commits, refs, coordinator pages,
   and provider profiles, with concise popovers, request-signer attribution,
   recent signed provider-job history, and incomplete-query handling.

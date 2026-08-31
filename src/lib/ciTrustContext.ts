@@ -8,7 +8,7 @@ import {
 export enum CITrustClassification {
   MaintainerDirected = "maintainer-directed",
   OperationallyAssociated = "operationally-associated",
-  SociallyCorroborated = "socially-corroborated",
+  SeenInYourNetwork = "seen-in-your-network",
   NoKnownContext = "no-known-context",
 }
 
@@ -19,7 +19,7 @@ export type CITrustEvidenceKind =
   | "repository-subdomain"
   | "coordinator-delegation"
   | "contact-request"
-  | "social-activity";
+  | "network-activity";
 
 export interface CITrustEvidence {
   kind: CITrustEvidenceKind;
@@ -53,7 +53,7 @@ export interface CITrustContextState {
 const classificationRank: Record<CITrustClassification, number> = {
   [CITrustClassification.MaintainerDirected]: 0,
   [CITrustClassification.OperationallyAssociated]: 1,
-  [CITrustClassification.SociallyCorroborated]: 2,
+  [CITrustClassification.SeenInYourNetwork]: 2,
   [CITrustClassification.NoKnownContext]: 3,
 };
 
@@ -71,15 +71,15 @@ export const CI_TRUST_CLASSIFICATION_COPY: Record<
     description:
       "Signed or independently verified evidence connects this identity to repository-listed infrastructure or a recognized coordinator.",
   },
-  [CITrustClassification.SociallyCorroborated]: {
-    label: "Socially corroborated",
+  [CITrustClassification.SeenInYourNetwork]: {
+    label: "Seen in your network",
     description:
-      "A confirmed maintainer you follow currently requests this CI identity, or it has CI activity on a repository they maintain.",
+      "Someone you follow requested this CI identity for a repository they maintain, or CI activity was observed there. They are not necessarily a maintainer of this repository, and this is not an endorsement.",
   },
   [CITrustClassification.NoKnownContext]: {
     label: "No known context",
     description:
-      "No maintainer, repository-infrastructure, coordinator, or viewer-relative social evidence was found.",
+      "No maintainer, repository-infrastructure, coordinator, or viewer-relative network evidence was found.",
   },
 };
 
@@ -193,19 +193,19 @@ export function getCIJobTrustResolution(
   }
 
   const delegatedClassification =
-    coordinator.classification === CITrustClassification.SociallyCorroborated
-      ? CITrustClassification.SociallyCorroborated
+    coordinator.classification === CITrustClassification.SeenInYourNetwork
+      ? CITrustClassification.SeenInYourNetwork
       : CITrustClassification.OperationallyAssociated;
   const evidence: CITrustEvidence = {
     kind: "coordinator-delegation",
     classification: delegatedClassification,
     summary:
-      delegatedClassification === CITrustClassification.SociallyCorroborated
-        ? "Accepted by a socially corroborated coordinator"
+      delegatedClassification === CITrustClassification.SeenInYourNetwork
+        ? "Accepted by a coordinator seen in your network"
         : "Accepted by the coordinator",
     detail:
-      delegatedClassification === CITrustClassification.SociallyCorroborated
-        ? "The coordinator signed a Workflow Result accepting this provider's Job Result, and that coordinator has CI history near your follow graph. This association is scoped to this job."
+      delegatedClassification === CITrustClassification.SeenInYourNetwork
+        ? "The coordinator signed a Workflow Result accepting this provider's Job Result, and separate activity connects that coordinator to repositories maintained by people you follow. This is not an endorsement for this repository, and the association is scoped to this job."
         : "The independently contextual coordinator signed a Workflow Result accepting this provider's Job Result. This association is scoped to this job.",
     scope: "run",
   };

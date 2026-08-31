@@ -454,19 +454,19 @@ function useCISocialEvidence(
               if (requesters?.size) {
                 items.push({
                   kind: "contact-request",
-                  classification: CITrustClassification.SociallyCorroborated,
-                  summary: "Requested by people you follow",
-                  detail: `${requesters.size} ${requesters.size === 1 ? "person you follow has" : "people you follow have"} signed a CI request addressed to this identity for a repository they maintain.`,
+                  classification: CITrustClassification.SeenInYourNetwork,
+                  summary: "Requested on another repository",
+                  detail: `${requesters.size} ${requesters.size === 1 ? "person you follow has" : "people you follow have"} signed a CI request addressed to this identity for a repository they maintain. This does not establish authority or endorsement for the repository you are viewing.`,
                   scope: "historical",
                 });
               }
               const maintainers = activity.get(pubkey);
               if (maintainers?.size) {
                 items.push({
-                  kind: "social-activity",
-                  classification: CITrustClassification.SociallyCorroborated,
-                  summary: "Used near your follow graph",
-                  detail: `Started or completed CI activity was observed on repositories maintained by ${maintainers.size} ${maintainers.size === 1 ? "person" : "people"} you follow. This does not mean they requested or endorsed it.`,
+                  kind: "network-activity",
+                  classification: CITrustClassification.SeenInYourNetwork,
+                  summary: "CI activity in your network",
+                  detail: `Started or completed CI activity was observed on repositories maintained by ${maintainers.size} ${maintainers.size === 1 ? "person" : "people"} you follow. This does not mean they requested or endorsed it, and it does not establish authority for the repository you are viewing.`,
                   scope: "historical",
                 });
               }

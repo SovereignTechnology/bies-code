@@ -49,19 +49,26 @@ const iconConfig: Record<
 interface CIStatusIconProps {
   status: CICheckStatus;
   className?: string;
+  /** Hide the icon from assistive technology when a parent control labels it. */
+  decorative?: boolean;
 }
 
 /**
  * Compact status icon for a CI check — used in the checks panel and as a
  * small badge in PR list rows.
  */
-export function CIStatusIcon({ status, className }: CIStatusIconProps) {
+export function CIStatusIcon({
+  status,
+  className,
+  decorative = false,
+}: CIStatusIconProps) {
   const config = iconConfig[status];
   const Icon = config.icon;
   return (
     <Icon
       className={cn("h-4 w-4 shrink-0", config.className, className)}
-      aria-label={`CI: ${ciStatusLabel(status)}`}
+      aria-hidden={decorative || undefined}
+      aria-label={decorative ? undefined : `CI: ${ciStatusLabel(status)}`}
     />
   );
 }

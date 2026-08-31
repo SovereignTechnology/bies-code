@@ -31,9 +31,8 @@ import {
   type PRItemType,
 } from "@/lib/nip34";
 import { useCIForPR, useRepoCI } from "@/hooks/useCI";
-import { CIStatusIcon } from "@/components/ci/CIStatusIcon";
-import { ciStatusLabel } from "@/lib/ci";
-import { CITrustContextLabel } from "@/components/ci/CITrustContextLabel";
+import { CIStatusTrustIcon } from "@/components/ci/CIStatusTrustIcon";
+import { summarizeRuns } from "@/lib/ci";
 import { useRepositoryCITrust } from "@/hooks/useRepositoryCITrust";
 import type { CIServiceControl } from "@/casts/CICoordinator";
 import {
@@ -523,12 +522,15 @@ function PRRow({
   const nevent = eventIdToNevent(pr.id, repoRelays.slice(0, 1));
   const needsAttributionCheck =
     repo !== undefined && !hasAcceptedRepositoryReference(pr.repoCoords, repo);
+  const hasActivityCounts =
+    pr.commentCount > 0 || pr.zapTotal > 0 || pr.participantCount > 1;
 
   return (
-    <li className="group flex items-stretch hover:bg-accent/40 transition-colors">
+    <li className="group flex items-start gap-3 px-3 py-2.5 transition-colors hover:bg-accent/40">
       <Link
         to={`${repoPath}/prs/${nevent}`}
-        className="flex min-w-0 flex-1 items-start gap-3 px-3 py-2.5 text-sm"
+        className="shrink-0 rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+        aria-label={`Open ${pr.itemType === "patch" ? "patch" : "pull request"}: ${pr.currentSubject}`}
       >
         {/* Status icon — variant reflects PR vs patch */}
         <StatusIcon
@@ -536,93 +538,99 @@ function PRRow({
           variant={pr.itemType === "patch" ? "patch" : "pr"}
           className="mt-0.5"
         />
+      </Link>
 
-        {/* Title + metadata */}
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="font-medium text-foreground group-hover:text-pink-600 dark:group-hover:text-pink-400 transition-colors line-clamp-1">
+      {/* Title + metadata */}
+      <div className="min-w-0 flex-1 text-sm">
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex min-w-0 max-w-full items-center gap-2">
+            <Link
+              to={`${repoPath}/prs/${nevent}`}
+              className="min-w-0 line-clamp-1 font-medium text-foreground transition-colors group-hover:text-pink-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:group-hover:text-pink-400"
+            >
               {pr.currentSubject}
-            </span>
+            </Link>
             {ci?.status && (
-              <span
-                title={`Checks: ${ciStatusLabel(ci.status).toLowerCase()}`}
-                className="inline-flex shrink-0"
-              >
-                <CIStatusIcon status={ci.status} className="h-3.5 w-3.5" />
-              </span>
-            )}
-            {ci && ci.currentRuns.length > 0 && (
-              <CITrustContextLabel
+              <CIStatusTrustIcon
+                status={ci.status}
                 resolution={trustResolution}
-                visibility="exceptions-only"
+                statusSummary={summarizeRuns(ci.currentRuns)}
+                className="h-3.5 w-3.5"
+                align="start"
               />
             )}
-            {(stackLayer ||
-              hasStackBranches ||
-              inferredParent?.status === "ambiguous") && (
-              <span
-                title={
-                  inferredParent?.status === "ambiguous"
-                    ? "Inferred stack parent is ambiguous"
-                    : hasStackBranches
-                      ? "Inferred stack branches"
-                      : stackLayer
-                        ? `Inferred stack: layer ${stackLayer.position} of ${stackLayer.size}`
-                        : "Inferred stack"
-                }
-                className="inline-flex shrink-0 items-center gap-1 text-[10px] text-muted-foreground"
-              >
-                <GitBranch className="h-3 w-3" />
-                {inferredParent?.status === "ambiguous"
-                  ? "Stack?"
+          </div>
+          {(stackLayer ||
+            hasStackBranches ||
+            inferredParent?.status === "ambiguous") && (
+            <span
+              title={
+                inferredParent?.status === "ambiguous"
+                  ? "Inferred stack parent is ambiguous"
                   : hasStackBranches
-                    ? "Stack"
+                    ? "Inferred stack branches"
                     : stackLayer
-                      ? `${stackLayer.position}/${stackLayer.size}`
-                      : "Stack"}
+                      ? `Inferred stack: layer ${stackLayer.position} of ${stackLayer.size}`
+                      : "Inferred stack"
+              }
+              className="inline-flex shrink-0 items-center gap-1 text-[10px] text-muted-foreground"
+            >
+              <GitBranch className="h-3 w-3" />
+              {inferredParent?.status === "ambiguous"
+                ? "Stack?"
+                : hasStackBranches
+                  ? "Stack"
+                  : stackLayer
+                    ? `${stackLayer.position}/${stackLayer.size}`
+                    : "Stack"}
+            </span>
+          )}
+          {pr.targetBranch && (
+            <span
+              title={`Targets non-default branch ${pr.targetBranch}`}
+              aria-label={`Targets branch ${pr.targetBranch}`}
+              className="inline-flex min-w-0 shrink items-center gap-1 rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
+            >
+              <GitBranch className="h-3 w-3 shrink-0" />
+              <span aria-hidden="true" className="truncate">
+                → {pr.targetBranch}
               </span>
-            )}
-            {pr.targetBranch && (
-              <span
-                title={`Targets non-default branch ${pr.targetBranch}`}
-                aria-label={`Targets branch ${pr.targetBranch}`}
-                className="inline-flex min-w-0 shrink items-center gap-1 rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
-              >
-                <GitBranch className="h-3 w-3 shrink-0" />
-                <span aria-hidden="true" className="truncate">
-                  → {pr.targetBranch}
-                </span>
-              </span>
-            )}
-            {pr.labels.map((label) => (
-              <LabelBadge
-                key={label}
-                label={label}
-                className="text-[10px] py-0 px-1.5 h-[18px]"
-              />
-            ))}
-          </div>
-          <div className="flex items-center gap-2 mt-1 text-xs text-muted-foreground">
-            <code className="font-mono text-[10px] text-muted-foreground/80">
-              #{pr.id.slice(0, 8)}
-            </code>
-            <span className="text-muted-foreground/40">&middot;</span>
-            <span>active {lastActive}</span>
-            <span className="text-muted-foreground/40">&middot;</span>
-            <UserAvatar
-              pubkey={pr.pubkey}
-              size="sm"
-              className="h-4 w-4 text-[8px]"
+            </span>
+          )}
+          {pr.labels.map((label) => (
+            <LabelBadge
+              key={label}
+              label={label}
+              className="text-[10px] py-0 px-1.5 h-[18px]"
             />
-            <UserName
-              pubkey={pr.pubkey}
-              className="text-xs font-normal text-muted-foreground"
-            />
-          </div>
+          ))}
         </div>
+        <div className="flex items-center gap-2 mt-1 text-xs text-muted-foreground">
+          <code className="font-mono text-[10px] text-muted-foreground/80">
+            #{pr.id.slice(0, 8)}
+          </code>
+          <span className="text-muted-foreground/40">&middot;</span>
+          <span>active {lastActive}</span>
+          <span className="text-muted-foreground/40">&middot;</span>
+          <UserAvatar
+            pubkey={pr.pubkey}
+            size="sm"
+            className="h-4 w-4 text-[8px]"
+          />
+          <UserName
+            pubkey={pr.pubkey}
+            className="text-xs font-normal text-muted-foreground"
+          />
+        </div>
+      </div>
 
-        {/* Comment, zap & participant counts — right-aligned */}
-        <div className="flex items-center gap-3 self-center text-xs text-muted-foreground shrink-0">
+      {/* Comment, zap & participant counts — right-aligned */}
+      {hasActivityCounts && (
+        <Link
+          to={`${repoPath}/prs/${nevent}`}
+          className="flex shrink-0 items-center gap-3 self-center rounded text-xs text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          aria-label={`Open ${pr.currentSubject}`}
+        >
           {pr.commentCount > 0 && (
             <span className="inline-flex items-center gap-0.5">
               <MessageCircle className="h-3 w-3" />
@@ -641,10 +649,10 @@ function PRRow({
               {pr.participantCount}
             </span>
           )}
-        </div>
-      </Link>
+        </Link>
+      )}
       {needsAttributionCheck && (
-        <div className="flex shrink-0 items-center pr-2">
+        <div className="flex shrink-0 items-center self-center">
           <RepoItemAttributionIndicator
             repo={repo}
             repoCoords={pr.repoCoords}

@@ -117,7 +117,7 @@ interface CICoordinatorTrustCounts {
   repositoryInfrastructure: number;
   previouslyRequested: number;
   operational: number;
-  social: number;
+  network: number;
   noKnownContext: number;
 }
 
@@ -132,7 +132,7 @@ function countCoordinatorTrust(
     repositoryInfrastructure: 0,
     previouslyRequested: 0,
     operational: 0,
-    social: 0,
+    network: 0,
     noKnownContext: 0,
   };
   for (const pubkey of pubkeys) {
@@ -160,8 +160,8 @@ function countCoordinatorTrust(
           counts.operational++;
         }
         break;
-      case CITrustClassification.SociallyCorroborated:
-        counts.social++;
+      case CITrustClassification.SeenInYourNetwork:
+        counts.network++;
         break;
       case CITrustClassification.NoKnownContext:
         if (resolution.coverage === "complete") counts.noKnownContext++;
@@ -306,9 +306,9 @@ export function CICoordinatorSummaryBar({
                         {trustCounts?.operational} operationally associated
                       </span>
                     )}
-                    {(trustCounts?.social ?? 0) > 0 && (
+                    {(trustCounts?.network ?? 0) > 0 && (
                       <span className="inline-flex items-center gap-1 text-muted-foreground">
-                        {trustCounts?.social} socially corroborated
+                        {trustCounts?.network} seen in your network
                       </span>
                     )}
                     {(trustCounts?.noKnownContext ?? 0) > 0 && (

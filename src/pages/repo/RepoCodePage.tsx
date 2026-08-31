@@ -62,9 +62,8 @@ import { useIsMobile } from "@/hooks/useIsMobile";
 import { isNonHttpUrl } from "@/lib/git-grasp-pool";
 import { IncompatibleProtocolError } from "@/components/IncompatibleProtocolError";
 import { useCIForCommit } from "@/hooks/useCI";
-import { CIStatusIcon } from "@/components/ci/CIStatusIcon";
+import { CIStatusTrustIcon } from "@/components/ci/CIStatusTrustIcon";
 import { summarizeRuns } from "@/lib/ci";
-import { CITrustContextLabel } from "@/components/ci/CITrustContextLabel";
 import { useRepositoryCITrust } from "@/hooks/useRepositoryCITrust";
 import {
   getCIRunTrustResolution,
@@ -1386,47 +1385,43 @@ function CodeBar({
       {/* Commit summary row */}
       {headCommit ? (
         <div className="flex items-center gap-3 px-3 py-2.5 bg-background border-t border-border/40">
-          <Link
-            to={`${basePath}/commit/${commitHash}`}
-            className="flex items-center gap-3 min-w-0 flex-1 hover:bg-muted/20 transition-colors rounded -mx-1 px-1 -my-0.5 py-0.5"
-          >
-            <div className="p-1.5 rounded-full bg-muted shrink-0">
-              <GitCommit className="h-3.5 w-3.5 text-muted-foreground" />
-            </div>
-            <div className="min-w-0 flex-1">
-              <p className="text-sm font-medium truncate leading-snug">
-                {headCommit.message.split("\n")[0]}
-              </p>
-              <p className="text-xs text-muted-foreground">
-                {headCommit.author.name} &middot;{" "}
-                {safeFormatDistanceToNow(
-                  headCommit.committer?.timestamp ??
-                    headCommit.author.timestamp,
-                  { addSuffix: true },
-                )}
-              </p>
-            </div>
+          <div className="flex min-w-0 flex-1 items-center gap-2 rounded -mx-1 px-1 -my-0.5 py-0.5">
+            <Link
+              to={`${basePath}/commit/${commitHash}`}
+              className="flex min-w-0 flex-1 items-center gap-3 rounded transition-colors hover:bg-muted/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <div className="p-1.5 rounded-full bg-muted shrink-0">
+                <GitCommit className="h-3.5 w-3.5 text-muted-foreground" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-medium truncate leading-snug">
+                  {headCommit.message.split("\n")[0]}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {headCommit.author.name} &middot;{" "}
+                  {safeFormatDistanceToNow(
+                    headCommit.committer?.timestamp ??
+                      headCommit.author.timestamp,
+                    { addSuffix: true },
+                  )}
+                </p>
+              </div>
+            </Link>
             {headCommitCI?.status && (
-              <span
-                className="shrink-0 flex items-center"
-                title={`CI: ${summarizeRuns(headCommitCI.runs)}`}
-              >
-                <CIStatusIcon
-                  status={headCommitCI.status}
-                  className="h-3.5 w-3.5"
-                />
-              </span>
-            )}
-            {headCommitCI && headCommitCI.runs.length > 0 && (
-              <CITrustContextLabel
+              <CIStatusTrustIcon
+                status={headCommitCI.status}
                 resolution={headCommitTrust}
-                visibility="exceptions-only"
+                statusSummary={summarizeRuns(headCommitCI.runs)}
+                className="h-3.5 w-3.5"
               />
             )}
-            <code className="text-xs font-mono bg-muted px-1.5 py-0.5 rounded text-muted-foreground shrink-0">
+            <Link
+              to={`${basePath}/commit/${commitHash}`}
+              className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-xs text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
               {commitHash?.slice(0, 8)}
-            </code>
-          </Link>
+            </Link>
+          </div>
           <Link
             to={`${
               currentRef

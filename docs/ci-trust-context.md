@@ -72,7 +72,7 @@ numeric score:
 ```text
 MaintainerDirected
 OperationallyAssociated
-SociallyCorroborated
+SeenInYourNetwork
 NoKnownContext
 ```
 
@@ -216,16 +216,16 @@ Recommended language:
 - **Operationally associated with a maintainer-recognized coordinator**, when
   the coordinator has independent maintainer or infrastructure evidence
 
-### Level 3: Socially Corroborated
+### Level 3: Seen in Your Network
 
 **Meaning:** The current viewer can observe prior started or completed CI
 activity connecting the coordinator/provider to a repository maintained by
 someone they follow.
 
-This is subjective, viewer-relative corroboration. A relationship on another
+This is subjective, viewer-relative network evidence. A relationship on another
 repository does not become maintainer direction for the repository currently
-being viewed. It shows that the identity has participated in CI activity near
-the viewer's social graph.
+being viewed. It shows only that the identity has participated in CI activity
+on repositories maintained by people the viewer follows.
 
 There are two strengths of Level 3 evidence.
 
@@ -237,16 +237,16 @@ referenced repository, is direct evidence that the contact chose the
 coordinator. The resulting run MUST carry validated request provenance before
 it can support this claim.
 
-When that coordinator allocates a job to a separate provider, the social
-evidence may follow the signed allocation to that provider for the allocated
-job. The language must still distinguish the contact's choice of coordinator
-from the coordinator's choice of provider.
+When that coordinator allocates a job to a separate provider, the
+seen-in-your-network evidence may follow the signed allocation to that provider
+for the allocated job. The language must still distinguish the contact's choice
+of coordinator from the coordinator's choice of provider.
 
 Recommended language:
 
 - **A person you follow requested CI from this coordinator**
-- **Used for CI requested by N people you follow**
-- **Selected by a coordinator used by people you follow**, for a separately
+- **Seen in your network: requested by N people you follow**
+- **Selected by a coordinator seen in your network**, for a separately
   allocated provider
 
 #### Observed Started Activity
@@ -266,7 +266,7 @@ followed person chose, requested, approved, or trusted the signer.
 Recommended language:
 
 - **Has run CI for a repository maintained by someone you follow**
-- **Started CI activity observed on repositories in your follow graph**
+- **CI activity observed on repositories in your network**
 - **Prior provider activity found for N people you follow**
 
 Avoid language such as **verified by**, **approved by**, or **trusted by your
@@ -341,9 +341,9 @@ Trust context follows explicit edges and remains scoped:
 - Coordinator evidence reaches a separate provider only through a signed
   allocation or accepted result, and only for the relevant job.
 - Provider evidence does not flow backward to the coordinator.
-- Social corroboration applies to the identity that signed or was selected for
-  the observed activity and to the current viewer. It transfers from a
-  coordinator to a provider only through a signed allocation or accepted
+- Seen-in-your-network evidence applies to the identity that signed or was
+  selected for the observed activity and to the current viewer. It transfers
+  from a coordinator to a provider only through a signed allocation or accepted
   provider result, with the weaker delegated wording.
 - A live Advertisement, Request-Readiness entry, Repository Status, successful
   job, or valid signature is not trust context by itself.
@@ -362,7 +362,7 @@ Trust context can change:
 - NIP-05 and NIP-11 mappings can change;
 - coordinators can choose different providers; and
 - viewers can follow or unfollow the maintainers whose prior activity supplies
-  social corroboration.
+  seen-in-your-network evidence.
 
 Evidence MUST identify whether it describes the current relationship or the
 relationship at the time of a run. Immutable signed service controls and
@@ -382,7 +382,7 @@ Recommended temporal language:
 Trust context MUST remain unresolved while any relevant initial query is still
 loading. A client must not temporarily classify a signer as **No known
 context** merely because repository relationships, profiles, NIP-05 mappings,
-or viewer-relative social evidence have not settled yet.
+or viewer-relative network evidence have not settled yet.
 
 The resolution state is independent from the classification:
 
@@ -417,11 +417,11 @@ evidence.
 
 ## Reference Summary
 
-| Level | Name                     | Core evidence                                                                                                                     | Claim it supports                                                          |
-| ----- | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| 1     | Maintainer-directed      | Verified maintainer Service Request, Manual Trigger, or active-at-run control history                                             | A maintainer explicitly requested the service or run                       |
-| 2     | Operationally associated | Repository-listed GRASP infrastructure, verified domain/operator association, coordinator allocation, or accepted provider result | The repository or coordinator chose to use this infrastructure or provider |
-| 3     | Socially corroborated    | Started or completed CI activity on repositories maintained by people in the viewer's follow graph                                | This identity has prior CI activity near the viewer's social graph         |
+| Level | Name                     | Core evidence                                                                                                                     | Claim it supports                                                           |
+| ----- | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| 1     | Maintainer-directed      | Verified maintainer Service Request, Manual Trigger, or active-at-run control history                                             | A maintainer explicitly requested the service or run                        |
+| 2     | Operationally associated | Repository-listed GRASP infrastructure, verified domain/operator association, coordinator allocation, or accepted provider result | The repository or coordinator chose to use this infrastructure or provider  |
+| 3     | Seen in your network     | Started or completed CI activity on repositories maintained by people the viewer follows                                          | This identity has prior CI activity on repositories in the viewer's network |
 
 The levels describe evidence, not a numeric security score. A complete CI trust
 context should retain the identities, signed events, domain checks, provenance,

@@ -408,7 +408,7 @@ export default function PRPage() {
     [ciChecks?.runs],
   );
 
-  // Coordinator relationships, infrastructure identities, social context,
+  // Coordinator relationships, infrastructure identities, network context,
   // and immutable service-control history use the same trust model as the
   // repository Actions page.
   const hasCIRuns = !!ciChecks && ciChecks.runs.length > 0;

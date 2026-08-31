@@ -211,9 +211,10 @@ export default function CIProviderPage() {
                   />
                 </div>
                 <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-                  This global view uses verified identity and viewer-relative
-                  social history. A repository view can additionally show an
-                  accepted result from an independently contextual coordinator.
+                  This global view uses verified identity evidence and
+                  viewer-relative network activity. A repository view can
+                  additionally show an accepted result from an independently
+                  contextual coordinator.
                 </p>
                 <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
                   A provider signs the direct execution claim. Trust context
