@@ -1,6 +1,5 @@
 import type { CastRefEventStore } from "applesauce-common/casts/cast";
 import type { Filter } from "applesauce-core/helpers";
-import type { RelayGroup } from "applesauce-relay";
 import type { NostrEvent } from "nostr-tools";
 import { combineLatest, of, timer } from "rxjs";
 import { map } from "rxjs/operators";
@@ -82,7 +81,6 @@ export function useCICoordinators(
   repositoryCoordinates: string[] | undefined,
   selectedCoordinate: string | undefined,
   confirmedMaintainers: string[] | undefined,
-  repoRelayGroup: RelayGroup | undefined,
 ): CICoordinatorState | undefined {
   const store = useEventStore();
   const castStore = store as unknown as CastRefEventStore;
@@ -117,9 +115,8 @@ export function useCICoordinators(
       repositoryCoordinates,
       selectedCoordinate,
       confirmedMaintainers ?? [],
-      repoRelayGroup,
     );
-  }, [coordinatesKey, maintainersKey, selectedCoordinate, repoRelayGroup]);
+  }, [coordinatesKey, maintainersKey, selectedCoordinate]);
 
   const summaries = use$(() => {
     if (!repositoryCoordinates || !confirmedMaintainers) return undefined;

@@ -1258,7 +1258,6 @@ function CodeBar({
   const { coordinatorState, trust } = useRepositoryCITrust(
     resolved?.repo,
     headCommitCI?.runs,
-    resolved?.repoRelayGroup,
   );
   const headCommitTrust = summarizeCIRunTrust(
     (headCommitCI?.runs ?? []).map((run) =>

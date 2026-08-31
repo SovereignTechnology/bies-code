@@ -103,11 +103,7 @@ export default function RepoCommitsPage() {
       ciChecks ? [...ciChecks.values()].flatMap((checks) => checks.runs) : [],
     [ciChecks],
   );
-  const { coordinatorState, trust } = useRepositoryCITrust(
-    repo,
-    ciRuns,
-    resolved?.repoRelayGroup,
-  );
+  const { coordinatorState, trust } = useRepositoryCITrust(repo, ciRuns);
 
   useSeoMeta({
     title: repo

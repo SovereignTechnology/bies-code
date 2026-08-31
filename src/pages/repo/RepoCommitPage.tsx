@@ -36,11 +36,7 @@ export default function RepoCommitPage() {
   // CI checks (ngit-ci kinds 9841/9842) for this commit — shown between the
   // commit header and the diff.
   const ci = useCIForCommit(commitId, resolved?.repoRelayGroup);
-  const { coordinatorState, trust } = useRepositoryCITrust(
-    repo,
-    ci?.runs,
-    resolved?.repoRelayGroup,
-  );
+  const { coordinatorState, trust } = useRepositoryCITrust(repo, ci?.runs);
 
   if (!commitId) {
     return (

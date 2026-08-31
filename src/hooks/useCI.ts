@@ -305,12 +305,12 @@ export function useCIForCommit(
  * coordinates, so the full coordinate set is passed) and reads them back
  * from the store grouped into workflow runs, most recent first.
  *
- * @param repoCoords     - The repo's confirmed maintainer coordinates
- * @param repoRelayGroup - Repo relay group from useResolvedRepository
+ * @param repoCoords         - The repo's confirmed maintainer coordinates
+ * @param selectedCoordinate - The repo's selected coordinate (relay source)
  */
 export function useRepoCI(
   repoCoords: string[] | undefined,
-  repoRelayGroup: RelayGroup | undefined,
+  selectedCoordinate: string | undefined,
 ): CIWorkflowRun[] | undefined {
   const store = useEventStore();
 
@@ -321,8 +321,8 @@ export function useRepoCI(
   // the repository shows CI signals, so tab navigation reuses one query.
   use$(() => {
     if (!repoCoords || repoCoords.length === 0) return undefined;
-    return repoCIActivity$(repoCoords, repoRelayGroup);
-  }, [coordsKey, repoRelayGroup]);
+    return repoCIActivity$(repoCoords, selectedCoordinate);
+  }, [coordsKey, selectedCoordinate]);
 
   // Layer 2: read all CI kinds back from the store and group.
   return use$(() => {

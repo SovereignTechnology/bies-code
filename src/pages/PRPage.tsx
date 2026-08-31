@@ -415,7 +415,6 @@ export default function PRPage() {
   const { coordinatorState, trust } = useRepositoryCITrust(
     hasCIRuns ? repo : undefined,
     ciChecks?.runs,
-    resolved?.repoRelayGroup,
   );
   const ciTrustContext = useMemo<CIRunTrustContext | undefined>(() => {
     if (!repo) return undefined;

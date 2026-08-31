@@ -1,5 +1,4 @@
 import { useMemo } from "react";
-import type { RelayGroup } from "applesauce-relay";
 import { useCICoordinators } from "@/hooks/useCICoordinators";
 import { useCITrustContext } from "@/hooks/useCITrustContext";
 import type { CIWorkflowRun } from "@/lib/ci";
@@ -11,13 +10,11 @@ const EMPTY_PUBKEYS: ReadonlySet<string> = new Set();
 export function useRepositoryCITrust(
   repo: ResolvedRepo | undefined,
   runs: readonly CIWorkflowRun[] | undefined,
-  repoRelayGroup: RelayGroup | undefined,
 ) {
   const coordinatorState = useCICoordinators(
     repo?.confirmedMaintainerCoordinates,
     repo?.selectedCoordinate,
     repo?.confirmedMaintainers,
-    repoRelayGroup,
   );
   const relationships = useMemo(
     () =>

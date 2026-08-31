@@ -81,13 +81,9 @@ export default function RepoPRsPage() {
   );
   const ciRuns = useRepoCI(
     repo?.confirmedMaintainerCoordinates,
-    resolved?.repoRelayGroup,
+    repo?.selectedCoordinate,
   );
-  const { coordinatorState, trust } = useRepositoryCITrust(
-    repo,
-    ciRuns,
-    resolved?.repoRelayGroup,
-  );
+  const { coordinatorState, trust } = useRepositoryCITrust(repo, ciRuns);
 
   // Filters — all multi-select; status defaults to open+draft
   const [statusFilter, setStatusFilter] = useState<IssueStatus[]>(

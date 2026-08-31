@@ -17,12 +17,11 @@ export default function RepoActionsPage() {
     !!account && !!repo?.confirmedMaintainers.includes(account.pubkey);
   const runs = useRepoCI(
     repo?.confirmedMaintainerCoordinates,
-    resolved?.repoRelayGroup,
+    repo?.selectedCoordinate,
   );
   const { coordinatorState, relationships, trust } = useRepositoryCITrust(
     repo,
     runs,
-    resolved?.repoRelayGroup,
   );
   const coordinators = coordinatorState?.coordinators;
   const coordinatorAvailability = useMemo(

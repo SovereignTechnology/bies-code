@@ -29,9 +29,12 @@ import {
   CI_SERVICE_REQUEST_KIND,
   CI_SERVICE_STOP_KIND,
 } from "@/lib/ci";
-import { REPO_KIND } from "@/lib/nip34";
+import { REPO_KIND, parseRepoCoordinate } from "@/lib/nip34";
 import { keyedShared } from "@/lib/keyedShared";
-import { relayGroupUrls$ } from "@/models/RepositoryRelayGroup";
+import {
+  RepositoryRelayGroup,
+  relayGroupUrls$,
+} from "@/models/RepositoryRelayGroup";
 import {
   loadRelayQueryUntilSettled,
   type RelayQuerySettlement,
@@ -57,6 +60,32 @@ function sameList(a: readonly string[], b: readonly string[]): boolean {
 function discoveryRelays$(): Observable<string[]> {
   return combineLatest([lookupRelays, gitIndexRelays]).pipe(
     map(([lookup, indexes]) => sortedUnique([...lookup, ...indexes])),
+    distinctUntilChanged<string[]>(sameList),
+  );
+}
+
+/**
+ * Reactive relay URLs for the repository identified by `coordinate`, resolved
+ * through the model-cached RepositoryRelayGroup. Owners subscribe to the
+ * model themselves rather than capturing a caller's RelayGroup instance:
+ * every (re)connection binds whatever group the model cache currently holds,
+ * and while the owner is connected (including the share linger) its model
+ * subscription keeps the group's relay discovery live.
+ */
+function repositoryRelays$(
+  coordinate: string | undefined,
+): Observable<string[]> {
+  const parsed = parseRepoCoordinate(coordinate);
+  if (!parsed) return of([] as string[]);
+  return (
+    eventStore.model(
+      RepositoryRelayGroup,
+      parsed.pubkey,
+      parsed.identifier,
+    ) as unknown as Observable<RelayGroup>
+  ).pipe(
+    switchMap((group) => relayGroupUrls$(group)),
+    map((urls) => sortedUnique(urls)),
     distinctUntilChanged<string[]>(sameList),
   );
 }
@@ -335,24 +364,21 @@ const repositoryCoordinatorStatus = new Map<
 
 /**
  * Repository status claims plus maintainer-authored service controls for the
- * selected coordinate, fetched from the repository relays. Keyed by the
- * repository's coordinate and maintainer sets; the relay group captured by
- * the first caller is reused until the linger elapses (relay groups are
- * model-cached per repository, so concurrent callers pass the same instance).
+ * selected coordinate, fetched from the repository relays. The relay set is
+ * derived from the model-cached RepositoryRelayGroup for the selected
+ * coordinate (falling back to the first coordinate), so it is a pure
+ * function of the cache key rather than a captured caller argument.
  */
 export function ciRepositoryCoordinatorStatus$(
   repositoryCoordinates: readonly string[],
   selectedCoordinate: string | undefined,
   maintainers: readonly string[],
-  repoRelayGroup: RelayGroup | undefined,
 ): Observable<RelayQuerySettlement> {
   const coordinates = sortedUnique(repositoryCoordinates);
   const pubkeys = sortedUnique(maintainers);
   const key = `${coordinates.join(",")}|${selectedCoordinate ?? ""}|${pubkeys.join(",")}`;
   return keyedShared(repositoryCoordinatorStatus, key, () =>
-    relayGroupUrls$(repoRelayGroup).pipe(
-      map((relays) => sortedUnique(relays)),
-      distinctUntilChanged<string[]>(sameList),
+    repositoryRelays$(selectedCoordinate ?? coordinates[0]).pipe(
       switchMap((relays) => {
         const filters: Filter[] = [
           { kinds: [CI_REPOSITORY_STATUS_KIND], "#a": coordinates } as Filter,
@@ -383,13 +409,12 @@ const repoCIActivityQueries = new Map<
  */
 export function repoCIActivity$(
   repositoryCoordinates: readonly string[],
-  repoRelayGroup: RelayGroup | undefined,
+  selectedCoordinate: string | undefined,
 ): Observable<RelayQuerySettlement> {
   const coordinates = sortedUnique(repositoryCoordinates);
-  return keyedShared(repoCIActivityQueries, coordinates.join(","), () =>
-    relayGroupUrls$(repoRelayGroup).pipe(
-      map((relays) => sortedUnique(relays)),
-      distinctUntilChanged<string[]>(sameList),
+  const key = `${coordinates.join(",")}|${selectedCoordinate ?? ""}`;
+  return keyedShared(repoCIActivityQueries, key, () =>
+    repositoryRelays$(selectedCoordinate ?? coordinates[0]).pipe(
       switchMap((relays) =>
         loadRelayQueryUntilSettled(
           pool,

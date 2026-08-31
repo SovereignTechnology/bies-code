@@ -307,15 +307,17 @@ function RepoLayoutResolved({
     if (!hasCI || !repo?.confirmedMaintainerCoordinates.length)
       return undefined;
     return merge(
-      repoCIActivity$(repo.confirmedMaintainerCoordinates, repoRelayGroup),
+      repoCIActivity$(
+        repo.confirmedMaintainerCoordinates,
+        repo.selectedCoordinate,
+      ),
       ciRepositoryCoordinatorStatus$(
         repo.confirmedMaintainerCoordinates,
         repo.selectedCoordinate,
         repo.confirmedMaintainers,
-        repoRelayGroup,
       ),
     );
-  }, [hasCI, maintainerCoordKey, repo?.selectedCoordinate, repoRelayGroup]);
+  }, [hasCI, maintainerCoordKey, repo?.selectedCoordinate]);
   const releaseSummary = useRepoReleaseSummary(
     repo?.confirmedMaintainerCoordinates,
     repo?.confirmedMaintainers,

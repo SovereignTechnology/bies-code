@@ -123,11 +123,7 @@ export default function RepoTagsPage() {
       ciChecks ? [...ciChecks.values()].flatMap((checks) => checks.runs) : [],
     [ciChecks],
   );
-  const { coordinatorState, trust } = useRepositoryCITrust(
-    repo,
-    ciRuns,
-    resolved?.repoRelayGroup,
-  );
+  const { coordinatorState, trust } = useRepositoryCITrust(repo, ciRuns);
 
   useSeoMeta({
     title: repo ? `Tags - ${repo.name} - ngit` : "Tags - ngit",

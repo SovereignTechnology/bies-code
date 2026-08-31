@@ -34,13 +34,13 @@ export default function RepoCoordinatorsPage({
     : undefined;
   const runs = useRepoCI(
     repo?.confirmedMaintainerCoordinates,
-    resolved?.repoRelayGroup,
+    repo?.selectedCoordinate,
   );
   const {
     coordinatorState,
     relationships: coordinatorRelationships,
     trust,
-  } = useRepositoryCITrust(repo, runs, resolved?.repoRelayGroup);
+  } = useRepositoryCITrust(repo, runs);
   const coordinators = coordinatorState?.coordinators;
   const coordinator = coordinators?.find(
     ({ pubkey }) => pubkey === coordinatorPubkey,
