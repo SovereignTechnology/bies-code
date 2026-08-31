@@ -13,10 +13,9 @@ import { Card, CardContent } from "@/components/ui/card";
 import { AlertCircle, GitCommit, User, Clock, Loader2 } from "lucide-react";
 import { safeFormatDistanceToNow, safeFormat } from "@/lib/utils";
 import type { Commit } from "@/lib/vendored/git-natural-api";
-import { CIStatusIcon } from "@/components/ci/CIStatusIcon";
+import { CIStatusTrustIcon } from "@/components/ci/CIStatusTrustIcon";
 import { summarizeRuns } from "@/lib/ci";
 import type { CommitCIChecks } from "@/hooks/useCI";
-import { CITrustContextLabel } from "@/components/ci/CITrustContextLabel";
 import type { CIServiceControl } from "@/casts/CICoordinator";
 import type { ResolvedRepo } from "@/lib/nip34";
 import {
@@ -206,20 +205,18 @@ export function CommitRow({
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          {ci && ci.runs.length > 0 && (
-            <CITrustContextLabel
+          {ci?.status && (
+            <CIStatusTrustIcon
+              status={ci.status}
               resolution={trustResolution}
-              visibility="exceptions-only"
+              statusSummary={summarizeRuns(ci.runs)}
+              className="h-3.5 w-3.5"
             />
           )}
           <Link
             to={`${basePath}/commit/${commit.hash}`}
-            className="flex items-center gap-1.5 rounded bg-muted px-2 py-1 font-mono text-xs text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground"
-            title={ci?.status ? `CI: ${summarizeRuns(ci.runs)}` : undefined}
+            className="rounded bg-muted px-2 py-1 font-mono text-xs text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground"
           >
-            {ci?.status && (
-              <CIStatusIcon status={ci.status} className="h-3.5 w-3.5" />
-            )}
             {shortHash}
           </Link>
         </div>

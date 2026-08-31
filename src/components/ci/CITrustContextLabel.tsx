@@ -1,4 +1,4 @@
-import { ShieldAlert } from "lucide-react";
+import { CircleHelp, ShieldAlert } from "lucide-react";
 import {
   Popover,
   PopoverContent,
@@ -17,6 +17,10 @@ import {
   type CITrustResolution,
 } from "@/lib/ciTrustContext";
 import { cn } from "@/lib/utils";
+import {
+  getCITrustAttentionTone,
+  getSettledCITrustPresentation,
+} from "./ciTrustPresentation";
 
 export function CITrustContextLabel({
   resolution,
@@ -30,6 +34,10 @@ export function CITrustContextLabel({
   className?: string;
 }) {
   if (resolution.phase === "loading") {
+    if (visibility === "exceptions-only") {
+      return <span data-ci-trust-phase="loading" aria-hidden="true" />;
+    }
+
     return (
       <Skeleton
         className={cn("h-5 w-24 shrink-0 rounded", className)}
@@ -38,9 +46,8 @@ export function CITrustContextLabel({
     );
   }
 
-  const incomplete = resolution.coverage === "partial";
-  const hasPositiveEvidence =
-    resolution.classification !== CITrustClassification.NoKnownContext;
+  const { incomplete, hasPositiveEvidence, label } =
+    getSettledCITrustPresentation(resolution, displayLabel);
   const hiddenByPolicy =
     visibility === "exceptions-only" &&
     (resolution.classification === CITrustClassification.MaintainerDirected ||
@@ -61,16 +68,11 @@ export function CITrustContextLabel({
     );
   }
 
-  const copy = CI_TRUST_CLASSIFICATION_COPY[resolution.classification];
-  const weakContext =
-    resolution.classification === CITrustClassification.NoKnownContext &&
-    resolution.coverage === "complete";
-  const label =
-    incomplete && !hasPositiveEvidence
-      ? "Context incomplete"
-      : (displayLabel ?? copy.label);
+  const attentionTone = getCITrustAttentionTone(resolution);
 
-  const content = <CITrustExplanation resolution={resolution} label={label} />;
+  const content = (
+    <CITrustContextDetails resolution={resolution} displayLabel={label} />
+  );
 
   return (
     <Popover>
@@ -82,14 +84,19 @@ export function CITrustContextLabel({
               className={cn(
                 "inline-flex h-5 shrink-0 items-center gap-1 rounded border px-1.5 text-[10px] font-medium transition-colors",
                 "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
-                weakContext
-                  ? "border-amber-500/40 bg-amber-500/10 text-amber-700 hover:bg-amber-500/15 dark:text-amber-300"
-                  : "border-border bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground",
+                attentionTone === "danger"
+                  ? "border-red-500/40 bg-red-500/10 text-red-700 hover:bg-red-500/15 dark:text-red-300"
+                  : attentionTone === "caution"
+                    ? "border-amber-500/40 bg-amber-500/10 text-amber-700 hover:bg-amber-500/15 dark:text-amber-300"
+                    : "border-border bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground",
                 className,
               )}
               aria-label={`${label}. Open CI trust context`}
             >
-              {weakContext && (
+              {attentionTone === "caution" && (
+                <CircleHelp className="h-3 w-3" aria-hidden="true" />
+              )}
+              {attentionTone === "danger" && (
                 <ShieldAlert className="h-3 w-3" aria-hidden="true" />
               )}
               {label}
@@ -107,16 +114,30 @@ export function CITrustContextLabel({
   );
 }
 
-function CITrustExplanation({
+export function CITrustContextDetails({
   resolution,
-  label,
+  displayLabel,
 }: {
-  resolution: Extract<CITrustResolution, { phase: "settled" }>;
-  label: string;
+  resolution: CITrustResolution;
+  displayLabel?: string;
 }) {
+  if (resolution.phase === "loading") {
+    return (
+      <div className="space-y-1 text-xs">
+        <p className="font-semibold text-foreground">Checking runner context</p>
+        <p className="leading-relaxed text-muted-foreground">
+          The CI result is available while relationship evidence continues to
+          load.
+        </p>
+      </div>
+    );
+  }
+
+  const { label, hasPositiveEvidence } = getSettledCITrustPresentation(
+    resolution,
+    displayLabel,
+  );
   const copy = CI_TRUST_CLASSIFICATION_COPY[resolution.classification];
-  const hasPositiveEvidence =
-    resolution.classification !== CITrustClassification.NoKnownContext;
   const incompleteWithoutEvidence =
     resolution.coverage === "partial" && !hasPositiveEvidence;
   return (

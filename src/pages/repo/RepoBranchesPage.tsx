@@ -34,8 +34,7 @@ import { isNonHttpUrl } from "@/lib/git-grasp-pool";
 import { IncompatibleProtocolError } from "@/components/IncompatibleProtocolError";
 import { useCIForCommits } from "@/hooks/useCI";
 import { useRepositoryCITrust } from "@/hooks/useRepositoryCITrust";
-import { CIStatusIcon } from "@/components/ci/CIStatusIcon";
-import { CITrustContextLabel } from "@/components/ci/CITrustContextLabel";
+import { CIStatusTrustIcon } from "@/components/ci/CIStatusTrustIcon";
 import { summarizeRuns } from "@/lib/ci";
 import {
   getCIRunTrustResolution,
@@ -366,21 +365,12 @@ export default function RepoBranchesPage() {
                     {row}
                   </Link>
                   {ci?.status && (
-                    <span
-                      className="ml-2 inline-flex shrink-0 items-center"
-                      title={`CI: ${summarizeRuns(ci.runs)}`}
-                    >
-                      <CIStatusIcon
-                        status={ci.status}
-                        className="h-3.5 w-3.5"
-                      />
-                    </span>
-                  )}
-                  {ci && ci.runs.length > 0 && (
-                    <CITrustContextLabel
+                    <CIStatusTrustIcon
+                      status={ci.status}
                       resolution={trustResolution}
-                      visibility="exceptions-only"
-                      className="ml-2"
+                      statusSummary={summarizeRuns(ci.runs)}
+                      className="h-3.5 w-3.5"
+                      buttonClassName="ml-2"
                     />
                   )}
                 </div>

@@ -109,18 +109,18 @@ function coordinatorProfileTrustResolution(
   if (context.requestedByContactsRepositoryCount > 0) {
     evidence.push({
       kind: "contact-request",
-      classification: CITrustClassification.SociallyCorroborated,
-      summary: "Requested by people you follow",
-      detail: `${context.requestedByContacts.length} ${context.requestedByContacts.length === 1 ? "person you follow has" : "people you follow have"} signed a standing or run-specific request for this coordinator across ${context.requestedByContactsRepositoryCount} ${context.requestedByContactsRepositoryCount === 1 ? "repository" : "repositories"} they maintain.`,
+      classification: CITrustClassification.SeenInYourNetwork,
+      summary: "Requested on repositories in your network",
+      detail: `${context.requestedByContacts.length} ${context.requestedByContacts.length === 1 ? "person you follow has" : "people you follow have"} signed a standing or run-specific request for this coordinator across ${context.requestedByContactsRepositoryCount} ${context.requestedByContactsRepositoryCount === 1 ? "repository" : "repositories"} they maintain. This does not establish authority or endorsement for repositories they do not maintain.`,
       scope: "historical",
     });
   }
   if (context.activeForContactsRepositoryCount > 0) {
     evidence.push({
-      kind: "social-activity",
-      classification: CITrustClassification.SociallyCorroborated,
-      summary: "Used near your follow graph",
-      detail: `Signed coordinator status or started CI activity was observed on ${context.activeForContactsRepositoryCount} ${context.activeForContactsRepositoryCount === 1 ? "repository" : "repositories"} maintained by ${context.activeForContacts.length} ${context.activeForContacts.length === 1 ? "person" : "people"} you follow. This does not mean they requested or endorsed it.`,
+      kind: "network-activity",
+      classification: CITrustClassification.SeenInYourNetwork,
+      summary: "CI activity in your network",
+      detail: `Signed coordinator status or started CI activity was observed on ${context.activeForContactsRepositoryCount} ${context.activeForContactsRepositoryCount === 1 ? "repository" : "repositories"} maintained by ${context.activeForContacts.length} ${context.activeForContacts.length === 1 ? "person" : "people"} you follow. This does not mean they requested or endorsed it, and it does not establish authority for repositories they do not maintain.`,
       scope: "historical",
     });
   }
