@@ -19,6 +19,7 @@ import {
   merge,
   distinctUntilChanged,
   firstValueFrom,
+  from,
   of,
   timer,
   EMPTY,
@@ -27,7 +28,7 @@ import {
   catchError,
   filter,
   map,
-  switchMap,
+  mergeMap,
   take,
   timeout,
 } from "rxjs/operators";
@@ -63,7 +64,11 @@ import {
   createPaginatedTagValueLoader,
   type PaginatedTagValueResponse,
 } from "@/lib/tagValuePaginatedLoader";
-import { resilientSubscription } from "@/lib/resilientSubscription";
+import {
+  resilientAdditiveSubscription,
+  resilientSubscription,
+  type AdditiveFilterChunk,
+} from "@/lib/resilientSubscription";
 import { outboxStore, type RelayGroupResolver } from "./outbox";
 import { normalizeUrl } from "@/lib/url";
 import { relayGroupUrls$ } from "@/models/RepositoryRelayGroup";
@@ -1115,7 +1120,10 @@ export function nip34RepoLoader(
 
     // Discover inferred stack parents in one repository-scoped #c query.
     // Historical PR updates loaded by the list loaders participate too.
-    const stackCandidateSub = eventStore
+    // Each merge base is one immutable keyed chunk: a commit discovered
+    // later (e.g. a merge base arriving asynchronously) opens a single
+    // delta REQ per relay instead of restarting the whole subscription.
+    const stackCandidateChunks$ = eventStore
       .timeline([{ kinds: [1618, 1619], "#a": coords } as Filter])
       .pipe(
         map((events) => {
@@ -1136,20 +1144,35 @@ export function nip34RepoLoader(
             a.length === b.length &&
             a.every((value, index) => b[index] === value),
         ),
-        switchMap((mergeBases) => {
-          const candidateFilter = buildStackCandidateFilter(coords, mergeBases);
-          if (!candidateFilter) return EMPTY;
-          return resilientSubscription(
-            pool,
-            relayGroupUrls$(relayGroup),
-            [candidateFilter],
-            { reconnect: true, gapFill: true, settle: false },
-          ).pipe(
-            onlyEvents(),
-            mapEventsToStore(eventStore),
-            catchError(() => EMPTY),
-          );
-        }),
+        mergeMap((mergeBases) =>
+          from(
+            mergeBases.flatMap((mergeBase): AdditiveFilterChunk[] => {
+              const candidateFilter = buildStackCandidateFilter(coords, [
+                mergeBase,
+              ]);
+              return candidateFilter
+                ? [
+                    {
+                      key: mergeBase,
+                      filters: [candidateFilter],
+                      deltaSafe: true,
+                    },
+                  ]
+                : [];
+            }),
+          ),
+        ),
+      );
+    const stackCandidateSub = resilientAdditiveSubscription(
+      pool,
+      relayGroupUrls$(relayGroup),
+      { initial: [], additions$: stackCandidateChunks$ },
+      { reconnect: true, gapFill: true, settle: false },
+    )
+      .pipe(
+        onlyEvents(),
+        mapEventsToStore(eventStore),
+        catchError(() => EMPTY),
       )
       .subscribe();
 
