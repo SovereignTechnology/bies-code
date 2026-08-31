@@ -88,6 +88,7 @@ export default function IssuePage() {
     repo?.roleHistory,
     extraSearchGroups,
     retryKey,
+    repo?.isPrivate ?? false,
   );
   const mentionedItems = useMentionedNip34Items(issue?.rootEvent.id);
   const timelineEntries = useMemo(() => {

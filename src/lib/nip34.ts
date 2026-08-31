@@ -537,8 +537,9 @@ export function getRepoBlossomUrls(ev: NostrEvent): string[] {
 export function getRepoIsPrivate(ev: NostrEvent): boolean {
   return getOrComputeCachedValue(ev, RepoIsPrivateSymbol, () =>
     ev.tags.some(
-      ([name, value]) =>
-        (name === "private" && value === "true") || name === "buzz-channel",
+      (tag) =>
+        (tag.length === 2 && tag[0] === "private" && tag[1] === "true") ||
+        tag[0] === "buzz-channel",
     ),
   );
 }
@@ -761,6 +762,8 @@ export interface RepoQueryOptions {
   relayHints: string[];
   useItemAuthorRelays?: boolean;
   maintainerPubkeys?: string[];
+  /** Keep all repository and descendant reads on the supplied relay group. */
+  privateRepository?: boolean;
 }
 
 /**

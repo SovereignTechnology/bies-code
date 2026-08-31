@@ -68,6 +68,7 @@ export function useResolvedPR(
   _options?: UseResolvedPROptions,
   extraSearchGroups?: RelayGroupSpec[],
   retryKey?: number,
+  privateRepository = false,
 ): ResolvedPRResult {
   const store = useEventStore();
   const curationMode = use$(relayCurationMode);
@@ -80,6 +81,7 @@ export function useResolvedPR(
     members,
     extraSearchGroups,
     retryKey,
+    privateRepository,
   );
 
   // ── 2. Subscribe to PRDetailModel ───────────────────────────────────────
@@ -111,12 +113,14 @@ export function useResolvedPR(
 
   useNip34ItemLoaderBatch(revisionRootIds, repoRelayGroup, {
     includeThread: true,
-    includeAuthorNip65: curationMode === "outbox",
+    includeAuthorNip65: !privateRepository && curationMode === "outbox",
     supplementalRelayGroup:
-      curationMode === "outbox"
+      !privateRepository && curationMode === "outbox"
         ? extraRelaysForMaintainerMailboxCoverage
         : undefined,
-    additionalThreadRelayGroups: extraSearchGroups,
+    additionalThreadRelayGroups: privateRepository
+      ? undefined
+      : extraSearchGroups,
   });
 
   return { pr: resolved, search };

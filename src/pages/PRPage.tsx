@@ -367,6 +367,7 @@ export default function PRPage() {
     undefined, // options
     extraSearchGroups,
     retryKey,
+    repo?.isPrivate ?? false,
   );
   const mentionedItems = useMentionedNip34Items(pr?.rootEvent.id);
   const timelineEntries = useMemo(() => {

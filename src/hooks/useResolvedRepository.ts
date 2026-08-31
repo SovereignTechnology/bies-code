@@ -37,6 +37,10 @@ import type { Observable } from "rxjs";
 import { BehaviorSubject, combineLatest, defer, of } from "rxjs";
 import { distinctUntilChanged, map, switchMap } from "rxjs/operators";
 import { normalizeUrl } from "@/lib/url";
+import {
+  usePrivateRepositoryProbe,
+  type PrivateRepositoryProbeState,
+} from "@/hooks/usePrivateRepositoryProbe";
 
 /** Max healthy mailbox relays to take per maintainer when querying NIP-65 relays. */
 const MAX_MAILBOX_RELAYS_PER_USER = 3;
@@ -80,6 +84,8 @@ export interface ResolvedRepositoryResult {
   announcementsSettled: boolean;
   /** Coverage detail for the full snapshot (relay and failure counts). */
   announcementSettlement: RelayQuerySettlement;
+  /** Private discovery always settles before ordinary repository discovery. */
+  privateProbe: PrivateRepositoryProbeState | undefined;
 }
 
 /**
@@ -156,6 +162,11 @@ export function useResolvedRepository(
   const key = `${pubkey}:${dTag}`;
   const hintsKey = relayHints.join(",");
   const nip05RelaysKey = nip05Relays.join(",");
+  const privateProbe = usePrivateRepositoryProbe(pubkey, dTag, [
+    ...nip05Relays,
+    ...relayHints,
+  ]);
+  const privateProbeStatus = privateProbe?.status;
 
   // ── Layer 1: search for the repo announcement via useEventSearch ─────────
   // Check if the event is already in the store — skip the search if so.
@@ -216,9 +227,10 @@ export function useResolvedRepository(
   }, [hintsKey, nip05RelaysKey]);
 
   const searchTarget = useMemo<SearchTarget | undefined>(() => {
-    if (!pubkey || !dTag || alreadyInStore) return undefined;
+    if (!pubkey || !dTag || alreadyInStore || privateProbeStatus !== "absent")
+      return undefined;
     return { type: "address", kind: REPO_KIND, pubkey, dTag };
-  }, [pubkey, dTag, alreadyInStore]);
+  }, [pubkey, dTag, alreadyInStore, privateProbeStatus]);
 
   const repoSearch = useEventSearch(searchTarget, searchGroups);
 
@@ -228,37 +240,55 @@ export function useResolvedRepository(
   // is a strict superset of the old authors-scoped refresh.
 
   // Layer 2: subscribe to the model.
-  const repo = use$(() => {
-    if (!pubkey || !dTag) return undefined;
+  const publicRepo = use$(() => {
+    if (!pubkey || !dTag || privateProbeStatus !== "absent") return undefined;
     return store.model(
       RepositoryModel,
       pubkey,
       dTag,
       deletionEvents$,
     ) as unknown as Observable<ResolvedRepo | undefined>;
-  }, [key, store]);
+  }, [key, store, privateProbeStatus]);
+  const repo = privateProbeStatus === "found" ? privateProbe?.repo : publicRepo;
 
   // Base RelayGroup: repo-declared relays + relay hints only.
   // Backed by the RepositoryRelayGroup model so it's cached and shared.
-  const repoRelayGroup = use$(() => {
-    if (!pubkey || !dTag) return undefined;
+  const publicRepoRelayGroup = use$(() => {
+    if (!pubkey || !dTag || privateProbeStatus !== "absent") return undefined;
     return store.model(
       RepositoryRelayGroup,
       pubkey,
       dTag,
     ) as unknown as Observable<RelayGroupType>;
-  }, [key, store]);
+  }, [key, store, privateProbeStatus]);
+  const privateRelayKey = privateProbe?.relayUrls.join(",") ?? "";
+  const privateRepoRelayGroup = useMemo(
+    () =>
+      privateProbeStatus === "found"
+        ? new RelayGroup(
+            (privateProbe?.relayUrls ?? []).map((relay) => pool.relay(relay)),
+          )
+        : undefined,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [privateProbeStatus, privateRelayKey],
+  );
+  const repoRelayGroup = privateRepoRelayGroup ?? publicRepoRelayGroup;
 
   // Seed the relay group with URL relay hints immediately so subscriptions
   // can start before the announcement event arrives.
   useMemo(() => {
-    if (!repoRelayGroup || relayHints.length === 0) return;
+    if (
+      privateProbeStatus !== "absent" ||
+      !repoRelayGroup ||
+      relayHints.length === 0
+    )
+      return;
     for (const url of relayHints) {
       const relay = pool.relay(url);
       if (!repoRelayGroup.has(relay)) repoRelayGroup.add(relay);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [repoRelayGroup, hintsKey]);
+  }, [repoRelayGroup, hintsKey, privateProbeStatus]);
 
   // Delta group: maintainer outbox + inbox relays not already in repoRelayGroup.
   // Stable reference — created once per (pubkey, dTag) pair.
@@ -286,7 +316,14 @@ export function useResolvedRepository(
   // fetch: authority comes exclusively from reciprocal resolution rooted at
   // the route pubkey (AGENTS.md §Repository authorization model carve-out).
   use$(() => {
-    if (!pubkey || !dTag || !repoRelayGroup || !extraRelays$) return undefined;
+    if (
+      privateProbeStatus !== "absent" ||
+      !pubkey ||
+      !dTag ||
+      !repoRelayGroup ||
+      !extraRelays$
+    )
+      return undefined;
     const repoRelayUrls$ = (
       store.model(
         RepositoryRelayGroup,
@@ -306,7 +343,7 @@ export function useResolvedRepository(
     return resilientSubscription(pool, enrichmentRelays$, [
       { kinds: [REPO_KIND], "#d": [dTag] } as Filter,
     ]).pipe(onlyEvents(), mapEventsToStore(store));
-  }, [key, store, repoRelayGroup, extraRelays$]);
+  }, [key, store, repoRelayGroup, extraRelays$, privateProbeStatus]);
 
   // Layer 3: once we know the repo's own relay list, add any relays not yet
   // in repoRelayGroup. Also subscribes to maintainer announcements on those relays.
@@ -316,7 +353,13 @@ export function useResolvedRepository(
   // (Layer 4) and is now declared by the repo itself, remove it from the delta
   // group — repoRelayGroup now covers it and the delta subscription closes cleanly.
   use$(() => {
-    if (!dTag || !repo || !repoRelayGroup || repo.relays.length === 0)
+    if (
+      privateProbeStatus !== "absent" ||
+      !dTag ||
+      !repo ||
+      !repoRelayGroup ||
+      repo.relays.length === 0
+    )
       return undefined;
 
     for (const url of repo.relays) {
@@ -385,6 +428,7 @@ export function useResolvedRepository(
     repoRelayGroup,
     extraRelays$,
     extraRelaysForMaintainerMailboxCoverage,
+    privateProbeStatus,
   ]);
 
   // Layer 4: resolve maintainer outbox + inbox relays. Only relays not already
@@ -393,6 +437,7 @@ export function useResolvedRepository(
   // both before adding the first batch.
   use$(() => {
     if (
+      privateProbeStatus !== "absent" ||
       !dTag ||
       !repo ||
       !repoRelayGroup ||
@@ -469,6 +514,7 @@ export function useResolvedRepository(
     repoRelayGroup,
     extraRelaysForMaintainerMailboxCoverage,
     extraRelays$,
+    privateProbeStatus,
   ]);
 
   // Mailbox enrichment (kind 10002): demoted from the settlement critical
@@ -477,7 +523,12 @@ export function useResolvedRepository(
   // that exist solely on a maintainer's mailbox relays arrive progressively.
   const historyKey = repo?.historyPubkeys.join(",") ?? "";
   use$(() => {
-    if (!repo || repo.discoveryPubkeys.length === 0) return undefined;
+    if (
+      privateProbeStatus !== "absent" ||
+      !repo ||
+      repo.discoveryPubkeys.length === 0
+    )
+      return undefined;
     const authors = [
       ...new Set([...repo.discoveryPubkeys, ...repo.historyPubkeys]),
     ];
@@ -492,7 +543,7 @@ export function useResolvedRepository(
     return resilientRequest(pool, relays, [
       { kinds: [10002], authors } as Filter,
     ]).pipe(onlyEvents(), mapEventsToStore(store));
-  }, [discoveryKey, historyKey, store]);
+  }, [discoveryKey, historyKey, store, privateProbeStatus]);
 
   // ── Monotonic initial routing snapshot ────────────────────────────────────
   // Keyed once per route: (pubkey, dTag, relay hints). R0 is read at
@@ -506,7 +557,7 @@ export function useResolvedRepository(
   // The snapshot also settles with failedRelayCount > 0 — degraded coverage
   // is surfaced through announcementSettlement, not blocking.
   const snapshotState = use$(() => {
-    if (!pubkey || !dTag) return undefined;
+    if (!pubkey || !dTag || privateProbeStatus !== "absent") return undefined;
     return defer(() =>
       announcementSnapshot({
         pool,
@@ -521,14 +572,22 @@ export function useResolvedRepository(
         deferredRelays: fallbackRelays.getValue(),
       }),
     );
-  }, [key, hintsKey, nip05RelaysKey, store]);
-  const announcementsFreshEose = snapshotState?.firstFreshEose ?? false;
-  const announcementSettlement: RelayQuerySettlement =
-    snapshotState?.settlement ?? {
-      settled: false,
-      relayCount: 0,
-      failedRelayCount: 0,
-    };
+  }, [key, hintsKey, nip05RelaysKey, store, privateProbeStatus]);
+  const privateFound = privateProbeStatus === "found";
+  const announcementsFreshEose = privateFound
+    ? true
+    : (snapshotState?.firstFreshEose ?? false);
+  const announcementSettlement: RelayQuerySettlement = privateFound
+    ? {
+        settled: true,
+        relayCount: privateProbe?.relayUrls.length ?? 0,
+        failedRelayCount: 0,
+      }
+    : (snapshotState?.settlement ?? {
+        settled: false,
+        relayCount: 0,
+        failedRelayCount: 0,
+      });
   const announcementsSettled = announcementSettlement.settled;
 
   const resolved: ResolvedRepository | undefined =
@@ -538,9 +597,10 @@ export function useResolvedRepository(
 
   return {
     resolved,
-    repoSearch,
+    repoSearch: privateProbeStatus === "absent" ? repoSearch : undefined,
     announcementsFreshEose,
     announcementsSettled,
     announcementSettlement,
+    privateProbe,
   };
 }

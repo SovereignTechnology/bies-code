@@ -26,7 +26,15 @@ import {
   resilientSubscription,
 } from "@/lib/resilientSubscription";
 import { normalizeUrl } from "@/lib/url";
-import { pool } from "@/services/nostr";
+import { eventStore, pool } from "@/services/nostr";
+import {
+  clearPrivateRepositoryScope,
+  installPrivateServiceRelays,
+} from "@/services/privateRepositoryScope";
+import {
+  clearPrivateGitObjectCache,
+  clearPrivateRegistry,
+} from "@/lib/git-grasp-pool";
 
 const SNAPSHOT_TIMEOUT_MS = 8_000;
 const MAX_MERGE_ATTEMPTS = 3;
@@ -181,6 +189,17 @@ function installSnapshot(
   snapshot: PrivateGitRelaySnapshot,
 ): void {
   assertCurrentSession(session);
+  const removedRelays = installPrivateServiceRelays(
+    session.account.id,
+    session.account.pubkey,
+    session.generation,
+    snapshot.selected?.relayUrls ?? [],
+  );
+  for (const relay of removedRelays) pool.remove(relay);
+  if (removedRelays.length > 0) {
+    clearPrivateRegistry(session.account.pubkey);
+    clearPrivateGitObjectCache(session.account.pubkey);
+  }
   privateGitRelayList$.next({
     generation: session.generation,
     pubkey: session.account.pubkey,
@@ -217,6 +236,13 @@ export function startPrivateGitRelaySession(
 ): () => void {
   activeSubscription?.unsubscribe();
   if (activeSession) activeSession.stopped = true;
+  const previous = clearPrivateRepositoryScope();
+  for (const eventId of previous.eventIds) eventStore.remove(eventId);
+  for (const relay of previous.relayUrls) pool.remove(relay);
+  if (activeSession) {
+    clearPrivateRegistry(activeSession.account.pubkey);
+    clearPrivateGitObjectCache(activeSession.account.pubkey);
+  }
 
   const session: PrivateGitRelaySession = {
     generation: ++generation,
@@ -262,6 +288,11 @@ export function startPrivateGitRelaySession(
       activeSession = undefined;
       activeSubscription?.unsubscribe();
       activeSubscription = undefined;
+      const cleared = clearPrivateRepositoryScope();
+      for (const eventId of cleared.eventIds) eventStore.remove(eventId);
+      for (const relay of cleared.relayUrls) pool.remove(relay);
+      clearPrivateRegistry(session.account.pubkey);
+      clearPrivateGitObjectCache(session.account.pubkey);
       privateGitRelayList$.next({
         generation: ++generation,
         status: "logged-out",

@@ -442,6 +442,7 @@ export function useNip34ItemDetailLoader(
   maintainers: Set<string> | undefined,
   extraSearchGroups?: RelayGroupSpec[],
   retryKey?: number,
+  privateRepository = false,
 ): Nip34ItemDetailLoaderResult {
   const curationMode = use$(relayCurationMode);
 
@@ -466,7 +467,7 @@ export function useNip34ItemDetailLoader(
       });
     }
 
-    if (curationMode === "outbox") {
+    if (!privateRepository && curationMode === "outbox") {
       // Outbox mode: add maintainer mailbox relays as second group
       if (extraRelaysForMaintainerMailboxCoverage) {
         groups.push({
@@ -487,7 +488,7 @@ export function useNip34ItemDetailLoader(
     }
 
     // Fallback when no repo relay group yet: use git index relays directly
-    if (!repoRelayGroup) {
+    if (!privateRepository && !repoRelayGroup) {
       groups.push({
         label: "git index",
         relays$: gitIndexRelays,
@@ -495,7 +496,12 @@ export function useNip34ItemDetailLoader(
     }
 
     return groups;
-  }, [repoRelayGroup, extraRelaysForMaintainerMailboxCoverage, curationMode]);
+  }, [
+    repoRelayGroup,
+    extraRelaysForMaintainerMailboxCoverage,
+    curationMode,
+    privateRepository,
+  ]);
 
   const searchTarget = useMemo<SearchTarget | undefined>(() => {
     if (!itemId || alreadyInStore) return undefined;
@@ -513,10 +519,15 @@ export function useNip34ItemDetailLoader(
   // Run as a completely separate useEventSearch so the primary search is
   // never torn down and restarted when extra groups are added.
   const extraSearchTarget = useMemo<SearchTarget | undefined>(() => {
-    if (!itemId || alreadyInStore || !extraSearchGroups?.length)
+    if (
+      privateRepository ||
+      !itemId ||
+      alreadyInStore ||
+      !extraSearchGroups?.length
+    )
       return undefined;
     return { type: "event", id: itemId };
-  }, [itemId, alreadyInStore, extraSearchGroups?.length]);
+  }, [privateRepository, itemId, alreadyInStore, extraSearchGroups?.length]);
 
   const extraSearch = useEventSearch(
     extraSearchTarget,
@@ -537,12 +548,14 @@ export function useNip34ItemDetailLoader(
   // ── 3. Trigger loading (list + thread) ───────────────────────────────────
   useNip34ItemLoader(itemId, repoRelayGroup, {
     includeThread: true,
-    includeAuthorNip65: curationMode === "outbox",
+    includeAuthorNip65: !privateRepository && curationMode === "outbox",
     supplementalRelayGroup:
-      curationMode === "outbox"
+      !privateRepository && curationMode === "outbox"
         ? extraRelaysForMaintainerMailboxCoverage
         : undefined,
-    additionalThreadRelayGroups: extraSearchGroups,
+    additionalThreadRelayGroups: privateRepository
+      ? undefined
+      : extraSearchGroups,
   });
 
   const maintainerKey = maintainers

@@ -1,0 +1,100 @@
+import type { NostrEvent } from "nostr-tools";
+import { BehaviorSubject } from "rxjs";
+
+import { normalizeUrl } from "@/lib/url";
+
+interface PrivateRelayTrustSession {
+  accountId: string;
+  pubkey: string;
+  generation: number;
+}
+
+const privateEventIds = new Set<string>();
+const privateRepositoryCoordinates = new Set<string>();
+const privateRelaySessions = new Map<string, PrivateRelayTrustSession>();
+
+export const privateRepositoryScopeRevision$ = new BehaviorSubject(0);
+
+function emitRevision(): void {
+  privateRepositoryScopeRevision$.next(
+    privateRepositoryScopeRevision$.getValue() + 1,
+  );
+}
+
+export function installPrivateServiceRelays(
+  accountId: string,
+  pubkey: string,
+  generation: number,
+  relayUrls: readonly string[],
+): string[] {
+  const next = new Set(relayUrls.map(normalizeUrl));
+  const removed: string[] = [];
+  for (const [relay, session] of privateRelaySessions) {
+    if (
+      session.accountId !== accountId ||
+      session.generation !== generation ||
+      !next.has(relay)
+    ) {
+      privateRelaySessions.delete(relay);
+      removed.push(relay);
+    }
+  }
+  for (const relay of next) {
+    privateRelaySessions.set(relay, { accountId, pubkey, generation });
+  }
+  if (removed.length > 0 || next.size > 0) emitRevision();
+  return removed;
+}
+
+export function getPrivateRelayTrustSession(
+  relayUrl: string,
+): PrivateRelayTrustSession | undefined {
+  return privateRelaySessions.get(normalizeUrl(relayUrl));
+}
+
+export function isTrustedPrivateRepositoryRelay(relayUrl: string): boolean {
+  return privateRelaySessions.has(normalizeUrl(relayUrl));
+}
+
+export function markPrivateRepositoryCoordinate(coordinate: string): void {
+  if (!privateRepositoryCoordinates.has(coordinate)) {
+    privateRepositoryCoordinates.add(coordinate);
+    emitRevision();
+  }
+}
+
+export function isPrivateRepositoryCoordinate(coordinate: string): boolean {
+  return privateRepositoryCoordinates.has(coordinate);
+}
+
+export function markPrivateRelayEvent(event: NostrEvent): void {
+  if (!privateEventIds.has(event.id)) {
+    privateEventIds.add(event.id);
+    emitRevision();
+  }
+}
+
+export function isPrivateRepositoryEvent(event: NostrEvent): boolean {
+  return privateEventIds.has(event.id);
+}
+
+export function isPrivateRepositoryEventId(eventId: string): boolean {
+  return privateEventIds.has(eventId);
+}
+
+export interface ClearedPrivateRepositoryScope {
+  eventIds: string[];
+  relayUrls: string[];
+}
+
+export function clearPrivateRepositoryScope(): ClearedPrivateRepositoryScope {
+  const cleared = {
+    eventIds: [...privateEventIds],
+    relayUrls: [...privateRelaySessions.keys()],
+  };
+  privateEventIds.clear();
+  privateRepositoryCoordinates.clear();
+  privateRelaySessions.clear();
+  emitRevision();
+  return cleared;
+}

@@ -48,7 +48,7 @@ import { nip34RepoLoader, type Nip34RepoLoaderInputs } from "@/services/nostr";
 export function useIssues(
   repoCoords: string | string[] | undefined,
   repoRelayGroup: RelayGroup | undefined,
-  _options: RepoQueryOptions,
+  options: RepoQueryOptions,
   roleHistory?: RepositoryRoleHistory,
 ): ResolvedIssueLite[] | undefined {
   const store = useEventStore();
@@ -105,10 +105,12 @@ export function useIssues(
   const hasCoords = !!coords && coords.length > 0;
   use$(() => {
     if (!hasCoords || !repoRelayGroup) return undefined;
-    return nip34RepoLoader(inputs$, repoRelayGroup).pipe(
-      catchError(() => EMPTY),
-    );
-  }, [hasCoords, repoRelayGroup, inputs$]);
+    return nip34RepoLoader(
+      inputs$,
+      repoRelayGroup,
+      options.privateRepository,
+    ).pipe(catchError(() => EMPTY));
+  }, [hasCoords, repoRelayGroup, inputs$, options.privateRepository]);
 
   // Subscribe to the model — cached by the store, shared across components.
   return use$(() => {

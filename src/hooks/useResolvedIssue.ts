@@ -44,6 +44,7 @@ export function useResolvedIssue(
   roleHistory?: RepositoryRoleHistory,
   extraSearchGroups?: RelayGroupSpec[],
   retryKey?: number,
+  privateRepository = false,
 ): ResolvedIssueResult {
   const store = useEventStore();
 
@@ -54,6 +55,7 @@ export function useResolvedIssue(
     maintainers,
     extraSearchGroups,
     retryKey,
+    privateRepository,
   );
 
   const issue = use$(() => {

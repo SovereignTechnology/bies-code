@@ -1,5 +1,9 @@
 import type { Filter, NostrEvent } from "applesauce-core/helpers";
 import "window.nostrdb.js";
+import {
+  isPrivateRepositoryEvent,
+  isPrivateRepositoryEventId,
+} from "@/services/privateRepositoryScope";
 
 const DELETION_PERSIST_TIMEOUT_MS = 5_000;
 const DELETION_PERSIST_POLL_MS = 25;
@@ -10,12 +14,17 @@ const DELETION_PERSIST_POLL_MS = 25;
  * Returns empty array if cache is not available.
  */
 export async function cacheRequest(filters: Filter[]) {
-  return window.nostrdb.filters(filters);
+  const events = await window.nostrdb.filters(filters);
+  return events.filter((event) => !isPrivateRepositoryEventId(event.id));
 }
 
 /** Save events to the cache */
 export async function saveEvents(events: NostrEvent[]) {
-  await Promise.allSettled(events.map((e) => window.nostrdb.add(e)));
+  await Promise.allSettled(
+    events
+      .filter((event) => !isPrivateRepositoryEvent(event))
+      .map((event) => window.nostrdb.add(event)),
+  );
 }
 
 /** Load durable kind-5 tombstones before any cached originals are consumed. */
@@ -25,6 +34,7 @@ export async function loadDeletionEvents(): Promise<NostrEvent[]> {
 
 /** Persist a verified kind-5 event outside EventStore.insert$. */
 export async function saveDeletionEvent(event: NostrEvent): Promise<void> {
+  if (isPrivateRepositoryEvent(event)) return;
   // Strip Applesauce's symbol metadata and detach nested tag arrays before the
   // asynchronous nostr-idb write queue observes the event.
   const durableEvent: NostrEvent = {
