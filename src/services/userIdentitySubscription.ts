@@ -12,6 +12,7 @@
  *   kind 10017 — NIP-51 Git authors follow list
  *   kind 10018 — NIP-51 Git repositories follow list
  *   kind 10317 — Grasp server list
+ *   kind 10318 — encrypted private Git relay list
  *   kind 10617 — pinned git repositories list
  *
  * Events are piped directly into the EventStore (and therefore the IndexedDB
@@ -57,6 +58,7 @@ export const USER_REPLACEABLE_KINDS = [
   10017, // NIP-51 Git authors follow list
   10018, // NIP-51 Git repositories follow list
   10317, // Grasp server list
+  10318, // encrypted private Git relay list (GRASP-08)
   10617, // pinned git repositories list
 ] as const;
 
