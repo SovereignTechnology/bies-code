@@ -88,6 +88,7 @@ import {
   ciRepositoryCoordinatorStatus$,
   repoCIActivity$,
 } from "@/services/ciQueries";
+import { useGitPool } from "@/hooks/useGitPool";
 // ---------------------------------------------------------------------------
 // RepoLayout
 // ---------------------------------------------------------------------------
@@ -621,6 +622,9 @@ function RepoLayoutResolved({
   }, [repoPageSuffix]);
 
   const cloneUrls = repo?.cloneUrls ?? [];
+  const { pool: commitLinkPool } = useGitPool(cloneUrls, {
+    private: isPrivate,
+  });
 
   // The PR base path: basePath + /prs/<prId> — used for PR sub-route links.
   const prBasePath = useMemo(() => {
@@ -665,9 +669,14 @@ function RepoLayoutResolved({
   // Build the git commit link context — provides cloneUrls + basePath to
   // CommentContent / MarkdownContent for linkifying commit hash mentions.
   const gitCommitLinkCtxValue: GitCommitLinkContextValue = useMemo(
-    () => ({ cloneUrls, basePath }),
+    () => ({
+      cloneUrls,
+      basePath,
+      pool: commitLinkPool,
+      privateRepository: isPrivate,
+    }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [cloneUrls.join(","), basePath],
+    [cloneUrls.join(","), basePath, commitLinkPool, isPrivate],
   );
 
   // Route at the first fresh announcement EOSE (both explicit and

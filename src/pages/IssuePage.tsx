@@ -68,12 +68,12 @@ export default function IssuePage() {
   const [searchMoreActive, setSearchMoreActive] = useState(false);
 
   const extraSearchGroups = useMemo<RelayGroupSpec[]>(() => {
-    if (!searchMoreActive) return [];
+    if (!searchMoreActive || repo?.isPrivate) return [];
     return [
       { label: "git index", relays$: gitIndexRelays },
       { label: "fallback relays", relays$: fallbackRelays },
     ];
-  }, [searchMoreActive]);
+  }, [searchMoreActive, repo?.isPrivate]);
 
   const handleSearchMore = useCallback(() => {
     setSearchMoreActive(true);
@@ -200,7 +200,9 @@ export default function IssuePage() {
         backPath={`${repoBasePath}/issues`}
         backLabel="Back to issues"
         onSearchMore={
-          !searchMoreActive && search.settled ? handleSearchMore : undefined
+          !repo?.isPrivate && !searchMoreActive && search.settled
+            ? handleSearchMore
+            : undefined
         }
         searchMoreActive={searchMoreActive}
         onRetry={handleRetry}

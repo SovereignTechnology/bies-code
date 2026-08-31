@@ -33,6 +33,7 @@ import { remarkCommitLinks } from "@/lib/remarkCommitLinks";
 import { decodePointer } from "applesauce-core/helpers";
 import { CommitLink } from "@/components/CommitLink";
 import { getOrCreatePool } from "@/lib/git-grasp-pool";
+import { useGitCommitLinkContext } from "@/components/CommitLinkContext";
 import { WrappableCodeBlock } from "@/components/WrappableCodeBlock";
 import { getFileMediaType, toDataUri } from "@/lib/fileMediaType";
 import { useUserPath } from "@/hooks/useUserPath";
@@ -219,6 +220,7 @@ function GitImage({
   filePath,
 }: GitImageProps) {
   const linked = useContext(LinkedMarkdownImageContext);
+  const gitContext = useGitCommitLinkContext();
   const [dataUri, setDataUri] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -242,7 +244,12 @@ function GitImage({
       try {
         // Route through the pool — uses the winning URL with fallback, CORS
         // proxy, and the pool's cache. No filterFailedUrls needed.
-        const pool = getOrCreatePool({ cloneUrls });
+        const pool =
+          gitContext?.pool ??
+          (gitContext?.privateRepository
+            ? undefined
+            : getOrCreatePool({ cloneUrls }));
+        if (!pool) throw new Error("Private Git access is not ready");
         const abort = new AbortController();
         const result = await pool.getObjectByPath(
           commitHash,
@@ -266,7 +273,14 @@ function GitImage({
     return () => {
       cancelled = true;
     };
-  }, [src, cloneUrls.join(","), commitHash, filePath]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [
+    src,
+    cloneUrls,
+    commitHash,
+    filePath,
+    gitContext?.pool,
+    gitContext?.privateRepository,
+  ]);
 
   if (!src) return null;
 

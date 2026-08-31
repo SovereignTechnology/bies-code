@@ -12,7 +12,6 @@
 import { useState, useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
 import { GitCommit } from "lucide-react";
-import { peekPool, getOrCreatePool } from "@/lib/git-grasp-pool";
 import { useGitCommitLinkContext } from "./CommitLinkContext";
 import { CommitHoverCard } from "./CommitHoverCard";
 
@@ -29,9 +28,7 @@ export function CommitLink({ hash, displayHash }: CommitLinkProps) {
 
   // Check L1 cache synchronously so already-known commits link immediately.
   const initialExists = (): boolean => {
-    if (!ctx || ctx.cloneUrls.length === 0) return false;
-    const pool = peekPool(ctx.cloneUrls);
-    return !!pool?.cache.peekCommit(hash);
+    return !!ctx?.pool?.cache.peekCommit(hash);
   };
 
   const [exists, setExists] = useState<boolean>(initialExists);
@@ -39,20 +36,15 @@ export function CommitLink({ hash, displayHash }: CommitLinkProps) {
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
-    if (!ctx || ctx.cloneUrls.length === 0) return;
+    if (!ctx?.pool) return;
 
     // Already confirmed — nothing to do.
     if (exists) return;
 
-    // getOrCreatePool so the pool is created if it doesn't exist yet —
-    // on issue/comment pages the pool may not have been created by the
-    // code page, so peekPool would always return undefined.
-    const pool = getOrCreatePool({ cloneUrls: ctx.cloneUrls });
-
     const abort = new AbortController();
     abortRef.current = abort;
 
-    pool
+    ctx.pool
       .getSingleCommit(hash, abort.signal)
       .then((commit) => {
         if (!abort.signal.aborted && commit) {
@@ -67,12 +59,11 @@ export function CommitLink({ hash, displayHash }: CommitLinkProps) {
       abort.abort();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ctx?.cloneUrls.join(","), hash]);
+  }, [ctx?.pool, hash]);
 
-  if (exists && ctx) {
-    const pool = getOrCreatePool({ cloneUrls: ctx.cloneUrls });
+  if (exists && ctx?.pool) {
     return (
-      <CommitHoverCard hash={hash} pool={pool} asChild>
+      <CommitHoverCard hash={hash} pool={ctx.pool} asChild>
         <Link
           to={`${ctx.basePath}/commit/${hash}`}
           className="inline-flex items-center gap-1 font-mono text-[0.8em] px-1.5 py-px rounded-md bg-muted text-muted-foreground border border-border hover:bg-accent hover:text-foreground hover:border-foreground/20 transition-colors no-underline"

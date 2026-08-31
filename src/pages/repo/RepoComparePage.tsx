@@ -498,6 +498,7 @@ export default function RepoComparePage() {
   const headValue = compareHeadRef ?? "";
 
   const { pool, poolState } = useGitPool(cloneUrls, {
+    private: repo?.isPrivate,
     headRef: repoState?.headRef,
     knownHeadCommit: repoState?.headCommitId,
     stateRefs: repoState?.refs,

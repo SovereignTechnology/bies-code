@@ -31,12 +31,18 @@ export default function RepoCommitPage() {
     twitterCard: repoOwnerProfile?.picture ? "summary" : "summary_large_image",
   });
 
-  const { pool } = useGitPool(cloneUrls);
+  const { pool } = useGitPool(cloneUrls, { private: repo?.isPrivate });
 
   // CI checks (ngit-ci kinds 9841/9842) for this commit — shown between the
   // commit header and the diff.
-  const ci = useCIForCommit(commitId, resolved?.repoRelayGroup);
-  const { coordinatorState, trust } = useRepositoryCITrust(repo, ci?.runs);
+  const ci = useCIForCommit(
+    commitId,
+    repo?.isPrivate ? undefined : resolved?.repoRelayGroup,
+  );
+  const { coordinatorState, trust } = useRepositoryCITrust(
+    repo?.isPrivate ? undefined : repo,
+    ci?.runs,
+  );
 
   if (!commitId) {
     return (
