@@ -1,5 +1,5 @@
 import { EventStore, mapEventsToStore } from "applesauce-core";
-import { persistEventsToCache } from "applesauce-core/helpers";
+import { fakeVerifyEvent, persistEventsToCache } from "applesauce-core/helpers";
 import type { Filter } from "applesauce-core/helpers";
 import {
   createAddressLoader,
@@ -81,7 +81,6 @@ import {
   getEffectivePRMergeBases,
 } from "@/lib/inferredPRParents";
 import { loadEventReferenceClosure } from "@/lib/eventReferenceClosure";
-import { createDedupedVerifyEvent } from "@/lib/dedupeVerifyEvent";
 
 /**
  * Global EventStore instance for all Nostr events.
@@ -103,13 +102,14 @@ export const eventStore = new EventStore({
   deleteManager,
 });
 
-// Verify events when they are added to the store. Each event id pays for a
-// full verification (hash + schnorr) at most once: duplicate copies of an
-// already-stored event skip straight to the store's id-based dedupe. See
-// createDedupedVerifyEvent for the safety argument. The delete manager above
-// keeps its own unwrapped verifier — rehydrated tombstones must always be
-// verified.
-eventStore.verifyEvent = createDedupedVerifyEvent(eventStore, verifyEvent);
+// Signature verification is intentionally disabled for the EventStore:
+// relay-delivered events are trusted without hash or schnorr checks. The
+// EventStore verifies by default, so this must be an explicit override.
+// See docs/signature-verification.md for the rationale and the planned
+// relay-trust spot-check model that will replace blanket verification.
+// The delete manager above keeps its own real verifier — rehydrated
+// deletion tombstones are always fully verified.
+eventStore.verifyEvent = fakeVerifyEvent;
 
 // Persist events to the local nostrdb
 persistEventsToCache(eventStore, saveEvents);

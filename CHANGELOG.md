@@ -16,7 +16,7 @@
 
 ### Fixes
 
-- Verify each event's signature at most once: duplicate copies of the same event arriving from other relays are accepted via the store's id-based dedupe instead of paying a redundant schnorr verification, removing roughly a third of main-thread CPU work on a cold repository load.
+- Disable event signature verification in the EventStore, removing roughly a third of main-thread CPU work on a cold repository load: relay-validated events are trusted on receipt, in line with wider nostr client practice, while locally persisted deletion tombstones remain fully verified. See `docs/signature-verification.md` for the rationale and the planned relay-trust spot-check model.
 - Resolve item links that name several repositories (multi-pointer `nevent` routes) through one identifier-scoped announcement wave instead of sequential per-repository settlement stages, while keeping the component-ambiguity refusal gated on complete relay coverage.
 - Restart repository issue and pull-request relay subscriptions only when role-history content actually changes, so announcement refetches and deletion-list emissions no longer re-request the repository's full item backlog from every relay.
 - Grow repository issue and pull-request relay subscriptions additively when a maintainer confirms later: the new coordinate joins the live queries as one delta request per relay instead of restarting them and re-fetching every already-seen item's details, and an unchanged coordinate set costs no relay traffic at all.
