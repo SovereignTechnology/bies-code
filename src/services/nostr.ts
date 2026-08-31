@@ -81,6 +81,7 @@ import {
   getEffectivePRMergeBases,
 } from "@/lib/inferredPRParents";
 import { loadEventReferenceClosure } from "@/lib/eventReferenceClosure";
+import { createDedupedVerifyEvent } from "@/lib/dedupeVerifyEvent";
 
 /**
  * Global EventStore instance for all Nostr events.
@@ -102,8 +103,13 @@ export const eventStore = new EventStore({
   deleteManager,
 });
 
-// Verify events when they are added to the store
-eventStore.verifyEvent = verifyEvent;
+// Verify events when they are added to the store. Each event id pays for a
+// full verification (hash + schnorr) at most once: duplicate copies of an
+// already-stored event skip straight to the store's id-based dedupe. See
+// createDedupedVerifyEvent for the safety argument. The delete manager above
+// keeps its own unwrapped verifier — rehydrated tombstones must always be
+// verified.
+eventStore.verifyEvent = createDedupedVerifyEvent(eventStore, verifyEvent);
 
 // Persist events to the local nostrdb
 persistEventsToCache(eventStore, saveEvents);
