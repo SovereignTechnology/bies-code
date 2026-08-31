@@ -82,8 +82,12 @@ import {
 import { RepoRelaysContext } from "@/contexts/RepoRelaysContext";
 import { relayGroupUrls$ } from "@/models/RepositoryRelayGroup";
 import { getRepositoryLeadRedirectPath } from "@/lib/repositoryLeadRoute";
-import { EMPTY } from "rxjs";
+import { EMPTY, merge } from "rxjs";
 import { catchError } from "rxjs/operators";
+import {
+  ciRepositoryCoordinatorStatus$,
+  repoCIActivity$,
+} from "@/services/ciQueries";
 // ---------------------------------------------------------------------------
 // RepoLayout
 // ---------------------------------------------------------------------------
@@ -292,6 +296,26 @@ function RepoLayoutResolved({
     repo?.confirmedMaintainerCoordinates,
     repoRelayGroup,
   );
+
+  // Pin the shared repository CI context for the lifetime of the layout once
+  // the repository shows CI signals, so child pages and tab navigation attach
+  // to one live set of queries instead of reopening them per mount. The
+  // coordinator discovery query is already held open by useRepoHasCI above.
+  const maintainerCoordKey =
+    repo?.confirmedMaintainerCoordinates.join(",") ?? "";
+  use$(() => {
+    if (!hasCI || !repo?.confirmedMaintainerCoordinates.length)
+      return undefined;
+    return merge(
+      repoCIActivity$(repo.confirmedMaintainerCoordinates, repoRelayGroup),
+      ciRepositoryCoordinatorStatus$(
+        repo.confirmedMaintainerCoordinates,
+        repo.selectedCoordinate,
+        repo.confirmedMaintainers,
+        repoRelayGroup,
+      ),
+    );
+  }, [hasCI, maintainerCoordKey, repo?.selectedCoordinate, repoRelayGroup]);
   const releaseSummary = useRepoReleaseSummary(
     repo?.confirmedMaintainerCoordinates,
     repo?.confirmedMaintainers,

@@ -21,10 +21,10 @@ import {
   CI_SERVICE_REQUEST_KIND,
   CI_SERVICE_STOP_KIND,
 } from "@/lib/ci";
-import { relayGroupUrls$ } from "@/models/RepositoryRelayGroup";
-import { loadRelayQueryUntilSettled } from "@/lib/relayQuerySettlement";
-import { pool } from "@/services/nostr";
-import { gitIndexRelays } from "@/services/settings";
+import {
+  ciCoordinatorDiscovery$,
+  ciRepositoryCoordinatorStatus$,
+} from "@/services/ciQueries";
 import { use$ } from "@/hooks/use$";
 import { useEventStore } from "@/hooks/useEventStore";
 
@@ -95,56 +95,31 @@ export function useCICoordinators(
     : "";
   const selectedMaintainer = selectedCoordinate?.split(":")[1];
 
-  const indexRelays = use$(() => gitIndexRelays, []) ?? [];
-  const indexRelayKey = indexRelays.join(",");
-  const repoRelays =
-    use$(() => relayGroupUrls$(repoRelayGroup), [repoRelayGroup]) ?? [];
-  const repoRelayKey = repoRelays.join(",");
-
-  // Coordinator discovery and repository-readiness hints live on index relays.
-  const indexQuery = use$(() => {
-    const filters: Filter[] = [
-      { kinds: [CI_COORDINATOR_ADVERTISEMENT_KIND] } as Filter,
-    ];
-    if (selectedCoordinate) {
-      filters.push({
-        kinds: [CI_REQUEST_READINESS_KIND],
-        "#a": [selectedCoordinate],
-      } as Filter);
-    }
-    if (selectedMaintainer) {
-      filters.push({
-        kinds: [CI_REQUEST_READINESS_KIND],
-        "#p": [selectedMaintainer],
-      } as Filter);
-    }
-
-    return loadRelayQueryUntilSettled(pool, indexRelays, filters, store);
-  }, [coordinatesKey, maintainersKey, indexRelayKey, store]);
+  // Coordinator discovery and repository-readiness hints live on index
+  // relays; the query is shared with RepoLayout's Actions-tab probe.
+  const indexQuery = use$(
+    () =>
+      ciCoordinatorDiscovery$(
+        repositoryCoordinates ?? [],
+        confirmedMaintainers ?? [],
+      ),
+    [coordinatesKey, maintainersKey],
+  );
 
   // Repository status is public coordinator state. Service controls are
-  // trust-bearing and therefore fetched only from current confirmed maintainers.
+  // trust-bearing and therefore fetched only from current confirmed
+  // maintainers. The shared owner is pinned by RepoLayout across tabs.
   const repoQuery = use$(() => {
     if (!repositoryCoordinates?.length) {
       return of({ settled: true, relayCount: 0, failedRelayCount: 0 });
     }
-
-    const filters: Filter[] = [
-      {
-        kinds: [CI_REPOSITORY_STATUS_KIND],
-        "#a": repositoryCoordinates,
-      } as Filter,
-    ];
-    if (selectedCoordinate && confirmedMaintainers?.length) {
-      filters.push({
-        kinds: [CI_SERVICE_REQUEST_KIND, CI_SERVICE_STOP_KIND],
-        authors: confirmedMaintainers,
-        "#a": [selectedCoordinate],
-      } as Filter);
-    }
-
-    return loadRelayQueryUntilSettled(pool, repoRelays, filters, store);
-  }, [coordinatesKey, maintainersKey, repoRelayKey, selectedCoordinate, store]);
+    return ciRepositoryCoordinatorStatus$(
+      repositoryCoordinates,
+      selectedCoordinate,
+      confirmedMaintainers ?? [],
+      repoRelayGroup,
+    );
+  }, [coordinatesKey, maintainersKey, selectedCoordinate, repoRelayGroup]);
 
   const summaries = use$(() => {
     if (!repositoryCoordinates || !confirmedMaintainers) return undefined;

@@ -13,8 +13,7 @@ import { useEventStore } from "@/hooks/useEventStore";
 import { CI_SERVICE_REQUEST_KIND, CI_SERVICE_STOP_KIND } from "@/lib/ci";
 import type { CICoordinatorRelationship } from "@/lib/ciCoordinatorRelationship";
 import type { ResolvedRepo } from "@/lib/nip34";
-import { loadRelayQueryUntilSettled } from "@/lib/relayQuerySettlement";
-import { pool } from "@/services/nostr";
+import { ciRepositoryServiceControls$ } from "@/services/ciQueries";
 
 export interface CIRepositoryCoordinatorRelationshipState {
   relationship: CICoordinatorRelationship;
@@ -56,20 +55,8 @@ export function useCIRepositoryCoordinatorRelationship(
         failedRelayCount: 0,
       });
     }
-    return loadRelayQueryUntilSettled(
-      pool,
-      relays,
-      [
-        {
-          kinds: [CI_SERVICE_REQUEST_KIND, CI_SERVICE_STOP_KIND],
-          authors: maintainers,
-          "#a": coordinates,
-        } as Filter,
-      ],
-      store,
-      { paginate: true },
-    );
-  }, [coordinateKey, maintainerKey, relayKey, repo !== undefined, store]);
+    return ciRepositoryServiceControls$(coordinates, maintainers, relays);
+  }, [coordinateKey, maintainerKey, relayKey, repo !== undefined]);
 
   const controls: readonly CIServiceControl[] =
     use$(() => {

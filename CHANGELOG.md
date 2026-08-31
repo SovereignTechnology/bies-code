@@ -15,6 +15,7 @@
 
 ### Fixes
 
+- Fetch repository CI context (coordinator discovery, repository status, repo-wide activity) and per-identity provider/coordinator enrichment through shared keyed queries that persist across tab navigation, so pages reuse one live subscription set and a newly observed CI identity fetches only itself instead of restarting the whole trust pipeline.
 - Keep cold repository discovery on structured loading states until both the base component list and the landing page's GRASP subset are observable, while bounding genuine empty results and labelling incomplete relay views honestly.
 - Bound direct repository graph refreshes on failed relays, stabilize deletion-aware repository-model cache identity, preserve observed coordinates in progressive discovery links, and fast-path unambiguous single-coordinate item routes.
 - Finish repository search component settling when unavailable graph relays reach a terminal error, so successful results no longer remain behind loading placeholders.

@@ -44,14 +44,11 @@ import { CIRun, isValidCIRun } from "@/casts/CIRun";
 import { CIJobResultEvent, isValidCIJobResult } from "@/casts/CIJobResult";
 import { CIResult, isValidCIResult } from "@/casts/CIResult";
 import { ciResultsByCommitLoader, pool } from "@/services/nostr";
-import {
-  resilientRequest,
-  resilientSubscription,
-} from "@/lib/resilientSubscription";
+import { ciCoordinatorDiscovery$, repoCIActivity$ } from "@/services/ciQueries";
+import { resilientRequest } from "@/lib/resilientSubscription";
 import { mapEventsToStore } from "applesauce-core";
 import { onlyEvents } from "applesauce-relay";
 import { relayGroupUrls$ } from "@/models/RepositoryRelayGroup";
-import { gitIndexRelays } from "@/services/settings";
 import {
   CICoordinatorAdvertisement,
   CIRequestReadiness,
@@ -319,23 +316,13 @@ export function useRepoCI(
 
   // Stable key — re-subscribes only when the coordinate set actually changes
   const coordsKey = repoCoords ? [...repoCoords].sort().join(",") : "";
-  // Reactive relay list — re-fires the subscription when the group gains relays
-  const relays =
-    use$(() => relayGroupUrls$(repoRelayGroup), [repoRelayGroup]) ?? [];
-  const relayKey = relays.join(",");
 
-  // Layer 1: fetch CI activity repo-wide by #a.
+  // Layer 1: shared repo-wide #a subscription — pinned by RepoLayout while
+  // the repository shows CI signals, so tab navigation reuses one query.
   use$(() => {
-    if (!repoCoords || repoCoords.length === 0 || relays.length === 0)
-      return undefined;
-    return resilientSubscription(pool, relays, [
-      { kinds: [...CI_EVENT_KINDS], "#a": repoCoords } as Filter,
-    ]).pipe(
-      onlyEvents(),
-      mapEventsToStore(store),
-      catchError(() => EMPTY),
-    );
-  }, [coordsKey, relayKey, store]);
+    if (!repoCoords || repoCoords.length === 0) return undefined;
+    return repoCIActivity$(repoCoords, repoRelayGroup);
+  }, [coordsKey, repoRelayGroup]);
 
   // Layer 2: read all CI kinds back from the store and group.
   return use$(() => {
@@ -400,8 +387,6 @@ export function useRepoHasCI(
   const relays =
     use$(() => relayGroupUrls$(repoRelayGroup), [repoRelayGroup]) ?? [];
   const relayKey = relays.join(",");
-  const indexRelays = use$(() => gitIndexRelays, []) ?? [];
-  const indexRelayKey = indexRelays.join(",");
 
   // Presence probe — one event per relay is enough to decide.
   use$(() => {
@@ -422,30 +407,12 @@ export function useRepoHasCI(
 
   // A coordinator that explicitly targets this repository makes the Actions
   // surface useful before its first run. A global capability advertisement by
-  // itself is not repository-specific evidence.
-  use$(() => {
-    if (indexRelays.length === 0) return undefined;
-    const filters: Filter[] = [
-      { kinds: [CI_COORDINATOR_ADVERTISEMENT_KIND] } as Filter,
-    ];
-    if (repoCoords?.length) {
-      filters.push({
-        kinds: [CI_REQUEST_READINESS_KIND],
-        "#a": repoCoords,
-      } as Filter);
-    }
-    if (repoMaintainers.length) {
-      filters.push({
-        kinds: [CI_REQUEST_READINESS_KIND],
-        "#p": repoMaintainers,
-      } as Filter);
-    }
-    return resilientSubscription(pool, indexRelays, filters).pipe(
-      onlyEvents(),
-      mapEventsToStore(store),
-      catchError(() => EMPTY),
-    );
-  }, [coordsKey, indexRelayKey, maintainerKey, store]);
+  // itself is not repository-specific evidence. The discovery query is shared
+  // with useCICoordinators so coordinator surfaces reuse it.
+  use$(
+    () => ciCoordinatorDiscovery$(repoCoords ?? [], repoMaintainers),
+    [coordsKey, maintainerKey],
+  );
 
   const hasCI = use$(() => {
     if (!repoCoords || repoCoords.length === 0) return undefined;

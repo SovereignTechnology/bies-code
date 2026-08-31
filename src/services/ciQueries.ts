@@ -18,16 +18,20 @@ import {
   shareReplay,
   switchMap,
 } from "rxjs/operators";
+import type { RelayGroup } from "applesauce-relay";
 import {
   CI_COORDINATOR_ADVERTISEMENT_KIND,
   CI_EVENT_KINDS,
   CI_MANUAL_TRIGGER_KIND,
   CI_NIX_PROVIDER_ADVERTISEMENT_KIND,
+  CI_REPOSITORY_STATUS_KIND,
   CI_REQUEST_READINESS_KIND,
   CI_SERVICE_REQUEST_KIND,
+  CI_SERVICE_STOP_KIND,
 } from "@/lib/ci";
 import { REPO_KIND } from "@/lib/nip34";
 import { keyedShared } from "@/lib/keyedShared";
+import { relayGroupUrls$ } from "@/models/RepositoryRelayGroup";
 import {
   loadRelayQueryUntilSettled,
   type RelayQuerySettlement,
@@ -278,6 +282,160 @@ export function ciSocialActivity$(
       paginate: true,
     });
   });
+}
+
+const coordinatorDiscovery = new Map<
+  string,
+  Observable<RelayQuerySettlement>
+>();
+
+/**
+ * Coordinator discovery on the index relays: every coordinator advertisement
+ * plus request readiness targeting any of the repository's confirmed
+ * coordinates or maintainers. Shared by the Actions-tab presence probe in
+ * RepoLayout and every repository surface that lists coordinators.
+ */
+export function ciCoordinatorDiscovery$(
+  repositoryCoordinates: readonly string[],
+  maintainers: readonly string[],
+): Observable<RelayQuerySettlement> {
+  const coordinates = sortedUnique(repositoryCoordinates);
+  const pubkeys = sortedUnique(maintainers);
+  const key = `${coordinates.join(",")}|${pubkeys.join(",")}`;
+  return keyedShared(coordinatorDiscovery, key, () =>
+    gitIndexRelays.pipe(
+      map((relays) => sortedUnique(relays)),
+      distinctUntilChanged<string[]>(sameList),
+      switchMap((relays) => {
+        const filters: Filter[] = [
+          { kinds: [CI_COORDINATOR_ADVERTISEMENT_KIND] } as Filter,
+        ];
+        if (coordinates.length) {
+          filters.push({
+            kinds: [CI_REQUEST_READINESS_KIND],
+            "#a": coordinates,
+          } as Filter);
+        }
+        if (pubkeys.length) {
+          filters.push({
+            kinds: [CI_REQUEST_READINESS_KIND],
+            "#p": pubkeys,
+          } as Filter);
+        }
+        return loadRelayQueryUntilSettled(pool, relays, filters, eventStore);
+      }),
+    ),
+  );
+}
+
+const repositoryCoordinatorStatus = new Map<
+  string,
+  Observable<RelayQuerySettlement>
+>();
+
+/**
+ * Repository status claims plus maintainer-authored service controls for the
+ * selected coordinate, fetched from the repository relays. Keyed by the
+ * repository's coordinate and maintainer sets; the relay group captured by
+ * the first caller is reused until the linger elapses (relay groups are
+ * model-cached per repository, so concurrent callers pass the same instance).
+ */
+export function ciRepositoryCoordinatorStatus$(
+  repositoryCoordinates: readonly string[],
+  selectedCoordinate: string | undefined,
+  maintainers: readonly string[],
+  repoRelayGroup: RelayGroup | undefined,
+): Observable<RelayQuerySettlement> {
+  const coordinates = sortedUnique(repositoryCoordinates);
+  const pubkeys = sortedUnique(maintainers);
+  const key = `${coordinates.join(",")}|${selectedCoordinate ?? ""}|${pubkeys.join(",")}`;
+  return keyedShared(repositoryCoordinatorStatus, key, () =>
+    relayGroupUrls$(repoRelayGroup).pipe(
+      map((relays) => sortedUnique(relays)),
+      distinctUntilChanged<string[]>(sameList),
+      switchMap((relays) => {
+        const filters: Filter[] = [
+          { kinds: [CI_REPOSITORY_STATUS_KIND], "#a": coordinates } as Filter,
+        ];
+        if (selectedCoordinate && pubkeys.length) {
+          filters.push({
+            kinds: [CI_SERVICE_REQUEST_KIND, CI_SERVICE_STOP_KIND],
+            authors: pubkeys,
+            "#a": [selectedCoordinate],
+          } as Filter);
+        }
+        return loadRelayQueryUntilSettled(pool, relays, filters, eventStore);
+      }),
+    ),
+  );
+}
+
+const repoCIActivityQueries = new Map<
+  string,
+  Observable<RelayQuerySettlement>
+>();
+
+/**
+ * Live repo-wide CI activity (every CI kind by #a) on the repository relays.
+ * One shared subscription per repository serves the PR list, Actions, and
+ * coordinator surfaces; RepoLayout pins it while the repository shows CI
+ * signals so tab navigation reuses it instead of reopening it per page.
+ */
+export function repoCIActivity$(
+  repositoryCoordinates: readonly string[],
+  repoRelayGroup: RelayGroup | undefined,
+): Observable<RelayQuerySettlement> {
+  const coordinates = sortedUnique(repositoryCoordinates);
+  return keyedShared(repoCIActivityQueries, coordinates.join(","), () =>
+    relayGroupUrls$(repoRelayGroup).pipe(
+      map((relays) => sortedUnique(relays)),
+      distinctUntilChanged<string[]>(sameList),
+      switchMap((relays) =>
+        loadRelayQueryUntilSettled(
+          pool,
+          relays,
+          [{ kinds: [...CI_EVENT_KINDS], "#a": coordinates } as Filter],
+          eventStore,
+        ),
+      ),
+    ),
+  );
+}
+
+const repositoryServiceControls = new Map<
+  string,
+  Observable<RelayQuerySettlement>
+>();
+
+/**
+ * Maintainer-authored service request / stop history for a repository across
+ * all confirmed coordinates, fetched from the repository's declared relays.
+ * Shared by coordinator-page repository rows revisiting the same repository.
+ */
+export function ciRepositoryServiceControls$(
+  repositoryCoordinates: readonly string[],
+  maintainers: readonly string[],
+  relays: readonly string[],
+): Observable<RelayQuerySettlement> {
+  const coordinates = sortedUnique(repositoryCoordinates);
+  const pubkeys = sortedUnique(maintainers);
+  const relayList = sortedUnique(relays);
+  const key = `${coordinates.join(",")}|${pubkeys.join(",")}|${relayList.join(",")}`;
+  return keyedShared(repositoryServiceControls, key, () =>
+    loadRelayQueryUntilSettled(
+      pool,
+      relayList,
+      [
+        {
+          kinds: [CI_SERVICE_REQUEST_KIND, CI_SERVICE_STOP_KIND],
+          authors: pubkeys,
+          "#a": coordinates,
+        } as Filter,
+      ],
+      eventStore,
+      { paginate: true },
+    ),
+  );
 }
 
 /**
