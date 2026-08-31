@@ -446,7 +446,7 @@ export default function IssuePage() {
               </div>
 
               {/* Reply box — always shown; anonymous posting handled inside */}
-              {issue && (
+              {issue && !repo?.isBuzz && (
                 <ReplyBox
                   rootEvent={issue.rootEvent}
                   priorityPubkeys={mentionPriorityPubkeys}

@@ -902,6 +902,7 @@ export default function PRPage() {
   const showMergePanel = !!(
     pr &&
     repo &&
+    !repo.isBuzz &&
     (repo.graspCloneUrls.length > 0 ||
       repo.additionalGitServerUrls.length > 0) &&
     isMaintainer &&
@@ -1876,7 +1877,7 @@ export default function PRPage() {
                 )}
 
                 {/* Reply box — always shown; anonymous posting handled inside */}
-                {pr && (
+                {pr && !repo?.isBuzz && (
                   <ReplyBox
                     rootEvent={
                       // For patches with multiple revisions, comments go to the

@@ -65,6 +65,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
+import { useIsBuzzRepository } from "@/contexts/BuzzRepositoryContext";
 
 // ---------------------------------------------------------------------------
 // Thread context — passes root info down without prop-drilling
@@ -504,13 +505,14 @@ export function ThreadComment({
   const [deleting, setDeleting] = useState(false);
 
   const ctx = useContext(ThreadCtx);
+  const isBuzz = useIsBuzzRepository();
   // canReply defaults to true when ctx is present (backward compat), but can
   // be explicitly disabled via ctx.canReply = false (e.g. for logged-out users
   // where we still want the context for inline comment links).
-  const canReply = !!ctx && ctx.canReply !== false;
+  const canReply = !isBuzz && !!ctx && ctx.canReply !== false;
   // onReply callback: when provided by the context, show a Reply button in the
   // header even if canReply is false (e.g. diff view uses its own reply UI).
-  const onReplyCallback = ctx?.onReply;
+  const onReplyCallback = isBuzz ? undefined : ctx?.onReply;
   const activeAccount = useActiveAccount();
   const isOwn = !!activeAccount && activeAccount.pubkey === event.pubkey;
 
@@ -590,7 +592,7 @@ export function ThreadComment({
               <Reply className="h-3.5 w-3.5" />
             </button>
           )}
-          {isOwn && ctx && (
+          {!isBuzz && isOwn && ctx && (
             <button
               type="button"
               onClick={() => setDeleteOpen(true)}
@@ -607,7 +609,7 @@ export function ThreadComment({
           UserLink uses w-8 avatar + gap-1.5 = 38px before the name text. */}
       <div className="sm:ml-[38px]">
         <CommentContent content={event.content} />
-        {ctx && (
+        {ctx && !isBuzz && (
           <div className="flex flex-wrap items-center gap-3 pt-2 empty:hidden">
             <ZapsBar event={event} />
             <ReactionsBar
@@ -620,7 +622,7 @@ export function ThreadComment({
       </div>
 
       {/* Inline reply composer */}
-      {replying && ctx && (
+      {!isBuzz && replying && ctx && (
         <div className="mt-3 sm:ml-[38px]">
           <ReplyBox
             rootEvent={ctx.rootEvent}

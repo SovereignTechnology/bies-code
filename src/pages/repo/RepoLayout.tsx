@@ -89,6 +89,7 @@ import {
   repoCIActivity$,
 } from "@/services/ciQueries";
 import { useGitPool } from "@/hooks/useGitPool";
+import { BuzzRepositoryContext } from "@/contexts/BuzzRepositoryContext";
 // ---------------------------------------------------------------------------
 // RepoLayout
 // ---------------------------------------------------------------------------
@@ -729,6 +730,11 @@ function RepoLayoutResolved({
                   basePath={basePath}
                   nip05={nip05}
                 />
+                {repo.isBuzz && (
+                  <Badge variant="secondary" className="shrink-0">
+                    Basic Buzz support
+                  </Badge>
+                )}
                 <div className="flex items-center gap-2 flex-shrink-0">
                   {!isPrivate && (
                     <>
@@ -912,57 +918,59 @@ function RepoLayoutResolved({
 
         {/* Page content */}
         {ctxValue ? (
-          <GitCommitLinkContext.Provider value={gitCommitLinkCtxValue}>
-            <RepoContext.Provider value={ctxValue}>
-              {isPrivate &&
-              (subPage === "actions" ||
-                subPage === "action-coordinators" ||
-                subPage === "releases" ||
-                subPage === "settings" ||
-                subPage === "edit") ? (
-                <PrivateFeatureUnavailable />
-              ) : subPage === "code" ? (
-                <RepoCodePage />
-              ) : subPage === "commits" ? (
-                <RepoCommitsPage />
-              ) : subPage === "commit" ? (
-                <RepoCommitPage />
-              ) : subPage === "branches" ? (
-                <RepoBranchesPage />
-              ) : subPage === "tags" ? (
-                <RepoTagsPage />
-              ) : subPage === "compare" ? (
-                <RepoComparePage />
-              ) : subPage === "actions" ? (
-                <RepoActionsPage />
-              ) : subPage === "action-coordinators" ? (
-                <RepoCoordinatorsPage
-                  coordinatorIdentifier={coordinatorIdentifier}
-                />
-              ) : subPage === "releases" ? (
-                <RepoReleasesPage
-                  eventId={releaseId}
-                  view={releaseView ?? "releases"}
-                />
-              ) : subPage === "issue" ? (
-                <IssuePage />
-              ) : subPage === "issues" ? (
-                <RepoIssuesPage />
-              ) : subPage === "pr" ? (
-                <PRPage />
-              ) : subPage === "pr-commit" ? (
-                <PRPage />
-              ) : subPage === "prs" ? (
-                <RepoPRsPage />
-              ) : subPage === "about" ? (
-                <RepoAboutPage />
-              ) : subPage === "edit" ? (
-                <Navigate to={`${basePath}/settings`} replace />
-              ) : subPage === "settings" ? (
-                <RepoSettingsPage />
-              ) : null}
-            </RepoContext.Provider>
-          </GitCommitLinkContext.Provider>
+          <BuzzRepositoryContext.Provider value={repo?.isBuzz ?? false}>
+            <GitCommitLinkContext.Provider value={gitCommitLinkCtxValue}>
+              <RepoContext.Provider value={ctxValue}>
+                {isPrivate &&
+                (subPage === "actions" ||
+                  subPage === "action-coordinators" ||
+                  subPage === "releases" ||
+                  subPage === "settings" ||
+                  subPage === "edit") ? (
+                  <PrivateFeatureUnavailable />
+                ) : subPage === "code" ? (
+                  <RepoCodePage />
+                ) : subPage === "commits" ? (
+                  <RepoCommitsPage />
+                ) : subPage === "commit" ? (
+                  <RepoCommitPage />
+                ) : subPage === "branches" ? (
+                  <RepoBranchesPage />
+                ) : subPage === "tags" ? (
+                  <RepoTagsPage />
+                ) : subPage === "compare" ? (
+                  <RepoComparePage />
+                ) : subPage === "actions" ? (
+                  <RepoActionsPage />
+                ) : subPage === "action-coordinators" ? (
+                  <RepoCoordinatorsPage
+                    coordinatorIdentifier={coordinatorIdentifier}
+                  />
+                ) : subPage === "releases" ? (
+                  <RepoReleasesPage
+                    eventId={releaseId}
+                    view={releaseView ?? "releases"}
+                  />
+                ) : subPage === "issue" ? (
+                  <IssuePage />
+                ) : subPage === "issues" ? (
+                  <RepoIssuesPage />
+                ) : subPage === "pr" ? (
+                  <PRPage />
+                ) : subPage === "pr-commit" ? (
+                  <PRPage />
+                ) : subPage === "prs" ? (
+                  <RepoPRsPage />
+                ) : subPage === "about" ? (
+                  <RepoAboutPage />
+                ) : subPage === "edit" ? (
+                  <Navigate to={`${basePath}/settings`} replace />
+                ) : subPage === "settings" ? (
+                  <RepoSettingsPage />
+                ) : null}
+              </RepoContext.Provider>
+            </GitCommitLinkContext.Provider>
+          </BuzzRepositoryContext.Provider>
         ) : privateProbe?.status === "unavailable" ? (
           <PrivateRepositoryUnavailable reason={privateProbe.error} />
         ) : repoSearch &&
