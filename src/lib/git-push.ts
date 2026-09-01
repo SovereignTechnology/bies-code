@@ -649,7 +649,15 @@ export async function pushToGitServer(
         }
 
         const reported = reportedByRef.get(update.refName);
-        return reported ? [reported] : [];
+        return reported
+          ? [reported]
+          : [
+              {
+                refName: update.refName,
+                ok: false,
+                reason: "server omitted this ref from report-status",
+              },
+            ];
       }),
     };
   }

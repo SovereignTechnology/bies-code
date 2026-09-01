@@ -2,8 +2,11 @@
  * Vendored from @fiatjaf/git-natural-api v0.2.4
  * https://jsr.io/@fiatjaf/git-natural-api
  *
- * Local modification: info/refs requests accept an AbortSignal so an
- * account-scoped private Git pool cannot complete after it is disposed.
+ * Local modifications:
+ * - info/refs requests accept authorization headers and an AbortSignal;
+ * - non-success HTTP responses throw a typed status-bearing error; and
+ * - the upstream URL-only capability cache is removed so authenticated
+ *   results can never cross account scopes.
  */
 
 /** Repository information from the Git protocol */
@@ -13,7 +16,17 @@ export type InfoRefsUploadPackResponse = {
   symrefs: Record<string, string>; // Symbolic references
 };
 
-const capabilitiesCache = new Map<string, string[]>();
+export class GitNaturalHttpError extends Error {
+  readonly status: number;
+  readonly statusText: string;
+
+  constructor(response: Response) {
+    super(`HTTP ${response.status} from Git info/refs: ${response.statusText}`);
+    this.name = "GitNaturalHttpError";
+    this.status = response.status;
+    this.statusText = response.statusText;
+  }
+}
 
 export async function getCapabilities(
   url: string,
@@ -23,17 +36,12 @@ export async function getCapabilities(
 ): Promise<string[]> {
   if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
   if (weAlreadyHaveSomeInfoRefsResponse) {
-    // if this was passed just extract the capabilities from it and update the cache
-    capabilitiesCache.set(url, weAlreadyHaveSomeInfoRefsResponse.capabilities);
+    // If this was passed, just extract the capabilities from it.
     return weAlreadyHaveSomeInfoRefsResponse.capabilities;
   }
 
-  const cached = capabilitiesCache.get(url);
-  if (cached) return cached;
-
   const info = await getInfoRefs(url, headers, signal);
   if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
-  capabilitiesCache.set(url, info.capabilities);
   return info.capabilities;
 }
 
@@ -53,11 +61,7 @@ export async function getInfoRefs(
     signal,
   });
   if (!httpResponse.ok) {
-    throw new Response(null, {
-      status: httpResponse.status,
-      statusText: httpResponse.statusText,
-      headers: httpResponse.headers,
-    });
+    throw new GitNaturalHttpError(httpResponse);
   }
   const response = await httpResponse.text();
   if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
