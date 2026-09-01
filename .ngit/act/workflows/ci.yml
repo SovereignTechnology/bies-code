@@ -132,6 +132,13 @@ jobs:
       - name: Prepare SPA fallback
         run: cp dist/index.html dist/404.html
 
+      # nsyte discovers .nsite/config.json from the checkout. That file names
+      # the production site "gitworkshop", but previews are root sites under
+      # their disposable identities. Keep the production identifier from
+      # silently turning this deploy into a named site with a different URL.
+      - name: Isolate preview from production nsite config
+        run: mv .nsite/config.json "$RUNNER_TEMP/nsite-production-config.json"
+
       # This key has no authority beyond content published by this untrusted
       # job. Mask it before act processes GITHUB_OUTPUT, then discard it with
       # the job so each PR run receives a distinct nsite identity and URL.
@@ -178,8 +185,9 @@ jobs:
             https://blossom.primal.net
             https://blossom.ditto.pub
 
-      # ngit-ci publishes this declared scalar on the signed Job Result. It is
-      # deliberately written only after nsyte reports a successful deploy.
+      # ngit-ci publishes this declared scalar on the signed Job Result. Wait
+      # for the gateway to resolve the new manifest before exposing the URL so
+      # a successful upload cannot advertise an unavailable root site.
       - name: Expose preview URL
         id: preview
         env:
@@ -187,7 +195,18 @@ jobs:
         run: |
           set -eu
           : "${PREVIEW_NPUB:?The ephemeral preview npub is missing.}"
-          printf 'url=https://%s.nsite.cloud/\n' "$PREVIEW_NPUB" >> "$GITHUB_OUTPUT"
+          preview_url="https://$PREVIEW_NPUB.nsite.cloud/"
+          deadline=$((SECONDS + 120))
+          until curl --fail --silent --show-error --max-time 15 \
+            --output /dev/null "$preview_url"; do
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              printf 'Preview manifest did not become available at %s\n' \
+                "$preview_url" >&2
+              exit 1
+            fi
+            sleep 5
+          done
+          printf 'url=%s\n' "$preview_url" >> "$GITHUB_OUTPUT"
 
   deploy-netlify:
     runs-on: ubuntu-latest
