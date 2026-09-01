@@ -106,6 +106,7 @@ export default function RepoCodePage() {
 
   // Single pool subscription — drives everything on this page.
   const { pool, poolState } = useGitPool(cloneUrls, {
+    private: repo?.isPrivate,
     headRef: repoState?.headRef,
     knownHeadCommit: repoState?.headCommitId,
     stateRefs: repoState?.refs,

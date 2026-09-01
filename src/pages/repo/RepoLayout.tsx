@@ -88,6 +88,9 @@ import {
   ciRepositoryCoordinatorStatus$,
   repoCIActivity$,
 } from "@/services/ciQueries";
+import { useGitPool } from "@/hooks/useGitPool";
+import { usePrivateGitRelays } from "@/hooks/usePrivateGitRelays";
+import { BuzzRepositoryContext } from "@/contexts/BuzzRepositoryContext";
 // ---------------------------------------------------------------------------
 // RepoLayout
 // ---------------------------------------------------------------------------
@@ -194,9 +197,15 @@ function RepoLayoutResolved({
   location: ReturnType<typeof useLocation>;
   nip05?: string;
 }) {
-  const { resolved, repoSearch, announcementsFreshEose, announcementsSettled } =
-    useResolvedRepository(pubkey, repoId, relayHints, nip05Relays);
+  const {
+    resolved,
+    repoSearch,
+    announcementsFreshEose,
+    announcementsSettled,
+    privateProbe,
+  } = useResolvedRepository(pubkey, repoId, relayHints, nip05Relays);
   const repo = resolved?.repo;
+  const isPrivate = privateProbe?.status === "found" || !!repo?.isPrivate;
 
   // Build an encoded base path for intra-repository links. Route wildcard
   // values are decoded by React Router, including `%2F` inside a repository
@@ -218,7 +227,7 @@ function RepoLayoutResolved({
 
   // Prefetch NIP-05 identities for all maintainers so useRepoPath can resolve
   // them synchronously from the IDB cache on subsequent visits.
-  usePrefetchNip05(repo?.confirmedMembers ?? []);
+  usePrefetchNip05(isPrivate ? [] : (repo?.confirmedMembers ?? []));
   const repoRelayGroup = resolved?.repoRelayGroup;
   const extraRelaysForMaintainerMailboxCoverage =
     resolved?.extraRelaysForMaintainerMailboxCoverage;
@@ -258,6 +267,7 @@ function RepoLayoutResolved({
   use$(() => {
     if (
       curationMode !== "outbox" ||
+      isPrivate ||
       !extraRelaysForMaintainerMailboxCoverage ||
       !hasMemberCoords
     )
@@ -268,19 +278,23 @@ function RepoLayoutResolved({
     ).pipe(catchError(() => EMPTY));
   }, [
     curationMode,
+    isPrivate,
     extraRelaysForMaintainerMailboxCoverage,
     hasMemberCoords,
     supplementalCoords$,
   ]);
 
+  const relayHintsKey = relayHints.join(",");
+  const confirmedMaintainersKey = repo?.confirmedMaintainers.join(",") ?? "";
   const queryOptions: RepoQueryOptions = useMemo(
     () => ({
-      relayHints,
+      relayHints: isPrivate ? [] : relayHints,
       useItemAuthorRelays: false,
       maintainerPubkeys: repo?.confirmedMaintainers ?? [],
+      privateRepository: isPrivate,
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [relayHints.join(","), repo?.confirmedMaintainers.join(","), curationMode],
+    [relayHintsKey, confirmedMaintainersKey, isPrivate],
   );
 
   const issues = useIssues(
@@ -310,8 +324,8 @@ function RepoLayoutResolved({
   // visibility of the Actions tab. Cheap limit-1 probe by #a across all
   // maintainer coordinates.
   const hasCI = useRepoHasCI(
-    repo?.confirmedMaintainerCoordinates,
-    repoRelayGroup,
+    isPrivate ? undefined : repo?.confirmedMaintainerCoordinates,
+    isPrivate ? undefined : repoRelayGroup,
   );
 
   // Pin the shared repository CI context for the lifetime of the layout once
@@ -321,7 +335,7 @@ function RepoLayoutResolved({
   const maintainerCoordKey =
     repo?.confirmedMaintainerCoordinates.join(",") ?? "";
   use$(() => {
-    if (!hasCI || !repo?.confirmedMaintainerCoordinates.length)
+    if (isPrivate || !hasCI || !repo?.confirmedMaintainerCoordinates.length)
       return undefined;
     return merge(
       repoCIActivity$(
@@ -334,12 +348,12 @@ function RepoLayoutResolved({
         repo.confirmedMaintainers,
       ),
     );
-  }, [hasCI, maintainerCoordKey, repo?.selectedCoordinate]);
+  }, [isPrivate, hasCI, maintainerCoordKey, repo?.selectedCoordinate]);
   const releaseSummary = useRepoReleaseSummary(
-    repo?.confirmedMaintainerCoordinates,
-    repo?.confirmedMaintainers,
-    repoRelayGroup,
-    !isReleasesTab,
+    isPrivate ? undefined : repo?.confirmedMaintainerCoordinates,
+    isPrivate ? undefined : repo?.confirmedMaintainers,
+    isPrivate ? undefined : repoRelayGroup,
+    !isReleasesTab && !isPrivate,
   );
   const hasReleases = releaseSummary.hasReleases;
 
@@ -373,10 +387,11 @@ function RepoLayoutResolved({
   // confirmed component.
   const account = useActiveAccount();
   const canOpenSettings =
-    account?.pubkey && repo
+    !isPrivate && account?.pubkey && repo
       ? repo.confirmedMaintainers.includes(account.pubkey)
       : false;
-  const showReleases = hasReleases || isReleasesTab || canOpenSettings;
+  const showReleases =
+    !isPrivate && (hasReleases || isReleasesTab || canOpenSettings);
 
   const repoPageSuffix = useMemo(() => {
     if (location.pathname.startsWith(basePath)) {
@@ -609,6 +624,9 @@ function RepoLayoutResolved({
   }, [repoPageSuffix]);
 
   const cloneUrls = repo?.cloneUrls ?? [];
+  const { pool: commitLinkPool, privateAccessError } = useGitPool(cloneUrls, {
+    private: isPrivate,
+  });
 
   // The PR base path: basePath + /prs/<prId> — used for PR sub-route links.
   const prBasePath = useMemo(() => {
@@ -653,9 +671,14 @@ function RepoLayoutResolved({
   // Build the git commit link context — provides cloneUrls + basePath to
   // CommentContent / MarkdownContent for linkifying commit hash mentions.
   const gitCommitLinkCtxValue: GitCommitLinkContextValue = useMemo(
-    () => ({ cloneUrls, basePath }),
+    () => ({
+      cloneUrls,
+      basePath,
+      pool: commitLinkPool,
+      privateRepository: isPrivate,
+    }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [cloneUrls.join(","), basePath],
+    [cloneUrls.join(","), basePath, commitLinkPool, isPrivate],
   );
 
   // Route at the first fresh announcement EOSE (both explicit and
@@ -708,21 +731,30 @@ function RepoLayoutResolved({
                   basePath={basePath}
                   nip05={nip05}
                 />
+                {repo.isBuzz && (
+                  <Badge variant="secondary" className="shrink-0">
+                    Basic Buzz support
+                  </Badge>
+                )}
                 <div className="flex items-center gap-2 flex-shrink-0">
-                  <RepoZapButton
-                    targetAnnouncement={repo.confirmedAnnouncements.find(
-                      (a) => a.pubkey === repo.selectedMaintainer,
-                    )}
-                    repoCoords={acceptedRepoCoordinates}
-                  />
-                  <FollowRepoButton repoCoord={selectedRepoCoordinate} />
-                  <StarButton
-                    targetAnnouncement={repo.confirmedAnnouncements.find(
-                      (a) => a.pubkey === repo.selectedMaintainer,
-                    )}
-                    allAnnouncements={acceptedAnnouncements}
-                    repoCoords={acceptedRepoCoordinates}
-                  />
+                  {!isPrivate && (
+                    <>
+                      <RepoZapButton
+                        targetAnnouncement={repo.confirmedAnnouncements.find(
+                          (a) => a.pubkey === repo.selectedMaintainer,
+                        )}
+                        repoCoords={acceptedRepoCoordinates}
+                      />
+                      <FollowRepoButton repoCoord={selectedRepoCoordinate} />
+                      <StarButton
+                        targetAnnouncement={repo.confirmedAnnouncements.find(
+                          (a) => a.pubkey === repo.selectedMaintainer,
+                        )}
+                        allAnnouncements={acceptedAnnouncements}
+                        repoCoords={acceptedRepoCoordinates}
+                      />
+                    </>
+                  )}
                 </div>
               </div>
             ) : (
@@ -759,7 +791,7 @@ function RepoLayoutResolved({
 
               {/* Secondary tabs — visible on md+ screens */}
               <div className="hidden md:flex gap-1">
-                {(hasCI || isActionsTab) && (
+                {!isPrivate && (hasCI || isActionsTab) && (
                   <TabLink
                     to={`${basePath}/actions`}
                     active={isActionsTab}
@@ -811,7 +843,7 @@ function RepoLayoutResolved({
                     </button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
-                    {(hasCI || isActionsTab) && (
+                    {!isPrivate && (hasCI || isActionsTab) && (
                       <DropdownMenuItem asChild>
                         <Link
                           to={`${basePath}/actions`}
@@ -860,14 +892,14 @@ function RepoLayoutResolved({
           </div>
         </div>
 
-        {repo && (
+        {repo && !isPrivate && (
           <RepoMaintainerRequestBanner
             repo={repo}
             pageSuffix={repoPageSuffix}
           />
         )}
 
-        {repo && account?.pubkey && (
+        {repo && !isPrivate && account?.pubkey && (
           <MaintainerInvitationSafetyBanner
             repo={repo}
             accountPubkey={account.pubkey}
@@ -885,52 +917,75 @@ function RepoLayoutResolved({
           />
         )}
 
+        {repo && isPrivate && privateAccessError && (
+          <div
+            className="container max-w-screen-xl px-4 pt-4 md:px-8"
+            role="alert"
+          >
+            <div className="flex gap-3 rounded-lg border border-destructive/40 bg-destructive/5 p-4 text-sm text-destructive">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <p>{privateAccessError}</p>
+            </div>
+          </div>
+        )}
+
         {/* Page content */}
         {ctxValue ? (
-          <GitCommitLinkContext.Provider value={gitCommitLinkCtxValue}>
-            <RepoContext.Provider value={ctxValue}>
-              {subPage === "code" ? (
-                <RepoCodePage />
-              ) : subPage === "commits" ? (
-                <RepoCommitsPage />
-              ) : subPage === "commit" ? (
-                <RepoCommitPage />
-              ) : subPage === "branches" ? (
-                <RepoBranchesPage />
-              ) : subPage === "tags" ? (
-                <RepoTagsPage />
-              ) : subPage === "compare" ? (
-                <RepoComparePage />
-              ) : subPage === "actions" ? (
-                <RepoActionsPage />
-              ) : subPage === "action-coordinators" ? (
-                <RepoCoordinatorsPage
-                  coordinatorIdentifier={coordinatorIdentifier}
-                />
-              ) : subPage === "releases" ? (
-                <RepoReleasesPage
-                  eventId={releaseId}
-                  view={releaseView ?? "releases"}
-                />
-              ) : subPage === "issue" ? (
-                <IssuePage />
-              ) : subPage === "issues" ? (
-                <RepoIssuesPage />
-              ) : subPage === "pr" ? (
-                <PRPage />
-              ) : subPage === "pr-commit" ? (
-                <PRPage />
-              ) : subPage === "prs" ? (
-                <RepoPRsPage />
-              ) : subPage === "about" ? (
-                <RepoAboutPage />
-              ) : subPage === "edit" ? (
-                <Navigate to={`${basePath}/settings`} replace />
-              ) : subPage === "settings" ? (
-                <RepoSettingsPage />
-              ) : null}
-            </RepoContext.Provider>
-          </GitCommitLinkContext.Provider>
+          <BuzzRepositoryContext.Provider value={repo?.isBuzz ?? false}>
+            <GitCommitLinkContext.Provider value={gitCommitLinkCtxValue}>
+              <RepoContext.Provider value={ctxValue}>
+                {isPrivate &&
+                (subPage === "actions" ||
+                  subPage === "action-coordinators" ||
+                  subPage === "releases" ||
+                  subPage === "settings" ||
+                  subPage === "edit") ? (
+                  <PrivateFeatureUnavailable />
+                ) : subPage === "code" ? (
+                  <RepoCodePage />
+                ) : subPage === "commits" ? (
+                  <RepoCommitsPage />
+                ) : subPage === "commit" ? (
+                  <RepoCommitPage />
+                ) : subPage === "branches" ? (
+                  <RepoBranchesPage />
+                ) : subPage === "tags" ? (
+                  <RepoTagsPage />
+                ) : subPage === "compare" ? (
+                  <RepoComparePage />
+                ) : subPage === "actions" ? (
+                  <RepoActionsPage />
+                ) : subPage === "action-coordinators" ? (
+                  <RepoCoordinatorsPage
+                    coordinatorIdentifier={coordinatorIdentifier}
+                  />
+                ) : subPage === "releases" ? (
+                  <RepoReleasesPage
+                    eventId={releaseId}
+                    view={releaseView ?? "releases"}
+                  />
+                ) : subPage === "issue" ? (
+                  <IssuePage />
+                ) : subPage === "issues" ? (
+                  <RepoIssuesPage />
+                ) : subPage === "pr" ? (
+                  <PRPage />
+                ) : subPage === "pr-commit" ? (
+                  <PRPage />
+                ) : subPage === "prs" ? (
+                  <RepoPRsPage />
+                ) : subPage === "about" ? (
+                  <RepoAboutPage />
+                ) : subPage === "edit" ? (
+                  <Navigate to={`${basePath}/settings`} replace />
+                ) : subPage === "settings" ? (
+                  <RepoSettingsPage />
+                ) : null}
+              </RepoContext.Provider>
+            </GitCommitLinkContext.Provider>
+          </BuzzRepositoryContext.Provider>
+        ) : privateProbe?.status === "unavailable" ? (
+          <PrivateRepositoryUnavailable reason={privateProbe.error} />
         ) : repoSearch &&
           (repoSearch.concludedNotFound ||
             repoSearch.deleted ||
@@ -1090,6 +1145,56 @@ function MaintainerInvitationSafetyBanner({
 // ---------------------------------------------------------------------------
 // Error / loading states
 // ---------------------------------------------------------------------------
+
+function PrivateRepositoryUnavailable({ reason }: { reason?: string }) {
+  const { state, retry } = usePrivateGitRelays();
+  return (
+    <div className="container max-w-screen-md px-4 py-16 md:px-8">
+      <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-6 text-center">
+        <AlertCircle className="mx-auto h-8 w-8 text-amber-600 dark:text-amber-400" />
+        <h2 className="mt-4 text-xl font-semibold">
+          Private repository unavailable
+        </h2>
+        <p className="mx-auto mt-2 max-w-lg text-sm text-muted-foreground">
+          {reason ??
+            "Private discovery did not complete safely, so GitWorkshop did not try public relays."}
+        </p>
+        <div className="mt-6 flex flex-wrap justify-center gap-2">
+          {state.status !== "logged-out" && (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={retry}
+              disabled={state.status === "loading"}
+            >
+              {state.status === "loading" && (
+                <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+              )}
+              Retry now
+            </Button>
+          )}
+          <Button asChild variant="outline">
+            <Link to="/settings">Review Private Git services</Link>
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PrivateFeatureUnavailable() {
+  return (
+    <div className="container max-w-screen-md px-4 py-16 md:px-8">
+      <div className="rounded-xl border border-dashed p-8 text-center">
+        <h2 className="text-xl font-semibold">Unavailable for private repos</h2>
+        <p className="mx-auto mt-2 max-w-lg text-sm text-muted-foreground">
+          This feature is disabled until it can operate entirely through the
+          repository&apos;s private service relays.
+        </p>
+      </div>
+    </div>
+  );
+}
 
 function Nip05LoadingState({ nip05 }: { nip05: string }) {
   const [visible, setVisible] = useState(false);

@@ -81,6 +81,13 @@ import {
   getEffectivePRMergeBases,
 } from "@/lib/inferredPRParents";
 import { loadEventReferenceClosure } from "@/lib/eventReferenceClosure";
+import {
+  getPrivateRepositoryRelays,
+  getPrivateRelayTrustSession,
+  isPrivateRepositoryCoordinate,
+  isTrustedPrivateRepositoryRelay,
+  markPrivateRelayEvent,
+} from "@/services/privateRepositoryScope";
 
 /**
  * Global EventStore instance for all Nostr events.
@@ -199,6 +206,26 @@ function reconnectDelayMs(attempts: number): number {
 pool.add$.subscribe((relay) => {
   relay.reconnectTimer = (_error, attempts) =>
     timer(reconnectDelayMs(attempts));
+
+  // Mark private-relay provenance before EventStore consumers observe the
+  // event. Cache persistence consults this synchronous quarantine.
+  relay.message$.subscribe((message: unknown) => {
+    if (
+      !isTrustedPrivateRepositoryRelay(relay.url) ||
+      !Array.isArray(message) ||
+      message[0] !== "EVENT"
+    ) {
+      return;
+    }
+    const event = message[2];
+    if (
+      event &&
+      typeof event === "object" &&
+      verifyEvent(event as NostrEvent)
+    ) {
+      markPrivateRelayEvent(event as NostrEvent);
+    }
+  });
 });
 
 /**
@@ -239,6 +266,33 @@ pool.add$.subscribe((relay) => {
       const { accounts } = await import("./accounts");
       const account = accounts.active$.getValue();
       if (!account) return;
+
+      const privateTrust = getPrivateRelayTrustSession(relay.url);
+      if (
+        privateTrust &&
+        privateTrust.accountId === account.id &&
+        privateTrust.pubkey === account.pubkey
+      ) {
+        try {
+          await relay.authenticate(account.signer);
+          const currentAccount = accounts.active$.getValue();
+          const currentTrust = getPrivateRelayTrustSession(relay.url);
+          if (
+            currentAccount?.id !== account.id ||
+            currentAccount.pubkey !== account.pubkey ||
+            currentTrust?.generation !== privateTrust.generation ||
+            currentTrust.accountId !== privateTrust.accountId
+          ) {
+            pool.remove(relay.url);
+          }
+        } catch (err) {
+          console.warn(
+            `[auth] Private relay auth failed for ${relay.url}:`,
+            err,
+          );
+        }
+        return;
+      }
 
       // Synchronous cache check — kind:10002 is kept live by
       // userIdentitySubscription so this will almost always be populated.
@@ -354,6 +408,9 @@ const relayGroupResolver: RelayGroupResolver = async (groupId) => {
   // target. Any announcements arriving later are picked up when the outbox
   // re-resolves relay groups.
   if (groupId.startsWith("30617:")) {
+    if (isPrivateRepositoryCoordinate(groupId)) {
+      return getPrivateRepositoryRelays(groupId) ?? [];
+    }
     const parts = groupId.split(":");
     const pubkey = parts[1];
     const d = parts.slice(2).join(":");
@@ -1094,8 +1151,10 @@ export function nip34SupplementalRelayLoader(
 export function nip34RepoLoader(
   inputs$: Observable<Nip34RepoLoaderInputs>,
   relayGroup: RelayGroup,
+  privateRepository = false,
 ): Observable<NostrEvent> {
-  const resolveAuthorInbox = relayCurationMode.getValue() === "outbox";
+  const resolveAuthorInbox =
+    !privateRepository && relayCurationMode.getValue() === "outbox";
 
   return new Observable<NostrEvent>((subscriber) => {
     const seenIds = new Set<string>();
@@ -1176,14 +1235,16 @@ export function nip34RepoLoader(
     // events, which can leave an older application event behind the
     // repository's item backlog. Chunks are keyed per (author, coordinate)
     // pair so a maintainer confirmed later adds delta REQs only.
-    const softwareApplicationSub = resilientAdditiveSubscription(
-      pool,
-      relayGroupUrls$(relayGroup),
-      { initial: [], additions$: appAdditions },
-      { reconnect: true, gapFill: true, settle: false },
-    )
-      .pipe(onlyEvents(), mapEventsToStore(eventStore))
-      .subscribe({ error: (err) => subscriber.error(err) });
+    const softwareApplicationSub = privateRepository
+      ? new Subscription()
+      : resilientAdditiveSubscription(
+          pool,
+          relayGroupUrls$(relayGroup),
+          { initial: [], additions$: appAdditions },
+          { reconnect: true, gapFill: true, settle: false },
+        )
+          .pipe(onlyEvents(), mapEventsToStore(eventStore))
+          .subscribe({ error: (err) => subscriber.error(err) });
 
     const itemSub = resilientAdditiveSubscription(
       pool,
@@ -1212,14 +1273,16 @@ export function nip34RepoLoader(
         error: (err) => subscriber.error(err),
       });
 
-    const repoMetaSub = resilientAdditiveSubscription(
-      pool,
-      relayGroupUrls$(relayGroup),
-      { initial: [], additions$: metaAdditions },
-      { reconnect: true, gapFill: true, settle: false },
-    )
-      .pipe(onlyEvents(), mapEventsToStore(eventStore))
-      .subscribe({ error: (err) => subscriber.error(err) });
+    const repoMetaSub = privateRepository
+      ? new Subscription()
+      : resilientAdditiveSubscription(
+          pool,
+          relayGroupUrls$(relayGroup),
+          { initial: [], additions$: metaAdditions },
+          { reconnect: true, gapFill: true, settle: false },
+        )
+          .pipe(onlyEvents(), mapEventsToStore(eventStore))
+          .subscribe({ error: (err) => subscriber.error(err) });
 
     // Discover inferred stack parents via repository-scoped #c queries.
     // Historical PR updates loaded by the list loaders participate too.

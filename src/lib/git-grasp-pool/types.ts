@@ -6,6 +6,7 @@
  */
 
 import type { Observable } from "rxjs";
+import type { GitHttpAuthorizationProvider } from "@/lib/git-http-auth";
 import type {
   Commit,
   Tree,
@@ -399,6 +400,8 @@ export interface PoolState {
 export interface PoolOptions {
   /** Initial set of clone URLs. More can be added later via addUrls(). */
   cloneUrls: string[];
+  /** Account/repository-scoped NIP-98 authorization for private Git HTTP. */
+  authorizationProvider?: GitHttpAuthorizationProvider;
   /**
    * Observable that emits the current Nostr state event for this repo.
    * - undefined = still loading
@@ -469,6 +472,7 @@ export type ErrorClass = "permanent" | "transient";
  * - "transient"        : temporary failure, will be retried
  */
 export type UrlErrorKind =
+  | "unauthorized"
   | "not-git"
   | "cors-blocked"
   | "proxy-error"

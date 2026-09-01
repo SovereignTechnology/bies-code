@@ -345,6 +345,7 @@ const RepoMaintainersSymbol = Symbol.for("repo-ev-current-maintainers-v2");
 const RepoUpstreamsSymbol = Symbol.for("repo-ev-upstreams");
 const RepoBlossomUrlsSymbol = Symbol.for("repo-ev-blossom-urls");
 const RepoIsPrivateSymbol = Symbol.for("repo-ev-is-private");
+const RepoIsBuzzSymbol = Symbol.for("repo-ev-is-buzz");
 
 export interface RepoUpstream {
   /** Upstream repository coordinate, e.g. "30617:<pubkey>:<identifier>". */
@@ -537,9 +538,16 @@ export function getRepoBlossomUrls(ev: NostrEvent): string[] {
 export function getRepoIsPrivate(ev: NostrEvent): boolean {
   return getOrComputeCachedValue(ev, RepoIsPrivateSymbol, () =>
     ev.tags.some(
-      ([name, value]) =>
-        (name === "private" && value === "true") || name === "buzz-channel",
+      (tag) =>
+        (tag.length === 2 && tag[0] === "private" && tag[1] === "true") ||
+        tag[0] === "buzz-channel",
     ),
+  );
+}
+
+export function getRepoIsBuzz(ev: NostrEvent): boolean {
+  return getOrComputeCachedValue(ev, RepoIsBuzzSymbol, () =>
+    ev.tags.some(([name]) => name === "buzz-channel"),
   );
 }
 
@@ -761,6 +769,8 @@ export interface RepoQueryOptions {
   relayHints: string[];
   useItemAuthorRelays?: boolean;
   maintainerPubkeys?: string[];
+  /** Keep all repository and descendant reads on the supplied relay group. */
+  privateRepository?: boolean;
 }
 
 /**
@@ -887,6 +897,8 @@ export interface ResolvedRepo {
   blossomUrls: string[];
   /** True when any confirmed-member announcement marks the repository private. */
   isPrivate: boolean;
+  /** True when the confirmed component carries Buzz channel ACL metadata. */
+  isBuzz: boolean;
 
   // --- Resolved membership and authority ---
   /** Maintainers in the reciprocal component; the sole state/merge authority set. */
@@ -2491,6 +2503,7 @@ function resolvedRepoFromMembership(
   const seenBlossom = new Set<string>();
   const blossomUrls: string[] = [];
   let isPrivate = false;
+  let isBuzz = false;
 
   for (const ev of announcements) {
     for (const v of getRepoCloneUrls(ev)) {
@@ -2522,6 +2535,7 @@ function resolvedRepoFromMembership(
       }
     }
     isPrivate ||= getRepoIsPrivate(ev);
+    isBuzz ||= getRepoIsBuzz(ev);
   }
 
   const labels = latestEv
@@ -2603,6 +2617,7 @@ function resolvedRepoFromMembership(
     relays: relayProvenance.map((p) => p.value),
     blossomUrls,
     isPrivate,
+    isBuzz,
     confirmedMaintainers: membership.confirmedMaintainers,
     confirmedModerators: membership.confirmedModerators,
     confirmedMembers: membership.confirmedMembers,

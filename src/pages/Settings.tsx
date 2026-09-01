@@ -50,6 +50,8 @@ import {
 } from "@/services/wallet";
 import { NwcQrConnect } from "@/components/zap/NwcQrConnect";
 import { useGraspServers } from "@/hooks/useGraspServers";
+import { usePrivateGitRelays } from "@/hooks/usePrivateGitRelays";
+import { normalizePrivateGitRelayUrls } from "@/lib/private-git-relays";
 import { usePublish } from "@/hooks/usePublish";
 import { useRobustReplaceableAction } from "@/hooks/useRobustReplaceableAction";
 import { useToast } from "@/hooks/useToast";
@@ -785,6 +787,280 @@ function GraspRelaysSection() {
   );
 }
 
+function privateRelayInputToUrl(value: string): string {
+  const trimmed = value.trim();
+  const relayUrl = /^wss?:\/\//i.test(trimmed)
+    ? trimmed
+    : graspServiceAddressToRelayUrl(normalizeGraspServiceAddress(trimmed));
+  return normalizePrivateGitRelayUrls([relayUrl])[0];
+}
+
+function PrivateGitRelaysSection() {
+  const account = useAccount();
+  const { state, retry, save } = usePrivateGitRelays();
+  const { toast } = useToast();
+  const [draft, setDraft] = useState<{
+    base: string[];
+    next: string[];
+  } | null>(null);
+  const [input, setInput] = useState("");
+  const [inputError, setInputError] = useState<string>();
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setDraft(null);
+    setInput("");
+    setInputError(undefined);
+    setSaving(false);
+  }, [state.generation, state.sourceEvent?.id]);
+
+  const published = state.relayUrls;
+  const displayed = draft?.next ?? published;
+  const dirty =
+    draft !== null &&
+    (!state.sourceEvent ||
+      draft.base.length !== draft.next.length ||
+      draft.base.some((url, index) => url !== draft.next[index]));
+
+  const edit = useCallback(
+    (update: (urls: string[]) => string[]) => {
+      setDraft((current) => {
+        const base = current?.base ?? [...published];
+        const next = update(current?.next ?? [...published]);
+        return { base, next: [...new Set(next)].sort() };
+      });
+    },
+    [published],
+  );
+
+  const add = useCallback(() => {
+    try {
+      const relayUrl = privateRelayInputToUrl(input);
+      if (displayed.includes(relayUrl)) {
+        setInputError("Already in the list");
+        return;
+      }
+      edit((urls) => [...urls, relayUrl]);
+      setInput("");
+      setInputError(undefined);
+    } catch {
+      setInputError(
+        "Enter a ws:// or wss:// relay URL, or a Git service address",
+      );
+    }
+  }, [displayed, edit, input]);
+
+  const persist = useCallback(async () => {
+    if (!draft) return;
+    setSaving(true);
+    try {
+      await save(draft.base, draft.next);
+      setDraft(null);
+      toast({
+        title: "Private Git service list updated",
+        variant: "success",
+      });
+    } catch (error) {
+      toast({
+        title: "Failed to update private Git services",
+        description:
+          error instanceof Error
+            ? error.message
+            : "An unexpected error occurred.",
+        variant: "destructive",
+      });
+    } finally {
+      setSaving(false);
+    }
+  }, [draft, save, toast]);
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Private Git services</CardTitle>
+        <CardDescription>
+          GRASP-08, Buzz, and other private repository relays. This list is
+          encrypted to your active Nostr account and its entries are never
+          published as public tags.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {!account ? (
+          <p className="text-xs text-muted-foreground">
+            Log in to decrypt and manage your private Git service list.
+          </p>
+        ) : state.status === "loading" ? (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            Decrypting your private service list...
+          </div>
+        ) : state.status === "unavailable" ? (
+          <div
+            className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2.5"
+            role="alert"
+          >
+            <p className="text-sm font-medium">Private list unavailable</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {state.error ??
+                "The list could not be read safely. Editing is disabled so an unknown list is never replaced with an empty one."}
+            </p>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="mt-3 h-8 text-xs"
+              onClick={retry}
+            >
+              <RotateCcw className="mr-1.5 h-3 w-3" />
+              Retry now
+            </Button>
+          </div>
+        ) : (
+          <>
+            <div className="space-y-2">
+              {displayed.map((relayUrl) => {
+                const isDraftOnly =
+                  draft !== null && !draft.base.includes(relayUrl);
+                return (
+                  <div
+                    key={relayUrl}
+                    className="flex items-center gap-2 rounded-md border border-border/50 bg-muted/20 px-3 py-2"
+                  >
+                    <Shield className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                    <span className="min-w-0 flex-1 truncate font-mono text-sm">
+                      {relayUrl}
+                    </span>
+                    {isDraftOnly && (
+                      <Badge
+                        variant="secondary"
+                        className="h-4 px-1.5 py-0 text-[10px]"
+                      >
+                        new
+                      </Badge>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        edit((urls) =>
+                          urls.filter((candidate) => candidate !== relayUrl),
+                        )
+                      }
+                      disabled={saving}
+                      className="px-1 text-xs text-muted-foreground transition-colors hover:text-destructive disabled:opacity-50"
+                      aria-label={`Remove ${relayUrl}`}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                );
+              })}
+              {displayed.length === 0 && (
+                <div className="rounded-lg border border-dashed px-4 py-6 text-center">
+                  <p className="text-sm text-muted-foreground">
+                    Your encrypted private Git service list is empty.
+                  </p>
+                  {!state.sourceEvent && draft === null && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="mt-3 h-8 text-xs"
+                      onClick={() => setDraft({ base: [], next: [] })}
+                      disabled={saving}
+                    >
+                      Publish encrypted empty list
+                    </Button>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-1.5">
+              <div className="flex gap-2">
+                <Input
+                  value={input}
+                  onChange={(event) => {
+                    setInput(event.target.value);
+                    setInputError(undefined);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      add();
+                    }
+                  }}
+                  disabled={saving}
+                  placeholder="wss://private.example/relay"
+                  className={cn(
+                    "h-8 font-mono text-sm",
+                    inputError && "border-destructive",
+                  )}
+                  aria-invalid={Boolean(inputError)}
+                  aria-describedby={
+                    inputError ? "private-git-relay-input-error" : undefined
+                  }
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={add}
+                  disabled={saving || !input.trim()}
+                  className="h-8 shrink-0 px-2.5"
+                  aria-label="Add private Git service"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+              {inputError && (
+                <p
+                  id="private-git-relay-input-error"
+                  className="px-0.5 text-xs text-destructive"
+                  role="alert"
+                  aria-live="polite"
+                >
+                  {inputError}
+                </p>
+              )}
+              <p className="px-0.5 text-xs text-muted-foreground">
+                Saving an empty list publishes an encrypted [] replacement.
+                Manual entries are not inferred from repositories you open.
+              </p>
+            </div>
+
+            {dirty && (
+              <div className="flex items-center justify-end gap-2 border-t pt-1">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setDraft(null)}
+                  disabled={saving}
+                  className="h-8 text-xs"
+                >
+                  Discard
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => void persist()}
+                  disabled={saving}
+                  className="h-8 text-xs"
+                >
+                  {saving && (
+                    <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+                  )}
+                  Save encrypted list
+                </Button>
+              </div>
+            )}
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 function DefaultNostrConnectRelaysSection() {
   const relaysList = use$(defaultNostrConnectRelays);
   const isCustomised = use$(nostrConnectRelaysCustomised$);
@@ -1084,6 +1360,7 @@ export default function Settings() {
       <RelayCurationSection />
       <LightningWalletSection />
       <GraspRelaysSection />
+      <PrivateGitRelaysSection />
       <DiscoveryRelaysSection />
       <DefaultNostrConnectRelaysSection />
       <OutboxRelaysSection />

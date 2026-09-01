@@ -23,17 +23,81 @@ export interface GraspAccessSummary {
   criteria: string | undefined;
 }
 
+const BUZZ_SOFTWARE_URL = "https://github.com/block/buzz";
+const privateServiceClassificationCache = new Set<string>();
+const privateServiceTransientClassificationCache = new Map<
+  string,
+  { expiresAt: number; error?: Error }
+>();
+const PRIVATE_SERVICE_NEGATIVE_TTL_MS = 2 * 60_000;
+
+/**
+ * Classify the two private Git transports supported by ngit v3.
+ * Advertising generic NIP-42/NIP-98 support is deliberately insufficient.
+ */
+export function isPrivateGitServiceDocument(document: Nip11Document): boolean {
+  const supportsGrasp08 = (document.supported_grasps ?? []).some(
+    (value) => value.trim().toUpperCase() === "GRASP-08",
+  );
+  const software = document.software?.trim().replace(/\/+$/, "").toLowerCase();
+  return supportsGrasp08 || software === BUZZ_SOFTWARE_URL.toLowerCase();
+}
+
+/**
+ * Classify a route-hint relay before sending it a repository coordinate.
+ * Positive classifications remain trusted for this page session. Ordinary
+ * and failed classifications use a short TTL so dead hints do not impose the
+ * full NIP-11 timeout on every mount without making a later GRASP-08 upgrade
+ * stale for the whole session.
+ */
+export async function classifyPrivateGitServiceRelay(
+  relayUrl: string,
+): Promise<boolean> {
+  const serviceAddress = normalizeGraspServiceAddress(relayUrl);
+  if (!serviceAddress) throw new Error("Invalid repository relay hint");
+  const key = graspServiceAddressToRelayUrl(serviceAddress);
+  if (privateServiceClassificationCache.has(key)) return true;
+  const transient = privateServiceTransientClassificationCache.get(key);
+  if (transient && transient.expiresAt > Date.now()) {
+    if (transient.error) throw transient.error;
+    return false;
+  }
+  privateServiceTransientClassificationCache.delete(key);
+
+  try {
+    const document = await fetchGraspServerInformation(
+      serviceAddress,
+      AbortSignal.timeout(5_000),
+    );
+    const result = isPrivateGitServiceDocument(document);
+    if (result) privateServiceClassificationCache.add(key);
+    else {
+      privateServiceTransientClassificationCache.set(key, {
+        expiresAt: Date.now() + PRIVATE_SERVICE_NEGATIVE_TTL_MS,
+      });
+    }
+    return result;
+  } catch (error) {
+    const cachedError =
+      error instanceof Error
+        ? error
+        : new Error("Private Git service classification failed");
+    privateServiceTransientClassificationCache.set(key, {
+      expiresAt: Date.now() + PRIVATE_SERVICE_NEGATIVE_TTL_MS,
+      error: cachedError,
+    });
+    throw cachedError;
+  }
+}
+
 /** Describe a service's advertised repository-admission policy conservatively. */
 export function getGraspAccessSummary(
   document: Nip11Document,
 ): GraspAccessSummary {
   const criteria = document.repo_acceptance_criteria?.trim() || undefined;
   const normalizedCriteria = criteria?.toLowerCase() ?? "";
-  const grasps = new Set(
-    (document.supported_grasps ?? []).map((value) => value.toUpperCase()),
-  );
 
-  if (grasps.has("GRASP-08")) {
+  if (isPrivateGitServiceDocument(document)) {
     return {
       mode: "private",
       title: "Private service",
@@ -205,6 +269,7 @@ export async function fetchGraspServerInformation(
 ): Promise<Nip11Document> {
   const response = await fetch(graspServiceAddressToHttpUrl(serviceAddress), {
     headers: { Accept: "application/nostr+json" },
+    redirect: "error",
     signal: signal ?? AbortSignal.timeout(8000),
   });
   if (!response.ok) {
@@ -350,8 +415,11 @@ export async function validateGraspServer(
   }
 
   const grasps = doc.supported_grasps;
+  const advertised = new Set(
+    (grasps ?? []).map((grasp) => grasp.trim().toUpperCase()),
+  );
   const missing = requiredGrasps.filter(
-    (grasp) => !Array.isArray(grasps) || !grasps.includes(grasp),
+    (grasp) => !advertised.has(grasp.trim().toUpperCase()),
   );
   if (missing.length > 0) {
     return `Server does not advertise ${missing.join(" and ")} support in NIP-11`;

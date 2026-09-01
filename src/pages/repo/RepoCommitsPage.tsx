@@ -43,6 +43,7 @@ export default function RepoCommitsPage() {
 
   // Pool must come before explorer since pool is passed to explorer.
   const { pool, poolState } = useGitPool(cloneUrls, {
+    private: repo?.isPrivate,
     headRef: repoState?.headRef,
     knownHeadCommit: repoState?.headCommitId,
     stateRefs: repoState?.refs,
@@ -97,7 +98,10 @@ export default function RepoCommitsPage() {
     () => history.commits.map((c) => c.hash),
     [history.commits],
   );
-  const ciChecks = useCIForCommits(commitIds, resolved?.repoRelayGroup);
+  const ciChecks = useCIForCommits(
+    commitIds,
+    repo?.isPrivate ? undefined : resolved?.repoRelayGroup,
+  );
   const ciRuns = useMemo(
     () =>
       ciChecks ? [...ciChecks.values()].flatMap((checks) => checks.runs) : [],

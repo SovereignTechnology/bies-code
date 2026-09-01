@@ -27,6 +27,7 @@ const HARD_TIMEOUT_MS = 45_000;
  */
 const ENCRYPTED_CONTENT_KINDS = new Set([
   10000, // Mute list (NIP-51, private items encrypted to self)
+  10318, // Private Git relay list (GRASP-08, encrypted to self)
   30078, // App settings (NIP-78, content encrypted to self)
 ]);
 
@@ -68,6 +69,9 @@ const KIND_LABELS: Record<number, string> = {
   10003: "bookmarks update",
   10015: "interests update",
   10030: "emoji list update",
+  10318: "private Git relay list update",
+  22242: "private relay authentication",
+  27235: "private Git authorization",
   30000: "user list update",
   30023: "article",
   30078: "app settings",

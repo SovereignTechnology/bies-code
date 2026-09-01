@@ -54,6 +54,10 @@ import {
 import type { NostrEvent } from "nostr-tools";
 import type { PackableObject } from "@/lib/git-packfile";
 import { ZERO_HASH, type RefUpdate } from "@/lib/git-push";
+import {
+  UnverifiedPrivateGitRootError,
+  type GitHttpAuthorizationProvider,
+} from "@/lib/git-http-auth";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -479,6 +483,7 @@ export class GitGraspPool {
   private http: GitHttpClient;
   private urlManager: UrlStateManager;
   private stateManager: StateEventManager;
+  private readonly authorizationProvider?: GitHttpAuthorizationProvider;
 
   // --- Observable state ---
   private state$ = new BehaviorSubject<PoolState>(makeInitialState());
@@ -511,16 +516,22 @@ export class GitGraspPool {
     this.evictionGraceMs =
       options.evictionGracePeriodMs ?? DEFAULT_EVICTION_GRACE_MS;
 
+    this.authorizationProvider = options.authorizationProvider;
+
     // Initialize services
     this.cors = new CorsProxyManager(
-      options.corsProxyBase,
+      options.authorizationProvider ? null : options.corsProxyBase,
       options.knownCorsBlockedOrigins,
     );
-    this.cache = new GitObjectCache(options.infoRefsTtlMs);
+    this.cache = new GitObjectCache(
+      options.infoRefsTtlMs,
+      options.authorizationProvider?.accessScope,
+    );
     this.http = new GitHttpClient(
       this.cache,
       this.cors,
       options.expectRepositoryProvisioning,
+      options.authorizationProvider,
     );
     this.urlManager = new UrlStateManager(this.cors);
     this.stateManager = new StateEventManager();
@@ -2201,12 +2212,24 @@ export class GitGraspPool {
       onUpdate?: (summary: PushDeliverySummary) => void;
     },
   ): Promise<PushDeliverySummary> {
+    const signal = options.signal
+      ? AbortSignal.any([options.signal, this.http.lifecycleSignal])
+      : this.http.lifecycleSignal;
+    if (signal.aborted) {
+      throw signal.reason instanceof Error
+        ? signal.reason
+        : new DOMException("Aborted", "AbortError");
+    }
+
     const summary = await pushRefUpdateToGraspServers({
       cloneUrls: options.targetCloneUrls,
       objects,
       refUpdate,
       currentStateEvent: options.currentStateEvent,
+      authorizationProvider: this.authorizationProvider,
+      signal,
       onUpdate: (snapshot) => {
+        if (signal.aborted) return;
         // Once the last background push settles, revalidate info/refs again
         // so late-syncing mirrors are reflected without waiting for a poll.
         if (snapshot.pendingCount === 0) this.refreshAdvertisedRefs();
@@ -2216,15 +2239,15 @@ export class GitGraspPool {
         tipCommitId,
         stopAtCommitId,
         includeObjectIds,
+        pushSignal,
       ) => {
         if (!tipCommitId || tipCommitId === ZERO_HASH) {
           return Promise.resolve(null);
         }
-        const signal = options.signal ?? new AbortController().signal;
         const objects = await this.getPackableObjectsForCommitRange(
           tipCommitId,
           stopAtCommitId,
-          signal,
+          pushSignal ?? signal,
           options.fallbackUrls,
         );
         if (!objects || !includeObjectIds || includeObjectIds.length === 0) {
@@ -2239,7 +2262,7 @@ export class GitGraspPool {
 
           const extraObjects = await this.getPackableObjectsForObject(
             objectId,
-            signal,
+            pushSignal ?? signal,
             options.fallbackUrls,
           );
           if (!extraObjects?.some((object) => object.hash === objectId)) {
@@ -2251,13 +2274,20 @@ export class GitGraspPool {
         return fetchedObjects;
       },
     });
+    if (signal.aborted) {
+      throw signal.reason instanceof Error
+        ? signal.reason
+        : new DOMException("Aborted", "AbortError");
+    }
 
     // The server-side refs have just changed, but info/refs is cached by the
     // pool. Revalidate immediately rather than waiting for the state-event
     // backoff poll (or a full page reload) to notice this merge. When pushes
     // are still settling in the background, the onUpdate wrapper above
     // refreshes again once the last one lands.
-    if (summary.pendingCount > 0) this.refreshAdvertisedRefs();
+    if (summary.pendingCount > 0 && !signal.aborted) {
+      this.refreshAdvertisedRefs();
+    }
 
     return summary;
   }
@@ -2853,6 +2883,8 @@ export class GitGraspPool {
    *   the pool — they are only used for this single operation invocation.
    *   Intended for PR/PR-Update clone URLs that may host commits not yet
    *   mirrored to the repo's main git servers.
+   *   Authenticated pools reject an extra URL unless the authorization
+   *   provider independently verified that exact repository root.
    */
   private async withFallback<T>(
     signal: AbortSignal,
@@ -2866,6 +2898,12 @@ export class GitGraspPool {
     const extraUrls = fallbackUrls
       ? fallbackUrls.filter((u) => !poolUrlSet.has(u) && !isNonHttpUrl(u))
       : [];
+    if (this.authorizationProvider) {
+      const unverified = extraUrls.find(
+        (url) => !this.authorizationProvider?.canAuthorize(url),
+      );
+      if (unverified) throw new UnverifiedPrivateGitRootError(unverified);
+    }
     const urls = [...poolUrls, ...extraUrls];
 
     if (urls.length === 0) return null;
@@ -2988,6 +3026,7 @@ export class GitGraspPool {
    */
   dispose(): void {
     this.abort?.abort();
+    this.http.dispose();
     this.stateManager.cancelBackoff();
     this.stateEventSub?.unsubscribe();
     this.stateEventSub = null;
@@ -3002,5 +3041,10 @@ export class GitGraspPool {
   /** Whether this pool has been disposed */
   get isDisposed(): boolean {
     return this.state$.closed;
+  }
+
+  /** Current React/imperative subscribers, used for private-session disposal. */
+  get subscriberCount(): number {
+    return this.subscribers.size;
   }
 }

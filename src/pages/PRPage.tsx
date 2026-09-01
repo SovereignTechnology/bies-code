@@ -345,12 +345,12 @@ export default function PRPage() {
   const [searchMoreActive, setSearchMoreActive] = useState(false);
 
   const extraSearchGroups = useMemo<RelayGroupSpec[]>(() => {
-    if (!searchMoreActive) return [];
+    if (!searchMoreActive || repo?.isPrivate) return [];
     return [
       { label: "git index", relays$: gitIndexRelays },
       { label: "fallback relays", relays$: fallbackRelays },
     ];
-  }, [searchMoreActive]);
+  }, [searchMoreActive, repo?.isPrivate]);
 
   const handleSearchMore = useCallback(() => {
     setSearchMoreActive(true);
@@ -364,9 +364,11 @@ export default function PRPage() {
     selectedMaintainers,
     confirmedMaintainers,
     repo?.roleHistory,
-    undefined, // options
-    extraSearchGroups,
-    retryKey,
+    {
+      extraSearchGroups,
+      retryKey,
+      privateRepository: repo?.isPrivate ?? false,
+    },
   );
   const mentionedItems = useMentionedNip34Items(pr?.rootEvent.id);
   const timelineEntries = useMemo(() => {
@@ -445,6 +447,7 @@ export default function PRPage() {
 
   // Git pool — uses the repo's clone URLs (same as RepoCodePage).
   const { pool: gitPool, poolState: gitPoolState } = useGitPool(cloneUrls, {
+    private: repo?.isPrivate,
     headRef: repoState?.headRef,
     knownHeadCommit: repoState?.headCommitId,
     stateRefs: repoState?.refs,
@@ -900,6 +903,7 @@ export default function PRPage() {
   const showMergePanel = !!(
     pr &&
     repo &&
+    !repo.isBuzz &&
     (repo.graspCloneUrls.length > 0 ||
       repo.additionalGitServerUrls.length > 0) &&
     isMaintainer &&
@@ -1325,7 +1329,9 @@ export default function PRPage() {
         backPath={`${repoBasePath}/prs`}
         backLabel="Back to PRs"
         onSearchMore={
-          !searchMoreActive && search.settled ? handleSearchMore : undefined
+          !repo?.isPrivate && !searchMoreActive && search.settled
+            ? handleSearchMore
+            : undefined
         }
         searchMoreActive={searchMoreActive}
         onRetry={handleRetry}
@@ -1872,7 +1878,7 @@ export default function PRPage() {
                 )}
 
                 {/* Reply box — always shown; anonymous posting handled inside */}
-                {pr && (
+                {pr && !repo?.isBuzz && (
                   <ReplyBox
                     rootEvent={
                       // For patches with multiple revisions, comments go to the

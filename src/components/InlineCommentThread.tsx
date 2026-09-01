@@ -63,6 +63,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { useIsBuzzRepository } from "@/contexts/BuzzRepositoryContext";
 
 // ---------------------------------------------------------------------------
 // Props
@@ -437,7 +438,8 @@ export function InlineCommentThread({
   repoCoords,
   className,
 }: InlineCommentThreadProps) {
-  const [composerOpen, setComposerOpen] = useState(autoFocus);
+  const isBuzz = useIsBuzzRepository();
+  const [composerOpen, setComposerOpen] = useState(autoFocus && !isBuzz);
   /**
    * Whether the thread body (comments + composer) is collapsed.
    * Resolved threads start collapsed; unresolved threads start expanded.
@@ -490,9 +492,9 @@ export function InlineCommentThread({
       repoCoords,
       canReply: false as const,
       hideInlineCommentBanner: true,
-      onReply: handleReplyFromComment,
+      onReply: isBuzz ? undefined : handleReplyFromComment,
     }),
-    [rootEvent, repoCoords, handleReplyFromComment],
+    [rootEvent, repoCoords, handleReplyFromComment, isBuzz],
   );
 
   // The thread root is the first inline comment — used as the parent for the resolve event.
@@ -500,6 +502,7 @@ export function InlineCommentThread({
 
   // Can the current user resolve this thread?
   const canResolve =
+    !isBuzz &&
     !isResolved &&
     !!activeAccount &&
     !!authorizedPubkeys &&
@@ -510,12 +513,12 @@ export function InlineCommentThread({
   // already has comments and the thread is already mounted), open the composer
   // as a new inline code comment (not a reply) and expand if collapsed.
   useEffect(() => {
-    if (autoFocus) {
+    if (autoFocus && !isBuzz) {
       setReplyToComment(null);
       setComposerOpen(true);
       setCollapsed(false);
     }
-  }, [autoFocus]);
+  }, [autoFocus, isBuzz]);
 
   // When isResolved changes (e.g. resolution event arrives from relay),
   // collapse the thread automatically.
@@ -669,7 +672,7 @@ export function InlineCommentThread({
           )}
 
           {/* Footer: resolved indicator, composer, or reply/resolve actions */}
-          {isResolved && resolveEvent ? (
+          {isBuzz ? null : isResolved && resolveEvent ? (
             <ResolvedFooter
               resolveEvent={resolveEvent}
               authorizedPubkeys={authorizedPubkeys}

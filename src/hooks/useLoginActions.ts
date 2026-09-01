@@ -22,6 +22,13 @@ import { nip19 } from "nostr-tools";
 // NOTE: This file should not be edited except for adding new login methods.
 
 const AMBER_ANDROID_PACKAGE = "com.greenart7c3.nostrsigner";
+const NOSTR_CONNECT_PERMISSIONS = [
+  ...NostrConnectSigner.buildSigningPermissions([
+    0, 1, 3, 10002, 10318, 22242, 27235,
+  ]),
+  "nip44_encrypt",
+  "nip44_decrypt",
+];
 
 /**
  * Wraps the signer on an account with {@link signerWithNudge} so that slow or
@@ -116,7 +123,7 @@ export function createNostrConnectSession(
   const metadata: Parameters<NostrConnectSigner["getNostrConnectURI"]>[0] = {
     name: appName ?? APP_NAME,
     url: typeof window !== "undefined" ? window.location.origin : undefined,
-    permissions: NostrConnectSigner.buildSigningPermissions([0, 1, 3, 10002]),
+    permissions: NOSTR_CONNECT_PERMISSIONS,
   };
 
   // On mobile, the signer app is on the same device — no QR needed, just a
@@ -178,7 +185,9 @@ export function useLoginActions() {
      */
     async bunker(uri: string): Promise<void> {
       try {
-        const signer = await NostrConnectSigner.fromBunkerURI(uri);
+        const signer = await NostrConnectSigner.fromBunkerURI(uri, {
+          permissions: NOSTR_CONNECT_PERMISSIONS,
+        });
         const pubkey = await signer.getPublicKey();
 
         // Only skip adding if a NostrConnect account for this pubkey already

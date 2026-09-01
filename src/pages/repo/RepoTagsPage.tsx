@@ -53,6 +53,7 @@ export default function RepoTagsPage() {
   const repoOwnerProfile = useProfile(pubkey);
 
   const { pool, poolState } = useGitPool(cloneUrls, {
+    private: repo?.isPrivate,
     headRef: repoState?.headRef,
     knownHeadCommit: repoState?.headCommitId,
     stateRefs: repoState?.refs,
@@ -116,7 +117,10 @@ export default function RepoTagsPage() {
     () => sortedTags.map((tag) => tag.hash),
     [sortedTags],
   );
-  const ciChecks = useCIForCommits(tagCommitIds, resolved?.repoRelayGroup);
+  const ciChecks = useCIForCommits(
+    tagCommitIds,
+    repo?.isPrivate ? undefined : resolved?.repoRelayGroup,
+  );
   const ciRuns = useMemo(
     () =>
       ciChecks ? [...ciChecks.values()].flatMap((checks) => checks.runs) : [],

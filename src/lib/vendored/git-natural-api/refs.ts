@@ -1,6 +1,12 @@
 /**
  * Vendored from @fiatjaf/git-natural-api v0.2.4
  * https://jsr.io/@fiatjaf/git-natural-api
+ *
+ * Local modifications:
+ * - info/refs requests accept authorization headers and an AbortSignal;
+ * - non-success HTTP responses throw a typed status-bearing error; and
+ * - the upstream URL-only capability cache is removed so authenticated
+ *   results can never cross account scopes.
  */
 
 /** Repository information from the Git protocol */
@@ -10,23 +16,32 @@ export type InfoRefsUploadPackResponse = {
   symrefs: Record<string, string>; // Symbolic references
 };
 
-const capabilitiesCache = new Map<string, string[]>();
+export class GitNaturalHttpError extends Error {
+  readonly status: number;
+  readonly statusText: string;
+
+  constructor(response: Response) {
+    super(`HTTP ${response.status} from Git info/refs: ${response.statusText}`);
+    this.name = "GitNaturalHttpError";
+    this.status = response.status;
+    this.statusText = response.statusText;
+  }
+}
 
 export async function getCapabilities(
   url: string,
   weAlreadyHaveSomeInfoRefsResponse?: InfoRefsUploadPackResponse,
+  headers?: Record<string, string>,
+  signal?: AbortSignal,
 ): Promise<string[]> {
+  if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
   if (weAlreadyHaveSomeInfoRefsResponse) {
-    // if this was passed just extract the capabilities from it and update the cache
-    capabilitiesCache.set(url, weAlreadyHaveSomeInfoRefsResponse.capabilities);
+    // If this was passed, just extract the capabilities from it.
     return weAlreadyHaveSomeInfoRefsResponse.capabilities;
   }
 
-  const cached = capabilitiesCache.get(url);
-  if (cached) return cached;
-
-  const info = await getInfoRefs(url);
-  capabilitiesCache.set(url, info.capabilities);
+  const info = await getInfoRefs(url, headers, signal);
+  if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
   return info.capabilities;
 }
 
@@ -37,10 +52,19 @@ export async function getCapabilities(
  */
 export async function getInfoRefs(
   url: string,
+  headers?: Record<string, string>,
+  signal?: AbortSignal,
 ): Promise<InfoRefsUploadPackResponse> {
-  const response = await (
-    await fetch(`${url}/info/refs?service=git-upload-pack`)
-  ).text();
+  if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+  const httpResponse = await fetch(`${url}/info/refs?service=git-upload-pack`, {
+    headers,
+    signal,
+  });
+  if (!httpResponse.ok) {
+    throw new GitNaturalHttpError(httpResponse);
+  }
+  const response = await httpResponse.text();
+  if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
   const result: InfoRefsUploadPackResponse = {
     refs: {},
     capabilities: [],

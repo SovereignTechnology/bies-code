@@ -14,6 +14,8 @@ import {
   eventStore,
 } from "@/services/nostr";
 import { startUserIdentitySubscription } from "@/services/userIdentitySubscription";
+import { startPrivateGitRelaySession } from "@/services/privateGitRelays";
+import { fallbackRelays, lookupRelays } from "@/services/settings";
 import { MailboxesModel } from "applesauce-core/models";
 
 /**
@@ -105,6 +107,7 @@ let isApplyingCrossTabSync = false;
   // the updated relay set. This ensures all user replaceable events are always
   // as fresh as possible — the prerequisite for safe replaceable event edits.
   let stopIdentitySub: (() => void) | null = null;
+  let stopPrivateGitRelays: (() => void) | null = null;
 
   accounts.active$
     .pipe(
@@ -112,11 +115,14 @@ let isApplyingCrossTabSync = false;
         if (!account?.pubkey) return of(null);
         const pubkey = account.pubkey;
         return eventStore.model(MailboxesModel, pubkey).pipe(
-          map((mailboxes) => ({ pubkey, outboxes: mailboxes?.outboxes ?? [] })),
+          map((mailboxes) => ({
+            account,
+            outboxes: mailboxes?.outboxes ?? [],
+          })),
           // Only restart when the serialised outbox list actually changes
           distinctUntilChanged(
             (a, b) =>
-              a.pubkey === b.pubkey &&
+              a.account.id === b.account.id &&
               JSON.stringify([...a.outboxes].sort()) ===
                 JSON.stringify([...b.outboxes].sort()),
           ),
@@ -127,10 +133,33 @@ let isApplyingCrossTabSync = false;
       // Tear down the previous identity subscription before starting a new one
       stopIdentitySub?.();
       stopIdentitySub = null;
+      stopPrivateGitRelays?.();
+      stopPrivateGitRelays = null;
       if (value) {
         stopIdentitySub = startUserIdentitySubscription(
-          value.pubkey,
+          value.account.pubkey,
           value.outboxes,
+        );
+        const defaultIdentityRelays = [
+          ...new Set([
+            ...fallbackRelays.getValue(),
+            ...lookupRelays.getValue(),
+          ]),
+        ];
+        const writeRelays =
+          value.outboxes.length > 0
+            ? value.outboxes
+            : fallbackRelays.getValue().length > 0
+              ? fallbackRelays.getValue()
+              : lookupRelays.getValue();
+        stopPrivateGitRelays = startPrivateGitRelaySession(
+          value.account,
+          // Own replaceable lists are read from NIP-65 write relays. Inbox
+          // relays receive events from other users and need not carry kind
+          // 10318; including them would turn unrelated relay health into a
+          // private-list discovery dependency.
+          writeRelays.length > 0 ? writeRelays : defaultIdentityRelays,
+          writeRelays,
         );
       }
     });

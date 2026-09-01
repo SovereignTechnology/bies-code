@@ -103,7 +103,10 @@ export class PR extends EventCast<PREvent> {
     return getOrComputeCachedValue(
       this.event,
       TargetBranchSymbol,
-      () => getTagValue(this.event, "b") || undefined,
+      () =>
+        getTagValue(this.event, "b") ||
+        getTagValue(this.event, "target-branch") ||
+        undefined,
     );
   }
 

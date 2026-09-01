@@ -33,6 +33,18 @@ import { ignoreElements } from "rxjs/operators";
 import type { NostrEvent } from "nostr-tools";
 import type { RelayPool, PublishResponse } from "applesauce-relay";
 import { normalizeUrl } from "@/lib/url";
+import { getRepoIsPrivate, REPO_KIND } from "@/lib/nip34";
+import {
+  getPrivateRelayTrustSession,
+  getPrivateRepositoryRelays,
+  isPrivateRepositoryCoordinate,
+  isPrivateRepositoryEvent,
+  markPrivateRelayEvent,
+} from "@/services/privateRepositoryScope";
+
+const PRIVATE_REPOSITORY_MUTATION_KINDS = new Set([
+  5, 1111, 1617, 1618, 1619, 1621, 1630, 1631, 1632, 1633, 30617, 30618,
+]);
 
 // ---------------------------------------------------------------------------
 // URL normalization
@@ -366,7 +378,7 @@ export type RelayGroupResolver = (
   eventPubkey: string,
 ) => Promise<string[]>;
 
-class OutboxStore {
+export class OutboxStore {
   /** Reactive list of all outbox items, sorted newest-first */
   readonly items$ = new BehaviorSubject<OutboxItem[]>([]);
 
@@ -436,6 +448,25 @@ class OutboxStore {
   ): Promise<void> {
     // Deduplicate group IDs
     const uniqueGroupIds = [...new Set(groupIds)];
+    const repositoryGroups = uniqueGroupIds.filter((groupId) =>
+      groupId.startsWith("30617:"),
+    );
+    const hasPrivateRepositoryGroup = repositoryGroups.some(
+      isPrivateRepositoryCoordinate,
+    );
+    const hasPrivateIntent =
+      isPrivateRepositoryEvent(event) ||
+      (event.kind === REPO_KIND && getRepoIsPrivate(event));
+
+    if (hasPrivateRepositoryGroup || hasPrivateIntent) {
+      if (repositoryGroups.length === 0) {
+        throw new Error(
+          "Private repository publication is missing its repository coordinate",
+        );
+      }
+      await this.publishPrivateRepositoryEvent(event, repositoryGroups);
+      return;
+    }
 
     // Insert a provisional item immediately (no relays yet) so the
     // OutboxStatusBadge appears on the event card without any delay while
@@ -492,6 +523,60 @@ class OutboxStore {
 
     await this.upsert(item);
     this.sendToRelays(item);
+  }
+
+  /** Publish private repository events without UI or durable outbox state. */
+  private async publishPrivateRepositoryEvent(
+    event: NostrEvent,
+    repositoryGroups: string[],
+  ): Promise<void> {
+    if (!this.pool) throw new Error("The relay pool is not ready");
+    if (!PRIVATE_REPOSITORY_MUTATION_KINDS.has(event.kind)) {
+      throw new Error(
+        `Event kind ${event.kind} is not enabled for private repositories`,
+      );
+    }
+    const relayUrls = new Set<string>();
+    let generation: number | undefined;
+    for (const coordinate of repositoryGroups) {
+      const relays = getPrivateRepositoryRelays(coordinate);
+      if (!relays?.length) {
+        throw new Error(
+          `No admitted private relay is available for ${coordinate}`,
+        );
+      }
+      for (const relay of relays) {
+        const trust = getPrivateRelayTrustSession(relay);
+        if (!trust || trust.pubkey !== event.pubkey) {
+          throw new Error(
+            "The active account no longer owns this private relay session",
+          );
+        }
+        if (generation !== undefined && trust.generation !== generation) {
+          throw new Error("Private relay destinations cross account sessions");
+        }
+        generation = trust.generation;
+        relayUrls.add(normalizeUrl(relay));
+      }
+    }
+    if (relayUrls.size === 0) {
+      throw new Error("Private repository publication has no destination");
+    }
+
+    markPrivateRelayEvent(event);
+    const destinations = [...relayUrls];
+    const responses = await this.pool.publish(destinations, event);
+    const accepted = new Set(
+      responses
+        .filter((response) => response.ok)
+        .map((response) => normalizeUrl(response.from)),
+    );
+    const missing = destinations.filter((relay) => !accepted.has(relay));
+    if (missing.length > 0) {
+      throw new Error(
+        `The private event may have reached some repository relays, but these relays did not confirm it: ${missing.join(", ")}`,
+      );
+    }
   }
 
   /**

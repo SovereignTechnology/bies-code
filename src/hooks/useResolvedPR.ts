@@ -38,6 +38,9 @@ import { type Observable } from "rxjs";
 export interface UseResolvedPROptions {
   /** Extra clone URLs for fallback relay queries (from the repo). */
   fallbackCloneUrls?: string[];
+  extraSearchGroups?: RelayGroupSpec[];
+  retryKey?: number;
+  privateRepository?: boolean;
 }
 
 export interface ResolvedPRResult {
@@ -55,8 +58,6 @@ export interface ResolvedPRResult {
  * @param members         - Confirmed member set from repo resolution
  * @param maintainers     - Confirmed maintainer-only authority set
  * @param options         - Additional options
- * @param extraSearchGroups - Additional relay groups for user-triggered expansion
- * @param retryKey        - Increment to force a fresh search across all relays
  */
 export function useResolvedPR(
   prId: string | undefined,
@@ -65,12 +66,11 @@ export function useResolvedPR(
   members: Set<string> | undefined,
   maintainers: Set<string> | undefined,
   roleHistory?: RepositoryRoleHistory,
-  _options?: UseResolvedPROptions,
-  extraSearchGroups?: RelayGroupSpec[],
-  retryKey?: number,
+  options: UseResolvedPROptions = {},
 ): ResolvedPRResult {
   const store = useEventStore();
   const curationMode = use$(relayCurationMode);
+  const { extraSearchGroups, retryKey, privateRepository = false } = options;
 
   // ── 1. Fetch root event + tiered loading (shared with useResolvedIssue) ──
   const { maintainerKey, search } = useNip34ItemDetailLoader(
@@ -80,6 +80,7 @@ export function useResolvedPR(
     members,
     extraSearchGroups,
     retryKey,
+    privateRepository,
   );
 
   // ── 2. Subscribe to PRDetailModel ───────────────────────────────────────
@@ -111,12 +112,14 @@ export function useResolvedPR(
 
   useNip34ItemLoaderBatch(revisionRootIds, repoRelayGroup, {
     includeThread: true,
-    includeAuthorNip65: curationMode === "outbox",
+    includeAuthorNip65: !privateRepository && curationMode === "outbox",
     supplementalRelayGroup:
-      curationMode === "outbox"
+      !privateRepository && curationMode === "outbox"
         ? extraRelaysForMaintainerMailboxCoverage
         : undefined,
-    additionalThreadRelayGroups: extraSearchGroups,
+    additionalThreadRelayGroups: privateRepository
+      ? undefined
+      : extraSearchGroups,
   });
 
   return { pr: resolved, search };

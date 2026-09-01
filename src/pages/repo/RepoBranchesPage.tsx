@@ -110,6 +110,7 @@ export default function RepoBranchesPage() {
   const repoOwnerProfile = useProfile(pubkey);
 
   const { pool, poolState } = useGitPool(cloneUrls, {
+    private: repo?.isPrivate,
     headRef: repoState?.headRef,
     knownHeadCommit: repoState?.headCommitId,
     stateRefs: repoState?.refs,
@@ -184,7 +185,10 @@ export default function RepoBranchesPage() {
     () => sortedBranches.map((branch) => branch.hash),
     [sortedBranches],
   );
-  const ciChecks = useCIForCommits(branchCommitIds, resolved?.repoRelayGroup);
+  const ciChecks = useCIForCommits(
+    branchCommitIds,
+    repo?.isPrivate ? undefined : resolved?.repoRelayGroup,
+  );
   const ciRuns = useMemo(
     () =>
       ciChecks ? [...ciChecks.values()].flatMap((checks) => checks.runs) : [],

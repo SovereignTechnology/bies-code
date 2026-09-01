@@ -19,10 +19,28 @@ import { RepoAnnouncementFactory } from "@/factories/RepoAnnouncementFactory";
 import { RepoStateFactory } from "@/factories/RepoStateFactory";
 import { eventStore, pool } from "@/services/nostr";
 import { outboxStore } from "@/services/outbox";
+import { privateGitRelayList$ } from "@/services/privateGitRelays";
+import {
+  installPrivateRepositoryRelays,
+  markPrivateRelayEvent,
+} from "@/services/privateRepositoryScope";
 
 import { pushToGitServer, ZERO_HASH, type RefUpdate } from "@/lib/git-push";
-import { graspRepositoryCloneUrl, type GraspServer } from "@/lib/grasp";
+import {
+  fetchGraspServerInformation,
+  graspRepositoryCloneUrl,
+  type GraspServer,
+} from "@/lib/grasp";
 import { useProfile } from "@/hooks/useProfile";
+import {
+  createGitHttpAuthorizationProvider,
+  gitAuthorizationHeaders,
+} from "@/lib/git-http-auth";
+import { verifyPrivateGraspService } from "@/lib/private-grasp";
+import { resilientRequest } from "@/lib/resilientSubscription";
+import { onlyEvents } from "applesauce-relay";
+import { firstValueFrom, timeout, toArray } from "rxjs";
+import { repoCoordinate } from "@/lib/nip34";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -63,6 +81,20 @@ export interface CreateRepoFormInput {
   identifier: string;
   /** The selected Grasp servers to publish to */
   graspServers: GraspServer[];
+  /** Create only on one GRASP-08 service from the encrypted kind-10318 list. */
+  private?: boolean;
+}
+
+interface PrivateCreateRetry {
+  generation: number;
+  pubkey: string;
+  relayUrl: string;
+  cloneUrl: string;
+  identifier: string;
+  commitHash: string;
+  packfile: Uint8Array;
+  announcement: NostrEvent;
+  state: NostrEvent;
 }
 
 // ---------------------------------------------------------------------------
@@ -77,10 +109,12 @@ export function useCreateRepo() {
 
   const [state, setState] = useState<CreateRepoState>({ step: "idle" });
   const abortRef = useRef<AbortController | null>(null);
+  const privateRetryRef = useRef<PrivateCreateRetry>();
 
   const reset = useCallback(() => {
     abortRef.current?.abort();
     abortRef.current = null;
+    privateRetryRef.current = undefined;
     setState({ step: "idle" });
   }, []);
 
@@ -95,6 +129,9 @@ export function useCreateRepo() {
       abortRef.current = abort;
 
       try {
+        if (input.private && input.graspServers.length !== 1) {
+          throw new Error("Select exactly one private GRASP-08 service");
+        }
         // ── Step 1: Build git objects ──────────────────────────────────
         setState({ step: "building-commit" });
 
@@ -125,6 +162,70 @@ export function useCreateRepo() {
         );
         const relayUrls = input.graspServers.map((s) => s.wsUrl);
 
+        const privateList = privateGitRelayList$.getValue();
+        if (
+          input.private &&
+          (privateList.status !== "ready" ||
+            privateList.pubkey !== pubkey ||
+            !relayUrls.every((relay) => privateList.relayUrls.includes(relay)))
+        ) {
+          throw new Error(
+            "The selected private service is no longer in your encrypted list",
+          );
+        }
+
+        let privateAuthorization:
+          | ReturnType<typeof createGitHttpAuthorizationProvider>
+          | undefined;
+        if (input.private) {
+          const server = input.graspServers[0];
+          const document = await fetchGraspServerInformation(
+            server.serviceAddress,
+            AbortSignal.any([abort.signal, AbortSignal.timeout(8_000)]),
+          );
+          if (
+            !(document.supported_grasps ?? []).some(
+              (grasp) => grasp.trim().toUpperCase() === "GRASP-08",
+            )
+          ) {
+            throw new Error(
+              `${server.serviceAddress} does not advertise GRASP-08 creation support`,
+            );
+          }
+          privateAuthorization = createGitHttpAuthorizationProvider(
+            pubkey,
+            account.signer,
+            cloneUrls,
+            String(privateList.generation),
+          );
+          await verifyPrivateGraspService(
+            cloneUrls[0],
+            relayUrls[0],
+            privateAuthorization,
+            account.signer,
+            abort.signal,
+          );
+          const existing = await firstValueFrom(
+            resilientRequest(
+              pool,
+              [relayUrls[0]],
+              [
+                {
+                  kinds: [30_617],
+                  authors: [pubkey],
+                  "#d": [input.identifier],
+                },
+              ],
+              { retryCount: 1, paginate: false },
+            ).pipe(onlyEvents(), toArray(), timeout(10_000)),
+          );
+          if (existing.length > 0) {
+            throw new Error(
+              "This private repository identifier already exists on the selected service",
+            );
+          }
+        }
+
         // Build + sign both events using typed factories
         const signedAnnouncement = await RepoAnnouncementFactory.create(
           input.identifier,
@@ -133,6 +234,7 @@ export function useCreateRepo() {
           cloneUrls,
           relayUrls,
           commitHash,
+          !!input.private,
         ).sign(account.signer);
 
         const signedState = await RepoStateFactory.create(
@@ -143,8 +245,41 @@ export function useCreateRepo() {
 
         if (abort.signal.aborted) return;
 
+        if (input.private) {
+          const currentList = privateGitRelayList$.getValue();
+          if (
+            currentList.generation !== privateList.generation ||
+            currentList.pubkey !== pubkey ||
+            !currentList.relayUrls.includes(relayUrls[0])
+          ) {
+            throw new Error(
+              "The private service list changed while the repository was being created",
+            );
+          }
+          privateRetryRef.current = {
+            generation: privateList.generation,
+            pubkey,
+            relayUrl: relayUrls[0],
+            cloneUrl: cloneUrls[0],
+            identifier: input.identifier,
+            commitHash,
+            packfile,
+            announcement: signedAnnouncement,
+            state: signedState,
+          };
+        }
+
         // ── Step 3: Publish announcement ──────────────────────────────
-        setState({ step: "publishing-announcement" });
+        setState({
+          step: "publishing-announcement",
+          ...(input.private
+            ? {
+                publishedAt: Date.now(),
+                commitHash,
+                identifier: input.identifier,
+              }
+            : {}),
+        });
 
         // Publish to Grasp relays directly and await their response
         // so we know the events are in purgatory before pushing.
@@ -156,23 +291,28 @@ export function useCreateRepo() {
           abort.signal,
         );
 
-        // Also publish to outbox/index relays (fire-and-forget via outbox store)
-        await outboxStore.publish(signedAnnouncement, [
-          "git-index",
-          "fallback-relays",
-        ]);
+        if (!input.private) {
+          // Public repositories remain discoverable through the normal index.
+          await outboxStore.publish(signedAnnouncement, [
+            "git-index",
+            "fallback-relays",
+          ]);
+        }
 
-        // Add to local store for immediate UI update
+        if (input.private) markPrivateRelayEvent(signedAnnouncement);
         eventStore.add(signedAnnouncement);
 
         if (abort.signal.aborted) return;
 
         // ── Step 4: Publish state ─────────────────────────────────────
-        setState({ step: "publishing-state" });
+        setState((previous) => ({
+          ...previous,
+          step: "publishing-state",
+        }));
 
         await publishToGraspRelays(signedState, graspRelayUrls, abort.signal);
 
-        // Add to local store
+        if (input.private) markPrivateRelayEvent(signedState);
         eventStore.add(signedState);
 
         const publishedAt = Date.now();
@@ -183,6 +323,7 @@ export function useCreateRepo() {
         setState({
           step: "pushing",
           publishedAt,
+          commitHash,
           identifier: input.identifier,
         });
 
@@ -198,7 +339,20 @@ export function useCreateRepo() {
         // own purgatory state event, so each needs the git data.
         const pushResults = await Promise.allSettled(
           cloneUrls.map((url) =>
-            pushToGitServer(url, refUpdates, packfile, abort.signal),
+            pushToGitServer(
+              url,
+              refUpdates,
+              packfile,
+              abort.signal,
+              privateAuthorization
+                ? (repoUrl) =>
+                    gitAuthorizationHeaders(
+                      privateAuthorization,
+                      repoUrl,
+                      abort.signal,
+                    )
+                : undefined,
+            ),
           ),
         );
 
@@ -249,6 +403,10 @@ export function useCreateRepo() {
 
         // Use the first clone URL as the canonical one for display
         const primaryCloneUrl = cloneUrls[0];
+        if (input.private) {
+          const coordinate = repoCoordinate(pubkey, input.identifier);
+          installPrivateRepositoryRelays([coordinate], relayUrls);
+        }
 
         // ── Done ──────────────────────────────────────────────────────
         setState({
@@ -279,7 +437,7 @@ export function useCreateRepo() {
    */
   const retryPush = useCallback(
     async (input: CreateRepoFormInput, commitHash: string) => {
-      if (!npub) {
+      if (!npub || !account || !pubkey) {
         setState((prev) => ({
           ...prev,
           step: "error",
@@ -292,6 +450,92 @@ export function useCreateRepo() {
       abortRef.current = abort;
 
       try {
+        if (input.private) {
+          const transaction = privateRetryRef.current;
+          const list = privateGitRelayList$.getValue();
+          if (
+            !transaction ||
+            transaction.commitHash !== commitHash ||
+            transaction.pubkey !== pubkey ||
+            list.generation !== transaction.generation ||
+            list.pubkey !== pubkey ||
+            !list.relayUrls.includes(transaction.relayUrl)
+          ) {
+            throw new Error(
+              "The private creation session changed; start the repository creation again",
+            );
+          }
+          setState((prev) => ({
+            ...prev,
+            step: "publishing-announcement",
+            error: undefined,
+          }));
+          const authorization = createGitHttpAuthorizationProvider(
+            pubkey,
+            account.signer,
+            [transaction.cloneUrl],
+            String(transaction.generation),
+          );
+          await verifyPrivateGraspService(
+            transaction.cloneUrl,
+            transaction.relayUrl,
+            authorization,
+            account.signer,
+            abort.signal,
+          );
+          await publishToGraspRelays(
+            transaction.announcement,
+            [transaction.relayUrl],
+            abort.signal,
+          );
+          setState((prev) => ({ ...prev, step: "publishing-state" }));
+          await publishToGraspRelays(
+            transaction.state,
+            [transaction.relayUrl],
+            abort.signal,
+          );
+          setState((prev) => ({
+            ...prev,
+            step: "pushing",
+            publishedAt: Date.now(),
+          }));
+          const pushResult = await pushToGitServer(
+            transaction.cloneUrl,
+            [
+              {
+                oldHash: ZERO_HASH,
+                newHash: transaction.commitHash,
+                refName: "refs/heads/main",
+              },
+            ],
+            transaction.packfile,
+            abort.signal,
+            (repoUrl) =>
+              gitAuthorizationHeaders(authorization, repoUrl, abort.signal),
+          );
+          if (
+            !pushResult.unpackOk ||
+            pushResult.refResults.some((result) => !result.ok)
+          ) {
+            throw new Error(
+              pushResult.serverError ??
+                pushResult.unpackStatus ??
+                "The private Git server rejected the retry",
+            );
+          }
+          installPrivateRepositoryRelays(
+            [repoCoordinate(pubkey, transaction.identifier)],
+            [transaction.relayUrl],
+          );
+          setState({
+            step: "done",
+            cloneUrl: transaction.cloneUrl,
+            commitHash: transaction.commitHash,
+            identifier: transaction.identifier,
+            publishedAt: Date.now(),
+          });
+          return;
+        }
         setState((prev) => ({ ...prev, step: "pushing", error: undefined }));
 
         // Rebuild the packfile for retry
@@ -383,7 +627,7 @@ export function useCreateRepo() {
         setState((prev) => ({ ...prev, step: "error", error: message }));
       }
     },
-    [npub, profile],
+    [account, npub, profile, pubkey],
   );
 
   return {
