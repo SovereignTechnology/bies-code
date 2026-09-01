@@ -983,6 +983,9 @@ function PrivateGitRelaysSection() {
                     inputError && "border-destructive",
                   )}
                   aria-invalid={Boolean(inputError)}
+                  aria-describedby={
+                    inputError ? "private-git-relay-input-error" : undefined
+                  }
                 />
                 <Button
                   type="button"
@@ -997,7 +1000,14 @@ function PrivateGitRelaysSection() {
                 </Button>
               </div>
               {inputError && (
-                <p className="px-0.5 text-xs text-destructive">{inputError}</p>
+                <p
+                  id="private-git-relay-input-error"
+                  className="px-0.5 text-xs text-destructive"
+                  role="alert"
+                  aria-live="polite"
+                >
+                  {inputError}
+                </p>
               )}
               <p className="px-0.5 text-xs text-muted-foreground">
                 Saving an empty list publishes an encrypted [] replacement.

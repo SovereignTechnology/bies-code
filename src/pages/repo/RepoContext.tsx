@@ -85,3 +85,7 @@ export function useRepoContext(): RepoContextValue {
   if (!ctx) throw new Error("useRepoContext must be used within RepoLayout");
   return ctx;
 }
+
+export function useOptionalRepoContext(): RepoContextValue | null {
+  return useContext(RepoContext);
+}

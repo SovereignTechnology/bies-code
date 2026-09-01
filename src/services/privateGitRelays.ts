@@ -360,7 +360,7 @@ async function publishPrivateGitRelayList(
   const missing = session.writeRelays.filter((relay) => !accepted.has(relay));
   if (missing.length > 0) {
     throw new Error(
-      `The encrypted list was not accepted by every write relay: ${missing.join(", ")}`,
+      `The encrypted list may have reached some write relays, but these relays did not confirm it: ${missing.join(", ")}`,
     );
   }
 }

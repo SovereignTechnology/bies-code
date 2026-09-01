@@ -378,7 +378,7 @@ export type RelayGroupResolver = (
   eventPubkey: string,
 ) => Promise<string[]>;
 
-class OutboxStore {
+export class OutboxStore {
   /** Reactive list of all outbox items, sorted newest-first */
   readonly items$ = new BehaviorSubject<OutboxItem[]>([]);
 
@@ -451,24 +451,20 @@ class OutboxStore {
     const repositoryGroups = uniqueGroupIds.filter((groupId) =>
       groupId.startsWith("30617:"),
     );
-    const privateRepositoryGroups = repositoryGroups.filter(
+    const hasPrivateRepositoryGroup = repositoryGroups.some(
       isPrivateRepositoryCoordinate,
     );
     const hasPrivateIntent =
       isPrivateRepositoryEvent(event) ||
       (event.kind === REPO_KIND && getRepoIsPrivate(event));
 
-    if (privateRepositoryGroups.length > 0 || hasPrivateIntent) {
+    if (hasPrivateRepositoryGroup || hasPrivateIntent) {
       if (repositoryGroups.length === 0) {
         throw new Error(
           "Private repository publication is missing its repository coordinate",
         );
       }
-      await this.publishPrivateRepositoryEvent(
-        event,
-        repositoryGroups,
-        repositoryGroups,
-      );
+      await this.publishPrivateRepositoryEvent(event, repositoryGroups);
       return;
     }
 
@@ -533,7 +529,6 @@ class OutboxStore {
   private async publishPrivateRepositoryEvent(
     event: NostrEvent,
     repositoryGroups: string[],
-    privateRepositoryGroups: string[],
   ): Promise<void> {
     if (!this.pool) throw new Error("The relay pool is not ready");
     if (!PRIVATE_REPOSITORY_MUTATION_KINDS.has(event.kind)) {
@@ -541,15 +536,9 @@ class OutboxStore {
         `Event kind ${event.kind} is not enabled for private repositories`,
       );
     }
-    if (privateRepositoryGroups.length !== repositoryGroups.length) {
-      throw new Error(
-        "Private repository publication contains an unresolved repository coordinate",
-      );
-    }
-
     const relayUrls = new Set<string>();
     let generation: number | undefined;
-    for (const coordinate of privateRepositoryGroups) {
+    for (const coordinate of repositoryGroups) {
       const relays = getPrivateRepositoryRelays(coordinate);
       if (!relays?.length) {
         throw new Error(
@@ -585,7 +574,7 @@ class OutboxStore {
     const missing = destinations.filter((relay) => !accepted.has(relay));
     if (missing.length > 0) {
       throw new Error(
-        `Private event was not accepted by every repository relay: ${missing.join(", ")}`,
+        `The private event may have reached some repository relays, but these relays did not confirm it: ${missing.join(", ")}`,
       );
     }
   }
