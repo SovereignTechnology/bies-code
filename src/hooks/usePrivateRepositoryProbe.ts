@@ -2,7 +2,15 @@ import { useMemo } from "react";
 import { useActiveAccount } from "applesauce-react/hooks";
 import type { Filter } from "applesauce-core/helpers";
 import { verifyEvent, type NostrEvent } from "nostr-tools";
-import { catchError, from, of, startWith, type Observable } from "rxjs";
+import {
+  catchError,
+  distinctUntilChanged,
+  from,
+  map,
+  of,
+  startWith,
+  type Observable,
+} from "rxjs";
 
 import { use$ } from "@/hooks/use$";
 import { classifyPrivateGitServiceRelay } from "@/lib/grasp";
@@ -21,10 +29,13 @@ import { normalizeUrl } from "@/lib/url";
 import { eventStore, pool } from "@/services/nostr";
 import { privateGitRelayList$ } from "@/services/privateGitRelays";
 import {
+  getPrivateRepositoryRelays,
   installPrivateRepositoryRelays,
   installPrivateServiceRelayHint,
+  isPrivateRepositoryCoordinate,
   markPrivateRelayEvent,
   markPrivateRepositoryCoordinate,
+  privateRepositoryScopeRevision$,
 } from "@/services/privateRepositoryScope";
 
 const PRIVATE_PROBE_TIMEOUT_MS = 8_000;
@@ -120,16 +131,23 @@ async function probePrivateRepository(
   const knownIsPrivate =
     !!validKnownAnnouncement &&
     (getRepoIsPrivate(validKnownAnnouncement) || !!cachedResolved?.isPrivate);
+  const coordinate = repoCoordinate(pubkey, dTag);
+  const installedRepositoryRelays =
+    getPrivateRepositoryRelays(coordinate) ?? [];
+  const knownPrivateInScope =
+    isPrivateRepositoryCoordinate(coordinate) ||
+    installedRepositoryRelays.length > 0;
 
   // A verified public announcement already made this coordinate public. It
   // must remain readable from the EventStore even when the optional encrypted
-  // private-service list is temporarily unavailable.
-  if (validKnownAnnouncement && !knownIsPrivate) {
+  // private-service list is temporarily unavailable, unless this page session
+  // has already positively established that the coordinate is private.
+  if (validKnownAnnouncement && !knownIsPrivate && !knownPrivateInScope) {
     return { status: "absent", relayUrls: [] };
   }
 
   if (!accountPubkey) {
-    if (validKnownAnnouncement) {
+    if (knownIsPrivate || knownPrivateInScope) {
       return {
         status: "unavailable",
         relayUrls: [],
@@ -226,21 +244,22 @@ async function probePrivateRepository(
   const discoveryRelays = uniqueRelayUrls([
     ...listedRelays,
     ...privateHintRelays,
+    ...(knownPrivateInScope ? installedRepositoryRelays : []),
   ]);
   if (discoveryRelays.length === 0) {
     if (listStatus === "loading") {
       return { status: "loading", relayUrls: [] };
     }
-    if (listStatus !== "ready") {
-      return {
-        status: "unavailable",
-        relayUrls: [],
-        error:
-          listError ??
-          "Private Git service discovery is unavailable. Public repository discovery was not attempted.",
-      };
+    if (listStatus === "ready" || !knownPrivateInScope) {
+      return { status: "absent", relayUrls: [] };
     }
-    return { status: "absent", relayUrls: [] };
+    return {
+      status: "unavailable",
+      relayUrls: [],
+      error:
+        listError ??
+        "Private Git service discovery is unavailable. Public repository discovery was not attempted.",
+    };
   }
   const events = new Map<string, NostrEvent>();
   const pendingAuthors = new Set([pubkey]);
@@ -289,6 +308,9 @@ async function probePrivateRepository(
 
   if (events.size === 0) {
     if (listStatus === "ready") return { status: "absent", relayUrls: [] };
+    if (!knownPrivateInScope && privateHintRelays.length === 0) {
+      return { status: "absent", relayUrls: [] };
+    }
     return listStatus === "loading"
       ? { status: "loading", relayUrls: [] }
       : {
@@ -378,14 +400,29 @@ export function usePrivateRepositoryProbe(
 ): PrivateRepositoryProbeState | undefined {
   const account = useActiveAccount();
   const list = use$(privateGitRelayList$);
-  const knownAnnouncement =
-    pubkey && dTag
-      ? eventStore.getReplaceable(REPO_KIND, pubkey, dTag)
-      : undefined;
+  const privateScopeRevision = use$(privateRepositoryScopeRevision$);
   const hintsKey = useMemo(
     () => uniqueRelayUrls(relayHints).join(","),
     [relayHints],
   );
+
+  // React to announcements inserted by any loader. A synchronous
+  // getReplaceable read alone leaves the probe stale after an event arrives.
+  const knownAnnouncement = use$(() => {
+    if (!pubkey || !dTag) return undefined;
+    return eventStore
+      .timeline([
+        {
+          kinds: [REPO_KIND],
+          authors: [pubkey],
+          "#d": [dTag],
+        } as Filter,
+      ])
+      .pipe(
+        map(() => eventStore.getReplaceable(REPO_KIND, pubkey, dTag)),
+        distinctUntilChanged((previous, next) => previous?.id === next?.id),
+      );
+  }, [pubkey, dTag]);
 
   return use$(() => {
     if (!pubkey || !dTag) return undefined;
@@ -433,6 +470,7 @@ export function usePrivateRepositoryProbe(
     list.generation,
     list.status,
     list.sourceEvent?.id,
+    privateScopeRevision,
     knownAnnouncement?.id,
   ]);
 }
