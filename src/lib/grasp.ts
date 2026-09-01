@@ -25,6 +25,11 @@ export interface GraspAccessSummary {
 
 const BUZZ_SOFTWARE_URL = "https://github.com/block/buzz";
 const privateServiceClassificationCache = new Set<string>();
+const privateServiceTransientClassificationCache = new Map<
+  string,
+  { expiresAt: number; error?: Error }
+>();
+const PRIVATE_SERVICE_NEGATIVE_TTL_MS = 2 * 60_000;
 
 /**
  * Classify the two private Git transports supported by ngit v3.
@@ -40,8 +45,10 @@ export function isPrivateGitServiceDocument(document: Nip11Document): boolean {
 
 /**
  * Classify a route-hint relay before sending it a repository coordinate.
- * Only successful NIP-11 reads are cached; network and JSON failures remain
- * unknown so callers cannot accidentally treat them as public.
+ * Positive classifications remain trusted for this page session. Ordinary
+ * and failed classifications use a short TTL so dead hints do not impose the
+ * full NIP-11 timeout on every mount without making a later GRASP-08 upgrade
+ * stale for the whole session.
  */
 export async function classifyPrivateGitServiceRelay(
   relayUrl: string,
@@ -50,16 +57,37 @@ export async function classifyPrivateGitServiceRelay(
   if (!serviceAddress) throw new Error("Invalid repository relay hint");
   const key = graspServiceAddressToRelayUrl(serviceAddress);
   if (privateServiceClassificationCache.has(key)) return true;
-  const document = await fetchGraspServerInformation(
-    serviceAddress,
-    AbortSignal.timeout(5_000),
-  );
-  const result = isPrivateGitServiceDocument(document);
-  // Positive capability is safe to retain for this page session. A negative
-  // can become stale when a service enables GRASP-08/Buzz, so callers must
-  // revalidate it before treating a hint as public.
-  if (result) privateServiceClassificationCache.add(key);
-  return result;
+  const transient = privateServiceTransientClassificationCache.get(key);
+  if (transient && transient.expiresAt > Date.now()) {
+    if (transient.error) throw transient.error;
+    return false;
+  }
+  privateServiceTransientClassificationCache.delete(key);
+
+  try {
+    const document = await fetchGraspServerInformation(
+      serviceAddress,
+      AbortSignal.timeout(5_000),
+    );
+    const result = isPrivateGitServiceDocument(document);
+    if (result) privateServiceClassificationCache.add(key);
+    else {
+      privateServiceTransientClassificationCache.set(key, {
+        expiresAt: Date.now() + PRIVATE_SERVICE_NEGATIVE_TTL_MS,
+      });
+    }
+    return result;
+  } catch (error) {
+    const cachedError =
+      error instanceof Error
+        ? error
+        : new Error("Private Git service classification failed");
+    privateServiceTransientClassificationCache.set(key, {
+      expiresAt: Date.now() + PRIVATE_SERVICE_NEGATIVE_TTL_MS,
+      error: cachedError,
+    });
+    throw cachedError;
+  }
 }
 
 /** Describe a service's advertised repository-admission policy conservatively. */
