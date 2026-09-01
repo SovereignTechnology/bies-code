@@ -29,6 +29,29 @@ function emitRevision(): void {
   );
 }
 
+/**
+ * Establish the account generation that may admit private relay hints.
+ *
+ * This intentionally happens before the encrypted service list settles: a
+ * GRASP-08/Buzz-positive route hint is an independent trust source. Account
+ * switches still clear the whole scope before a new generation begins.
+ */
+export function beginPrivateRelayTrustSession(
+  accountId: string,
+  pubkey: string,
+  generation: number,
+): void {
+  activePrivateRelayTrustSession = { accountId, pubkey, generation };
+  let changed = false;
+  for (const [relay, session] of privateRelaySessions) {
+    if (session.accountId !== accountId || session.generation !== generation) {
+      privateRelaySessions.delete(relay);
+      changed = true;
+    }
+  }
+  if (changed) emitRevision();
+}
+
 export function installPrivateServiceRelays(
   accountId: string,
   pubkey: string,
@@ -37,7 +60,7 @@ export function installPrivateServiceRelays(
 ): string[] {
   const next = new Set(relayUrls.map(normalizeUrl));
   const removed: string[] = [];
-  activePrivateRelayTrustSession = { accountId, pubkey, generation };
+  beginPrivateRelayTrustSession(accountId, pubkey, generation);
   for (const [relay, session] of privateRelaySessions) {
     if (session.accountId !== accountId || session.generation !== generation) {
       privateRelaySessions.delete(relay);

@@ -7,6 +7,8 @@ import { catchError, from, of, startWith, type Observable } from "rxjs";
 import { use$ } from "@/hooks/use$";
 import { classifyPrivateGitServiceRelay } from "@/lib/grasp";
 import {
+  getRepoIsPrivate,
+  getRepoRelays,
   getRepoHistorySubjects,
   getRepoRoleSubjects,
   REPO_KIND,
@@ -93,8 +95,47 @@ async function probePrivateRepository(
   listGeneration: number,
   listStatus: string,
   listRelayUrls: readonly string[],
+  listError: string | undefined,
+  knownAnnouncement: NostrEvent | undefined,
 ): Promise<PrivateRepositoryProbeState> {
+  const validKnownAnnouncement =
+    knownAnnouncement &&
+    verifyEvent(knownAnnouncement) &&
+    knownAnnouncement.kind === REPO_KIND &&
+    knownAnnouncement.pubkey === pubkey &&
+    knownAnnouncement.tags.some(
+      ([name, value]) => name === "d" && value === dTag,
+    )
+      ? knownAnnouncement
+      : undefined;
+  const cachedAnnouncements = validKnownAnnouncement
+    ? eventStore
+        .getByFilters({ kinds: [REPO_KIND], "#d": [dTag] } as Filter)
+        .filter((event) => verifyEvent(event))
+    : [];
+  const cachedResolved = validKnownAnnouncement
+    ? (resolveChain(cachedAnnouncements, pubkey, dTag) ??
+      resolveChain([validKnownAnnouncement], pubkey, dTag))
+    : undefined;
+  const knownIsPrivate =
+    !!validKnownAnnouncement &&
+    (getRepoIsPrivate(validKnownAnnouncement) || !!cachedResolved?.isPrivate);
+
+  // A verified public announcement already made this coordinate public. It
+  // must remain readable from the EventStore even when the optional encrypted
+  // private-service list is temporarily unavailable.
+  if (validKnownAnnouncement && !knownIsPrivate) {
+    return { status: "absent", relayUrls: [] };
+  }
+
   if (!accountPubkey) {
+    if (validKnownAnnouncement) {
+      return {
+        status: "unavailable",
+        relayUrls: [],
+        error: "Log in to open this private repository.",
+      };
+    }
     const privateHints = await discoverPrivateHintRelays(relayHints, new Set());
     return privateHints.length > 0
       ? {
@@ -104,19 +145,9 @@ async function probePrivateRepository(
         }
       : { status: "absent", relayUrls: [] };
   }
-  if (listStatus === "loading") {
-    return { status: "loading", relayUrls: [] };
-  }
-  if (listStatus !== "ready") {
-    return {
-      status: "unavailable",
-      relayUrls: [],
-      error:
-        "Private Git service discovery is unavailable. Public repository discovery was not attempted.",
-    };
-  }
 
-  const listedRelays = uniqueRelayUrls(listRelayUrls);
+  const listedRelays =
+    listStatus === "ready" ? uniqueRelayUrls(listRelayUrls) : [];
   const listedSet = new Set(listedRelays);
   const privateHintRelays = await discoverPrivateHintRelays(
     relayHints,
@@ -137,10 +168,80 @@ async function probePrivateRepository(
       );
     }
   }
+
+  if (validKnownAnnouncement) {
+    const resolved = cachedResolved;
+    if (!resolved) {
+      return {
+        status: "unavailable",
+        relayUrls: [],
+        error:
+          "The cached private repository announcement could not be resolved safely.",
+      };
+    }
+    const repositoryRelays = uniqueRelayUrls([
+      ...resolved.relays,
+      ...getRepoRelays(validKnownAnnouncement),
+    ]);
+    if (repositoryRelays.length === 0) {
+      return {
+        status: "unavailable",
+        relayUrls: [],
+        error: "The private repository does not declare a repository relay.",
+      };
+    }
+    for (const relay of repositoryRelays) {
+      if (
+        !accountId ||
+        !installPrivateServiceRelayHint(
+          accountId,
+          accountPubkey,
+          listGeneration,
+          relay,
+        )
+      ) {
+        throw new Error(
+          "The active account changed during private repository discovery",
+        );
+      }
+    }
+    for (const coordinate of resolved.confirmedMemberCoordinates) {
+      markPrivateRepositoryCoordinate(coordinate);
+    }
+    markPrivateRepositoryCoordinate(repoCoordinate(pubkey, dTag));
+    for (const event of resolved.discoveredAnnouncements) {
+      markPrivateRelayEvent(event);
+    }
+    installPrivateRepositoryRelays(
+      [...resolved.confirmedMemberCoordinates, repoCoordinate(pubkey, dTag)],
+      repositoryRelays,
+    );
+    return {
+      status: "found",
+      relayUrls: repositoryRelays,
+      repo: { ...resolved, isPrivate: true },
+    };
+  }
+
   const discoveryRelays = uniqueRelayUrls([
     ...listedRelays,
     ...privateHintRelays,
   ]);
+  if (discoveryRelays.length === 0) {
+    if (listStatus === "loading") {
+      return { status: "loading", relayUrls: [] };
+    }
+    if (listStatus !== "ready") {
+      return {
+        status: "unavailable",
+        relayUrls: [],
+        error:
+          listError ??
+          "Private Git service discovery is unavailable. Public repository discovery was not attempted.",
+      };
+    }
+    return { status: "absent", relayUrls: [] };
+  }
   const events = new Map<string, NostrEvent>();
   const pendingAuthors = new Set([pubkey]);
   const queriedAuthors = new Set<string>();
@@ -187,7 +288,16 @@ async function probePrivateRepository(
   }
 
   if (events.size === 0) {
-    return { status: "absent", relayUrls: [] };
+    if (listStatus === "ready") return { status: "absent", relayUrls: [] };
+    return listStatus === "loading"
+      ? { status: "loading", relayUrls: [] }
+      : {
+          status: "unavailable",
+          relayUrls: [],
+          error:
+            listError ??
+            "The route hints did not contain this repository, and private-list discovery is unavailable. Public discovery was not attempted.",
+        };
   }
 
   const announcements = [...events.values()];
@@ -268,6 +378,10 @@ export function usePrivateRepositoryProbe(
 ): PrivateRepositoryProbeState | undefined {
   const account = useActiveAccount();
   const list = use$(privateGitRelayList$);
+  const knownAnnouncement =
+    pubkey && dTag
+      ? eventStore.getReplaceable(REPO_KIND, pubkey, dTag)
+      : undefined;
   const hintsKey = useMemo(
     () => uniqueRelayUrls(relayHints).join(","),
     [relayHints],
@@ -291,6 +405,8 @@ export function usePrivateRepositoryProbe(
         list.generation,
         list.status,
         list.relayUrls,
+        list.error,
+        knownAnnouncement,
       ),
     ).pipe(
       startWith<PrivateRepositoryProbeState>({
@@ -317,5 +433,6 @@ export function usePrivateRepositoryProbe(
     list.generation,
     list.status,
     list.sourceEvent?.id,
+    knownAnnouncement?.id,
   ]);
 }

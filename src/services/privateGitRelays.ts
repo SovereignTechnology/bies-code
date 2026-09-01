@@ -21,6 +21,7 @@ import { clearPrivateGraspVerificationCache } from "@/lib/private-grasp";
 import { normalizeUrl } from "@/lib/url";
 import { eventStore, pool } from "@/services/nostr";
 import {
+  beginPrivateRelayTrustSession,
   clearPrivateRepositoryScope,
   installPrivateServiceRelays,
 } from "@/services/privateRepositoryScope";
@@ -31,6 +32,7 @@ import {
 
 const SNAPSHOT_TIMEOUT_MS = 8_000;
 const MAX_MERGE_ATTEMPTS = 3;
+const REFRESH_RETRY_DELAYS_MS = [2_000, 5_000, 15_000, 30_000] as const;
 
 export type PrivateGitRelayListStatus =
   | "logged-out"
@@ -53,6 +55,9 @@ interface PrivateGitRelaySession {
   identityRelays: string[];
   writeRelays: string[];
   stopped: boolean;
+  retryAttempt: number;
+  retryTimer?: ReturnType<typeof setTimeout>;
+  refreshInFlight?: Promise<void>;
 }
 
 interface PrivateGitRelaySnapshot {
@@ -91,21 +96,36 @@ function assertCurrentSession(session: PrivateGitRelaySession): void {
 }
 
 async function requestRelayEvents(
-  relay: string,
+  relays: readonly string[],
   filters: Filter[],
+  requireAllRelays: boolean,
 ): Promise<NostrEvent[]> {
-  const snapshot = await requestRelaySnapshot(
-    pool,
-    relay,
-    filters,
-    SNAPSHOT_TIMEOUT_MS,
+  const snapshots = await Promise.all(
+    relays.map(async (relay) => ({
+      relay,
+      snapshot: await requestRelaySnapshot(
+        pool,
+        relay,
+        filters,
+        SNAPSHOT_TIMEOUT_MS,
+      ),
+    })),
   );
-  if (!snapshot.complete) {
+  const completed = snapshots.filter(({ snapshot }) => snapshot.complete);
+  const incomplete = snapshots
+    .filter(({ snapshot }) => !snapshot.complete)
+    .map(({ relay }) => relay);
+  if (completed.length === 0) {
     throw new Error(
-      `Private-list relay ${relay} did not complete its response safely`,
+      `No private-list relay completed its response safely. Unavailable: ${incomplete.join(", ")}`,
     );
   }
-  return snapshot.events;
+  if (requireAllRelays && incomplete.length > 0) {
+    throw new Error(
+      `Private-list relays did not complete their responses safely: ${incomplete.join(", ")}`,
+    );
+  }
+  return completed.flatMap(({ snapshot }) => snapshot.events);
 }
 
 function deduplicateVerified(events: Iterable<NostrEvent>): NostrEvent[] {
@@ -118,6 +138,7 @@ function deduplicateVerified(events: Iterable<NostrEvent>): NostrEvent[] {
 
 export async function requestPrivateGitRelaySnapshot(
   session: PrivateGitRelaySession,
+  options: { requireAllRelays?: boolean } = {},
 ): Promise<PrivateGitRelaySnapshot> {
   assertCurrentSession(session);
   if (session.identityRelays.length === 0) {
@@ -126,24 +147,22 @@ export async function requestPrivateGitRelaySnapshot(
     );
   }
 
-  const initial = (
-    await Promise.all(
-      session.identityRelays.map((relay) =>
-        requestRelayEvents(relay, [
-          {
-            kinds: [PRIVATE_GIT_RELAY_LIST_KIND],
-            authors: [session.account.pubkey],
-            limit: 10,
-          } as Filter,
-          {
-            kinds: [GLOBAL_VANISH_KIND],
-            authors: [session.account.pubkey],
-            limit: 10,
-          } as Filter,
-        ]),
-      ),
-    )
-  ).flat();
+  const initial = await requestRelayEvents(
+    session.identityRelays,
+    [
+      {
+        kinds: [PRIVATE_GIT_RELAY_LIST_KIND],
+        authors: [session.account.pubkey],
+        limit: 10,
+      } as Filter,
+      {
+        kinds: [GLOBAL_VANISH_KIND],
+        authors: [session.account.pubkey],
+        limit: 10,
+      } as Filter,
+    ],
+    options.requireAllRelays ?? false,
+  );
   assertCurrentSession(session);
 
   const candidates = deduplicateVerified(
@@ -157,19 +176,17 @@ export async function requestPrivateGitRelaySnapshot(
     candidateIds.length === 0
       ? []
       : deduplicateVerified(
-          (
-            await Promise.all(
-              session.identityRelays.map((relay) =>
-                requestRelayEvents(relay, [
-                  {
-                    kinds: [5],
-                    authors: [session.account.pubkey],
-                    "#e": candidateIds,
-                  } as Filter,
-                ]),
-              ),
-            )
-          ).flat(),
+          await requestRelayEvents(
+            session.identityRelays,
+            [
+              {
+                kinds: [5],
+                authors: [session.account.pubkey],
+                "#e": candidateIds,
+              } as Filter,
+            ],
+            options.requireAllRelays ?? false,
+          ),
         );
   assertCurrentSession(session);
 
@@ -210,23 +227,53 @@ function installSnapshot(
   });
 }
 
+function clearRefreshRetry(session: PrivateGitRelaySession): void {
+  if (session.retryTimer !== undefined) clearTimeout(session.retryTimer);
+  session.retryTimer = undefined;
+}
+
+function scheduleRefreshRetry(session: PrivateGitRelaySession): void {
+  if (session.stopped || activeSession !== session || session.retryTimer)
+    return;
+  const delay =
+    REFRESH_RETRY_DELAYS_MS[
+      Math.min(session.retryAttempt, REFRESH_RETRY_DELAYS_MS.length - 1)
+    ];
+  session.retryAttempt += 1;
+  session.retryTimer = setTimeout(() => {
+    session.retryTimer = undefined;
+    void refreshSession(session);
+  }, delay);
+}
+
 async function refreshSession(session: PrivateGitRelaySession): Promise<void> {
-  try {
-    const snapshot = await requestPrivateGitRelaySnapshot(session);
-    installSnapshot(session, snapshot);
-  } catch (error) {
-    if (session.stopped || activeSession !== session) return;
-    privateGitRelayList$.next({
-      generation: session.generation,
-      pubkey: session.account.pubkey,
-      status: "unavailable",
-      relayUrls: [],
-      error:
-        error instanceof Error
-          ? error.message
-          : "The private Git relay list could not be read safely",
-    });
-  }
+  if (session.refreshInFlight) return session.refreshInFlight;
+  const refresh = (async () => {
+    try {
+      const snapshot = await requestPrivateGitRelaySnapshot(session);
+      installSnapshot(session, snapshot);
+      session.retryAttempt = 0;
+      clearRefreshRetry(session);
+    } catch (error) {
+      if (session.stopped || activeSession !== session) return;
+      privateGitRelayList$.next({
+        generation: session.generation,
+        pubkey: session.account.pubkey,
+        status: "unavailable",
+        relayUrls: [],
+        error:
+          error instanceof Error
+            ? error.message
+            : "The private Git relay list could not be read safely",
+      });
+      scheduleRefreshRetry(session);
+    }
+  })().finally(() => {
+    if (session.refreshInFlight === refresh)
+      session.refreshInFlight = undefined;
+  });
+  session.refreshInFlight = refresh;
+  return refresh;
 }
 
 /** Start an account-scoped private-list session and return its cleanup. */
@@ -236,7 +283,10 @@ export function startPrivateGitRelaySession(
   writeRelays: readonly string[],
 ): () => void {
   activeSubscription?.unsubscribe();
-  if (activeSession) activeSession.stopped = true;
+  if (activeSession) {
+    clearRefreshRetry(activeSession);
+    activeSession.stopped = true;
+  }
   const previous = clearPrivateRepositoryScope();
   for (const eventId of previous.eventIds) eventStore.remove(eventId);
   for (const relay of previous.relayUrls) pool.remove(relay);
@@ -253,8 +303,10 @@ export function startPrivateGitRelaySession(
     identityRelays: uniqueRelays(identityRelays),
     writeRelays: uniqueRelays(writeRelays),
     stopped: false,
+    retryAttempt: 0,
   };
   activeSession = session;
+  beginPrivateRelayTrustSession(account.id, account.pubkey, session.generation);
   privateGitRelayList$.next({
     generation: session.generation,
     pubkey: account.pubkey,
@@ -287,6 +339,7 @@ export function startPrivateGitRelaySession(
     });
 
   return () => {
+    clearRefreshRetry(session);
     if (activeSession === session) {
       activeSession = undefined;
       activeSubscription?.unsubscribe();
@@ -371,7 +424,9 @@ async function updatePrivateGitRelayListNow(
   nextRelayUrls: readonly string[],
 ): Promise<void> {
   for (let attempt = 0; attempt < MAX_MERGE_ATTEMPTS; attempt += 1) {
-    const before = await requestPrivateGitRelaySnapshot(session);
+    const before = await requestPrivateGitRelaySnapshot(session, {
+      requireAllRelays: true,
+    });
     const expectedRelayUrls = mergeEditorDelta(
       baseRelayUrls,
       nextRelayUrls,
@@ -391,7 +446,9 @@ async function updatePrivateGitRelayListNow(
     assertCurrentSession(session);
     await publishPrivateGitRelayList(session, event);
 
-    const after = await requestPrivateGitRelaySnapshot(session);
+    const after = await requestPrivateGitRelaySnapshot(session, {
+      requireAllRelays: true,
+    });
     if (
       after.selected?.event.id === event.id &&
       after.selected.relayUrls.length === expectedRelayUrls.length &&
@@ -407,6 +464,23 @@ async function updatePrivateGitRelayListNow(
   throw new Error(
     "The private service list kept changing while it was saved. Review the latest list and try again.",
   );
+}
+
+/** Retry an unavailable encrypted-list read for the active account session. */
+export function retryPrivateGitRelayList(generationToRetry: number): void {
+  const session = activeSession;
+  if (!session || session.generation !== generationToRetry || session.stopped) {
+    return;
+  }
+  clearRefreshRetry(session);
+  session.retryAttempt = 0;
+  privateGitRelayList$.next({
+    generation: session.generation,
+    pubkey: session.account.pubkey,
+    status: "loading",
+    relayUrls: [],
+  });
+  void refreshSession(session);
 }
 
 /** Apply an editor delta to the freshest list and confirm the replacement. */

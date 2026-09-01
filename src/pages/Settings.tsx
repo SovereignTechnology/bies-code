@@ -797,7 +797,7 @@ function privateRelayInputToUrl(value: string): string {
 
 function PrivateGitRelaysSection() {
   const account = useAccount();
-  const { state, save } = usePrivateGitRelays();
+  const { state, retry, save } = usePrivateGitRelays();
   const { toast } = useToast();
   const [draft, setDraft] = useState<{
     base: string[];
@@ -895,12 +895,25 @@ function PrivateGitRelaysSection() {
             Decrypting your private service list...
           </div>
         ) : state.status === "unavailable" ? (
-          <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2.5">
+          <div
+            className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2.5"
+            role="alert"
+          >
             <p className="text-sm font-medium">Private list unavailable</p>
             <p className="mt-1 text-xs text-muted-foreground">
               {state.error ??
                 "The list could not be read safely. Editing is disabled so an unknown list is never replaced with an empty one."}
             </p>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="mt-3 h-8 text-xs"
+              onClick={retry}
+            >
+              <RotateCcw className="mr-1.5 h-3 w-3" />
+              Retry now
+            </Button>
           </div>
         ) : (
           <>

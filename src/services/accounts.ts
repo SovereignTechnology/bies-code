@@ -117,15 +117,12 @@ let isApplyingCrossTabSync = false;
         return eventStore.model(MailboxesModel, pubkey).pipe(
           map((mailboxes) => ({
             account,
-            inboxes: mailboxes?.inboxes ?? [],
             outboxes: mailboxes?.outboxes ?? [],
           })),
           // Only restart when the serialised outbox list actually changes
           distinctUntilChanged(
             (a, b) =>
               a.account.id === b.account.id &&
-              JSON.stringify([...a.inboxes].sort()) ===
-                JSON.stringify([...b.inboxes].sort()) &&
               JSON.stringify([...a.outboxes].sort()) ===
                 JSON.stringify([...b.outboxes].sort()),
           ),
@@ -143,19 +140,12 @@ let isApplyingCrossTabSync = false;
           value.account.pubkey,
           value.outboxes,
         );
-        const declaredIdentityRelays = [
-          ...new Set([...value.inboxes, ...value.outboxes]),
-        ];
         const defaultIdentityRelays = [
           ...new Set([
             ...fallbackRelays.getValue(),
             ...lookupRelays.getValue(),
           ]),
         ];
-        const identityRelays =
-          declaredIdentityRelays.length > 0
-            ? declaredIdentityRelays
-            : defaultIdentityRelays;
         const writeRelays =
           value.outboxes.length > 0
             ? value.outboxes
@@ -164,7 +154,11 @@ let isApplyingCrossTabSync = false;
               : lookupRelays.getValue();
         stopPrivateGitRelays = startPrivateGitRelaySession(
           value.account,
-          identityRelays,
+          // Own replaceable lists are read from NIP-65 write relays. Inbox
+          // relays receive events from other users and need not carry kind
+          // 10318; including them would turn unrelated relay health into a
+          // private-list discovery dependency.
+          writeRelays.length > 0 ? writeRelays : defaultIdentityRelays,
           writeRelays,
         );
       }

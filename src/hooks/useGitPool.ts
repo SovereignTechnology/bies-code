@@ -143,7 +143,7 @@ export function useGitPool(
   const privateRelayList = use$(privateGitRelayList$);
   const cloneUrlsKey = cloneUrls.join(",");
   const privateAccessKey = options.private
-    ? `${privateRelayList.generation}:${privateRelayList.sourceEvent?.id ?? "empty"}:${account?.pubkey ?? "logged-out"}:${cloneUrlsKey}`
+    ? `${privateRelayList.generation}:${account?.pubkey ?? "logged-out"}:${cloneUrlsKey}`
     : "public";
   const [verifiedPrivateAccess, setVerifiedPrivateAccess] =
     useState<VerifiedPrivateGitAccess>();
@@ -158,20 +158,6 @@ export function useGitPool(
         key: privateAccessKey,
         cloneUrls: [],
         error: "Log in to access this private repository's Git data.",
-      });
-      return;
-    }
-    if (privateRelayList.status === "loading") {
-      setVerifiedPrivateAccess({ key: privateAccessKey, cloneUrls: [] });
-      return;
-    }
-    if (privateRelayList.status !== "ready") {
-      setVerifiedPrivateAccess({
-        key: privateAccessKey,
-        cloneUrls: [],
-        error:
-          privateRelayList.error ??
-          "Private Git service discovery is unavailable.",
       });
       return;
     }

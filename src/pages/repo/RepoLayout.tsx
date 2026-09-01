@@ -89,6 +89,7 @@ import {
   repoCIActivity$,
 } from "@/services/ciQueries";
 import { useGitPool } from "@/hooks/useGitPool";
+import { usePrivateGitRelays } from "@/hooks/usePrivateGitRelays";
 import { BuzzRepositoryContext } from "@/contexts/BuzzRepositoryContext";
 // ---------------------------------------------------------------------------
 // RepoLayout
@@ -1146,6 +1147,7 @@ function MaintainerInvitationSafetyBanner({
 // ---------------------------------------------------------------------------
 
 function PrivateRepositoryUnavailable({ reason }: { reason?: string }) {
+  const { state, retry } = usePrivateGitRelays();
   return (
     <div className="container max-w-screen-md px-4 py-16 md:px-8">
       <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-6 text-center">
@@ -1157,9 +1159,24 @@ function PrivateRepositoryUnavailable({ reason }: { reason?: string }) {
           {reason ??
             "Private discovery did not complete safely, so GitWorkshop did not try public relays."}
         </p>
-        <Button asChild variant="outline" className="mt-6">
-          <Link to="/settings">Review Private Git services</Link>
-        </Button>
+        <div className="mt-6 flex flex-wrap justify-center gap-2">
+          {state.status !== "logged-out" && (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={retry}
+              disabled={state.status === "loading"}
+            >
+              {state.status === "loading" && (
+                <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+              )}
+              Retry now
+            </Button>
+          )}
+          <Button asChild variant="outline">
+            <Link to="/settings">Review Private Git services</Link>
+          </Button>
+        </div>
       </div>
     </div>
   );

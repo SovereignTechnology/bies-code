@@ -31,6 +31,10 @@ export async function requestRelaySnapshot(
         paginate: false,
         onRelayEose: () => {
           sawEose = true;
+          // A later successful retry supersedes an earlier transport error.
+          // EOSE is the relay's proof that this attempt delivered a complete
+          // snapshot, so privacy-sensitive callers may trust the result.
+          failed = false;
         },
         onRelayError: () => {
           failed = true;
