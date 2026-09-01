@@ -26,6 +26,12 @@ export interface ResolvedIssueResult {
   search: EventSearchState | undefined;
 }
 
+export interface UseResolvedIssueOptions {
+  extraSearchGroups?: RelayGroupSpec[];
+  retryKey?: number;
+  privateRepository?: boolean;
+}
+
 /**
  * Unified hook for the issue detail page.
  *
@@ -33,8 +39,7 @@ export interface ResolvedIssueResult {
  * @param repoRelayGroup  - Base relay group from useResolvedRepository
  * @param extraRelaysForMaintainerMailboxCoverage - Delta relay group for outbox mode
  * @param maintainers     - Effective maintainer set from repo resolution
- * @param extraSearchGroups - Additional relay groups for user-triggered expansion
- * @param retryKey        - Increment to force a fresh search across all relays
+ * @param options         - Search expansion, retry, and private transport flags
  */
 export function useResolvedIssue(
   issueId: string | undefined,
@@ -42,11 +47,10 @@ export function useResolvedIssue(
   extraRelaysForMaintainerMailboxCoverage: RelayGroup | undefined,
   maintainers: Set<string> | undefined,
   roleHistory?: RepositoryRoleHistory,
-  extraSearchGroups?: RelayGroupSpec[],
-  retryKey?: number,
-  privateRepository = false,
+  options: UseResolvedIssueOptions = {},
 ): ResolvedIssueResult {
   const store = useEventStore();
+  const { extraSearchGroups, retryKey, privateRepository = false } = options;
 
   const { maintainerKey, search } = useNip34ItemDetailLoader(
     issueId,

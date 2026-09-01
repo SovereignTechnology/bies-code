@@ -364,10 +364,11 @@ export default function PRPage() {
     selectedMaintainers,
     confirmedMaintainers,
     repo?.roleHistory,
-    undefined, // options
-    extraSearchGroups,
-    retryKey,
-    repo?.isPrivate ?? false,
+    {
+      extraSearchGroups,
+      retryKey,
+      privateRepository: repo?.isPrivate ?? false,
+    },
   );
   const mentionedItems = useMentionedNip34Items(pr?.rootEvent.id);
   const timelineEntries = useMemo(() => {
