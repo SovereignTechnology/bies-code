@@ -114,6 +114,7 @@ export function installPrivateServiceRelayHint(
 
   const relay = normalizeUrl(relayUrl);
   const existing = privateRelaySessions.get(relay);
+  let changed = false;
   if (existing) {
     if (
       existing.accountId !== accountId ||
@@ -121,7 +122,10 @@ export function installPrivateServiceRelayHint(
     ) {
       return false;
     }
-    existing.sources.add("hint");
+    if (!existing.sources.has("hint")) {
+      existing.sources.add("hint");
+      changed = true;
+    }
   } else {
     privateRelaySessions.set(relay, {
       accountId,
@@ -129,8 +133,9 @@ export function installPrivateServiceRelayHint(
       generation,
       sources: new Set(["hint"]),
     });
+    changed = true;
   }
-  emitRevision();
+  if (changed) emitRevision();
   return true;
 }
 
