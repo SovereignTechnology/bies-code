@@ -1022,10 +1022,11 @@ function PrivateGitRelaysSection() {
                   {inputError}
                 </p>
               )}
-              <p className="px-0.5 text-xs text-muted-foreground">
-                Saving an empty list publishes an encrypted [] replacement.
-                Manual entries are not inferred from repositories you open.
-              </p>
+              {displayed.length === 0 && (
+                <p className="px-0.5 text-xs text-muted-foreground">
+                  Saving an empty list publishes an encrypted [] replacement.
+                </p>
+              )}
             </div>
 
             {dirty && (
