@@ -572,6 +572,35 @@ export class GitHttpClient {
     return gitAuthorizationHeaders(this.authorizationProvider, repoUrl, signal);
   }
 
+  /** Retry one rejected request with a newly signed short-lived credential. */
+  private async getInfoRefsWithAuthorizationRetry(
+    repoUrl: string,
+    effectiveUrl: string,
+    signal: AbortSignal,
+  ): Promise<InfoRefsUploadPackResponse> {
+    try {
+      return await libGetInfoRefs(
+        effectiveUrl,
+        await this.getHeaders(repoUrl, signal),
+        signal,
+      );
+    } catch (error) {
+      const status =
+        error && typeof error === "object" && "status" in error
+          ? (error as { status?: unknown }).status
+          : undefined;
+      if (this.authorizationProvider && (status === 401 || status === 403)) {
+        this.authorizationProvider.invalidateAuthorization(repoUrl);
+        return libGetInfoRefs(
+          effectiveUrl,
+          await this.getHeaders(repoUrl, signal),
+          signal,
+        );
+      }
+      throw error;
+    }
+  }
+
   /** Couple caller cancellation to the lifetime of the account-scoped pool. */
   private operationSignal(signal: AbortSignal): AbortSignal {
     return AbortSignal.any([signal, this.lifecycleAbort.signal]);
@@ -651,9 +680,9 @@ export class GitHttpClient {
       if (cached) return cached;
 
       try {
-        const info = await libGetInfoRefs(
+        const info = await this.getInfoRefsWithAuthorizationRetry(
+          url,
           effectiveUrl,
-          await this.getHeaders(url, lifecycleSignal),
           lifecycleSignal,
         );
         // libGetInfoRefs does not check the HTTP status code — it calls
@@ -853,14 +882,17 @@ export class GitHttpClient {
               name,
               serverCaps,
               signal,
+              headers,
             );
             if (signal.aborted) return null;
             if (!entry || entry.isDir) continue;
             const blobData = await this.fetchBlobByHash(
+              url,
               effectiveUrl,
               entry.hash,
               serverCaps,
               signal,
+              headers,
             );
             if (signal.aborted) return null;
             if (blobData) {
@@ -904,6 +936,7 @@ export class GitHttpClient {
                 name,
                 serverCaps,
                 signal,
+                headers,
               );
               if (!entry || entry.isDir) throw new Error(`${name} not found`);
               const cachedBlob = await this.cache.getBlob(entry.hash);
@@ -913,10 +946,12 @@ export class GitHttpClient {
                 return { name, content: text };
               }
               const blobData = await this.fetchBlobByHash(
+                url,
                 effectiveUrl,
                 entry.hash,
                 serverCaps,
                 signal,
+                headers,
               );
               if (!blobData) throw new Error(`${name} blob missing`);
               const text = new TextDecoder("utf-8").decode(blobData);
@@ -1243,6 +1278,7 @@ export class GitHttpClient {
 
     try {
       const data = await this.fetchBlobByHash(
+        url,
         effectiveUrl,
         blobHash,
         serverCaps,
@@ -1496,6 +1532,7 @@ export class GitHttpClient {
    * Checks L1/L2 cache first, then fetches from the server.
    */
   private async fetchBlobByHash(
+    repoUrl: string,
     effectiveUrl: string,
     hash: string,
     serverCaps: string[],
@@ -1513,7 +1550,7 @@ export class GitHttpClient {
       hash,
       serverCaps,
       signal,
-      headers ?? (await this.getHeaders(effectiveUrl, signal)),
+      headers ?? (await this.getHeaders(repoUrl, signal)),
     );
     if (signal.aborted) return null;
     if (!obj) return null;

@@ -54,7 +54,10 @@ import {
 import type { NostrEvent } from "nostr-tools";
 import type { PackableObject } from "@/lib/git-packfile";
 import { ZERO_HASH, type RefUpdate } from "@/lib/git-push";
-import type { GitHttpAuthorizationProvider } from "@/lib/git-http-auth";
+import {
+  UnverifiedPrivateGitRootError,
+  type GitHttpAuthorizationProvider,
+} from "@/lib/git-http-auth";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -2880,6 +2883,8 @@ export class GitGraspPool {
    *   the pool — they are only used for this single operation invocation.
    *   Intended for PR/PR-Update clone URLs that may host commits not yet
    *   mirrored to the repo's main git servers.
+   *   Authenticated pools reject an extra URL unless the authorization
+   *   provider independently verified that exact repository root.
    */
   private async withFallback<T>(
     signal: AbortSignal,
@@ -2893,6 +2898,12 @@ export class GitGraspPool {
     const extraUrls = fallbackUrls
       ? fallbackUrls.filter((u) => !poolUrlSet.has(u) && !isNonHttpUrl(u))
       : [];
+    if (this.authorizationProvider) {
+      const unverified = extraUrls.find(
+        (url) => !this.authorizationProvider?.canAuthorize(url),
+      );
+      if (unverified) throw new UnverifiedPrivateGitRootError(unverified);
+    }
     const urls = [...poolUrls, ...extraUrls];
 
     if (urls.length === 0) return null;

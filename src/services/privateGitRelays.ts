@@ -16,6 +16,8 @@ import {
 } from "@/lib/private-git-relays";
 import { resilientSubscription } from "@/lib/resilientSubscription";
 import { requestRelaySnapshot } from "@/lib/relaySnapshot";
+import { clearGitHttpAuthorizationProviders } from "@/lib/git-http-auth";
+import { clearPrivateGraspVerificationCache } from "@/lib/private-grasp";
 import { normalizeUrl } from "@/lib/url";
 import { eventStore, pool } from "@/services/nostr";
 import {
@@ -196,6 +198,8 @@ function installSnapshot(
   if (removedRelays.length > 0) {
     clearPrivateRegistry(session.account.pubkey);
     clearPrivateGitObjectCache(session.account.pubkey);
+    clearGitHttpAuthorizationProviders(session.account.pubkey);
+    clearPrivateGraspVerificationCache(session.account.pubkey);
   }
   privateGitRelayList$.next({
     generation: session.generation,
@@ -239,6 +243,8 @@ export function startPrivateGitRelaySession(
   if (activeSession) {
     clearPrivateRegistry(activeSession.account.pubkey);
     clearPrivateGitObjectCache(activeSession.account.pubkey);
+    clearGitHttpAuthorizationProviders(activeSession.account.pubkey);
+    clearPrivateGraspVerificationCache(activeSession.account.pubkey);
   }
 
   const session: PrivateGitRelaySession = {
@@ -290,6 +296,8 @@ export function startPrivateGitRelaySession(
       for (const relay of cleared.relayUrls) pool.remove(relay);
       clearPrivateRegistry(session.account.pubkey);
       clearPrivateGitObjectCache(session.account.pubkey);
+      clearGitHttpAuthorizationProviders(session.account.pubkey);
+      clearPrivateGraspVerificationCache(session.account.pubkey);
       privateGitRelayList$.next({
         generation: ++generation,
         status: "logged-out",

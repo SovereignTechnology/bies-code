@@ -28,13 +28,14 @@ import type {
 import type { RepoStateRef } from "@/lib/nip34";
 import { useAccount } from "@/hooks/useAccount";
 import {
-  createGitHttpAuthorizationProvider,
+  getOrCreateGitHttpAuthorizationProvider,
   privateGitServiceRelayUrl,
   type GitHttpAuthorizationProvider,
 } from "@/lib/git-http-auth";
 import { classifyPrivateGitServiceRelay } from "@/lib/grasp";
-import { verifyPrivateGraspEndpoint } from "@/lib/private-grasp";
+import { verifyPrivateGraspEndpointCached } from "@/lib/private-grasp";
 import { privateGitRelayList$ } from "@/services/privateGitRelays";
+import { isTrustedPrivateRepositoryRelay } from "@/services/privateRepositoryScope";
 import { use$ } from "@/hooks/use$";
 
 // ---------------------------------------------------------------------------
@@ -66,7 +67,10 @@ export interface UseGitPoolOptions {
 // Initial state helper
 // ---------------------------------------------------------------------------
 
-function makeInitialState(hasUrls: boolean): PoolState {
+function makeInitialState(
+  hasUrls: boolean,
+  error: string | null = null,
+): PoolState {
   return {
     urls: {},
     winnerUrl: null,
@@ -82,7 +86,7 @@ function makeInitialState(hasUrls: boolean): PoolState {
     authoritativeHead: null,
     viewSource: "authoritative",
     effectiveRefs: {},
-    error: null,
+    error,
     lastCheckedAt: null,
     crossRefDiscrepancies: [],
     retryAt: null,
@@ -102,6 +106,8 @@ export interface UseGitPoolResult {
    * null only when cloneUrls is empty.
    */
   pool: GitGraspPool | null;
+  /** Why an authenticated private Git pool could not be opened. */
+  privateAccessError?: string;
 }
 
 interface KeyedPoolState {
@@ -112,7 +118,8 @@ interface KeyedPoolState {
 interface VerifiedPrivateGitAccess {
   key: string;
   cloneUrls: string[];
-  authorizationProvider: GitHttpAuthorizationProvider;
+  authorizationProvider?: GitHttpAuthorizationProvider;
+  error?: string;
 }
 
 /**
@@ -142,63 +149,125 @@ export function useGitPool(
     useState<VerifiedPrivateGitAccess>();
 
   useEffect(() => {
-    if (
-      !options.private ||
-      !account ||
-      privateRelayList.status !== "ready" ||
-      cloneUrls.length === 0
-    ) {
+    if (!options.private) {
       setVerifiedPrivateAccess(undefined);
+      return;
+    }
+    if (!account) {
+      setVerifiedPrivateAccess({
+        key: privateAccessKey,
+        cloneUrls: [],
+        error: "Log in to access this private repository's Git data.",
+      });
+      return;
+    }
+    if (privateRelayList.status === "loading") {
+      setVerifiedPrivateAccess({ key: privateAccessKey, cloneUrls: [] });
+      return;
+    }
+    if (privateRelayList.status !== "ready") {
+      setVerifiedPrivateAccess({
+        key: privateAccessKey,
+        cloneUrls: [],
+        error:
+          privateRelayList.error ??
+          "Private Git service discovery is unavailable.",
+      });
+      return;
+    }
+    if (cloneUrls.length === 0) {
+      setVerifiedPrivateAccess({
+        key: privateAccessKey,
+        cloneUrls: [],
+        error: "This private repository does not announce a Git server.",
+      });
       return;
     }
 
     const controller = new AbortController();
     void (async () => {
-      const classifications = await Promise.allSettled(
-        cloneUrls.map(async (cloneUrl) => {
-          const relayUrl = privateGitServiceRelayUrl(cloneUrl);
-          return relayUrl &&
-            privateRelayList.relayUrls.includes(relayUrl) &&
-            (await classifyPrivateGitServiceRelay(relayUrl))
-            ? cloneUrl
-            : undefined;
-        }),
-      );
-      const classifiedRoots = classifications.flatMap((result) =>
-        result.status === "fulfilled" && result.value ? [result.value] : [],
-      );
-      if (controller.signal.aborted || classifiedRoots.length === 0) return;
+      try {
+        const classifications = await Promise.allSettled(
+          cloneUrls.map(async (cloneUrl) => {
+            const relayUrl = privateGitServiceRelayUrl(cloneUrl);
+            return relayUrl &&
+              isTrustedPrivateRepositoryRelay(relayUrl) &&
+              (await classifyPrivateGitServiceRelay(relayUrl))
+              ? cloneUrl
+              : undefined;
+          }),
+        );
+        const classifiedRoots = classifications.flatMap((result) =>
+          result.status === "fulfilled" && result.value ? [result.value] : [],
+        );
+        if (controller.signal.aborted) return;
+        if (classifiedRoots.length === 0) {
+          setVerifiedPrivateAccess({
+            key: privateAccessKey,
+            cloneUrls: [],
+            error:
+              "No announced Git server could be verified as an admitted GRASP-08 or Buzz private service.",
+          });
+          return;
+        }
 
-      const candidateProvider = createGitHttpAuthorizationProvider(
-        account.pubkey,
-        account.signer,
-        classifiedRoots,
-        String(privateRelayList.generation),
-      );
-      const challenges = await Promise.allSettled(
-        classifiedRoots.map(async (cloneUrl) => {
-          await verifyPrivateGraspEndpoint(
-            cloneUrl,
-            candidateProvider,
-            controller.signal,
-          );
-          return cloneUrl;
-        }),
-      );
-      const acceptedRoots = challenges.flatMap((result) =>
-        result.status === "fulfilled" ? [result.value] : [],
-      );
-      if (controller.signal.aborted || acceptedRoots.length === 0) return;
-      setVerifiedPrivateAccess({
-        key: privateAccessKey,
-        cloneUrls: acceptedRoots,
-        authorizationProvider: createGitHttpAuthorizationProvider(
+        const candidateProvider = getOrCreateGitHttpAuthorizationProvider(
           account.pubkey,
           account.signer,
-          acceptedRoots,
+          classifiedRoots,
           String(privateRelayList.generation),
-        ),
-      });
+        );
+        const challenges = await Promise.allSettled(
+          classifiedRoots.map(async (cloneUrl) => {
+            await verifyPrivateGraspEndpointCached(
+              cloneUrl,
+              candidateProvider,
+              controller.signal,
+            );
+            return cloneUrl;
+          }),
+        );
+        const acceptedRoots = challenges.flatMap((result) =>
+          result.status === "fulfilled" ? [result.value] : [],
+        );
+        if (controller.signal.aborted) return;
+        if (acceptedRoots.length === 0) {
+          const firstFailure = challenges.find(
+            (result) => result.status === "rejected",
+          );
+          const reason =
+            firstFailure?.status === "rejected" &&
+            firstFailure.reason instanceof Error
+              ? ` ${firstFailure.reason.message}`
+              : "";
+          setVerifiedPrivateAccess({
+            key: privateAccessKey,
+            cloneUrls: [],
+            error: `This account was not accepted by any announced private Git server.${reason}`,
+          });
+          return;
+        }
+        setVerifiedPrivateAccess({
+          key: privateAccessKey,
+          cloneUrls: acceptedRoots,
+          authorizationProvider: getOrCreateGitHttpAuthorizationProvider(
+            account.pubkey,
+            account.signer,
+            acceptedRoots,
+            String(privateRelayList.generation),
+          ),
+        });
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        setVerifiedPrivateAccess({
+          key: privateAccessKey,
+          cloneUrls: [],
+          error:
+            error instanceof Error
+              ? error.message
+              : "Private Git access verification failed.",
+        });
+      }
     })();
 
     return () => controller.abort();
@@ -212,10 +281,11 @@ export function useGitPool(
       ? verifiedPrivateAccess
       : undefined;
   const authorizationProvider = activePrivateAccess?.authorizationProvider;
+  const privateAccessError = activePrivateAccess?.error;
   const effectiveCloneUrls = options.private
     ? (activePrivateAccess?.cloneUrls ?? [])
     : cloneUrls;
-  const urlsKey = `${authorizationProvider?.accessScope ?? "public"}:${effectiveCloneUrls.join(",")}`;
+  const urlsKey = `${authorizationProvider?.accessScope ?? "public"}:${effectiveCloneUrls.join(",")}:${privateAccessError ?? ""}`;
 
   // Stable key for the state event so we can detect changes without
   // deep-comparing the refs array on every render.
@@ -257,7 +327,10 @@ export function useGitPool(
 
   const [poolSnapshot, setPoolSnapshot] = useState<KeyedPoolState>(() => ({
     key: urlsKey,
-    state: makeInitialState(effectiveCloneUrls.length > 0),
+    state: makeInitialState(
+      effectiveCloneUrls.length > 0,
+      privateAccessError ?? null,
+    ),
   }));
 
   // Stable pool ref — updated inside the effect, read by callers.
@@ -266,7 +339,10 @@ export function useGitPool(
 
   useEffect(() => {
     if (effectiveCloneUrls.length === 0) {
-      setPoolSnapshot({ key: urlsKey, state: makeInitialState(false) });
+      setPoolSnapshot({
+        key: urlsKey,
+        state: makeInitialState(false, privateAccessError ?? null),
+      });
       stateSubjectRef.current = null;
       poolRef.current = null;
       poolKeyRef.current = null;
@@ -311,8 +387,11 @@ export function useGitPool(
   const poolState =
     poolSnapshot.key === urlsKey
       ? poolSnapshot.state
-      : makeInitialState(effectiveCloneUrls.length > 0);
+      : makeInitialState(
+          effectiveCloneUrls.length > 0,
+          privateAccessError ?? null,
+        );
   const pool = poolKeyRef.current === urlsKey ? poolRef.current : null;
 
-  return { poolState, pool };
+  return { poolState, pool, privateAccessError };
 }

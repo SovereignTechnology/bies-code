@@ -7,7 +7,20 @@ import { graspCloneUrlServiceAddress } from "@/lib/nip34";
 export interface GitHttpAuthorizationProvider {
   /** Separates authenticated pools and their in-memory caches by account. */
   readonly accessScope: string;
+  /** Whether credentials may be attached to this exact repository root. */
+  canAuthorize(repoUrl: string): boolean;
   getAuthorization(repoUrl: string, signal?: AbortSignal): Promise<string>;
+  /** Discard a cached token after an authentication rejection. */
+  invalidateAuthorization(repoUrl: string): void;
+}
+
+export class UnverifiedPrivateGitRootError extends Error {
+  constructor(repoUrl: string) {
+    super(
+      `Private Git access to ${repoUrl} was refused because that repository root was not independently verified`,
+    );
+    this.name = "UnverifiedPrivateGitRootError";
+  }
 }
 
 interface CachedCredential {
@@ -19,6 +32,7 @@ interface CachedCredential {
 // transport and clock skew, and derive expiry from the timestamp the signer
 // actually returned (remote signers can take a noticeable amount of time).
 const CREDENTIAL_EXPIRY_MARGIN_MS = 5_000;
+const authorizationProviders = new Map<string, GitHttpAuthorizationProvider>();
 
 function abortError(signal: AbortSignal): Error {
   return signal.reason instanceof Error
@@ -125,6 +139,13 @@ export function createGitHttpAuthorizationProvider(
 
   return {
     accessScope: `private:${pubkey}:${sessionScope ?? "ephemeral"}:${canonicalRoots.sort().join("|")}`,
+    canAuthorize(repoUrl: string): boolean {
+      try {
+        return allowedRoots.has(canonicalGitRepositoryUrl(repoUrl));
+      } catch {
+        return false;
+      }
+    },
     async getAuthorization(
       repoUrl: string,
       signal?: AbortSignal,
@@ -132,9 +153,7 @@ export function createGitHttpAuthorizationProvider(
       throwIfAborted(signal);
       const canonicalUrl = canonicalGitRepositoryUrl(repoUrl);
       if (!allowedRoots.has(canonicalUrl)) {
-        throw new Error(
-          "Refusing to attach private Git authorization to an unverified repository root",
-        );
+        throw new UnverifiedPrivateGitRootError(canonicalUrl);
       }
       const cached = cache.get(canonicalUrl);
       if (cached && cached.expiresAt > Date.now()) {
@@ -151,9 +170,7 @@ export function createGitHttpAuthorizationProvider(
           canonicalUrl,
           "GET",
           async (template) => {
-            throwIfAborted(signal);
             const event = await signer.signEvent(template);
-            throwIfAborted(signal);
             const urls = event.tags.filter(([name]) => name === "u");
             const methods = event.tags.filter(([name]) => name === "method");
             if (
@@ -179,7 +196,6 @@ export function createGitHttpAuthorizationProvider(
           true,
         )
         .then((authorization) => {
-          throwIfAborted(signal);
           if (signedCreatedAt !== undefined) {
             const expiresAt = Math.min(
               (signedCreatedAt + 60) * 1_000 - CREDENTIAL_EXPIRY_MARGIN_MS,
@@ -196,7 +212,40 @@ export function createGitHttpAuthorizationProvider(
       inFlight.set(canonicalUrl, credential);
       return waitForAuthorization(credential, signal);
     },
+    invalidateAuthorization(repoUrl: string): void {
+      const canonicalUrl = canonicalGitRepositoryUrl(repoUrl);
+      if (!allowedRoots.has(canonicalUrl)) {
+        throw new UnverifiedPrivateGitRootError(canonicalUrl);
+      }
+      cache.delete(canonicalUrl);
+    },
   };
+}
+
+/** Reuse credentials and signing work across hook instances in one session. */
+export function getOrCreateGitHttpAuthorizationProvider(
+  pubkey: string,
+  signer: ISigner,
+  repositoryUrls: readonly string[],
+  sessionScope?: string,
+): GitHttpAuthorizationProvider {
+  const candidate = createGitHttpAuthorizationProvider(
+    pubkey,
+    signer,
+    repositoryUrls,
+    sessionScope,
+  );
+  const existing = authorizationProviders.get(candidate.accessScope);
+  if (existing) return existing;
+  authorizationProviders.set(candidate.accessScope, candidate);
+  return candidate;
+}
+
+export function clearGitHttpAuthorizationProviders(pubkey: string): void {
+  const prefix = `private:${pubkey}:`;
+  for (const key of authorizationProviders.keys()) {
+    if (key.startsWith(prefix)) authorizationProviders.delete(key);
+  }
 }
 
 export async function gitAuthorizationHeaders(

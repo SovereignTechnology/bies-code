@@ -623,7 +623,7 @@ function RepoLayoutResolved({
   }, [repoPageSuffix]);
 
   const cloneUrls = repo?.cloneUrls ?? [];
-  const { pool: commitLinkPool } = useGitPool(cloneUrls, {
+  const { pool: commitLinkPool, privateAccessError } = useGitPool(cloneUrls, {
     private: isPrivate,
   });
 
@@ -914,6 +914,18 @@ function RepoLayoutResolved({
               ]),
             ]}
           />
+        )}
+
+        {repo && isPrivate && privateAccessError && (
+          <div
+            className="container max-w-screen-xl px-4 pt-4 md:px-8"
+            role="alert"
+          >
+            <div className="flex gap-3 rounded-lg border border-destructive/40 bg-destructive/5 p-4 text-sm text-destructive">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <p>{privateAccessError}</p>
+            </div>
+          </div>
         )}
 
         {/* Page content */}

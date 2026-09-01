@@ -3,11 +3,13 @@ import { AuthRequiredError, Relay } from "applesauce-relay";
 import { filter, firstValueFrom, take, timeout } from "rxjs";
 
 import {
+  canonicalGitRepositoryUrl,
   gitAuthorizationHeaders,
   type GitHttpAuthorizationProvider,
 } from "@/lib/git-http-auth";
 
 const RELAY_PREFLIGHT_TIMEOUT_MS = 10_000;
+const endpointVerifications = new Map<string, Promise<void>>();
 
 function boundedSignal(signal?: AbortSignal): AbortSignal {
   const timeoutSignal = AbortSignal.timeout(RELAY_PREFLIGHT_TIMEOUT_MS);
@@ -55,6 +57,60 @@ export async function verifyPrivateGraspEndpoint(
     throw new Error(
       `${repoUrl} did not accept this account as a private GRASP member (authenticated GET returned ${authenticated.status})`,
     );
+  }
+}
+
+function waitForVerification(
+  verification: Promise<void>,
+  signal?: AbortSignal,
+): Promise<void> {
+  if (!signal) return verification;
+  if (signal.aborted) {
+    return Promise.reject(new DOMException("Aborted", "AbortError"));
+  }
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(new DOMException("Aborted", "AbortError"));
+    signal.addEventListener("abort", onAbort, { once: true });
+    verification.then(
+      () => {
+        signal.removeEventListener("abort", onAbort);
+        if (signal.aborted) reject(new DOMException("Aborted", "AbortError"));
+        else resolve();
+      },
+      (error) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
+/** Share the authenticated preflight across pools without sharing aborts. */
+export function verifyPrivateGraspEndpointCached(
+  repoUrl: string,
+  authorizationProvider: GitHttpAuthorizationProvider,
+  signal?: AbortSignal,
+): Promise<void> {
+  const canonicalUrl = canonicalGitRepositoryUrl(repoUrl);
+  const key = `${authorizationProvider.accessScope}\u0000${canonicalUrl}`;
+  let verification = endpointVerifications.get(key);
+  if (!verification) {
+    verification = verifyPrivateGraspEndpoint(
+      canonicalUrl,
+      authorizationProvider,
+    ).catch((error: unknown) => {
+      endpointVerifications.delete(key);
+      throw error;
+    });
+    endpointVerifications.set(key, verification);
+  }
+  return waitForVerification(verification, signal);
+}
+
+export function clearPrivateGraspVerificationCache(pubkey: string): void {
+  const prefix = `private:${pubkey}:`;
+  for (const key of endpointVerifications.keys()) {
+    if (key.startsWith(prefix)) endpointVerifications.delete(key);
   }
 }
 
