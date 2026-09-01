@@ -12,11 +12,17 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { GitBranch, Search, ExternalLink, Loader2, User } from "lucide-react";
+import {
+  GitBranch,
+  Search,
+  ExternalLink,
+  Loader2,
+  Lock,
+  User,
+} from "lucide-react";
 import type { ResolvedRepo } from "@/lib/nip34";
 import { formatDistanceToNow } from "date-fns";
-import { use$ } from "@/hooks/use$";
-import { gitIndexRelays } from "@/services/settings";
+import { isPrivateRepositoryCoordinate } from "@/services/privateRepositoryScope";
 
 interface RepositoriesPageProps {
   /** When set, query this relay instead of the user's configured git index relays. */
@@ -191,10 +197,7 @@ export default function RepositoriesPage({
 
           {/* Relay pills — show which relays are being searched */}
           <div className="space-y-1.5">
-            <RelayPillsRow
-              relayOverride={relayOverride}
-              relayStatuses={relayStatuses}
-            />
+            <RelayPillsRow relayStatuses={relayStatuses} />
             {Object.keys(profileRelayStatuses).length > 0 && (
               <RelayStatusPillsRow
                 label="User Profile Search:"
@@ -291,6 +294,8 @@ function getVisibleMaintainers(repo: ResolvedRepo): string[] {
 function RepoCard({ repo, isUserMatch }: RepoCardProps) {
   const repoPath = useDefaultRepoPath(repo);
   const visibleMaintainers = getVisibleMaintainers(repo);
+  const isPrivate =
+    repo.isPrivate || isPrivateRepositoryCoordinate(repo.selectedCoordinate);
   const timeAgo = formatDistanceToNow(new Date(repo.updatedAt * 1000), {
     addSuffix: true,
   });
@@ -312,6 +317,15 @@ function RepoCard({ repo, isUserMatch }: RepoCardProps) {
                 <h3 className="font-semibold text-base truncate group-hover:text-pink-600 dark:group-hover:text-pink-400 transition-colors">
                   {repo.name}
                 </h3>
+                {isPrivate && (
+                  <span
+                    className="inline-flex items-center gap-1 rounded-full border border-border/60 bg-muted/60 px-1.5 py-0.5 text-[10px] text-muted-foreground shrink-0"
+                    title="Discovered through your private Git services"
+                  >
+                    <Lock className="h-2.5 w-2.5" />
+                    private
+                  </span>
+                )}
                 {isUserMatch && (
                   <span
                     className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-blue-500/10 text-blue-500 border border-blue-500/20 shrink-0"
@@ -418,15 +432,11 @@ function RelayPill({
 
 /** Row of relay pills shown below the search box. */
 function RelayPillsRow({
-  relayOverride,
   relayStatuses,
 }: {
-  relayOverride?: string[];
   relayStatuses: Record<string, RelayQueryStatus>;
 }) {
-  const liveGitIndexRelays =
-    use$(() => gitIndexRelays, []) ?? gitIndexRelays.getValue();
-  const relays = relayOverride ?? liveGitIndexRelays;
+  const relays = Object.keys(relayStatuses);
 
   if (relays.length === 0) return null;
 

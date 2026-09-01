@@ -1,7 +1,9 @@
 import { use$ } from "./use$";
 import { useEventStore } from "./useEventStore";
 import { mapEventsToStore } from "applesauce-core";
+import { useActiveAccount } from "applesauce-react/hooks";
 import { onlyEvents } from "applesauce-relay";
+import { filter } from "rxjs/operators";
 import { pool } from "@/services/nostr";
 import { resilientSubscription } from "@/lib/resilientSubscription";
 import { REPO_KIND, type ResolvedRepo } from "@/lib/nip34";
@@ -9,6 +11,10 @@ import { gitIndexRelays } from "@/services/settings";
 import { RepositoryListModel } from "@/models/RepositoryListModel";
 import type { Filter } from "applesauce-core/helpers";
 import type { Observable } from "rxjs";
+import {
+  prepareDiscoveredRepositoryEvent,
+  privateGitRelayList$,
+} from "@/services/privateGitRelays";
 
 /**
  * Fetch repository announcements authored by a specific user and return them
@@ -29,19 +35,38 @@ export function useUserRepositories(
   pubkey: string | undefined,
 ): ResolvedRepo[] | undefined {
   const store = useEventStore();
+  const account = useActiveAccount();
+  const liveGitIndexRelays =
+    use$(() => gitIndexRelays, []) ?? gitIndexRelays.getValue();
+  const privateRelayState = use$(privateGitRelayList$);
+  const privateRelays =
+    account &&
+    privateRelayState.status === "ready" &&
+    privateRelayState.pubkey === account.pubkey
+      ? privateRelayState.relayUrls
+      : [];
+  const repositoryRelays = [
+    ...new Set([...liveGitIndexRelays, ...privateRelays]),
+  ];
+  const repositoryRelayKey = repositoryRelays.join(",");
 
-  // Layer 1: fetch only this user's repo announcements from the relay.
+  // Layer 1: fetch only this user's repo announcements from public indexes and
+  // the active account's private services.
   // Filtering by authors ensures the user is the selected maintainer anchor
   // for every result, which is the correct behaviour for a user profile page.
   use$(() => {
     if (!pubkey) return undefined;
     return resilientSubscription(
       pool,
-      gitIndexRelays,
+      repositoryRelays,
       [{ kinds: [REPO_KIND], authors: [pubkey] } as Filter],
       { paginate: true },
-    ).pipe(onlyEvents(), mapEventsToStore(store));
-  }, [pubkey, store]);
+    ).pipe(
+      onlyEvents(),
+      filter((event) => prepareDiscoveredRepositoryEvent(event, privateRelays)),
+      mapEventsToStore(store),
+    );
+  }, [pubkey, store, repositoryRelayKey]);
 
   // Layer 2: subscribe to the model scoped to this pubkey.
   return use$(() => {

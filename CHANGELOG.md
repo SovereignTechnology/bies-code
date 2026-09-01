@@ -56,7 +56,9 @@
 - Add GRASP-08 and basic Buzz private-repository support with an editable
   NIP-44-encrypted service list, private-first repository discovery,
   account-scoped NIP-42/NIP-98 authentication, isolated Git caches, and strict
-  repository-relay confinement for private collaboration events.
+  repository-relay confinement for private collaboration events. Search the
+  listed private services alongside public indexes and include their repositories
+  in the dashboard and repository browser.
 - Give GRASP relays a dedicated service view for access policy, hosted
   collaboration totals, protocol metadata, and repository search, linked to
   but kept distinct from the matching CI coordinator profile.

@@ -198,6 +198,7 @@ async function probePrivateRepository(
       };
     }
     const repositoryRelays = uniqueRelayUrls([
+      ...installedRepositoryRelays,
       ...resolved.relays,
       ...getRepoRelays(validKnownAnnouncement),
     ]);

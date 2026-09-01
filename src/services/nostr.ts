@@ -54,12 +54,14 @@ import {
 } from "./settings";
 import {
   ISSUE_KIND,
+  REPO_KIND,
   PR_ROOT_KINDS,
   LEGACY_REPLY_KINDS,
   COVER_NOTE_KIND,
   parseRepoCoordinate,
   isRepositoryRootItem,
   resolveChain,
+  getRepoIsPrivate,
   roleHistoryCacheKey,
   type RepositoryRoleHistory,
 } from "@/lib/nip34";
@@ -208,7 +210,10 @@ pool.add$.subscribe((relay) => {
     timer(reconnectDelayMs(attempts));
 
   // Mark private-relay provenance before EventStore consumers observe the
-  // event. Cache persistence consults this synchronous quarantine.
+  // event. Cache persistence consults this synchronous quarantine. A private
+  // service may also mirror public repository announcements, so kind:30617
+  // needs an explicit ngit/Buzz private marker; coordinate-specific legacy
+  // discovery marks its stronger evidence before EventStore insertion.
   relay.message$.subscribe((message: unknown) => {
     if (
       !isTrustedPrivateRepositoryRelay(relay.url) ||
@@ -218,12 +223,14 @@ pool.add$.subscribe((relay) => {
       return;
     }
     const event = message[2];
-    if (
-      event &&
-      typeof event === "object" &&
-      verifyEvent(event as NostrEvent)
-    ) {
-      markPrivateRelayEvent(event as NostrEvent);
+    if (event && typeof event === "object") {
+      const nostrEvent = event as NostrEvent;
+      if (
+        verifyEvent(nostrEvent) &&
+        (nostrEvent.kind !== REPO_KIND || getRepoIsPrivate(nostrEvent))
+      ) {
+        markPrivateRelayEvent(nostrEvent);
+      }
     }
   });
 });

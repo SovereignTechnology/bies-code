@@ -1,5 +1,5 @@
 import type { IAccount } from "applesauce-accounts";
-import type { Filter } from "applesauce-core/helpers";
+import { isFromRelay, type Filter } from "applesauce-core/helpers";
 import { onlyEvents } from "applesauce-relay";
 import type { NostrEvent } from "nostr-tools";
 import { verifyEvent } from "nostr-tools";
@@ -18,10 +18,12 @@ import { resilientSubscription } from "@/lib/resilientSubscription";
 import { requestRelaySnapshot } from "@/lib/relaySnapshot";
 import { clearGitHttpAuthorizationProviders } from "@/lib/git-http-auth";
 import { clearPrivateGraspVerificationCache } from "@/lib/private-grasp";
+import { getRepoIsPrivate } from "@/lib/nip34";
 import { normalizeUrl } from "@/lib/url";
 import { eventStore, pool } from "@/services/nostr";
 import {
   beginPrivateRelayTrustSession,
+  admitPrivateRepositoryAnnouncement,
   clearPrivateRepositoryScope,
   installPrivateServiceRelays,
 } from "@/services/privateRepositoryScope";
@@ -73,6 +75,24 @@ export const privateGitRelayList$ =
     status: "logged-out",
     relayUrls: [],
   });
+
+/**
+ * Quarantine a repository event when its relay provenance includes one of the
+ * active account's private services. Public announcements mirrored there and
+ * invalid private announcements return false so callers reject them before
+ * EventStore insertion.
+ */
+export function prepareDiscoveredRepositoryEvent(
+  event: NostrEvent,
+  privateRelayUrls: readonly string[],
+): boolean {
+  const sourceRelays = privateRelayUrls.filter((relay) =>
+    isFromRelay(event, relay),
+  );
+  if (sourceRelays.length === 0) return true;
+  if (!getRepoIsPrivate(event)) return false;
+  return admitPrivateRepositoryAnnouncement(event, sourceRelays);
+}
 
 let generation = 0;
 let activeSession: PrivateGitRelaySession | undefined;

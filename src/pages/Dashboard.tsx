@@ -22,6 +22,7 @@ import {
   ChevronUp,
   Pin,
   Search,
+  Lock,
 } from "lucide-react";
 import { CreateRepoDialog } from "@/components/CreateRepoDialog";
 import { Button } from "@/components/ui/button";
@@ -45,6 +46,7 @@ import { useDefaultRepoPath } from "@/hooks/useRepoPath";
 import { useState, useMemo } from "react";
 import type { ResolvedRepo } from "@/lib/nip34";
 import { NotificationRow } from "@/components/NotificationRow";
+import { isPrivateRepositoryCoordinate } from "@/services/privateRepositoryScope";
 
 // ---------------------------------------------------------------------------
 // Greeting header
@@ -90,6 +92,8 @@ function RepoListItem({
 }) {
   const repoPath = useDefaultRepoPath(repo);
   const name = repo.name || repo.dTag;
+  const isPrivate =
+    repo.isPrivate || isPrivateRepositoryCoordinate(repo.selectedCoordinate);
 
   return (
     <Link
@@ -116,6 +120,12 @@ function RepoListItem({
       <span className="text-sm font-medium truncate min-w-0 flex-1 group-hover:text-pink-600 dark:group-hover:text-pink-400 transition-colors">
         {name}
       </span>
+      {isPrivate && (
+        <Lock
+          className="h-3 w-3 shrink-0 text-muted-foreground/70"
+          aria-label="Private repository"
+        />
+      )}
     </Link>
   );
 }

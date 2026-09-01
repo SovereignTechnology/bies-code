@@ -5,7 +5,8 @@
  *
  * Mode 1 — Browse (empty query):
  *   Opens a resilientSubscription with manualPaginate$ against gitIndexRelays
- *   (or relayOverride). Events stream into the EventStore as they arrive;
+ *   and the active account's private Git services (or relayOverride). Events
+ *   stream into the EventStore as they arrive;
  *   the EOSE settle signal clears isLoading. The IntersectionObserver sentinel
  *   calls loadMore() which fires the manualPaginate$ subject to fetch the next
  *   backward page. hasMore goes false when a page returns fewer than PAGE_SIZE
@@ -13,7 +14,9 @@
  *
  * Mode 2 — Search (non-empty committedQuery):
  *   Opens a resilientSubscription with manualPaginate$ for NIP-50
- *   { kinds: [30617], search: query } against gitIndexRelays. Simultaneously
+ *   { kinds: [30617], search: query } against the public indexes, while private
+ *   services receive an authenticated paginated announcement query that is
+ *   matched locally. Simultaneously
  *   searches four NIP-50 profile relays for kind:0 candidates, validates and
  *   ranks their current EventStore winners, then fetches repositories for the
  *   newly matched authors in bounded, relay-settled requests.
@@ -76,6 +79,10 @@ import {
   repositorySelectionKey,
 } from "@/models/RepositorySelectionModel";
 import { RepositoryModel } from "@/models/RepositoryModel";
+import {
+  prepareDiscoveredRepositoryEvent,
+  privateGitRelayList$,
+} from "@/services/privateGitRelays";
 
 const PROFILE_SEARCH_RELAYS = [
   "wss://relay.ditto.pub",
@@ -117,6 +124,21 @@ function getFollowPubkeys(event: NostrEvent | undefined): string[] {
   return [
     ...new Set(getPublicContacts(event).map((contact) => contact.pubkey)),
   ].sort();
+}
+
+function repositoryAnnouncementMatchesSearch(
+  event: NostrEvent,
+  query: string,
+): boolean {
+  const terms = query.toLocaleLowerCase().split(/\s+/).filter(Boolean);
+  const searchable = [
+    event.pubkey,
+    event.content,
+    ...event.tags.flatMap((tag) => tag.slice(1)),
+  ]
+    .join("\n")
+    .toLocaleLowerCase();
+  return terms.every((term) => searchable.includes(term));
 }
 
 export interface UseRepositorySearchResult {
@@ -202,8 +224,19 @@ export function useRepositorySearch(
   // Subscribe to gitIndexRelays reactively so relay changes re-trigger
   const liveGitIndexRelays =
     use$(() => gitIndexRelays, []) ?? gitIndexRelays.getValue();
+  const privateRelayState = use$(privateGitRelayList$);
+  const privateRelays =
+    !relayOverride &&
+    accountPubkey &&
+    privateRelayState.status === "ready" &&
+    privateRelayState.pubkey === accountPubkey
+      ? privateRelayState.relayUrls
+      : [];
 
-  const relays = relayOverride ?? liveGitIndexRelays;
+  const publicRepositoryRelays = relayOverride ?? liveGitIndexRelays;
+  const relays = relayOverride
+    ? relayOverride
+    : [...new Set([...liveGitIndexRelays, ...privateRelays])];
   const relayKey = relays.join(",");
 
   const trimmedQuery = query.trim();
@@ -417,6 +450,7 @@ export function useRepositorySearch(
           return;
         }
         const ev = msg as NostrEvent;
+        if (!prepareDiscoveredRepositoryEvent(ev, privateRelays)) return;
         eventStore.add(ev);
 
         if (paginatingRef.current) {
@@ -504,6 +538,7 @@ export function useRepositorySearch(
     setRelayStatuses(Object.fromEntries(relays.map((r) => [r, "searching"])));
 
     let repoSub: { unsubscribe(): void } | null = null;
+    let privateRepoSub: { unsubscribe(): void } | null = null;
     let userSub: { unsubscribe(): void } | null = null;
     const userRepoSubs: { unsubscribe(): void }[] = [];
     const repoResolutionSubs = new Map<string, { unsubscribe(): void }>();
@@ -603,6 +638,8 @@ export function useRepositorySearch(
     // and updating statuses afterward.
     let initialLoadingCleared = false;
     let directInitialDone = false;
+    let publicDirectInitialDone = publicRepositoryRelays.length === 0;
+    let privateDirectInitialDone = privateRelays.length === 0;
     let userPathDone = false;
     let initialPageCount = 0;
 
@@ -631,6 +668,20 @@ export function useRepositorySearch(
       maybeClearInitialLoading();
     };
 
+    const finishPublicDirectInitial = () => {
+      publicDirectInitialDone = true;
+      if (privateDirectInitialDone) finishDirectInitial();
+    };
+
+    const finishPrivateDirectInitial = () => {
+      privateDirectInitialDone = true;
+      if (publicDirectInitialDone) finishDirectInitial();
+    };
+
+    if (publicDirectInitialDone && privateDirectInitialDone) {
+      finishDirectInitial();
+    }
+
     const finishUserPath = () => {
       if (userPathDone) return;
       userPathDone = true;
@@ -640,7 +691,7 @@ export function useRepositorySearch(
     // NIP-50 repo search with manual pagination.
     repoSub = resilientSubscription(
       pool,
-      relays,
+      publicRepositoryRelays,
       [
         {
           kinds: [REPO_KIND],
@@ -661,10 +712,11 @@ export function useRepositorySearch(
     ).subscribe({
       next: (msg) => {
         if (msg === "EOSE") {
-          finishDirectInitial();
+          finishPublicDirectInitial();
           return;
         }
         const ev = msg as NostrEvent;
+        if (!prepareDiscoveredRepositoryEvent(ev, privateRelays)) return;
         eventStore.add(ev);
         rememberRepoCoordinate(ev, directRepoCoordinates);
         // Push results regardless of whether eventStore.add was a no-op.
@@ -684,13 +736,49 @@ export function useRepositorySearch(
       },
       error: () => {
         clearPageSettleTimer();
-        finishDirectInitial();
+        finishPublicDirectInitial();
       },
       complete: () => {
         clearPageSettleTimer();
-        finishDirectInitial();
+        finishPublicDirectInitial();
       },
     });
+
+    // Private GRASP relays are not required to implement NIP-50. Fetch the
+    // authenticated announcement set and match locally so every installed
+    // private service participates in search without weakening confinement.
+    if (privateRelays.length > 0) {
+      privateRepoSub = resilientSubscription(
+        pool,
+        privateRelays,
+        [{ kinds: [REPO_KIND] } as Filter],
+        {
+          paginate: true,
+          onRelayEose: (relay) => {
+            setRelayStatuses((prev) => ({ ...prev, [relay]: "success" }));
+          },
+          onRelayError: (relay) => {
+            setRelayStatuses((prev) => ({ ...prev, [relay]: "error" }));
+          },
+        },
+      ).subscribe({
+        next: (msg) => {
+          if (msg === "EOSE") {
+            finishPrivateDirectInitial();
+            return;
+          }
+          const event = msg as NostrEvent;
+          if (!prepareDiscoveredRepositoryEvent(event, privateRelays)) return;
+          eventStore.add(event);
+          if (repositoryAnnouncementMatchesSearch(event, trimmedQuery)) {
+            rememberRepoCoordinate(event, directRepoCoordinates);
+            pushResults();
+          }
+        },
+        error: finishPrivateDirectInitial,
+        complete: finishPrivateDirectInitial,
+      });
+    }
 
     const profileCandidatePubkeys = new Set<string>();
     const dispatchedAuthors = new Set<string>();
@@ -728,6 +816,7 @@ export function useRepositorySearch(
           next: (msg) => {
             if (msg === "EOSE") return;
             const ev = msg as NostrEvent;
+            if (!prepareDiscoveredRepositoryEvent(ev, privateRelays)) return;
             eventStore.add(ev);
             rememberRepoCoordinate(ev, userRepoCoordinates);
             pushResults();
@@ -813,7 +902,7 @@ export function useRepositorySearch(
       setMatchedUserPubkeys(new Set([pubkey]));
 
       const profileRelays = Array.from(
-        new Set([...PROFILE_SEARCH_RELAYS, ...relays]),
+        new Set([...PROFILE_SEARCH_RELAYS, ...publicRepositoryRelays]),
       );
       userSub = resilientRequest(pool, profileRelays, [
         { kinds: [0], authors: [pubkey] } as Filter,
@@ -920,6 +1009,7 @@ export function useRepositorySearch(
 
     return () => {
       repoSub?.unsubscribe();
+      privateRepoSub?.unsubscribe();
       disposed = true;
       userSub?.unsubscribe();
       for (const sub of userRepoSubs) sub.unsubscribe();

@@ -1,4 +1,5 @@
-import type { NostrEvent } from "nostr-tools";
+import { getReplaceableIdentifier } from "applesauce-core/helpers";
+import { verifyEvent, type NostrEvent } from "nostr-tools";
 import { BehaviorSubject } from "rxjs";
 
 import { normalizeUrl } from "@/lib/url";
@@ -187,6 +188,38 @@ export function markPrivateRelayEvent(event: NostrEvent): void {
     privateEventIds.add(event.id);
     emitRevision();
   }
+}
+
+/**
+ * Admit a verified repository announcement discovered on private services.
+ *
+ * The event and coordinate are quarantined before the caller inserts the event
+ * into the EventStore. Only services that actually returned the announcement
+ * become repository relay targets; other entries in the user's private list
+ * must not learn about this repository through later publication.
+ */
+export function admitPrivateRepositoryAnnouncement(
+  event: NostrEvent,
+  relayUrls: readonly string[],
+): boolean {
+  const identifier = getReplaceableIdentifier(event);
+  if (event.kind !== 30617 || !identifier || !verifyEvent(event)) return false;
+
+  const coordinate = `30617:${event.pubkey}:${identifier}`;
+  const discoveredRelays = relayUrls.map(normalizeUrl);
+  if (discoveredRelays.length === 0) return false;
+
+  markPrivateRelayEvent(event);
+  installPrivateRepositoryRelays(
+    [coordinate],
+    [
+      ...new Set([
+        ...(getPrivateRepositoryRelays(coordinate) ?? []),
+        ...discoveredRelays,
+      ]),
+    ],
+  );
+  return true;
 }
 
 export function isPrivateRepositoryEvent(event: NostrEvent): boolean {
