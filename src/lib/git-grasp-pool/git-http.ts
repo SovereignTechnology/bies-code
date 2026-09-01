@@ -572,18 +572,17 @@ export class GitHttpClient {
     return gitAuthorizationHeaders(this.authorizationProvider, repoUrl, signal);
   }
 
-  /** Retry one rejected request with a newly signed short-lived credential. */
-  private async getInfoRefsWithAuthorizationRetry(
+  /**
+   * Resolve credentials immediately before an HTTP request and retry one
+   * authentication rejection with a freshly signed short-lived token.
+   */
+  private async withAuthorizationRetry<T>(
     repoUrl: string,
-    effectiveUrl: string,
     signal: AbortSignal,
-  ): Promise<InfoRefsUploadPackResponse> {
+    request: (headers?: Record<string, string>) => Promise<T>,
+  ): Promise<T> {
     try {
-      return await libGetInfoRefs(
-        effectiveUrl,
-        await this.getHeaders(repoUrl, signal),
-        signal,
-      );
+      return await request(await this.getHeaders(repoUrl, signal));
     } catch (error) {
       const status =
         error && typeof error === "object" && "status" in error
@@ -591,11 +590,7 @@ export class GitHttpClient {
           : undefined;
       if (this.authorizationProvider && (status === 401 || status === 403)) {
         this.authorizationProvider.invalidateAuthorization(repoUrl);
-        return libGetInfoRefs(
-          effectiveUrl,
-          await this.getHeaders(repoUrl, signal),
-          signal,
-        );
+        return request(await this.getHeaders(repoUrl, signal));
       }
       throw error;
     }
@@ -680,10 +675,10 @@ export class GitHttpClient {
       if (cached) return cached;
 
       try {
-        const info = await this.getInfoRefsWithAuthorizationRetry(
+        const info = await this.withAuthorizationRetry(
           url,
-          effectiveUrl,
           lifecycleSignal,
+          (headers) => libGetInfoRefs(effectiveUrl, headers, lifecycleSignal),
         );
         // libGetInfoRefs does not check the HTTP status code — it calls
         // fetch().text() and parses the body as git pkt-line regardless of
@@ -854,7 +849,6 @@ export class GitHttpClient {
     signal = this.operationSignal(signal);
     const effectiveUrl = this.cors.resolveUrl(url);
     const serverCaps = await this.getServerCaps(url, signal);
-    const headers = await this.getHeaders(url, signal);
     if (signal.aborted) return null;
 
     // Check commit cache
@@ -877,12 +871,12 @@ export class GitHttpClient {
         for (const name of README_NAMES) {
           try {
             const entry = await this.findObjectByPath(
+              url,
               effectiveUrl,
               commitHash,
               name,
               serverCaps,
               signal,
-              headers,
             );
             if (signal.aborted) return null;
             if (!entry || entry.isDir) continue;
@@ -892,7 +886,6 @@ export class GitHttpClient {
               entry.hash,
               serverCaps,
               signal,
-              headers,
             );
             if (signal.aborted) return null;
             if (blobData) {
@@ -920,23 +913,25 @@ export class GitHttpClient {
 
       if (supportsFilter && serverCaps.length > 0) {
         const [commits, readmeResult] = await Promise.all([
-          fetchCommitsOnly(
-            effectiveUrl,
-            commitHash,
-            1,
-            serverCaps,
-            signal,
-            headers,
+          this.withAuthorizationRetry(url, signal, (headers) =>
+            fetchCommitsOnly(
+              effectiveUrl,
+              commitHash,
+              1,
+              serverCaps,
+              signal,
+              headers,
+            ),
           ),
           Promise.any(
             README_NAMES.map(async (name) => {
               const entry = await this.findObjectByPath(
+                url,
                 effectiveUrl,
                 commitHash,
                 name,
                 serverCaps,
                 signal,
-                headers,
               );
               if (!entry || entry.isDir) throw new Error(`${name} not found`);
               const cachedBlob = await this.cache.getBlob(entry.hash);
@@ -951,7 +946,6 @@ export class GitHttpClient {
                 entry.hash,
                 serverCaps,
                 signal,
-                headers,
               );
               if (!blobData) throw new Error(`${name} blob missing`);
               const text = new TextDecoder("utf-8").decode(blobData);
@@ -969,12 +963,11 @@ export class GitHttpClient {
         readmeFilename = readmeResult?.name ?? null;
       } else {
         // Fallback: shallow clone (no filter capability)
-        const result = await shallowClone(
-          effectiveUrl,
-          commitHash,
-          serverCaps,
+        const result = await this.withAuthorizationRetry(
+          url,
           signal,
-          headers,
+          (headers) =>
+            shallowClone(effectiveUrl, commitHash, serverCaps, signal, headers),
         );
         if (signal.aborted) return null;
 
@@ -1020,7 +1013,6 @@ export class GitHttpClient {
 
     const effectiveUrl = this.cors.resolveUrl(url);
     const serverCaps = await this.getServerCaps(url, signal);
-    const headers = await this.getHeaders(url, signal);
     if (signal.aborted) return null;
 
     // Fetch in small batches starting from the tip. Follow every parent
@@ -1042,13 +1034,18 @@ export class GitHttpClient {
       const thisDepth = Math.min(batchSize, remaining);
 
       try {
-        const commits = await fetchCommitsOnly(
-          effectiveUrl,
-          nextWant,
-          thisDepth,
-          serverCaps,
+        const commits = await this.withAuthorizationRetry(
+          url,
           signal,
-          headers,
+          (headers) =>
+            fetchCommitsOnly(
+              effectiveUrl,
+              nextWant,
+              thisDepth,
+              serverCaps,
+              signal,
+              headers,
+            ),
         );
         if (signal.aborted) return null;
 
@@ -1144,15 +1141,14 @@ export class GitHttpClient {
     // 2. Raw objects cache / in-flight dedup / network fetch (all via getRawObjects)
     const effectiveUrl = this.cors.resolveUrl(url);
     const serverCaps = await this.getServerCaps(url, signal);
-    const headers = await this.getHeaders(url, signal);
     if (signal.aborted) return null;
 
     const rawEntry = await this.getRawObjects(
+      url,
       effectiveUrl,
       commitHash,
       serverCaps,
       signal,
-      headers,
     );
     if (signal.aborted) return null;
 
@@ -1213,7 +1209,6 @@ export class GitHttpClient {
 
     const effectiveUrl = this.cors.resolveUrl(url);
     const serverCaps = await this.getServerCaps(url, signal);
-    const headers = await this.getHeaders(url, signal);
     if (signal.aborted) return null;
 
     try {
@@ -1225,7 +1220,9 @@ export class GitHttpClient {
       // deepen=1: fetch only the tip commit (server still sends all its trees)
       // blob:none: no file content, only tree objects
       const want = createWantRequest(commitHash, caps, 1, "blob:none");
-      const result = await fetchPackfile(effectiveUrl, want, signal, headers);
+      const result = await this.withAuthorizationRetry(url, signal, (headers) =>
+        fetchPackfile(effectiveUrl, want, signal, headers),
+      );
       if (signal.aborted) return null;
 
       const commitObj = result.objects.get(commitHash);
@@ -1273,7 +1270,6 @@ export class GitHttpClient {
 
     const effectiveUrl = this.cors.resolveUrl(url);
     const serverCaps = await this.getServerCaps(url, signal);
-    const headers = await this.getHeaders(url, signal);
     if (signal.aborted) return null;
 
     try {
@@ -1283,7 +1279,6 @@ export class GitHttpClient {
         blobHash,
         serverCaps,
         signal,
-        headers,
       );
       if (signal.aborted) return null;
       return data;
@@ -1319,16 +1314,14 @@ export class GitHttpClient {
 
     const effectiveUrl = this.cors.resolveUrl(url);
     const serverCaps = await this.getServerCaps(url, signal);
-    const headers = await this.getHeaders(url, signal);
     if (signal.aborted) return null;
 
     try {
-      const objects = await fetchObjects(
-        effectiveUrl,
-        missing,
-        serverCaps,
+      const objects = await this.withAuthorizationRetry(
+        url,
         signal,
-        headers,
+        (headers) =>
+          fetchObjects(effectiveUrl, missing, serverCaps, signal, headers),
       );
       if (signal.aborted) return null;
 
@@ -1358,17 +1351,16 @@ export class GitHttpClient {
     signal = this.operationSignal(signal);
     const effectiveUrl = this.cors.resolveUrl(url);
     const serverCaps = await this.getServerCaps(url, signal);
-    const headers = await this.getHeaders(url, signal);
     if (signal.aborted) return null;
 
     try {
       const entry = await this.findObjectByPath(
+        url,
         effectiveUrl,
         commitHash,
         path,
         serverCaps,
         signal,
-        headers,
       );
       if (signal.aborted) return null;
       if (!entry) return null;
@@ -1405,17 +1397,21 @@ export class GitHttpClient {
 
     const effectiveUrl = this.cors.resolveUrl(url);
     const serverCaps = await this.getServerCaps(url, signal);
-    const headers = await this.getHeaders(url, signal);
     if (signal.aborted) return null;
 
     try {
-      const commits = await fetchCommitsOnly(
-        effectiveUrl,
-        commitOrRef,
-        1,
-        serverCaps,
+      const commits = await this.withAuthorizationRetry(
+        url,
         signal,
-        headers,
+        (headers) =>
+          fetchCommitsOnly(
+            effectiveUrl,
+            commitOrRef,
+            1,
+            serverCaps,
+            signal,
+            headers,
+          ),
       );
       if (signal.aborted) return null;
       if (commits.length === 0) return null;
@@ -1440,17 +1436,21 @@ export class GitHttpClient {
     signal = this.operationSignal(signal);
     const effectiveUrl = this.cors.resolveUrl(url);
     const serverCaps = await this.getServerCaps(url, signal);
-    const headers = await this.getHeaders(url, signal);
     if (signal.aborted) return null;
 
     try {
-      const commits = await fetchCommitsOnly(
-        effectiveUrl,
-        commitHash,
-        1,
-        serverCaps,
+      const commits = await this.withAuthorizationRetry(
+        url,
         signal,
-        headers,
+        (headers) =>
+          fetchCommitsOnly(
+            effectiveUrl,
+            commitHash,
+            1,
+            serverCaps,
+            signal,
+            headers,
+          ),
       );
       if (signal.aborted || commits.length === 0) return null;
       const commit = commits.find(
@@ -1483,7 +1483,6 @@ export class GitHttpClient {
     signal = this.operationSignal(signal);
     const effectiveUrl = this.cors.resolveUrl(url);
     const serverCaps = await this.getServerCaps(url, signal);
-    const headers = await this.getHeaders(url, signal);
     if (signal.aborted) return null;
 
     try {
@@ -1495,7 +1494,9 @@ export class GitHttpClient {
         undefined,
         haveCommitIds,
       );
-      const result = await fetchPackfile(effectiveUrl, want, signal, headers);
+      const result = await this.withAuthorizationRetry(url, signal, (headers) =>
+        fetchPackfile(effectiveUrl, want, signal, headers),
+      );
       if (signal.aborted) return null;
 
       const objects: PackableObject[] = [];
@@ -1537,7 +1538,6 @@ export class GitHttpClient {
     hash: string,
     serverCaps: string[],
     signal: AbortSignal,
-    headers?: Record<string, string>,
   ): Promise<Uint8Array | null> {
     const cached =
       this.cache.peekBlob(hash) ?? (await this.cache.getBlob(hash));
@@ -1545,12 +1545,8 @@ export class GitHttpClient {
     if (cached) return cached;
 
     if (signal.aborted) return null;
-    const obj = await fetchObject(
-      effectiveUrl,
-      hash,
-      serverCaps,
-      signal,
-      headers ?? (await this.getHeaders(repoUrl, signal)),
+    const obj = await this.withAuthorizationRetry(repoUrl, signal, (headers) =>
+      fetchObject(effectiveUrl, hash, serverCaps, signal, headers),
     );
     if (signal.aborted) return null;
     if (!obj) return null;
@@ -1563,12 +1559,12 @@ export class GitHttpClient {
    * Uses raw objects cache when available; falls back to a network fetch.
    */
   private async findObjectByPath(
+    repoUrl: string,
     effectiveUrl: string,
     commitHash: string,
     path: string,
     serverCaps: string[],
     signal: AbortSignal,
-    headers?: Record<string, string>,
   ): Promise<TreeEntry | undefined> {
     const normalizedPath = path
       .replace(/\\/g, "/")
@@ -1581,11 +1577,11 @@ export class GitHttpClient {
 
     // Raw objects cache / in-flight dedup / network fetch (all via getRawObjects)
     const rawEntry = await this.getRawObjects(
+      repoUrl,
       effectiveUrl,
       commitHash,
       serverCaps,
       signal,
-      headers,
     );
     if (signal.aborted) return undefined;
 
@@ -1612,11 +1608,11 @@ export class GitHttpClient {
    * Each caller checks its own signal after awaiting this method.
    */
   private async getRawObjects(
+    repoUrl: string,
     effectiveUrl: string,
     commitHash: string,
     serverCaps: string[],
     signal: AbortSignal,
-    authorizationHeaders?: Record<string, string>,
   ): Promise<RawObjectsEntry> {
     if (this.lifecycleAbort.signal.aborted) {
       return Promise.reject(new DOMException("Aborted", "AbortError"));
@@ -1639,19 +1635,18 @@ export class GitHttpClient {
     if (signal.aborted)
       return Promise.reject(new DOMException("Aborted", "AbortError"));
 
-    const headers =
-      authorizationHeaders ??
-      (await this.getHeaders(effectiveUrl, this.lifecycleAbort.signal));
-    if (this.lifecycleAbort.signal.aborted) {
-      throw new DOMException("Aborted", "AbortError");
-    }
-    const fetchPromise = fetchDirectoryTree(
-      effectiveUrl,
-      commitHash,
-      serverCaps,
+    const fetchPromise = this.withAuthorizationRetry(
+      repoUrl,
       this.lifecycleAbort.signal,
-      1, // parseDepth=1 for the initial tree; callers re-parse from raw objects
-      headers,
+      (headers) =>
+        fetchDirectoryTree(
+          effectiveUrl,
+          commitHash,
+          serverCaps,
+          this.lifecycleAbort.signal,
+          1, // parseDepth=1; callers re-parse from the shared raw objects
+          headers,
+        ),
     )
       .then((result) => {
         if (this.lifecycleAbort.signal.aborted) {
