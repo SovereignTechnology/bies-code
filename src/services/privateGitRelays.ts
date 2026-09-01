@@ -3,14 +3,7 @@ import type { Filter } from "applesauce-core/helpers";
 import { onlyEvents } from "applesauce-relay";
 import type { NostrEvent } from "nostr-tools";
 import { verifyEvent } from "nostr-tools";
-import {
-  BehaviorSubject,
-  Subscription,
-  debounceTime,
-  firstValueFrom,
-  timeout,
-  toArray,
-} from "rxjs";
+import { BehaviorSubject, Subscription, debounceTime } from "rxjs";
 
 import {
   createPrivateGitRelayListEvent,
@@ -21,10 +14,8 @@ import {
   selectPrivateGitRelayList,
   type DecodedPrivateGitRelayList,
 } from "@/lib/private-git-relays";
-import {
-  resilientRequest,
-  resilientSubscription,
-} from "@/lib/resilientSubscription";
+import { resilientSubscription } from "@/lib/resilientSubscription";
+import { requestRelaySnapshot } from "@/lib/relaySnapshot";
 import { normalizeUrl } from "@/lib/url";
 import { eventStore, pool } from "@/services/nostr";
 import {
@@ -101,12 +92,18 @@ async function requestRelayEvents(
   relay: string,
   filters: Filter[],
 ): Promise<NostrEvent[]> {
-  return firstValueFrom(
-    resilientRequest(pool, [relay], filters, {
-      retryCount: 1,
-      paginate: false,
-    }).pipe(onlyEvents(), toArray(), timeout({ first: SNAPSHOT_TIMEOUT_MS })),
+  const snapshot = await requestRelaySnapshot(
+    pool,
+    relay,
+    filters,
+    SNAPSHOT_TIMEOUT_MS,
   );
+  if (!snapshot.complete) {
+    throw new Error(
+      `Private-list relay ${relay} did not complete its response safely`,
+    );
+  }
+  return snapshot.events;
 }
 
 function deduplicateVerified(events: Iterable<NostrEvent>): NostrEvent[] {

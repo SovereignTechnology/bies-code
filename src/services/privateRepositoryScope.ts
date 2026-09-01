@@ -7,6 +7,7 @@ interface PrivateRelayTrustSession {
   accountId: string;
   pubkey: string;
   generation: number;
+  sources: Set<"list" | "hint">;
 }
 
 const privateEventIds = new Set<string>();
@@ -16,6 +17,9 @@ const privateEventIds = new Set<string>();
 const privateRepositoryCoordinates = new Set<string>();
 const privateRepositoryRelays = new Map<string, Set<string>>();
 const privateRelaySessions = new Map<string, PrivateRelayTrustSession>();
+let activePrivateRelayTrustSession:
+  | Pick<PrivateRelayTrustSession, "accountId" | "pubkey" | "generation">
+  | undefined;
 
 export const privateRepositoryScopeRevision$ = new BehaviorSubject(0);
 
@@ -33,21 +37,77 @@ export function installPrivateServiceRelays(
 ): string[] {
   const next = new Set(relayUrls.map(normalizeUrl));
   const removed: string[] = [];
+  activePrivateRelayTrustSession = { accountId, pubkey, generation };
   for (const [relay, session] of privateRelaySessions) {
-    if (
-      session.accountId !== accountId ||
-      session.generation !== generation ||
-      !next.has(relay)
+    if (session.accountId !== accountId || session.generation !== generation) {
+      privateRelaySessions.delete(relay);
+      removed.push(relay);
+    } else if (
+      !next.has(relay) &&
+      session.sources.delete("list") &&
+      session.sources.size === 0
     ) {
       privateRelaySessions.delete(relay);
       removed.push(relay);
     }
   }
   for (const relay of next) {
-    privateRelaySessions.set(relay, { accountId, pubkey, generation });
+    const existing = privateRelaySessions.get(relay);
+    if (
+      existing?.accountId === accountId &&
+      existing.generation === generation
+    ) {
+      existing.sources.add("list");
+    } else {
+      privateRelaySessions.set(relay, {
+        accountId,
+        pubkey,
+        generation,
+        sources: new Set(["list"]),
+      });
+    }
   }
   if (removed.length > 0 || next.size > 0) emitRevision();
   return removed;
+}
+
+/** Admit a GRASP-08 route hint without changing the encrypted service list. */
+export function installPrivateServiceRelayHint(
+  accountId: string,
+  pubkey: string,
+  generation: number,
+  relayUrl: string,
+): boolean {
+  const active = activePrivateRelayTrustSession;
+  if (
+    !active ||
+    active.accountId !== accountId ||
+    active.pubkey !== pubkey ||
+    active.generation !== generation
+  ) {
+    return false;
+  }
+
+  const relay = normalizeUrl(relayUrl);
+  const existing = privateRelaySessions.get(relay);
+  if (existing) {
+    if (
+      existing.accountId !== accountId ||
+      existing.generation !== generation
+    ) {
+      return false;
+    }
+    existing.sources.add("hint");
+  } else {
+    privateRelaySessions.set(relay, {
+      accountId,
+      pubkey,
+      generation,
+      sources: new Set(["hint"]),
+    });
+  }
+  emitRevision();
+  return true;
 }
 
 export function getPrivateRelayTrustSession(
@@ -134,6 +194,7 @@ export function clearPrivateRepositoryScope(): ClearedPrivateRepositoryScope {
   privateEventIds.clear();
   privateRepositoryRelays.clear();
   privateRelaySessions.clear();
+  activePrivateRelayTrustSession = undefined;
   emitRevision();
   return cleared;
 }

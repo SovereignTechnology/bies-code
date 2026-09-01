@@ -1,18 +1,8 @@
 import { useMemo } from "react";
 import { useActiveAccount } from "applesauce-react/hooks";
 import type { Filter } from "applesauce-core/helpers";
-import { onlyEvents } from "applesauce-relay";
 import { verifyEvent, type NostrEvent } from "nostr-tools";
-import {
-  catchError,
-  firstValueFrom,
-  from,
-  of,
-  startWith,
-  timeout,
-  toArray,
-  type Observable,
-} from "rxjs";
+import { catchError, from, of, startWith, type Observable } from "rxjs";
 
 import { use$ } from "@/hooks/use$";
 import { classifyPrivateGitServiceRelay } from "@/lib/grasp";
@@ -24,12 +14,13 @@ import {
   resolveChain,
   type ResolvedRepo,
 } from "@/lib/nip34";
-import { resilientRequest } from "@/lib/resilientSubscription";
+import { requestRelaySnapshot } from "@/lib/relaySnapshot";
 import { normalizeUrl } from "@/lib/url";
 import { eventStore, pool } from "@/services/nostr";
 import { privateGitRelayList$ } from "@/services/privateGitRelays";
 import {
   installPrivateRepositoryRelays,
+  installPrivateServiceRelayHint,
   markPrivateRelayEvent,
   markPrivateRepositoryCoordinate,
 } from "@/services/privateRepositoryScope";
@@ -57,22 +48,28 @@ async function requestRelay(
   relayUrl: string,
   filters: Filter[],
 ): Promise<NostrEvent[]> {
-  return firstValueFrom(
-    resilientRequest(pool, [relayUrl], filters, {
-      retryCount: 1,
-      paginate: false,
-    }).pipe(onlyEvents(), toArray(), timeout(PRIVATE_PROBE_TIMEOUT_MS)),
+  const snapshot = await requestRelaySnapshot(
+    pool,
+    relayUrl,
+    filters,
+    PRIVATE_PROBE_TIMEOUT_MS,
   );
+  if (!snapshot.complete) {
+    throw new Error(
+      `Private repository relay ${relayUrl} did not complete its response safely`,
+    );
+  }
+  return snapshot.events;
 }
 
-async function classifyUnlistedHints(
+async function discoverPrivateHintRelays(
   hints: readonly string[],
   listedRelays: ReadonlySet<string>,
-): Promise<PrivateRepositoryProbeState | undefined> {
+): Promise<string[]> {
   const unlisted = uniqueRelayUrls(hints).filter(
     (relay) => !listedRelays.has(relay),
   );
-  if (unlisted.length === 0) return undefined;
+  if (unlisted.length === 0) return [];
 
   const classified = await Promise.allSettled(
     unlisted.map(async (relay) => ({
@@ -80,43 +77,32 @@ async function classifyUnlistedHints(
       privateService: await classifyPrivateGitServiceRelay(relay),
     })),
   );
-  const privateHint = classified.find(
-    (result) => result.status === "fulfilled" && result.value.privateService,
+  return classified.flatMap((result) =>
+    result.status === "fulfilled" && result.value.privateService
+      ? [result.value.relay]
+      : [],
   );
-  if (privateHint?.status === "fulfilled") {
-    return {
-      status: "unavailable",
-      relayUrls: [],
-      error: `Add ${privateHint.value.relay} to Private Git services in Settings before opening this repository.`,
-    };
-  }
-  if (classified.some((result) => result.status === "rejected")) {
-    return {
-      status: "unavailable",
-      relayUrls: [],
-      error:
-        "A repository relay hint could not be classified safely. Public discovery was not attempted.",
-    };
-  }
-  return undefined;
 }
 
 async function probePrivateRepository(
   pubkey: string,
   dTag: string,
   relayHints: readonly string[],
+  accountId: string | undefined,
   accountPubkey: string | undefined,
+  listGeneration: number,
   listStatus: string,
   listRelayUrls: readonly string[],
 ): Promise<PrivateRepositoryProbeState> {
   if (!accountPubkey) {
-    const classified = await classifyUnlistedHints(relayHints, new Set());
-    return (
-      classified ?? {
-        status: "absent",
-        relayUrls: [],
-      }
-    );
+    const privateHints = await discoverPrivateHintRelays(relayHints, new Set());
+    return privateHints.length > 0
+      ? {
+          status: "unavailable",
+          relayUrls: [],
+          error: "Log in to open a repository on a private Git service.",
+        }
+      : { status: "absent", relayUrls: [] };
   }
   if (listStatus === "loading") {
     return { status: "loading", relayUrls: [] };
@@ -132,12 +118,35 @@ async function probePrivateRepository(
 
   const listedRelays = uniqueRelayUrls(listRelayUrls);
   const listedSet = new Set(listedRelays);
+  const privateHintRelays = await discoverPrivateHintRelays(
+    relayHints,
+    listedSet,
+  );
+  for (const relay of privateHintRelays) {
+    if (
+      !accountId ||
+      !installPrivateServiceRelayHint(
+        accountId,
+        accountPubkey,
+        listGeneration,
+        relay,
+      )
+    ) {
+      throw new Error(
+        "The active account changed during private repository discovery",
+      );
+    }
+  }
+  const discoveryRelays = uniqueRelayUrls([
+    ...listedRelays,
+    ...privateHintRelays,
+  ]);
   const events = new Map<string, NostrEvent>();
   const pendingAuthors = new Set([pubkey]);
   const queriedAuthors = new Set<string>();
   const foundRelays = new Set<string>();
 
-  while (pendingAuthors.size > 0 && listedRelays.length > 0) {
+  while (pendingAuthors.size > 0 && discoveryRelays.length > 0) {
     const authors = [...pendingAuthors].filter(
       (author) => !queriedAuthors.has(author),
     );
@@ -151,7 +160,7 @@ async function probePrivateRepository(
       "#d": [dTag],
     } as Filter;
     const responses = await Promise.all(
-      listedRelays.map(async (relay) => ({
+      discoveryRelays.map(async (relay) => ({
         relay,
         events: await requestRelay(relay, [filter]),
       })),
@@ -178,8 +187,7 @@ async function probePrivateRepository(
   }
 
   if (events.size === 0) {
-    const classified = await classifyUnlistedHints(relayHints, listedSet);
-    return classified ?? { status: "absent", relayUrls: [] };
+    return { status: "absent", relayUrls: [] };
   }
 
   const announcements = [...events.values()];
@@ -199,7 +207,7 @@ async function probePrivateRepository(
   ];
   const evidence = (
     await Promise.all(
-      listedRelays.map((relay) => requestRelay(relay, evidenceFilters)),
+      discoveryRelays.map((relay) => requestRelay(relay, evidenceFilters)),
     )
   )
     .flat()
@@ -229,7 +237,7 @@ async function probePrivateRepository(
   }
 
   const declaredRelays = new Set(resolved.relays.map(normalizeUrl));
-  const repositoryRelays = listedRelays.filter(
+  const repositoryRelays = discoveryRelays.filter(
     (relay) => foundRelays.has(relay) || declaredRelays.has(relay),
   );
   if (repositoryRelays.length === 0) {
@@ -278,7 +286,9 @@ export function usePrivateRepositoryProbe(
         pubkey,
         dTag,
         relayHints,
+        account?.id,
         account?.pubkey,
+        list.generation,
         list.status,
         list.relayUrls,
       ),
