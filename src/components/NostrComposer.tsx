@@ -69,8 +69,8 @@ export interface NostrComposerProps {
   className?: string;
   minRows?: number;
   /** Controlled preview mode — owned by the parent */
-  activeTab?: "write" | "preview";
-  onTabChange?: (tab: "write" | "preview") => void;
+  activeTab?: ComposerTab;
+  onTabChange?: (tab: ComposerTab) => void;
   onFocusChange?: (focused: boolean) => void;
   /** Called whenever a Blossom upload starts or finishes. */
   onUploadingChange?: (isUploading: boolean) => void;
@@ -88,6 +88,54 @@ export interface NostrComposerProps {
   maxHeight?: string;
   /** Auto-focus the textarea on mount */
   autoFocus?: boolean;
+}
+
+const COMPOSER_TABS = ["write", "preview"] as const;
+
+export type ComposerTab = (typeof COMPOSER_TABS)[number];
+
+interface ComposerModeToggleProps {
+  value: string;
+  activeTab: ComposerTab;
+  onTabChange: (tab: ComposerTab) => void;
+  className?: string;
+}
+
+/** Shared Write/Preview control for every NostrComposer surface. */
+export function ComposerModeToggle({
+  value,
+  activeTab,
+  onTabChange,
+  className,
+}: ComposerModeToggleProps) {
+  // Keep the control available in Preview if the value is cleared externally,
+  // so the editor can never become stranded there.
+  if (activeTab !== "preview" && value.trim().length === 0) return null;
+
+  return (
+    <div
+      role="group"
+      aria-label="Composer mode"
+      className={cn("flex items-center gap-0.5", className)}
+    >
+      {COMPOSER_TABS.map((tab) => (
+        <button
+          key={tab}
+          type="button"
+          aria-pressed={activeTab === tab}
+          onClick={() => onTabChange(tab)}
+          className={cn(
+            "rounded px-2 py-0.5 text-xs font-medium capitalize transition-colors",
+            activeTab === tab
+              ? "bg-muted text-foreground"
+              : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          {tab}
+        </button>
+      ))}
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -119,7 +167,7 @@ export const NostrComposer = forwardRef<
 ) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [internalTab, setInternalTab] = useState<"write" | "preview">("write");
+  const [internalTab, setInternalTab] = useState<ComposerTab>("write");
   const activeTab = activeTabProp ?? internalTab;
   const _setActiveTab = onTabChange ?? setInternalTab;
 

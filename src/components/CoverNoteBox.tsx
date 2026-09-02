@@ -22,11 +22,13 @@ import { useProfile } from "@/hooks/useProfile";
 import { useUserDisplayName } from "@/hooks/useUserDisplayName";
 import { CreateCoverNote } from "@/actions/nip34";
 import {
+  ComposerModeToggle,
   NostrComposer,
+  type ComposerTab,
   type NostrComposerHandle,
 } from "@/components/NostrComposer";
 import type { Nip94Tags } from "@/hooks/useBlossomUpload";
-import { composerHasNsec, hasPreviewableContent } from "@/lib/composerUtils";
+import { composerHasNsec } from "@/lib/composerUtils";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Pin, Loader2, Paperclip, X } from "lucide-react";
@@ -62,7 +64,7 @@ export function CoverNoteBox({
 }: CoverNoteBoxProps) {
   const composerRef = useRef<NostrComposerHandle>(null);
   const [body, setBody] = useState(initialContent);
-  const [activeTab, setActiveTab] = useState<"write" | "preview">("write");
+  const [activeTab, setActiveTab] = useState<ComposerTab>("write");
   const [focused, setFocused] = useState(false);
   const [isPending, setIsPending] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
@@ -75,8 +77,8 @@ export function CoverNoteBox({
   const { name: displayName } = useUserDisplayName(account?.pubkey ?? "");
   const initials = displayName.slice(0, 2).toUpperCase() || "?";
 
-  const showToggle =
-    activeTab === "preview" || focused || hasPreviewableContent(body);
+  const showAttach =
+    focused || activeTab === "preview" || body.trim().length > 0;
 
   const handleUploadedTags = useCallback((tags: Nip94Tags) => {
     setUploadedTagGroups((prev) => [...prev, tags]);
@@ -175,37 +177,23 @@ export function CoverNoteBox({
           />
 
           <div className="flex items-center gap-2">
-            {/* Keep Write available whenever Preview is active so the editor cannot get stranded */}
-            {showToggle && (
-              <>
-                <button
-                  type="button"
-                  title="Attach image or video (Blossom)"
-                  disabled={isPending || isUploading}
-                  onClick={() => composerRef.current?.triggerAttach()}
-                  className="rounded p-1 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                >
-                  <Paperclip className="h-4 w-4" />
-                </button>
-
-                <div className="flex items-center gap-0.5">
-                  {(["write", "preview"] as const).map((tab) => (
-                    <button
-                      key={tab}
-                      type="button"
-                      onClick={() => setActiveTab(tab)}
-                      className={`rounded px-2 py-0.5 text-xs font-medium capitalize transition-colors ${
-                        activeTab === tab
-                          ? "bg-muted text-foreground"
-                          : "text-muted-foreground hover:text-foreground"
-                      }`}
-                    >
-                      {tab}
-                    </button>
-                  ))}
-                </div>
-              </>
+            {showAttach && (
+              <button
+                type="button"
+                title="Attach image or video (Blossom)"
+                disabled={isPending || isUploading}
+                onClick={() => composerRef.current?.triggerAttach()}
+                className="rounded p-1 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <Paperclip className="h-4 w-4" />
+              </button>
             )}
+
+            <ComposerModeToggle
+              value={body}
+              activeTab={activeTab}
+              onTabChange={setActiveTab}
+            />
 
             <div className="flex items-center gap-2 ml-auto">
               <Button
