@@ -32,6 +32,7 @@
 import type { NostrEvent } from "nostr-tools";
 import { createPackfile, type PackableObject } from "@/lib/git-packfile";
 import {
+  GitHttpError,
   getReceivePackRefs,
   pushToGitServer,
   ZERO_HASH,
@@ -52,6 +53,12 @@ export interface PushDeliveryOutcome {
   cloneUrl: string;
   ok: boolean;
   message: string;
+  /** HTTP status retained for an expandable diagnostic view. */
+  httpStatus?: number;
+  /** Server-supplied HTTP status text, when present. */
+  httpStatusText?: string;
+  /** Bounded response body retained for an expandable diagnostic view. */
+  httpResponseBody?: string;
   /** True while the push to this server is still in flight. */
   pending?: boolean;
 }
@@ -194,6 +201,24 @@ function abortError(signal: AbortSignal): Error {
 
 function throwIfAborted(signal: AbortSignal): void {
   if (signal.aborted) throw abortError(signal);
+}
+
+function failedPushOutcome(
+  cloneUrl: string,
+  error: unknown,
+): PushDeliveryOutcome {
+  return {
+    cloneUrl,
+    ok: false,
+    message: error instanceof Error ? error.message : "push failed",
+    ...(error instanceof GitHttpError
+      ? {
+          httpStatus: error.status,
+          httpStatusText: error.statusText || undefined,
+          httpResponseBody: error.responseBody,
+        }
+      : {}),
+  };
 }
 
 /**
@@ -568,11 +593,7 @@ export async function pushToGraspServer(
       };
     }
 
-    return {
-      cloneUrl,
-      ok: false,
-      message: err instanceof Error ? err.message : "push failed",
-    };
+    return failedPushOutcome(cloneUrl, err);
   }
 }
 
@@ -669,30 +690,14 @@ export async function pushRefUpdateToGraspServers(
           resolveSettled(summary);
           return;
         }
-        const reasons = summary.outcomes
-          .map(
-            (each) => `${formatCloneUrlHost(each.cloneUrl)}: ${each.message}`,
-          )
-          .join("; ");
-        reject(
-          new Error(
-            `Push failed to all Grasp servers. ${reasons}. ` +
-              "The state event will expire from purgatory in 30 minutes.",
-          ),
-        );
+        reject(new Error("Push failed to all Grasp servers."));
       }
       resolveSettled(summary);
     };
 
     cloneUrls.forEach((cloneUrl, index) => {
       pushToGraspServer(cloneUrl, refUpdate, ctx)
-        .catch(
-          (err): PushDeliveryOutcome => ({
-            cloneUrl,
-            ok: false,
-            message: err instanceof Error ? err.message : "push failed",
-          }),
-        )
+        .catch((err): PushDeliveryOutcome => failedPushOutcome(cloneUrl, err))
         .then((outcome) =>
           recordOutcome(index, { ...outcome, pending: false }),
         );
