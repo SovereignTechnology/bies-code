@@ -24,6 +24,7 @@
 
 import { useState, useCallback, useMemo } from "react";
 import { useActiveAccount } from "applesauce-react/hooks";
+import type { PublishResponse } from "applesauce-relay";
 import { nip19 } from "nostr-tools";
 import type { NostrEvent } from "nostr-tools";
 import {
@@ -44,6 +45,11 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -76,6 +82,7 @@ import {
   type IssueAutoResolveContext,
   type IssueCandidate,
   type PushDeliverySummary,
+  type PushDeliveryOutcome,
 } from "@/lib/git-grasp-pool";
 import { pool as relayPool, eventStore } from "@/services/nostr";
 import { outboxStore } from "@/services/outbox";
@@ -88,14 +95,20 @@ import {
   type ResolvedPR,
   type ResolvedPRLite,
   type ResolvedIssueLite,
+  REPO_STATE_KIND,
+  graspCloneUrlServiceAddress,
 } from "@/lib/nip34";
 import {
   fetchPRBranchObjectsWithTimeout,
   fetchIssueScanObjectsForStateDelta,
 } from "@/lib/merge-push-fetch";
 import type { PrefetchedMergePushObjects } from "@/hooks/usePrefetchedMergePushObjects";
-import { relayMatchesGraspService } from "@/lib/grasp";
+import {
+  graspServiceAddressToRelayUrl,
+  relayMatchesGraspService,
+} from "@/lib/grasp";
 import type { InferredPRParent } from "@/lib/inferredPRParents";
+import { requestRelaySnapshot, type RelaySnapshot } from "@/lib/relaySnapshot";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -175,6 +188,11 @@ type MergeStep =
   | "done"
   | "failed";
 
+interface StatePublishDelivery {
+  event: NostrEvent;
+  responses: PublishResponse[];
+}
+
 type MergePanelStatus =
   | MergeabilityStatus
   | PRMergeabilityStatus
@@ -216,19 +234,12 @@ function formatResolvedIssuesSuffix(count: number): string {
 async function publishToGraspRelays(
   event: NostrEvent,
   relayUrls: string[],
-): Promise<void> {
+): Promise<PublishResponse[]> {
   if (relayUrls.length === 0) {
     throw new Error("No Grasp relay URLs available");
   }
 
-  const responses = await relayPool.publish(relayUrls, event);
-  const accepted = responses.filter((r) => r.ok);
-  if (accepted.length === 0) {
-    const reasons = responses
-      .map((r) => `${r.from}: ${r.message ?? "rejected"}`)
-      .join("; ");
-    throw new Error(`All Grasp relays rejected the state event: ${reasons}`);
-  }
+  return relayPool.publish(relayUrls, event);
 }
 
 const STEP_LABELS: Record<MergeStep, string> = {
@@ -279,6 +290,8 @@ export function MergePanel({
   const [pushDelivery, setPushDelivery] = useState<PushDeliverySummary | null>(
     null,
   );
+  const [statePublishDelivery, setStatePublishDelivery] =
+    useState<StatePublishDelivery | null>(null);
 
   const hasAdditionalGitServers = repo.additionalGitServerUrls.length > 0;
   const supportsBrowserMerge =
@@ -461,8 +474,14 @@ export function MergePanel({
       let pushSummary: PushDeliverySummary | null = null;
 
       const transports: GraspMergeTransports = {
-        publishStateToGrasp: (state) =>
-          publishToGraspRelays(state, graspRelayUrls),
+        publishStateToGrasp: async (state) => {
+          const responses = await publishToGraspRelays(state, graspRelayUrls);
+          setStatePublishDelivery({ event: state, responses });
+
+          if (!responses.some((response) => response.ok)) {
+            throw new Error("All Grasp relays rejected the state event.");
+          }
+        },
         pushObjects: async (objects, refUpdate) => {
           if (!gitPool) throw new Error("Git pool unavailable");
           // Resolves once one server accepted; the rest keep syncing in the
@@ -519,6 +538,7 @@ export function MergePanel({
     setMergeStep("building");
     setMergeError(null);
     setPushDelivery(null);
+    setStatePublishDelivery(null);
   }, []);
 
   const failMerge = useCallback(
@@ -595,6 +615,7 @@ export function MergePanel({
     setMergeStep("publishing-status");
     setMergeError(null);
     setPushDelivery(null);
+    setStatePublishDelivery(null);
 
     try {
       await publishMergedStatus(detectedMergeCommit.hash);
@@ -907,6 +928,7 @@ export function MergePanel({
                       setMergeStep("idle");
                       setMergeError(null);
                       setPushDelivery(null);
+                      setStatePublishDelivery(null);
                       mergeability.recheck();
                     }}
                   >
@@ -1262,9 +1284,14 @@ export function MergePanel({
             )}
 
             {/* GRASP push delivery summary */}
-            {mergeStep === "done" && pushDelivery && (
-              <PushDeliverySummaryView summary={pushDelivery} />
-            )}
+            {(mergeStep === "done" || mergeStep === "failed") &&
+              pushDelivery && (
+                <PushDeliverySummaryView
+                  summary={pushDelivery}
+                  statePublishDelivery={statePublishDelivery}
+                  repoIdentifier={repo.dTag}
+                />
+              )}
 
             {/* Local merge guidance for non-GRASP git servers */}
             {canShowLocalMerge && (
@@ -1326,7 +1353,7 @@ export function MergePanel({
               )}
 
             {/* Error details */}
-            {mergeStep === "failed" && mergeError && (
+            {mergeStep === "failed" && mergeError && !pushDelivery && (
               <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
                 {mergeError}
               </div>
@@ -1344,16 +1371,41 @@ export function MergePanel({
 
 function PushDeliverySummaryView({
   summary,
+  statePublishDelivery,
+  repoIdentifier,
 }: {
   summary: PushDeliverySummary;
+  statePublishDelivery: StatePublishDelivery | null;
+  repoIdentifier: string;
 }) {
+  const failedEverywhere =
+    summary.successCount === 0 && summary.pendingCount === 0;
+
   return (
-    <div className="rounded-md border border-green-600/30 bg-green-600/5 px-3 py-2 text-sm">
+    <div
+      className={
+        failedEverywhere
+          ? "rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm"
+          : "rounded-md border border-green-600/30 bg-green-600/5 px-3 py-2 text-sm"
+      }
+    >
       <div className="flex items-start gap-2">
-        <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-green-600" />
+        {failedEverywhere ? (
+          <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-destructive" />
+        ) : (
+          <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-green-600" />
+        )}
         <div className="min-w-0 flex-1 space-y-1.5">
-          <p className="font-medium text-green-700 dark:text-green-400">
-            {summarizePushDelivery(summary)}
+          <p
+            className={
+              failedEverywhere
+                ? "font-medium text-destructive"
+                : "font-medium text-green-700 dark:text-green-400"
+            }
+          >
+            {failedEverywhere
+              ? `Push failed on all ${summary.totalCount} Grasp server${summary.totalCount !== 1 ? "s" : ""}.`
+              : summarizePushDelivery(summary)}
           </p>
           <ul className="space-y-1 text-xs">
             {summary.outcomes.map((outcome) => (
@@ -1368,18 +1420,284 @@ function PushDeliverySummaryView({
                 ) : (
                   <XCircle className="mt-0.5 h-3 w-3 shrink-0 text-amber-600" />
                 )}
-                <span className="min-w-0 flex-1">
+                <div className="min-w-0 flex-1">
                   <span className="font-medium text-foreground">
                     {formatCloneUrlHost(outcome.cloneUrl)}
                   </span>
-                  : {outcome.message}
-                </span>
+                  {outcome.pending
+                    ? ": still syncing"
+                    : outcome.ok
+                      ? `: ${outcome.message}`
+                      : ": did not update"}
+                  {!outcome.pending && !outcome.ok && (
+                    <PushOutcomeDetails
+                      outcome={outcome}
+                      statePublishDelivery={statePublishDelivery}
+                      repoIdentifier={repoIdentifier}
+                    />
+                  )}
+                </div>
               </li>
             ))}
           </ul>
         </div>
       </div>
     </div>
+  );
+}
+
+type StateRelayCheck =
+  | { status: "idle" }
+  | { status: "loading" }
+  | {
+      status: "complete";
+      exact: RelaySnapshot;
+      current: RelaySnapshot;
+    };
+
+function PushOutcomeDetails({
+  outcome,
+  statePublishDelivery,
+  repoIdentifier,
+}: {
+  outcome: PushDeliveryOutcome;
+  statePublishDelivery: StatePublishDelivery | null;
+  repoIdentifier: string;
+}) {
+  const [relayCheck, setRelayCheck] = useState<StateRelayCheck>({
+    status: "idle",
+  });
+  const serviceAddress = graspCloneUrlServiceAddress(outcome.cloneUrl);
+  const publishResponse = serviceAddress
+    ? statePublishDelivery?.responses.find((response) =>
+        relayMatchesGraspService(response.from, [serviceAddress]),
+      )
+    : undefined;
+  const relayUrl =
+    publishResponse?.from ??
+    (serviceAddress
+      ? graspServiceAddressToRelayUrl(serviceAddress)
+      : undefined);
+
+  const checkStateRelay = useCallback(async () => {
+    if (!relayUrl || !statePublishDelivery || relayCheck.status !== "idle") {
+      return;
+    }
+
+    setRelayCheck({ status: "loading" });
+    const [exact, current] = await Promise.all([
+      requestRelaySnapshot(
+        relayPool,
+        relayUrl,
+        [
+          {
+            ids: [statePublishDelivery.event.id],
+            authors: [statePublishDelivery.event.pubkey],
+          },
+        ],
+        5_000,
+      ),
+      requestRelaySnapshot(
+        relayPool,
+        relayUrl,
+        [
+          {
+            kinds: [REPO_STATE_KIND],
+            authors: [statePublishDelivery.event.pubkey],
+            "#d": [repoIdentifier],
+            limit: 1,
+          },
+        ],
+        5_000,
+      ),
+    ]);
+    setRelayCheck({ status: "complete", exact, current });
+  }, [relayCheck.status, relayUrl, repoIdentifier, statePublishDelivery]);
+
+  const acceptedIntoPurgatory =
+    publishResponse?.ok === true &&
+    /^purgatory:/i.test(publishResponse.message?.trim() ?? "");
+
+  return (
+    <Popover
+      onOpenChange={(open) => {
+        if (open) void checkStateRelay();
+      }}
+    >
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="link"
+          size="sm"
+          className="ml-1 h-auto p-0 align-baseline text-xs"
+          aria-label={`Show push details for ${formatCloneUrlHost(outcome.cloneUrl)}`}
+        >
+          Details
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="end"
+        className="w-[calc(100vw-2rem)] max-w-sm space-y-3 text-xs"
+      >
+        <div>
+          <p className="font-medium text-sm">Grasp push details</p>
+          <p className="break-all text-muted-foreground">{outcome.cloneUrl}</p>
+        </div>
+
+        <div className="space-y-1">
+          <p className="font-medium">State publication</p>
+          {!statePublishDelivery ? (
+            <p className="text-muted-foreground">
+              No state publication result was recorded.
+            </p>
+          ) : !publishResponse ? (
+            <p className="text-muted-foreground">
+              No acknowledgement was recorded from this server&apos;s relay.
+            </p>
+          ) : publishResponse.ok ? (
+            <>
+              <p>
+                {acceptedIntoPurgatory
+                  ? "Accepted into purgatory."
+                  : "Accepted without the standard purgatory response."}
+              </p>
+              {publishResponse.message && (
+                <p className="break-words text-muted-foreground">
+                  Relay response: {publishResponse.message}
+                </p>
+              )}
+            </>
+          ) : (
+            <p className="break-words text-destructive">
+              Rejected by relay
+              {publishResponse.message ? `: ${publishResponse.message}` : "."}
+            </p>
+          )}
+        </div>
+
+        <div className="space-y-1">
+          <p className="font-medium">State relay check</p>
+          <StateRelayCheckView
+            check={relayCheck}
+            stateEventId={statePublishDelivery?.event.id}
+            acceptedIntoPurgatory={acceptedIntoPurgatory}
+            publishAccepted={publishResponse?.ok}
+            relayUrl={relayUrl}
+          />
+        </div>
+
+        <div className="space-y-1">
+          <p className="font-medium">Git push</p>
+          {outcome.httpStatus && (
+            <p>
+              HTTP {outcome.httpStatus}
+              {outcome.httpStatusText ? ` ${outcome.httpStatusText}` : ""}
+            </p>
+          )}
+          <p className="break-words text-muted-foreground">{outcome.message}</p>
+          {outcome.httpResponseBody && (
+            <div className="space-y-1 pt-1">
+              <p className="font-medium text-foreground">Server response</p>
+              <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted p-2 font-mono text-[11px] text-muted-foreground">
+                {outcome.httpResponseBody}
+              </pre>
+            </div>
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+function StateRelayCheckView({
+  check,
+  stateEventId,
+  acceptedIntoPurgatory,
+  publishAccepted,
+  relayUrl,
+}: {
+  check: StateRelayCheck;
+  stateEventId: string | undefined;
+  acceptedIntoPurgatory: boolean;
+  publishAccepted: boolean | undefined;
+  relayUrl: string | undefined;
+}) {
+  if (!relayUrl || !stateEventId) {
+    return (
+      <p className="text-muted-foreground">
+        The matching relay could not be determined.
+      </p>
+    );
+  }
+
+  if (check.status === "idle" || check.status === "loading") {
+    return (
+      <p className="flex items-center gap-1.5 text-muted-foreground">
+        <Loader2 className="h-3 w-3 animate-spin" />
+        Checking {relayUrl}…
+      </p>
+    );
+  }
+
+  const exactVisible = check.exact.events.some(
+    (event) => event.id === stateEventId,
+  );
+  const currentEvent = check.current.events[0];
+  const exactIsCurrent = currentEvent?.id === stateEventId;
+
+  if (exactVisible) {
+    return (
+      <p
+        className={
+          acceptedIntoPurgatory
+            ? "text-amber-700 dark:text-amber-400"
+            : undefined
+        }
+      >
+        {acceptedIntoPurgatory
+          ? "The relay is broadcasting this event even though it reported that the event was in purgatory"
+          : "The relay is broadcasting this state event"}
+        {exactIsCurrent
+          ? " as the current repository state."
+          : currentEvent
+            ? `, but its current state is ${currentEvent.id.slice(0, 8)}.`
+            : "."}
+      </p>
+    );
+  }
+
+  if (!check.exact.complete || !check.current.complete) {
+    return (
+      <p className="text-muted-foreground">
+        The relay check did not complete, so its state is unknown.
+      </p>
+    );
+  }
+
+  if (acceptedIntoPurgatory) {
+    return (
+      <p className="text-muted-foreground">
+        The event is not being broadcast, which is expected while it remains in
+        purgatory.
+      </p>
+    );
+  }
+
+  if (publishAccepted !== true) {
+    return (
+      <p className="text-muted-foreground">
+        The state event is not being broadcast by this relay.
+      </p>
+    );
+  }
+
+  return (
+    <p className="text-amber-700 dark:text-amber-400">
+      The relay accepted the event but is not broadcasting it
+      {currentEvent
+        ? `; its current state is ${currentEvent.id.slice(0, 8)}.`
+        : "."}
+    </p>
   );
 }
 

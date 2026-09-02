@@ -78,6 +78,20 @@ export type GitHttpHeaderProvider = (
   repoUrl: string,
 ) => Promise<Record<string, string> | undefined>;
 
+/** A non-success response from a Git smart HTTP endpoint. */
+export class GitHttpError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly statusText: string,
+    readonly requestUrl: string,
+    readonly responseBody?: string,
+  ) {
+    super(message);
+    this.name = "GitHttpError";
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -90,6 +104,8 @@ export const ZERO_HASH = "0000000000000000000000000000000000000000";
  * We only request capabilities the server actually advertises.
  */
 const WANTED_CAPABILITIES = ["report-status", "delete-refs"] as const;
+
+const MAX_HTTP_ERROR_BODY_BYTES = 2_048;
 
 // ---------------------------------------------------------------------------
 // pkt-line encoding / decoding
@@ -462,6 +478,86 @@ function throwIfAborted(signal?: AbortSignal): void {
 }
 
 /**
+ * Read enough of an error response to diagnose it without retaining an
+ * unbounded HTML error page or proxy response.
+ */
+async function readHttpErrorBody(
+  response: Response,
+): Promise<string | undefined> {
+  if (!response.body) return undefined;
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let body = "";
+  let bytesRead = 0;
+  let truncated = false;
+
+  try {
+    while (bytesRead < MAX_HTTP_ERROR_BODY_BYTES) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      const remaining = MAX_HTTP_ERROR_BODY_BYTES - bytesRead;
+      const chunk = value.subarray(0, remaining);
+      bytesRead += chunk.byteLength;
+      body += decoder.decode(chunk, { stream: true });
+
+      if (chunk.byteLength < value.byteLength) {
+        truncated = true;
+        await reader.cancel();
+        break;
+      }
+      if (bytesRead === MAX_HTTP_ERROR_BODY_BYTES) {
+        truncated = true;
+        await reader.cancel();
+        break;
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  body += decoder.decode();
+  const cleaned = body
+    // Preserve line breaks while removing binary control bytes from display.
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "")
+    .trim();
+
+  if (!cleaned) return undefined;
+  return truncated ? `${cleaned}…` : cleaned;
+}
+
+async function createGitHttpError(
+  response: Response,
+  requestUrl: string,
+  repoUrl: string,
+  operation: "read refs from" | "push to",
+): Promise<GitHttpError> {
+  let responseBody: string | undefined;
+  try {
+    responseBody = await readHttpErrorBody(response);
+  } catch {
+    // The HTTP status remains useful even when the response stream fails.
+  }
+  const status = `HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ""}`;
+  const message =
+    response.status === 401 || response.status === 403
+      ? `Authorization failed (${status}) while attempting to ${operation} ${repoUrl}.`
+      : response.status === 404
+        ? `Repository not found (${status}) at ${repoUrl}.`
+        : `Git server returned ${status} while attempting to ${operation} ${repoUrl}.`;
+
+  return new GitHttpError(
+    message,
+    response.status,
+    response.statusText,
+    requestUrl,
+    responseBody,
+  );
+}
+
+/**
  * Discover refs from a git server's receive-pack endpoint.
  *
  * Sends a GET request to `<repoUrl>/info/refs?service=git-receive-pack`
@@ -492,21 +588,7 @@ export async function getReceivePackRefs(
   });
 
   if (!response.ok) {
-    if (response.status === 401 || response.status === 403) {
-      throw new Error(
-        `Authorization failed (HTTP ${response.status}) for ${repoUrl}. ` +
-          "For Grasp servers, ensure the repo state event (kind:30618) is in purgatory.",
-      );
-    }
-    if (response.status === 404) {
-      throw new Error(
-        `Repository not found (HTTP 404) at ${repoUrl}. ` +
-          "Check that the repository URL is correct.",
-      );
-    }
-    throw new Error(
-      `HTTP ${response.status} from ${url}: ${response.statusText}`,
-    );
+    throw await createGitHttpError(response, url, repoUrl, "read refs from");
   }
 
   const text = await response.text();
@@ -614,21 +696,7 @@ export async function pushToGitServer(
   });
 
   if (!response.ok) {
-    if (response.status === 401 || response.status === 403) {
-      throw new Error(
-        `Authorization failed (HTTP ${response.status}) for push to ${repoUrl}. ` +
-          "For Grasp servers, ensure the repo state event (kind:30618) is in purgatory.",
-      );
-    }
-    if (response.status === 404) {
-      throw new Error(
-        `Repository not found (HTTP 404) at ${repoUrl}. ` +
-          "Check that the repository URL is correct.",
-      );
-    }
-    throw new Error(
-      `HTTP ${response.status} from ${url}: ${response.statusText}`,
-    );
+    throw await createGitHttpError(response, url, repoUrl, "push to");
   }
 
   const responseText = await response.text();
