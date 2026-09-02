@@ -16,6 +16,8 @@
 
 ### Fixes
 
+- Keep relay-setting rows inside phone-sized cards by truncating long URLs,
+  collapsing Remove to a trash icon, and hiding connection glyphs on mobile.
 - Disable event signature verification in the EventStore, removing roughly a third of main-thread CPU work on a cold repository load: relay-validated events are trusted on receipt, in line with wider nostr client practice, while locally persisted deletion tombstones remain fully verified. See `docs/signature-verification.md` for the rationale and the planned relay-trust spot-check model.
 - Resolve item links that name several repositories (multi-pointer `nevent` routes) through one identifier-scoped announcement wave instead of sequential per-repository settlement stages, while keeping the component-ambiguity refusal gated on complete relay coverage.
 - Restart repository issue and pull-request relay subscriptions only when role-history content actually changes, so announcement refetches and deletion-list emissions no longer re-request the repository's full item backlog from every relay.
