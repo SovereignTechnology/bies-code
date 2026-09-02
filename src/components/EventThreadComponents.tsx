@@ -1,13 +1,7 @@
 /**
  * Shared components used in both IssuePage and PRPage thread views.
  */
-import React, {
-  lazy,
-  Suspense,
-  useState,
-  useCallback,
-  type RefObject,
-} from "react";
+import React, { Suspense, useState, useCallback, type RefObject } from "react";
 import { formatDistanceToNow, format } from "date-fns";
 import type { NostrEvent } from "nostr-tools";
 import { Link } from "react-router-dom";
@@ -84,8 +78,7 @@ import { ReactionsBar } from "@/components/ReactionsBar";
 import { ZapsBar } from "@/components/zap/ZapsBar";
 import { NsitePreviewLink } from "@/components/ci/PRNsitePreview";
 import type { NsitePreview } from "@/lib/ciOutputs";
-
-const MarkdownContent = lazy(() => import("@/components/MarkdownContent"));
+import MarkdownContent from "@/components/DeferredMarkdownContent";
 
 // ---------------------------------------------------------------------------
 // EventBodyCard — the main body card for an issue or PR/patch

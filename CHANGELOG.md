@@ -16,6 +16,7 @@
 
 ### Fixes
 
+- Load the dedicated Markdown chunk alongside the repository route and warm both after initial-page idle or repository-link intent, so pull-request descriptions, cover notes, READMEs, and release notes retain focused caching without waiting behind a late JavaScript placeholder.
 - Keep relay-setting rows inside phone-sized cards by truncating long URLs,
   collapsing Remove to a trash icon, and hiding connection glyphs on mobile.
 - Disable event signature verification in the EventStore, removing roughly a third of main-thread CPU work on a cold repository load: relay-validated events are trusted on receipt, in line with wider nostr client practice, while locally persisted deletion tombstones remain fully verified. See `docs/signature-verification.md` for the rationale and the planned relay-trust spot-check model.

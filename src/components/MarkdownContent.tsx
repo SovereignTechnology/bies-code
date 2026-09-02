@@ -1,13 +1,14 @@
 /**
- * MarkdownContent — lazy-loadable markdown renderer with GitHub-style
- * component overrides and syntax highlighting.
+ * MarkdownContent — markdown renderer with GitHub-style component overrides
+ * and syntax highlighting.
  *
- * This module is intentionally NOT re-exported from a barrel file so that
- * React.lazy() can split it (and react-markdown + highlight.js languages)
- * into a separate chunk that doesn't affect initial load.
+ * This module is intentionally NOT re-exported from a barrel file. The
+ * DeferredMarkdownContent boundary keeps it and the curated highlight.js
+ * languages in a dedicated chunk, while repository-route preloading ensures
+ * primary repository content has the chunk before the route is revealed.
  *
  * Usage:
- *   const MarkdownContent = lazy(() => import("@/components/MarkdownContent"));
+ *   import MarkdownContent from "@/components/DeferredMarkdownContent";
  */
 import React, {
   createContext,

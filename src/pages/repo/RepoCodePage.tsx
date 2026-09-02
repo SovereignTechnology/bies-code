@@ -1,5 +1,4 @@
 import {
-  lazy,
   Suspense,
   useMemo,
   useState,
@@ -69,8 +68,7 @@ import {
   getCIRunTrustResolution,
   summarizeCIRunTrust,
 } from "@/lib/ciTrustContext";
-
-const MarkdownContent = lazy(() => import("@/components/MarkdownContent"));
+import MarkdownContent from "@/components/DeferredMarkdownContent";
 import { CodeBlock } from "@/components/CodeBlock";
 import { langFromFilename } from "@/lib/highlighter";
 

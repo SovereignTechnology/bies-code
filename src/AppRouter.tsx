@@ -6,7 +6,7 @@ import {
   useNavigate,
   useLocation,
 } from "react-router-dom";
-import { useEffect, useRef } from "react";
+import { lazy, Suspense, useEffect, useRef } from "react";
 import { App } from "@capacitor/app";
 import { Capacitor } from "@capacitor/core";
 import { nip19 } from "nostr-tools";
@@ -21,7 +21,6 @@ import NotificationsPage from "./pages/NotificationsPage";
 import RelayPage from "./pages/RelayPage";
 import CICoordinatorPage from "./pages/CICoordinatorPage";
 import CIProviderPage from "./pages/CIProviderPage";
-import RepoLayout from "./pages/repo/RepoLayout";
 import Settings from "./pages/Settings";
 import OutboxPage from "./pages/OutboxPage";
 import { NIP19Page } from "./pages/NIP19Page";
@@ -33,6 +32,111 @@ import { MaintainerAcceptanceMonitor } from "./components/MaintainerAcceptanceMo
 import { useRepoPath } from "./hooks/useRepoPath";
 import { REPO_KIND } from "./lib/nip34";
 import { getGitWorkshopPath } from "./lib/gitworkshopUrl";
+import { parseRepoRoute } from "./lib/routeUtils";
+import { preloadMarkdownContent } from "./lib/markdownContentLoader";
+
+let repositoryRoutePromise:
+  | Promise<typeof import("./pages/repo/RepoLayout")>
+  | undefined;
+
+function loadRepositoryRoute() {
+  repositoryRoutePromise ??= Promise.all([
+    import("./pages/repo/RepoLayout"),
+    preloadMarkdownContent(),
+  ]).then(([repoLayout]) => repoLayout);
+  return repositoryRoutePromise;
+}
+
+const RepoLayout = lazy(loadRepositoryRoute);
+
+/** Whether an internal link is likely to enter the multi-segment repo router. */
+function isRepositoryLink(anchor: HTMLAnchorElement): boolean {
+  const url = new URL(anchor.href, window.location.href);
+  if (url.origin !== window.location.origin) return false;
+  return parseRepoRoute(url.pathname.slice(1)) !== undefined;
+}
+
+/**
+ * Warm the repository route after the current page loads, or sooner when a
+ * repository link receives pointer/keyboard intent. This does not hold up the
+ * initial non-repository render, but makes the repository and dedicated
+ * Markdown bundles available before most navigations.
+ */
+function RepositoryRoutePreloader() {
+  useEffect(() => {
+    let idleHandle: number | undefined;
+    let fallbackHandle: ReturnType<typeof setTimeout> | undefined;
+
+    const preload = () => {
+      // A speculative failure should not become an unhandled rejection. The
+      // same rejected promise is still surfaced by React if navigation later
+      // needs the route, where the app-level error boundary can handle it.
+      void loadRepositoryRoute().catch(() => undefined);
+    };
+
+    const scheduleIdlePreload = () => {
+      if ("requestIdleCallback" in window) {
+        idleHandle = window.requestIdleCallback(preload);
+      } else {
+        fallbackHandle = setTimeout(preload);
+      }
+    };
+
+    const preloadFromIntent = (event: Event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const anchor = target.closest("a[href]");
+      if (anchor instanceof HTMLAnchorElement && isRepositoryLink(anchor)) {
+        preload();
+      }
+    };
+
+    document.addEventListener("pointerover", preloadFromIntent);
+    document.addEventListener("focusin", preloadFromIntent);
+
+    if (document.readyState === "complete") {
+      scheduleIdlePreload();
+    } else {
+      window.addEventListener("load", scheduleIdlePreload, { once: true });
+    }
+
+    return () => {
+      document.removeEventListener("pointerover", preloadFromIntent);
+      document.removeEventListener("focusin", preloadFromIntent);
+      window.removeEventListener("load", scheduleIdlePreload);
+      if (idleHandle !== undefined) window.cancelIdleCallback(idleHandle);
+      if (fallbackHandle !== undefined) clearTimeout(fallbackHandle);
+    };
+  }, []);
+
+  return null;
+}
+
+function RepositoryRouteFallback() {
+  return (
+    <div
+      className="container max-w-screen-xl flex-1 space-y-6 px-4 py-8 md:px-8"
+      role="status"
+      aria-label="Loading repository"
+    >
+      <div className="h-8 w-64 max-w-full animate-pulse rounded bg-muted" />
+      <div className="h-10 w-full animate-pulse rounded bg-muted" />
+      <div className="grid gap-6 lg:grid-cols-[1fr_280px]">
+        <div className="h-64 animate-pulse rounded-xl bg-muted" />
+        <div className="h-40 animate-pulse rounded-xl bg-muted" />
+      </div>
+      <span className="sr-only">Loading repository…</span>
+    </div>
+  );
+}
+
+function RepositoryRoute() {
+  return (
+    <Suspense fallback={<RepositoryRouteFallback />}>
+      <RepoLayout />
+    </Suspense>
+  );
+}
 
 /**
  * A cold-start App Link stays in App.getLaunchUrl() for the lifetime of the
@@ -386,7 +490,7 @@ function LegacyRedirect() {
   }
 
   // Not a legacy path — fall through to RepoLayout
-  return <RepoLayout />;
+  return <RepositoryRoute />;
 }
 
 function AppRouter() {
@@ -395,6 +499,7 @@ function AppRouter() {
       <NativeGitWorkshopLinks />
       <NativeAndroidBackButton />
       <ScrollToTop />
+      <RepositoryRoutePreloader />
       <MaintainerAcceptanceMonitor />
       <div className="flex flex-col min-h-screen">
         <AppHeader />

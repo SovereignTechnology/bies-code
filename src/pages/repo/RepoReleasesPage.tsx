@@ -1,5 +1,4 @@
 import {
-  lazy,
   Suspense,
   useCallback,
   useEffect,
@@ -74,8 +73,7 @@ import { eventIdToNevent, repoToPath } from "@/lib/routeUtils";
 import { cn, safeFormat, safeFormatDistanceToNow } from "@/lib/utils";
 import NotFound from "../NotFound";
 import { useRepoContext } from "./RepoContext";
-
-const MarkdownContent = lazy(() => import("@/components/MarkdownContent"));
+import MarkdownContent from "@/components/DeferredMarkdownContent";
 const RELEASE_RENDER_BATCH = 20;
 
 interface GitTagRef {
