@@ -3,10 +3,10 @@
  *
  * Desktop layout (md+):
  *   Left column (~65%):  Greeting → Notifications → Continue where you left off
- *   Right column (~35%): My repositories → Followed repositories
+ *   Right column (~35%): My repositories → Accessible private repositories → Followed repositories
  *
  * Mobile layout (< md):
- *   Single column: Greeting → My repos → Followed repos → Notifications → Activity
+ *   Single column: Greeting → My repos → Accessible private repos → Followed repos → Notifications → Activity
  */
 
 import { Link } from "react-router-dom";
@@ -23,6 +23,7 @@ import {
   Pin,
   Search,
   Lock,
+  Settings2,
 } from "lucide-react";
 import { CreateRepoDialog } from "@/components/CreateRepoDialog";
 import { Button } from "@/components/ui/button";
@@ -35,6 +36,7 @@ import { ActivityFeed } from "@/components/ActivityFeed";
 import { useUserActivity } from "@/hooks/useUserActivity";
 import { useUserRepositories } from "@/hooks/useUserRepositories";
 import { useUserFollowedRepos } from "@/hooks/useUserFollowedRepos";
+import { useAccessiblePrivateRepositories } from "@/hooks/useAccessiblePrivateRepositories";
 import { useUserPinnedCoords } from "@/hooks/useUserPinnedRepos";
 import { useNotifications } from "@/hooks/useNotifications";
 import { useUserProfileSubscription } from "@/hooks/useUserProfileSubscription";
@@ -418,6 +420,147 @@ function FollowedReposPanel({ pubkey }: { pubkey: string }) {
 }
 
 // ---------------------------------------------------------------------------
+// Accessible private repositories panel
+// ---------------------------------------------------------------------------
+
+function AccessiblePrivateRepositoriesPanel({ pubkey }: { pubkey: string }) {
+  const { repos, state } = useAccessiblePrivateRepositories(pubkey);
+  const [expanded, setExpanded] = useState(false);
+  const [search, setSearch] = useState("");
+
+  const sorted = useMemo(
+    () =>
+      repos ? [...repos].sort((a, b) => b.updatedAt - a.updatedAt) : undefined,
+    [repos],
+  );
+
+  const trimmed = search.trim().toLowerCase();
+  const filtered = useMemo(() => {
+    if (!sorted) return undefined;
+    if (!trimmed) return sorted;
+    return sorted.filter(
+      (repo) =>
+        repo.name.toLowerCase().includes(trimmed) ||
+        repo.dTag.toLowerCase().includes(trimmed) ||
+        repo.description.toLowerCase().includes(trimmed),
+    );
+  }, [sorted, trimmed]);
+
+  const isFiltering = trimmed.length > 0;
+  const displayRepos =
+    isFiltering || expanded ? filtered : filtered?.slice(0, INITIAL_VISIBLE);
+  const hasMore = !isFiltering && (filtered?.length ?? 0) > INITIAL_VISIBLE;
+  const serviceCount =
+    state.pubkey === pubkey && state.status === "ready"
+      ? state.relayUrls.length
+      : 0;
+  const serviceLabel = serviceCount === 1 ? "service" : "services";
+
+  if (serviceCount === 0) return null;
+
+  return (
+    <>
+      <div className="h-fit">
+        <div className="pb-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <h3 className="flex items-center gap-2 text-base font-semibold">
+                <Lock className="h-4 w-4 shrink-0 text-muted-foreground" />
+                <span className="leading-tight">
+                  Accessible private repositories
+                </span>
+              </h3>
+              <p className="ml-6 mt-1 text-xs text-muted-foreground">
+                Querying {serviceCount} private {serviceLabel}
+              </p>
+            </div>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 shrink-0 px-2 text-xs text-muted-foreground hover:text-foreground"
+              asChild
+            >
+              <Link to="/settings#private-git-services">
+                <Settings2 className="mr-1 h-3.5 w-3.5" />
+                Configure
+              </Link>
+            </Button>
+          </div>
+        </div>
+
+        {sorted && sorted.length > 0 && (
+          <div className="relative mb-3">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              placeholder="Filter private repositories..."
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              className="h-8 bg-background/60 pl-8 text-sm focus-visible:ring-pink-500/30"
+            />
+          </div>
+        )}
+
+        <div>
+          {repos === undefined ? (
+            <div className="space-y-1">
+              {Array.from({ length: 3 }).map((_, index) => (
+                <RepoRowSkeleton key={index} />
+              ))}
+            </div>
+          ) : displayRepos && displayRepos.length > 0 ? (
+            <>
+              <div className="space-y-0.5">
+                {displayRepos.map((repo) => (
+                  <RepoListItem key={repo.componentId} repo={repo} />
+                ))}
+              </div>
+              {hasMore && (
+                <div className="mt-3 border-t border-border/40 pt-2">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 w-full text-xs text-muted-foreground"
+                    onClick={() => setExpanded((value) => !value)}
+                  >
+                    {expanded ? (
+                      <>
+                        Show less
+                        <ChevronUp className="ml-1.5 h-3 w-3" />
+                      </>
+                    ) : (
+                      <>
+                        Show all {filtered?.length} repositories
+                        <ChevronDown className="ml-1.5 h-3 w-3" />
+                      </>
+                    )}
+                  </Button>
+                </div>
+              )}
+            </>
+          ) : isFiltering ? (
+            <div className="py-6 text-center">
+              <p className="text-sm text-muted-foreground">
+                No private repositories match "{search}"
+              </p>
+            </div>
+          ) : (
+            <div className="rounded-lg border border-dashed px-4 py-6 text-center">
+              <p className="text-sm text-muted-foreground">
+                No accessible private repositories
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground/60">
+                Repositories shared through your services will appear here.
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
+      <Separator className="opacity-40" />
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Embedded notifications panel (compact, inbox only, max 5)
 // ---------------------------------------------------------------------------
 
@@ -598,6 +741,7 @@ export function Dashboard() {
           <div className="order-1 md:order-2 w-full md:w-80 lg:w-96 md:max-w-sm shrink-0 space-y-6">
             <MyRepositoriesPanel pubkey={pubkey} />
             <Separator className="opacity-40" />
+            <AccessiblePrivateRepositoriesPanel pubkey={pubkey} />
             <FollowedReposPanel pubkey={pubkey} />
           </div>
         </div>

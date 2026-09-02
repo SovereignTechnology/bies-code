@@ -1,5 +1,6 @@
 import type React from "react";
 import { useState, useCallback, useEffect, useRef } from "react";
+import { useLocation } from "react-router-dom";
 import { useSeoMeta } from "@unhead/react";
 import {
   Card,
@@ -875,7 +876,7 @@ function PrivateGitRelaysSection() {
   }, [draft, save, toast]);
 
   return (
-    <Card>
+    <Card id="private-git-services" className="scroll-mt-20">
       <CardHeader>
         <CardTitle>Private Git services</CardTitle>
         <CardDescription>
@@ -1340,6 +1341,13 @@ function LightningWalletSection() {
 }
 
 export default function Settings() {
+  const { hash } = useLocation();
+
+  useEffect(() => {
+    if (hash !== "#private-git-services") return;
+    document.getElementById("private-git-services")?.scrollIntoView();
+  }, [hash]);
+
   useSeoMeta({
     title: "Settings - ngit",
     description: "Manage relay configurations and application settings.",
