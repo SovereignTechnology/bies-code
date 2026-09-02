@@ -53,8 +53,9 @@
 
 ### Features
 
-- Add an Accessible private repositories section to the signed-in homepage,
-  with a direct link to configure the private Git services used for discovery.
+- Add an Accessible private repositories section to the signed-in homepage
+  when private Git services are configured, showing how many services are
+  queried and linking directly to their configuration.
 - Add GRASP-08 and basic Buzz private-repository support with an editable
   NIP-44-encrypted service list, private-first repository discovery,
   account-scoped NIP-42/NIP-98 authentication, isolated Git caches, and strict

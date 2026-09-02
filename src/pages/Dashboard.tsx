@@ -450,119 +450,113 @@ function AccessiblePrivateRepositoriesPanel({ pubkey }: { pubkey: string }) {
   const displayRepos =
     isFiltering || expanded ? filtered : filtered?.slice(0, INITIAL_VISIBLE);
   const hasMore = !isFiltering && (filtered?.length ?? 0) > INITIAL_VISIBLE;
-  const isLoading =
-    state.pubkey !== pubkey ||
-    state.status === "logged-out" ||
-    state.status === "loading";
-  const hasConfiguredServices =
-    state.pubkey === pubkey &&
-    state.status === "ready" &&
-    state.relayUrls.length > 0;
+  const serviceCount =
+    state.pubkey === pubkey && state.status === "ready"
+      ? state.relayUrls.length
+      : 0;
+  const serviceLabel = serviceCount === 1 ? "service" : "services";
+
+  if (serviceCount === 0) return null;
 
   return (
-    <div className="h-fit">
-      <div className="pb-3">
-        <div className="flex items-center justify-between gap-3">
-          <h3 className="flex min-w-0 items-center gap-2 text-base font-semibold">
-            <Lock className="h-4 w-4 shrink-0 text-muted-foreground" />
-            <span className="leading-tight">
-              Accessible private repositories
-            </span>
-          </h3>
-          <Button
-            size="sm"
-            variant="ghost"
-            className="h-7 shrink-0 px-2 text-xs text-muted-foreground hover:text-foreground"
-            asChild
-          >
-            <Link to="/settings#private-git-services">
-              <Settings2 className="mr-1 h-3.5 w-3.5" />
-              Configure
-            </Link>
-          </Button>
-        </div>
-      </div>
-
-      {sorted && sorted.length > 0 && (
-        <div className="relative mb-3">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            placeholder="Filter private repositories..."
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            className="h-8 bg-background/60 pl-8 text-sm focus-visible:ring-pink-500/30"
-          />
-        </div>
-      )}
-
-      <div>
-        {isLoading || (state.status === "ready" && repos === undefined) ? (
-          <div className="space-y-1">
-            {Array.from({ length: 3 }).map((_, index) => (
-              <RepoRowSkeleton key={index} />
-            ))}
-          </div>
-        ) : state.status === "unavailable" ? (
-          <div className="rounded-lg border border-dashed px-4 py-6 text-center">
-            <p className="text-sm text-muted-foreground">
-              Private repositories are unavailable
-            </p>
-            <p className="mt-1 text-xs text-muted-foreground/60">
-              Check your private Git services in Settings.
-            </p>
-          </div>
-        ) : displayRepos && displayRepos.length > 0 ? (
-          <>
-            <div className="space-y-0.5">
-              {displayRepos.map((repo) => (
-                <RepoListItem key={repo.componentId} repo={repo} />
-              ))}
+    <>
+      <div className="h-fit">
+        <div className="pb-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <h3 className="flex items-center gap-2 text-base font-semibold">
+                <Lock className="h-4 w-4 shrink-0 text-muted-foreground" />
+                <span className="leading-tight">
+                  Accessible private repositories
+                </span>
+              </h3>
+              <p className="ml-6 mt-1 text-xs text-muted-foreground">
+                Querying {serviceCount} private {serviceLabel}
+              </p>
             </div>
-            {hasMore && (
-              <div className="mt-3 border-t border-border/40 pt-2">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-7 w-full text-xs text-muted-foreground"
-                  onClick={() => setExpanded((value) => !value)}
-                >
-                  {expanded ? (
-                    <>
-                      Show less
-                      <ChevronUp className="ml-1.5 h-3 w-3" />
-                    </>
-                  ) : (
-                    <>
-                      Show all {filtered?.length} repositories
-                      <ChevronDown className="ml-1.5 h-3 w-3" />
-                    </>
-                  )}
-                </Button>
-              </div>
-            )}
-          </>
-        ) : isFiltering ? (
-          <div className="py-6 text-center">
-            <p className="text-sm text-muted-foreground">
-              No private repositories match "{search}"
-            </p>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 shrink-0 px-2 text-xs text-muted-foreground hover:text-foreground"
+              asChild
+            >
+              <Link to="/settings#private-git-services">
+                <Settings2 className="mr-1 h-3.5 w-3.5" />
+                Configure
+              </Link>
+            </Button>
           </div>
-        ) : (
-          <div className="rounded-lg border border-dashed px-4 py-6 text-center">
-            <p className="text-sm text-muted-foreground">
-              {hasConfiguredServices
-                ? "No accessible private repositories"
-                : "No private Git services configured"}
-            </p>
-            <p className="mt-1 text-xs text-muted-foreground/60">
-              {hasConfiguredServices
-                ? "Repositories shared through your services will appear here."
-                : "Add a private service to discover repositories you can access."}
-            </p>
+        </div>
+
+        {sorted && sorted.length > 0 && (
+          <div className="relative mb-3">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              placeholder="Filter private repositories..."
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              className="h-8 bg-background/60 pl-8 text-sm focus-visible:ring-pink-500/30"
+            />
           </div>
         )}
+
+        <div>
+          {repos === undefined ? (
+            <div className="space-y-1">
+              {Array.from({ length: 3 }).map((_, index) => (
+                <RepoRowSkeleton key={index} />
+              ))}
+            </div>
+          ) : displayRepos && displayRepos.length > 0 ? (
+            <>
+              <div className="space-y-0.5">
+                {displayRepos.map((repo) => (
+                  <RepoListItem key={repo.componentId} repo={repo} />
+                ))}
+              </div>
+              {hasMore && (
+                <div className="mt-3 border-t border-border/40 pt-2">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 w-full text-xs text-muted-foreground"
+                    onClick={() => setExpanded((value) => !value)}
+                  >
+                    {expanded ? (
+                      <>
+                        Show less
+                        <ChevronUp className="ml-1.5 h-3 w-3" />
+                      </>
+                    ) : (
+                      <>
+                        Show all {filtered?.length} repositories
+                        <ChevronDown className="ml-1.5 h-3 w-3" />
+                      </>
+                    )}
+                  </Button>
+                </div>
+              )}
+            </>
+          ) : isFiltering ? (
+            <div className="py-6 text-center">
+              <p className="text-sm text-muted-foreground">
+                No private repositories match "{search}"
+              </p>
+            </div>
+          ) : (
+            <div className="rounded-lg border border-dashed px-4 py-6 text-center">
+              <p className="text-sm text-muted-foreground">
+                No accessible private repositories
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground/60">
+                Repositories shared through your services will appear here.
+              </p>
+            </div>
+          )}
+        </div>
       </div>
-    </div>
+      <Separator className="opacity-40" />
+    </>
   );
 }
 
@@ -748,7 +742,6 @@ export function Dashboard() {
             <MyRepositoriesPanel pubkey={pubkey} />
             <Separator className="opacity-40" />
             <AccessiblePrivateRepositoriesPanel pubkey={pubkey} />
-            <Separator className="opacity-40" />
             <FollowedReposPanel pubkey={pubkey} />
           </div>
         </div>
