@@ -1,5 +1,5 @@
 import type { IAccount } from "applesauce-accounts";
-import { isFromRelay, type Filter } from "applesauce-core/helpers";
+import { getSeenRelays, type Filter } from "applesauce-core/helpers";
 import { onlyEvents } from "applesauce-relay";
 import type { NostrEvent } from "nostr-tools";
 import { verifyEvent } from "nostr-tools";
@@ -86,8 +86,11 @@ export function prepareDiscoveredRepositoryEvent(
   event: NostrEvent,
   privateRelayUrls: readonly string[],
 ): boolean {
+  const seenRelays = new Set(
+    [...(getSeenRelays(event) ?? [])].map(normalizeUrl),
+  );
   const sourceRelays = privateRelayUrls.filter((relay) =>
-    isFromRelay(event, relay),
+    seenRelays.has(normalizeUrl(relay)),
   );
   if (sourceRelays.length === 0) return true;
   if (!getRepoIsPrivate(event)) return false;
