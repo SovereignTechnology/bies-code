@@ -21,11 +21,13 @@ import { useUserDisplayName } from "@/hooks/useUserDisplayName";
 import { ChangeIssueStatus, CreateComment } from "@/actions/nip34";
 import type { IssueStatus } from "@/lib/nip34";
 import {
+  ComposerModeToggle,
   NostrComposer,
+  type ComposerTab,
   type NostrComposerHandle,
 } from "@/components/NostrComposer";
 import type { Nip94Tags } from "@/hooks/useBlossomUpload";
-import { composerHasNsec, hasPreviewableContent } from "@/lib/composerUtils";
+import { composerHasNsec } from "@/lib/composerUtils";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -89,7 +91,7 @@ export function ReplyBox({
 }: ReplyBoxProps) {
   const composerRef = useRef<NostrComposerHandle>(null);
   const [body, setBody] = useState("");
-  const [activeTab, setActiveTab] = useState<"write" | "preview">("write");
+  const [activeTab, setActiveTab] = useState<ComposerTab>("write");
   const [focused, setFocused] = useState(false);
   const [isPending, setIsPending] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
@@ -107,8 +109,8 @@ export function ReplyBox({
 
   const initials = displayName.slice(0, 2).toUpperCase() || "?";
 
-  const showToggle =
-    activeTab === "preview" || focused || hasPreviewableContent(body);
+  const showAttach =
+    focused || activeTab === "preview" || body.trim().length > 0;
 
   // The applesauce CommentBlueprint takes the immediate parent event.
   // For a top-level comment that's the root; for a reply it's the comment.
@@ -268,37 +270,23 @@ export function ReplyBox({
         />
 
         <div className="flex flex-wrap items-center gap-2">
-          {/* Keep Write available whenever Preview is active so the editor cannot get stranded */}
-          {showToggle && (
-            <>
-              <button
-                type="button"
-                title="Attach image or video (Blossom)"
-                disabled={isPending || isUploading}
-                onClick={() => composerRef.current?.triggerAttach()}
-                className="rounded p-1 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                <Paperclip className="h-4 w-4" />
-              </button>
-
-              <div className="flex items-center gap-0.5">
-                {(["write", "preview"] as const).map((tab) => (
-                  <button
-                    key={tab}
-                    type="button"
-                    onClick={() => setActiveTab(tab)}
-                    className={`rounded px-2 py-0.5 text-xs font-medium capitalize transition-colors ${
-                      activeTab === tab
-                        ? "bg-muted text-foreground"
-                        : "text-muted-foreground hover:text-foreground"
-                    }`}
-                  >
-                    {tab}
-                  </button>
-                ))}
-              </div>
-            </>
+          {showAttach && (
+            <button
+              type="button"
+              title="Attach image or video (Blossom)"
+              disabled={isPending || isUploading}
+              onClick={() => composerRef.current?.triggerAttach()}
+              className="rounded p-1 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <Paperclip className="h-4 w-4" />
+            </button>
           )}
+
+          <ComposerModeToggle
+            value={body}
+            activeTab={activeTab}
+            onTabChange={setActiveTab}
+          />
 
           <div className="flex items-center gap-3 ml-auto">
             {/* Anonymous checkbox — only shown when not logged in */}

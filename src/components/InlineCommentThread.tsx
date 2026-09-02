@@ -15,7 +15,9 @@ import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import type { NostrEvent } from "nostr-tools";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import {
+  ComposerModeToggle,
   NostrComposer,
+  type ComposerTab,
   type NostrComposerHandle,
 } from "@/components/NostrComposer";
 import { Button } from "@/components/ui/button";
@@ -30,7 +32,7 @@ import {
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { composerHasNsec, hasPreviewableContent } from "@/lib/composerUtils";
+import { composerHasNsec } from "@/lib/composerUtils";
 import { runner } from "@/services/actions";
 import {
   CreateInlineComment,
@@ -132,7 +134,7 @@ function InlineComposer({
 }: InlineComposerProps) {
   const composerRef = useRef<NostrComposerHandle>(null);
   const [body, setBody] = useState("");
-  const [activeTab, setActiveTab] = useState<"write" | "preview">("write");
+  const [activeTab, setActiveTab] = useState<ComposerTab>("write");
   const [isPending, setIsPending] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const { toast } = useToast();
@@ -142,8 +144,6 @@ function InlineComposer({
   const profile = useProfile(account?.pubkey);
   const { name: displayName } = useUserDisplayName(account?.pubkey ?? "");
   const initials = displayName.slice(0, 2).toUpperCase() || "?";
-
-  const showToggle = activeTab === "preview" || hasPreviewableContent(body);
 
   const submitComment = useCallback(async () => {
     const trimmed = body.trim();
@@ -228,25 +228,11 @@ function InlineComposer({
           />
 
           <div className="flex items-center gap-2">
-            {/* Keep Write available whenever Preview is active so the editor cannot get stranded */}
-            {showToggle && (
-              <div className="flex items-center gap-0.5">
-                {(["write", "preview"] as const).map((tab) => (
-                  <button
-                    key={tab}
-                    type="button"
-                    onClick={() => setActiveTab(tab)}
-                    className={`rounded px-2 py-0.5 text-xs font-medium capitalize transition-colors ${
-                      activeTab === tab
-                        ? "bg-muted text-foreground"
-                        : "text-muted-foreground hover:text-foreground"
-                    }`}
-                  >
-                    {tab}
-                  </button>
-                ))}
-              </div>
-            )}
+            <ComposerModeToggle
+              value={body}
+              activeTab={activeTab}
+              onTabChange={setActiveTab}
+            />
 
             <div className="flex items-center gap-2 ml-auto">
               <Button
