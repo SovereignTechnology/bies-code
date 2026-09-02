@@ -203,6 +203,17 @@ function throwIfAborted(signal: AbortSignal): void {
   if (signal.aborted) throw abortError(signal);
 }
 
+const SLOW_PUSH_THRESHOLD_MS = 10_000;
+
+function acceptedPushMessage(responseReceivedAt: number | undefined): string {
+  if (responseReceivedAt === undefined) return "accepted";
+
+  const elapsedMs = Math.max(0, Date.now() - responseReceivedAt);
+  if (elapsedMs < SLOW_PUSH_THRESHOLD_MS) return "accepted";
+
+  return `accepted eventually (registered ${Math.round(elapsedMs / 1_000)}s after the push response)`;
+}
+
 function failedPushOutcome(
   cloneUrl: string,
   error: unknown,
@@ -510,11 +521,12 @@ export async function pushToGraspServer(
         gitAuthorizationHeaders(ctx.authorizationProvider, url, ctx.signal),
     );
     throwIfAborted(ctx.signal);
+    const responseReceivedAt = Date.now();
     const refFailures = result.refResults.filter((r) => !r.ok);
+    const responseAccepted = result.unpackOk && refFailures.length === 0;
 
     if (
-      result.unpackOk &&
-      refFailures.length === 0 &&
+      responseAccepted &&
       (await serverRefsMatch(
         cloneUrl,
         ctx.desiredRefs,
@@ -525,7 +537,7 @@ export async function pushToGraspServer(
       return {
         cloneUrl,
         ok: true,
-        message: "accepted",
+        message: acceptedPushMessage(responseReceivedAt),
       };
     }
 
@@ -540,7 +552,9 @@ export async function pushToGraspServer(
       return {
         cloneUrl,
         ok: true,
-        message: "accepted; server reported a stale failure",
+        message: acceptedPushMessage(
+          responseAccepted ? responseReceivedAt : undefined,
+        ),
       };
     }
 
@@ -589,7 +603,7 @@ export async function pushToGraspServer(
       return {
         cloneUrl,
         ok: true,
-        message: "accepted; confirmation failed",
+        message: "accepted",
       };
     }
 
