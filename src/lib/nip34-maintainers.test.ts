@@ -397,6 +397,34 @@ describe("repository component indexing", () => {
 });
 
 describe("replicated role history and exits", () => {
+  it("treats reciprocal untimed legacy membership as active from zero", () => {
+    const resolved = resolveChain(
+      [
+        legacyAnnouncement(owner, [invitee], 10),
+        legacyAnnouncement(invitee, [owner], 20),
+      ],
+      owner,
+      repoId,
+    );
+
+    expect(resolved?.confirmedMaintainers).toEqual([owner, invitee]);
+    expect(
+      isHistoricalRepositoryMember(resolved?.roleHistory, invitee, 0),
+    ).toBe(true);
+    expect(
+      isHistoricalRepositoryMember(resolved?.roleHistory, invitee, 20),
+    ).toBe(true);
+    expect(
+      isHistoricalRepositoryMember(resolved?.roleHistory, invitee, 21),
+    ).toBe(true);
+    const ownerSelfRole = resolved?.roleHistory.authorHistories
+      .find(({ author }) => author === owner)
+      ?.records.find(({ subject }) => subject === owner);
+    expect(ownerSelfRole && repositoryRoleStateAt(ownerSelfRole, 1)).toBe(
+      "active",
+    );
+  });
+
   it("authorizes accepted maintainers only from their signed acceptance boundary", () => {
     const resolved = resolveChain(
       [
@@ -518,6 +546,9 @@ describe("replicated role history and exits", () => {
     expect(
       isHistoricalRepositoryMember(resolved?.roleHistory, invitee, 15),
     ).toBe(false);
+    expect(
+      isHistoricalRepositoryMember(resolved?.roleHistory, invitee, 20),
+    ).toBe(true);
   });
 
   it("requires a new self-role interval to accept a reopened invitation", () => {

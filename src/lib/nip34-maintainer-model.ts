@@ -932,11 +932,14 @@ function authorRoleHistory(
         if (HEX_PUBKEY.test(subject)) subjects.add(subject);
       }
     }
-    const records = [...subjects].map((subject) => ({
+    const records: RepositoryRoleRecord[] = [...subjects].map((subject) => ({
       author: event.pubkey,
-      role: "m" as const,
+      role: "m",
       subject,
-      boundaries: [] as (number | "defer")[],
+      // Legacy maintainers tags are untimed active role records. Their missing
+      // start is represented by an empty history, which covers the role from
+      // the beginning until later evidence closes it.
+      boundaries: [],
       active: true,
     }));
     return {
@@ -1265,14 +1268,15 @@ function historicalMaintainersFromRoot(
     changed = false;
     for (const candidate of maintainerCandidates) {
       if (confirmed.has(candidate)) continue;
-      const assignments = history.resolvedRecords.filter(
-        (record) =>
-          record.subject === candidate &&
-          MAINTAINER_ROLES.has(record.role) &&
-          confirmed.has(record.author) &&
-          repositoryRoleStateAt(record, createdAt) === "active",
-      );
-      if (assignments.length === 0) continue;
+      const assignedByMember = [...confirmed].some((author) => {
+        const authorHistory = byAuthor.get(author);
+        return activeAuthorTargets(
+          authorHistory,
+          createdAt,
+          MAINTAINER_ROLES,
+        ).includes(candidate);
+      });
+      if (!assignedByMember) continue;
       const candidateHistory = byAuthor.get(candidate);
       const acceptsAssignment = historicalSelfAcceptanceCoversAssignment(
         candidateHistory,
@@ -1335,14 +1339,14 @@ export function historicalRepositoryMembersAt(
       .map((record) => record.subject),
   );
   for (const candidate of moderatorCandidates) {
-    const assignments = history.resolvedRecords.filter(
-      (record) =>
-        record.subject === candidate &&
-        record.role === "o" &&
-        confirmed.has(record.author) &&
-        repositoryRoleStateAt(record, createdAt) === "active",
+    const assignedByMaintainer = [...confirmed].some((author) =>
+      activeAuthorTargets(
+        byAuthor.get(author),
+        createdAt,
+        MODERATOR_ROLE,
+      ).includes(candidate),
     );
-    if (assignments.length === 0) continue;
+    if (!assignedByMaintainer) continue;
     const candidateHistory = byAuthor.get(candidate);
     const acceptsAssignment = historicalSelfAcceptanceCoversAssignment(
       candidateHistory,
