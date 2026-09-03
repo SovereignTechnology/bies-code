@@ -33,7 +33,6 @@ images:
 communities:
   - acfeaea6e51420e8068fac446ca9d17d7a9ef6a5d20d93894e50fee3d4902a84
 
-channel: main
 release_notes: CHANGELOG.md
 release_source: release-artifacts/gitworkshop-android-v{version}.apk
 

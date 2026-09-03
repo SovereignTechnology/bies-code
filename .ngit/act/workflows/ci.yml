@@ -413,9 +413,16 @@ jobs:
           trap 'rm -f "$signer_file"' EXIT
           umask 077
           printf '%s' "$NGIT_PUBLISHER_NBUNKSEC" > "$signer_file"
+          if [ "${VERSION_NAME#*-}" != "$VERSION_NAME" ]; then
+            prerelease="${VERSION_NAME#*-}"
+            channel="${prerelease%%[.+]*}"
+          else
+            channel=main
+          fi
           ngit release publish "$VERSION_NAME" \
             --repo nostr://dan@gitworkshop.dev/gitnostr.com/gitworkshop \
             --manifest .ngit/release.yaml \
+            --channel "$channel" \
             --tag "$RELEASE_TAG" \
             --nbunksec-file "$signer_file" \
             --defaults \
