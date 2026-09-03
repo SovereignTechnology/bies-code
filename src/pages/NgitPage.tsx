@@ -201,7 +201,7 @@ function InstallNgit() {
                       <li>
                         Clone{" "}
                         <a
-                          href="https://github.com/DanConwayDev/ngit-cli"
+                          href="https://ngit.dev/cli.git"
                           target="_blank"
                           rel="noreferrer"
                           className="text-pink-500 hover:underline"
@@ -284,7 +284,7 @@ function InstallNgit() {
                       <li>
                         Add ngit as a flake input:
                         <div className="bg-muted rounded-md px-4 py-3 font-mono text-sm mt-2 whitespace-pre">
-                          {`{ inputs = { ngit.url = "github:DanConwayDev/ngit-cli"; } }`}
+                          {`{ inputs = { ngit.url = "git+https://ngit.dev/cli.git?ref=refs/tags/${NGIT_VERSION}"; } }`}
                         </div>
                       </li>
                       <li>
