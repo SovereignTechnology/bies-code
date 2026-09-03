@@ -2552,13 +2552,25 @@ function resolvedRepoFromMembership(
       ? [record]
       : [];
   });
-  const aggressiveSelfLedRestart =
+  const activeSelfLeadStarts = selectedSelfRoles.flatMap((record) => {
+    const start = record.boundaries.at(-1);
+    return record.role === "M" && record.active && typeof start === "number"
+      ? [start]
+      : [];
+  });
+  // Closing self-m and opening self-M at the same boundary is a continuous
+  // co-maintainer-to-lead transition, not a same-coordinate repository fork.
+  const continuousSelfLeadPromotion = activeSelfLeadStarts.some((start) =>
     selectedSelfRoles.some(
       (record) =>
-        record.role === "M" &&
-        record.active &&
-        typeof record.boundaries.at(-1) === "number",
-    ) &&
+        record.role === "m" &&
+        !record.active &&
+        record.boundaries.at(-1) === start,
+    ),
+  );
+  const aggressiveSelfLedRestart =
+    activeSelfLeadStarts.length > 0 &&
+    !continuousSelfLeadPromotion &&
     selectedSelfRoles.some(
       (record) =>
         !record.active &&
