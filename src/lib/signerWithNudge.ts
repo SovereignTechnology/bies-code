@@ -404,13 +404,26 @@ export function signerWithNudge(
     };
   }
 
-  if (signer.nip04) {
-    wrapped.nip04 = wrapCrypto(signer.nip04);
-  }
-
-  if (signer.nip44) {
-    wrapped.nip44 = wrapCrypto(signer.nip44);
-  }
+  // ExtensionSigner exposes these as getters backed by window.nostr. During a
+  // restored-account startup the extension may inject that object after this
+  // wrapper is created, so resolving the capabilities only once here would
+  // permanently hide encryption support until the user logs in again.
+  Object.defineProperties(wrapped, {
+    nip04: {
+      enumerable: true,
+      get: () => {
+        const crypto = signer.nip04;
+        return crypto ? wrapCrypto(crypto) : undefined;
+      },
+    },
+    nip44: {
+      enumerable: true,
+      get: () => {
+        const crypto = signer.nip44;
+        return crypto ? wrapCrypto(crypto) : undefined;
+      },
+    },
+  });
 
   return wrapped;
 }
