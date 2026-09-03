@@ -1117,6 +1117,15 @@ function RepoSettingsForm({
     void runMembershipIntent({ type: "add", targetPubkey });
   }, [membershipTargetInput, repo.selectedMaintainer, runMembershipIntent]);
 
+  const handleSelectMembershipTarget = useCallback(
+    (pubkey: string) => {
+      setMembershipTargetInput(nip19.npubEncode(pubkey));
+      setMembershipTargetError(undefined);
+      membershipMutation.clearFailure();
+    },
+    [membershipMutation],
+  );
+
   // ---------------------------------------------------------------------------
   // Save
   // ---------------------------------------------------------------------------
@@ -1620,21 +1629,19 @@ function RepoSettingsForm({
                     Invite one maintainer
                   </Label>
                   <div className="flex flex-col gap-2 sm:flex-row">
-                    <Input
+                    <MaintainerUserInput
                       id="membership-target"
                       value={membershipTargetInput}
-                      onChange={(event) => {
-                        setMembershipTargetInput(event.target.value);
+                      onValueChange={(value) => {
+                        setMembershipTargetInput(value);
                         setMembershipTargetError(undefined);
                         membershipMutation.clearFailure();
                       }}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") {
-                          event.preventDefault();
-                          handleSafeAddMaintainer();
-                        }
-                      }}
-                      placeholder="npub1… or hex pubkey"
+                      onAdd={handleSafeAddMaintainer}
+                      onSelectPubkey={handleSelectMembershipTarget}
+                      priorityPubkeys={maintainerPickerPriorityPubkeys}
+                      excludePubkeys={maintainerPickerExcludePubkeys}
+                      placeholder="Name, npub1…, or hex pubkey"
                       className="font-mono"
                       disabled={
                         !membershipMutation.enabled ||
@@ -2647,6 +2654,7 @@ function RepoSettingsForm({
 // ---------------------------------------------------------------------------
 
 function MaintainerUserInput({
+  id,
   disabled = false,
   value,
   onValueChange,
@@ -2657,6 +2665,7 @@ function MaintainerUserInput({
   placeholder,
   className,
 }: {
+  id?: string;
   disabled?: boolean;
   value: string;
   onValueChange: (value: string) => void;
@@ -2723,6 +2732,7 @@ function MaintainerUserInput({
   return (
     <div className="relative flex-1">
       <Input
+        id={id}
         ref={inputRef}
         disabled={disabled}
         placeholder={placeholder}

@@ -20,6 +20,9 @@
 
 ### Fixes
 
+- Restore maintainer name autocomplete and resolve invitees' NIP-65 mailboxes
+  before membership safety snapshots, without treating optional identity
+  lookup relays as repository authorities.
 - Load the dedicated Markdown chunk alongside the repository route and warm both after initial-page idle or repository-link intent, so pull-request descriptions, cover notes, READMEs, and release notes retain focused caching without waiting behind a late JavaScript placeholder.
 - Keep relay-setting rows inside phone-sized cards by truncating long URLs,
   collapsing Remove to a trash icon, and hiding connection glyphs on mobile.

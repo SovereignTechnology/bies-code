@@ -1,7 +1,8 @@
 import { useCallback, useState } from "react";
 import { useActiveAccount } from "applesauce-react/hooks";
 import type { Filter } from "applesauce-core/helpers";
-import type { Subscription } from "rxjs";
+import { firstValueFrom, type Subscription } from "rxjs";
+import { endWith, ignoreElements, timeout } from "rxjs/operators";
 import type { NostrEvent } from "nostr-tools";
 
 import type { RepositoryState } from "@/casts/RepositoryState";
@@ -41,12 +42,13 @@ import {
   updateMaintainerAcceptanceJob,
   type RelayDelivery,
 } from "@/services/maintainerAcceptance";
-import { eventStore, pool as relayPool, publish } from "@/services/nostr";
 import {
-  fallbackRelays,
-  gitIndexRelays,
-  lookupRelays,
-} from "@/services/settings";
+  addressLoader,
+  eventStore,
+  pool as relayPool,
+  publish,
+} from "@/services/nostr";
+import { fallbackRelays, gitIndexRelays } from "@/services/settings";
 
 export interface RepositoryMembershipMutationFailure {
   code: RepositoryMembershipMutationRefusalCode;
@@ -271,6 +273,46 @@ function mutationAuthors(
   ];
 }
 
+async function discoverMutationMailboxes(
+  authors: string[],
+  deadline: number,
+): Promise<NostrEvent[]> {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) {
+    throw new RepositoryMembershipMutationRefusal(
+      "incomplete_relay_view",
+      "Mailbox lookup exhausted its bounded deadline. GitWorkshop does not yet support making this transition.",
+    );
+  }
+
+  try {
+    await Promise.all(
+      authors.map((author) =>
+        firstValueFrom(
+          addressLoader({
+            kind: 10002,
+            pubkey: author,
+            cache: false,
+          }).pipe(
+            ignoreElements(),
+            endWith(null),
+            timeout({ first: remaining }),
+          ),
+        ),
+      ),
+    );
+  } catch (error) {
+    throw new RepositoryMembershipMutationRefusal(
+      "incomplete_relay_view",
+      `The affected mailbox relay lists did not settle (${error instanceof Error ? error.message : String(error)}). GitWorkshop does not yet support making this transition.`,
+    );
+  }
+
+  return latestEventsByAuthor(
+    eventStore.getByFilters([{ kinds: [10002], authors }]),
+  );
+}
+
 async function settleMutationSnapshot(
   repo: ResolvedRepo,
   actorPubkey: string,
@@ -287,16 +329,16 @@ async function settleMutationSnapshot(
       ...repo.relays,
       ...indexRelayUrls,
       ...fallbackRelays.getValue(),
-      ...lookupRelays.getValue(),
     ].map(normalizeUrl),
   );
   if (baseRelays.size === 0) {
     throw new RepositoryMembershipMutationRefusal(
       "incomplete_relay_view",
-      "No repository, mailbox, index, lookup, or fallback relay is available. GitWorkshop does not yet support making this transition.",
+      "No repository, mailbox, Git index, or fallback relay is available. GitWorkshop does not yet support making this transition.",
     );
   }
   const safetyRelays = new Set(baseRelays);
+  const mailboxAuthors = new Set<string>();
 
   while (true) {
     if (authors.size > MAX_SNAPSHOT_AUTHORS) {
@@ -313,6 +355,27 @@ async function settleMutationSnapshot(
     }
 
     const authorList = [...authors].sort();
+    const undiscoveredMailboxAuthors = authorList.filter(
+      (author) => !mailboxAuthors.has(author),
+    );
+    if (undiscoveredMailboxAuthors.length > 0) {
+      const mailboxEvents = await discoverMutationMailboxes(
+        undiscoveredMailboxAuthors,
+        deadline,
+      );
+      for (const event of mailboxEvents) {
+        for (const [name, url] of event.tags) {
+          if (name === "r" && /^wss?:\/\//.test(url ?? "")) {
+            safetyRelays.add(normalizeUrl(url));
+          }
+        }
+      }
+      for (const author of undiscoveredMailboxAuthors) {
+        mailboxAuthors.add(author);
+      }
+      continue;
+    }
+
     const relayList = [...safetyRelays].sort();
     const mailboxRead = await requiredRelayRead(
       relayList,
