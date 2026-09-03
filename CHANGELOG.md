@@ -4,6 +4,8 @@
 
 ### Changed
 
+- Prepare tag-only NIP-82 and Zapstore release publication through ngit while
+  retaining the existing zsp manifest as a manual first-release fallback.
 - Publish the production NIP-5A site with ngit through a dedicated established
   CI signer connection, replacing the nsyte-specific signing bridge.
 - Settle repository resolution once over a monotonic initial relay snapshot — one identifier-scoped announcement wave plus a bounded deletion follow-up, with relay failures counted so settlement is always finite. Maintainers, relays, and mailboxes discovered later enrich the page progressively instead of restarting settlement; canonical lead redirects now fire at the first fresh relay EOSE, while dead-coordinate and unsupported-restart conclusions and the membership safety gates keep waiting for the full snapshot.
