@@ -226,6 +226,7 @@ jobs:
 
   deploy-nsite-production:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: [test, android-lint, prepare-web-deploys]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     concurrency:
@@ -234,17 +235,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 9.15.9
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-
-      # The signing bridge below runs from the application's node_modules.
-      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - uses: danconwaydev/setup-ngit@v3
 
       - name: Download tested web build
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
@@ -252,84 +243,31 @@ jobs:
           name: web-dist
           path: dist
 
-      - name: Prepare SPA fallback
-        run: cp dist/index.html dist/404.html
+      # _redirects configures Netlify and is not part of the website. The
+      # committed nsite config maps index.html to /404.html without uploading
+      # a duplicate blob.
+      - name: Prepare nsite artifact
+        run: rm dist/_redirects
 
-      # This persistent deployment signs through the same NIP-46 bunker as
-      # the Zapstore job, but no nsyte mode can reproduce zsp's handshake:
-      # the bunker binds its connect secret to zsp's client key, nsyte's
-      # nbunksec path omits the secret (timeout) and its bunker-URL path
-      # uses a fresh client key ("already connected"). The bridge performs
-      # the zsp-style handshake upstream and re-exposes the session as a
-      # throwaway local NIP-46 provider for nsyte to consume. It stays
-      # alive in the background relaying signing requests; the deploy step
-      # below talks to it through the bunker URI it writes out.
-      - name: Start NIP-46 signing bridge
-        id: bridge
+      # Reuse the established Amber connection without exposing its nbunksec
+      # in the process arguments. The committed .nsite/config.json supplies
+      # the named-site metadata, fallback, relays, and Blossom servers.
+      - name: Publish production nsite
         env:
-          ZAPSTORE_BUNKER_URL: ${{ secrets.ZAPSTORE_BUNKER_URL }}
-          ZAPSTORE_CLIENT_KEY: ${{ secrets.ZAPSTORE_CLIENT_KEY }}
+          NGIT_PUBLISHER_NBUNKSEC: ${{ secrets.NGIT_PUBLISHER_NBUNKSEC }}
         run: |
           set -eu
-          : "${ZAPSTORE_BUNKER_URL:?Set the ZAPSTORE_BUNKER_URL secret.}"
-          : "${ZAPSTORE_CLIENT_KEY:?Set the ZAPSTORE_CLIENT_KEY secret.}"
-          uri_file="$RUNNER_TEMP/nsite-bridge-uri"
-          log_file="$RUNNER_TEMP/nsite-bridge.log"
-          BRIDGE_OUTPUT_FILE="$uri_file" nohup \
-            node .ngit/act/scripts/nsite-bunker-bridge.mjs \
-            > "$log_file" 2>&1 &
-          for _ in $(seq 1 45); do
-            [ -s "$uri_file" ] && break
-            sleep 1
-          done
-          if [ ! -s "$uri_file" ]; then
-            echo "The bridge produced no URI within 45s." >&2
-            cat "$log_file" >&2 || true
-            exit 1
-          fi
-          uri="$(head -n 1 "$uri_file")"
-          case "$uri" in
-            ERROR*)
-              cat "$log_file" >&2 || true
-              exit 1
-              ;;
-          esac
-          echo "::add-mask::$uri"
-          printf 'uri=%s\n' "$uri" >> "$GITHUB_OUTPUT"
-
-      # Deploy as the NIP-5A named site "gitworkshop" (kind 35128 with a d
-      # tag) instead of the identity's root npub site, so the bunker
-      # identity's root namespace and its kind 10002/10063 lists stay
-      # untouched. Gateways resolve blobs through the manifest's own server
-      # tags, which nsyte fills from the servers list below. Secrets-scan
-      # reasoning matches the preview job: the tested bundle predates this
-      # job and trips the heuristic scanner on ordinary application strings.
-      - name: Publish production nsite
-        uses: sandwichfarm/nsite-action@35466ff9509a5c063ca943d1f727f9b129a37970
-        with:
-          sec: ${{ steps.bridge.outputs.uri }}
-          directory: dist
-          version: v0.28.0
-          name: gitworkshop
-          fallback: /index.html
-          skip_secrets_scan: true
-          verbose: true
-          relays: |
-            wss://relay.nsite.lol
-            wss://nos.lol
-            wss://relay.primal.net
-            wss://nsite.run
-          servers: |
-            https://blossom.primal.net
-            https://blossom.ditto.pub
-
-      # Surface the bridge's log (handshake status, relayed signing
-      # requests) for debugging and stop the background process.
-      - name: Stop NIP-46 signing bridge
-        if: ${{ always() }}
-        run: |
-          pkill -f nsite-bunker-bridge.mjs || true
-          cat "$RUNNER_TEMP/nsite-bridge.log" || true
+          : "${NGIT_PUBLISHER_NBUNKSEC:?Set the NGIT_PUBLISHER_NBUNKSEC secret.}"
+          signer_file="$RUNNER_TEMP/ngit-publisher.nbunksec"
+          trap 'rm -f "$signer_file"' EXIT
+          umask 077
+          printf '%s' "$NGIT_PUBLISHER_NBUNKSEC" > "$signer_file"
+          ngit nsite publish dist \
+            --repo nostr://dan@gitworkshop.dev/gitnostr.com/gitworkshop \
+            --nbunksec-file "$signer_file" \
+            --concurrency 12 \
+            --defaults \
+            --json
 
   build-android-release:
     runs-on: ubuntu-latest
