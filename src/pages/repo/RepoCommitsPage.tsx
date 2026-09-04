@@ -102,6 +102,27 @@ export default function RepoCommitsPage() {
     commitIds,
     repo?.isPrivate ? undefined : resolved?.repoRelayGroup,
   );
+  // Branch/tag badges for the graph — group refs by the commit they point at.
+  const refLabels = useMemo(() => {
+    const map = new Map<
+      string,
+      { name: string; isBranch: boolean; isTag: boolean; isDefault?: boolean }[]
+    >();
+    for (const ref of activeExplorer.refs) {
+      const list = map.get(ref.hash) ?? [];
+      list.push(ref);
+      map.set(ref.hash, list);
+    }
+    for (const list of map.values()) {
+      list.sort(
+        (a, b) =>
+          Number(b.isDefault ?? false) - Number(a.isDefault ?? false) ||
+          Number(b.isBranch) - Number(a.isBranch),
+      );
+    }
+    return map;
+  }, [activeExplorer.refs]);
+
   const ciRuns = useMemo(
     () =>
       ciChecks ? [...ciChecks.values()].flatMap((checks) => checks.runs) : [],
@@ -268,6 +289,7 @@ export default function RepoCommitsPage() {
         <CommitList
           commits={history.commits}
           basePath={basePath}
+          refLabels={refLabels}
           hasMore={history.hasMore}
           loadingMore={history.loadingMore}
           onLoadMore={history.loadMore}

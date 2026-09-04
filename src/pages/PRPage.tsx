@@ -1986,6 +1986,7 @@ export default function PRPage() {
                     ) : (
                       <CommitList
                         commits={prCommits}
+                        direction="oldest-first"
                         basePath={
                           prBasePath ??
                           repoToPath(pubkey, repoId, repo?.relays ?? [], nip05)
