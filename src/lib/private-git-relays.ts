@@ -20,6 +20,60 @@ export class PrivateGitRelayListDecodeError extends Error {
   }
 }
 
+interface PrivateGitRelayListCache {
+  /** Event ID whose authenticated ciphertext produced these relay URLs. */
+  eventId: string;
+  relayUrls: string[];
+}
+
+function privateGitRelayListCacheKey(pubkey: string): string {
+  return `private_git_relay_list:${pubkey}`;
+}
+
+function loadPrivateGitRelayListCache(
+  pubkey: string,
+): PrivateGitRelayListCache | undefined {
+  try {
+    const raw = localStorage.getItem(privateGitRelayListCacheKey(pubkey));
+    if (!raw) return undefined;
+
+    const parsed = JSON.parse(raw) as unknown;
+    if (typeof parsed !== "object" || parsed === null) return undefined;
+
+    const candidate = parsed as Record<string, unknown>;
+    if (
+      typeof candidate.eventId !== "string" ||
+      !Array.isArray(candidate.relayUrls) ||
+      !candidate.relayUrls.every(
+        (relay): relay is string => typeof relay === "string",
+      )
+    ) {
+      return undefined;
+    }
+
+    return {
+      eventId: candidate.eventId,
+      relayUrls: normalizePrivateGitRelayUrls(candidate.relayUrls),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function savePrivateGitRelayListCache(
+  pubkey: string,
+  cache: PrivateGitRelayListCache,
+): void {
+  try {
+    localStorage.setItem(
+      privateGitRelayListCacheKey(pubkey),
+      JSON.stringify(cache),
+    );
+  } catch {
+    // Storage is an optimization; decoding still works without it.
+  }
+}
+
 function validateRelayUrl(raw: string): string {
   let url: URL;
   try {
@@ -199,6 +253,8 @@ export async function selectPrivateGitRelayList(
   signer: ISigner,
   evidence: PrivateGitRelayListEvidence = {},
 ): Promise<DecodedPrivateGitRelayList | undefined> {
+  const cached = loadPrivateGitRelayListCache(pubkey);
+
   for (const event of [...candidates].sort(newestFirst)) {
     if (
       !verifyEvent(event) ||
@@ -208,16 +264,18 @@ export async function selectPrivateGitRelayList(
     }
 
     try {
-      const relayUrls = await decodePrivateGitRelayListEvent(
-        event,
-        pubkey,
-        signer,
-      );
+      const relayUrls =
+        cached?.eventId === event.id
+          ? cached.relayUrls
+          : await decodePrivateGitRelayListEvent(event, pubkey, signer);
       if (
         isDeleted(event, evidence.deletions ?? []) ||
         isVanished(event, evidence.vanishes ?? [])
       ) {
         return undefined;
+      }
+      if (cached?.eventId !== event.id) {
+        savePrivateGitRelayListCache(pubkey, { eventId: event.id, relayUrls });
       }
       return { event, relayUrls };
     } catch (error) {
@@ -303,6 +361,11 @@ export async function createPrivateGitRelayListEvent(
   ) {
     throw new Error("The signer returned an unreadable private Git relay list");
   }
+
+  savePrivateGitRelayListCache(pubkey, {
+    eventId: event.id,
+    relayUrls: roundTrip,
+  });
 
   return event;
 }
