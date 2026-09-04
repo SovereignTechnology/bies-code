@@ -17,7 +17,8 @@
   into dashed stubs where history continues above or below (earlier ancestors,
   later pushes built on top), and commits force-pushed away pair the
   struck-through text with a faded hollow dot; fast-forwarded pushes keep their
-  retained commits intact.
+  retained commits intact. Merged-in histories stay condensed behind the same
+  expandable branch-labelled row in both full and inline PR commit views.
 - Prepare tag-only NIP-82 and Zapstore release publication through ngit while
   retaining the existing zsp manifest as a manual first-release fallback.
 - Publish the production NIP-5A site with ngit through a dedicated established

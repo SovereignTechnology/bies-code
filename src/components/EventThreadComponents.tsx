@@ -116,6 +116,10 @@ interface EventBodyCardProps {
   commitGraphCommits?: Commit[];
   /** The displayed tip has later descendants outside this original push. */
   commitsContinueAbove?: boolean;
+  /** Condense commits introduced by merges into expandable group rows. */
+  collapseMergedCommits?: boolean;
+  /** Graph-resolved source branch per merge commit hash. */
+  mergeSourceNames?: Map<string, string>;
   /** Successful nsite preview produced for the last commit in this revision. */
   commitPreview?: NsitePreview;
   /**
@@ -147,6 +151,8 @@ export function EventBodyCard({
   commits,
   commitGraphCommits,
   commitsContinueAbove,
+  collapseMergedCommits,
+  mergeSourceNames,
   commitPreview,
   commitsSuperseded,
   commitsLatestHref,
@@ -286,6 +292,8 @@ export function EventBodyCard({
                 // Real commits carry their boundary parent. Bare patch/hash
                 // rows need an explicit signal that their base lies below.
                 continuesBelow={usesSyntheticCommitGraph}
+                collapseMergedCommits={collapseMergedCommits}
+                mergeSourceNames={mergeSourceNames}
               />
               {commitPreview && (
                 <NsitePreviewLink preview={commitPreview} className="mt-2" />

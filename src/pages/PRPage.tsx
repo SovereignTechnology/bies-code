@@ -629,6 +629,12 @@ export default function PRPage() {
     originalPRMergeBase,
     effectiveMergeBase,
   ]);
+  const originalMergeSourceNames = useMergedInSourceBranches(
+    gitPool,
+    gitPoolState,
+    hasRevisions ? originalPRCommits : [],
+    targetBranchName,
+  );
 
   // ── Fast-forward detection (for body card "outdated" badge) ──────────
   // If the latest PR update's tip includes the original PR tip in its history,
@@ -1646,6 +1652,10 @@ export default function PRPage() {
                     hasRevisions &&
                     isLatestFastForwardFromOriginal
                   }
+                  collapseMergedCommits={pr.itemType === "pr"}
+                  mergeSourceNames={
+                    hasRevisions ? originalMergeSourceNames : mergeSourceNames
+                  }
                   commitsSuperseded={
                     // PR: superseded only when there are updates AND the latest
                     // update is not simply a fast-forward of the original commit
@@ -1788,6 +1798,7 @@ export default function PRPage() {
                                         )
                                       : undefined
                                   }
+                                  mergeSourceNames={mergeSourceNames}
                                 />
                               );
                             }

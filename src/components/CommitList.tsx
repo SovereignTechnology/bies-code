@@ -312,40 +312,90 @@ export function CompactCommitGraphList({
   graphCommits,
   continuesAbove,
   continuesBelow,
+  collapseMergedCommits = false,
+  mergeSourceNames,
 }: {
   /** Display rows, oldest first. */
   rows: CompactCommitGraphRowData[];
   graphCommits: Commit[];
   continuesAbove?: boolean;
   continuesBelow?: boolean;
+  /** Collapse commits brought in through a spine merge behind a toggle row. */
+  collapseMergedCommits?: boolean;
+  /** Graph-resolved source branch per merge commit hash. */
+  mergeSourceNames?: Map<string, string>;
 }) {
-  const layout = useMemo(
-    () => layoutCommitGraph(graphCommits, { continuesAbove, continuesBelow }),
-    [graphCommits, continuesAbove, continuesBelow],
+  const collapse = useMemo(
+    () =>
+      collapseMergedCommits ? collapseMergedInCommits(graphCommits) : null,
+    [collapseMergedCommits, graphCommits],
   );
-  const ordered = useMemo(() => {
-    const byHash = new Map(rows.map((row) => [row.hash, row]));
-    return [...layout.rows].reverse().flatMap((graphRow) => {
-      const row = byHash.get(graphRow.commit.hash);
-      return row ? [{ graphRow, row }] : [];
-    });
-  }, [layout, rows]);
+  const layout = useMemo(
+    () =>
+      layoutCommitGraph(collapse ? collapse.spine : graphCommits, {
+        continuesAbove,
+        continuesBelow,
+      }),
+    [collapse, graphCommits, continuesAbove, continuesBelow],
+  );
+  const rowsByHash = useMemo(
+    () => new Map(rows.map((row) => [row.hash, row])),
+    [rows],
+  );
+  const ordered = useMemo(
+    () =>
+      [...layout.rows].reverse().flatMap((graphRow) => {
+        const row = rowsByHash.get(graphRow.commit.hash);
+        return row ? [{ graphRow, row }] : [];
+      }),
+    [layout, rowsByHash],
+  );
+  const [expandedMerges, setExpandedMerges] = useState<Set<string>>(
+    () => new Set(),
+  );
 
   return (
     <div className="rounded-md border border-border/50 bg-muted/20 px-2 py-1">
-      {ordered.map(({ graphRow, row }) => (
-        <GraphCommitRow
-          key={row.key}
-          compact
-          graphRow={graphRow}
-          laneCount={layout.laneCount}
-          flip
-          subject={row.subject}
-          href={row.href}
-          shortHash={row.shortHash}
-          superseded={row.superseded}
-        />
-      ))}
+      {ordered.map(({ graphRow, row }) => {
+        const group = collapse?.groups.get(graphRow.commit.hash);
+        return (
+          <Fragment key={row.key}>
+            {group && (
+              <CompactMergedInGroup
+                commits={group}
+                mergeCommit={graphRow.commit}
+                sourceName={mergeSourceNames?.get(graphRow.commit.hash)}
+                rowsByHash={rowsByHash}
+                lane={graphRow.lane}
+                laneColor={graphRow.color}
+                laneCount={layout.laneCount}
+                expanded={expandedMerges.has(graphRow.commit.hash)}
+                onToggle={() =>
+                  setExpandedMerges((previous) => {
+                    const next = new Set(previous);
+                    if (next.has(graphRow.commit.hash)) {
+                      next.delete(graphRow.commit.hash);
+                    } else {
+                      next.add(graphRow.commit.hash);
+                    }
+                    return next;
+                  })
+                }
+              />
+            )}
+            <GraphCommitRow
+              compact
+              graphRow={graphRow}
+              laneCount={layout.laneCount}
+              flip
+              subject={row.subject}
+              href={row.href}
+              shortHash={row.shortHash}
+              superseded={row.superseded}
+            />
+          </Fragment>
+        );
+      })}
     </div>
   );
 }
@@ -544,6 +594,120 @@ function GraphRailSpacer({
         strokeWidth={2}
       />
     </svg>
+  );
+}
+
+function CompactMergedInGroup({
+  commits,
+  mergeCommit,
+  sourceName,
+  rowsByHash,
+  lane,
+  laneColor,
+  laneCount,
+  expanded,
+  onToggle,
+}: {
+  /** Merged-in commits, newest first. */
+  commits: Commit[];
+  mergeCommit: Commit;
+  sourceName?: string;
+  rowsByHash: Map<string, CompactCommitGraphRowData>;
+  lane: number;
+  laneColor: number;
+  laneCount: number;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const sourceRef =
+    sourceName ?? parseMergeSourceRef(mergeCommit.message.split("\n")[0]);
+  const groupSuperseded = commits.every(
+    (commit) => rowsByHash.get(commit.hash)?.superseded,
+  );
+
+  return (
+    <>
+      {expanded &&
+        [...commits].reverse().map((commit) => {
+          const row = rowsByHash.get(commit.hash);
+          if (!row) return null;
+          const subjectClass = cn(
+            "min-w-0 flex-1 truncate text-xs text-muted-foreground transition-colors",
+            row.superseded && "line-through text-muted-foreground/50",
+            row.href &&
+              !row.superseded &&
+              "hover:text-pink-600 dark:hover:text-pink-400",
+          );
+          const hashClass = cn(
+            "hidden shrink-0 font-mono text-[11px] text-muted-foreground/60 sm:inline",
+            row.superseded && "line-through text-muted-foreground/40",
+            row.href && !row.superseded && "hover:text-foreground",
+          );
+          return (
+            <div
+              key={row.key}
+              className="flex items-center gap-2 pl-1 pr-2 hover:bg-muted/20 transition-colors"
+              style={{ height: COMPACT_ROW_HEIGHT }}
+            >
+              <GraphRailSpacer
+                lane={lane}
+                laneColor={laneColor}
+                laneCount={laneCount}
+                height={COMPACT_ROW_HEIGHT}
+              />
+              <span className="w-3.5 shrink-0" />
+              {row.href ? (
+                <Link to={row.href} className={subjectClass}>
+                  {row.subject}
+                </Link>
+              ) : (
+                <span className={subjectClass}>{row.subject}</span>
+              )}
+              {row.href ? (
+                <Link to={row.href} className={hashClass}>
+                  {row.shortHash}
+                </Link>
+              ) : (
+                <span className={hashClass}>{row.shortHash}</span>
+              )}
+            </div>
+          );
+        })}
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={expanded}
+        className="flex w-full items-center gap-2 pl-1 pr-2 text-left hover:bg-muted/20 transition-colors"
+        style={{ height: COMPACT_ROW_HEIGHT }}
+        title="History merged in from another branch — not authored on this branch"
+      >
+        <GraphRailSpacer
+          lane={lane}
+          laneColor={laneColor}
+          laneCount={laneCount}
+          height={COMPACT_ROW_HEIGHT}
+        />
+        {expanded ? (
+          <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        ) : (
+          <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        )}
+        <span
+          className={cn(
+            "min-w-0 truncate text-xs text-muted-foreground",
+            groupSuperseded && "line-through text-muted-foreground/50",
+          )}
+        >
+          {commits.length} commit{commits.length === 1 ? "" : "s"} merged in
+          from{" "}
+          {sourceRef ? (
+            <span className="font-mono text-foreground/70">{sourceRef}</span>
+          ) : (
+            "another branch"
+          )}
+        </span>
+      </button>
+    </>
   );
 }
 

@@ -492,6 +492,7 @@ export function PRUpdatePushEvent({
   previousTipCommitId,
   latestCommitIds,
   nsitePreview,
+  mergeSourceNames,
 }: {
   update: PRUpdate | PRUpdateLike;
   superseded: boolean;
@@ -521,6 +522,8 @@ export function PRUpdatePushEvent({
   latestCommitIds?: ReadonlySet<string>;
   /** Successful nsite preview produced for this update's tip commit. */
   nsitePreview?: NsitePreview;
+  /** Graph-resolved source branch per merge commit hash. */
+  mergeSourceNames?: Map<string, string>;
 }) {
   const timeAgo = formatDistanceToNow(
     new Date(update.event.created_at * 1000),
@@ -673,7 +676,6 @@ export function PRUpdatePushEvent({
     () => (usingLoadedCommits ? displayCommits : buildLinearGraphCommits(rows)),
     [usingLoadedCommits, displayCommits, rows],
   );
-
   // Fast-forward nuance: when a later push kept this update's tip in its
   // history, later commits were built on top — the window continues above.
   const continuesAbove =
@@ -750,6 +752,8 @@ export function PRUpdatePushEvent({
                 // parent links; synthetic chains need the explicit signal
                 // that the merge base lies below.
                 continuesBelow={!usingLoadedCommits}
+                collapseMergedCommits={usingLoadedCommits}
+                mergeSourceNames={mergeSourceNames}
               />
               {nsitePreview && (
                 <NsitePreviewLink preview={nsitePreview} className="mt-2" />
