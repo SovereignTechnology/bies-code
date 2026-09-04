@@ -1111,6 +1111,73 @@ describe("conservative repository membership mutations", () => {
     );
   });
 
+  it("does not make another author's duplicate role record contagious", () => {
+    const ownerEvent = announcement(owner, [
+      ["M", owner, "10"],
+      ["m", invitee, "10"],
+      ["maintainers", owner, invitee],
+    ]);
+    const duplicatedInvitee = announcement(
+      invitee,
+      [
+        ["M", owner, "20"],
+        ["m", invitee, "20", "defer"],
+        ["m", invitee, "30"],
+        ["maintainers", owner, invitee],
+      ],
+      2,
+    );
+    const resolved = resolveChain(
+      [ownerEvent, duplicatedInvitee],
+      owner,
+      repoId,
+    )!;
+
+    expect(resolved.repositoryHealth).toContainEqual(
+      expect.objectContaining({
+        code: "duplicate-role-record",
+        author: invitee,
+        role: "m",
+        subject: invitee,
+      }),
+    );
+    const proposal = prepareRepositoryMembershipMutation({
+      repo: resolved,
+      actorPubkey: owner,
+      intent: { type: "add", targetPubkey: recursiveInvitee },
+      announcements: [ownerEvent, duplicatedInvitee],
+      stateEvents: [],
+      createdAt: 40,
+    });
+
+    expect(proposal.expectedInvitations).toEqual([recursiveInvitee]);
+  });
+
+  it("keeps the affected author's own duplicate history fail-closed for generic mutations", () => {
+    const ownerEvent = announcement(owner, [
+      ["m", owner, "100", "defer"],
+      ["m", owner, "200"],
+      ["maintainers", owner],
+    ]);
+    const resolved = resolveChain([ownerEvent], owner, repoId)!;
+
+    expect(resolved.confirmedMaintainers).toEqual([owner]);
+    expect(() =>
+      prepareRepositoryMembershipMutation({
+        repo: resolved,
+        actorPubkey: owner,
+        intent: { type: "add", targetPubkey: invitee },
+        announcements: [ownerEvent],
+        stateEvents: [],
+        createdAt: 300,
+      }),
+    ).toThrowError(
+      expect.objectContaining<Partial<RepositoryMembershipMutationRefusal>>({
+        code: "history_conflict",
+      }),
+    );
+  });
+
   it("preserves a superseded self-defer during an unrelated membership edit", () => {
     const invalidTag = ["m", owner, "0", "10", "15", "defer"];
     const ownerEvent = announcement(owner, [

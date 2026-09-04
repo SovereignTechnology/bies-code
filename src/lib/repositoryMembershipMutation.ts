@@ -768,8 +768,17 @@ export function prepareRepositoryMembershipMutation({
   const explicitlyRepairsSelfDefer =
     intent.type === "repair-self-defer" || intent.type === "accept";
   const blockingHealth = repo.repositoryHealth.filter((warning) => {
-    if (warning.code !== "invalid-self-defer") return true;
+    if (
+      warning.code !== "invalid-self-defer" &&
+      warning.code !== "duplicate-role-record"
+    ) {
+      return true;
+    }
+    // Self-defer and duplicate health is author-scoped: another author's
+    // history problem never blocks this actor's mutations, while the
+    // affected author's own generic mutations stay fail-closed.
     if (warning.author !== actorPubkey) return false;
+    if (warning.code === "duplicate-role-record") return true;
     return !warning.selfDefer?.superseded && !explicitlyRepairsSelfDefer;
   });
   if (blockingHealth.length > 0) {

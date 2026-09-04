@@ -212,7 +212,11 @@ repository can be inspected:
 
 Self-`defer` health is author-scoped. Without a superseding role, GitWorkshop
 gates only the affected signer's announcement mutations and role-dependent
-writes; reads and other maintainers' operations continue. With a superseding
+writes; reads and other maintainers' operations continue. Duplicate role
+records are author-scoped in the same way: another author's duplicated
+history never blocks an actor's membership operations, while the affected
+author's own mutations remain fail-closed until their duplicate is
+reconciled. With a superseding
 role, the warning is non-blocking. An invalid self-`M` or self-`m` is not signed
 maintainer-departure evidence, including when a valid self-`o` supersedes it; a
 valid numeric-ended self-maintainer record remains departure evidence. Only the

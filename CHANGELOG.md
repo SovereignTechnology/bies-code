@@ -20,6 +20,9 @@
 
 ### Fixes
 
+- Scope duplicate role-record health to its author so another maintainer's
+  duplicated history no longer blocks unrelated membership operations; the
+  affected author's own mutations stay fail-closed.
 - Scope invalid self-`defer` health to its signer, require a strictly later
   signed self-role to restore current authority, keep other maintainers and
   superseded roles operational, and offer explicit signer-approved repair or
