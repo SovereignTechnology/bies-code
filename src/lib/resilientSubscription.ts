@@ -36,7 +36,6 @@
 
 import type { RelayPool } from "applesauce-relay";
 import {
-  completeOnEose,
   onlyEvents,
   AuthRequiredError,
   RelayClosedError,
@@ -62,6 +61,7 @@ import {
   share,
   switchMap,
   take,
+  takeUntil,
   tap,
   timer,
   catchError,
@@ -674,14 +674,17 @@ function processRelay(
             // need to fast-settle their settle signal immediately rather
             // than wait for the underlying retry cycle to complete.
             //
-            // No retryCount budget here — while the socket is bouncing we
-            // patiently wait. If the relay never recovers, open$ never fires
-            // and the subscription quietly remains dormant; if a caller
-            // unsubscribes, the watchTower sub and take(1) are torn down
-            // with no leak.
+            // Wait for the socket to recover, then apply the same configured
+            // REQ retry budget/backoff as NIP-01 CLOSED errors. The socket's
+            // reconnectTimer still owns connection-attempt cadence; this
+            // delay prevents a relay that repeatedly opens and immediately
+            // drops the REQ from cycling forever at the phase-1 socket rate.
             if (err instanceof TransportError) {
               signal.error(relay);
               opts.onRelayError?.(relay);
+              reconnectAttempts++;
+              if (!everReceivedEose && reconnectAttempts > opts.retryCount)
+                throw err;
               const relayObj = pool.relay(relay);
               // watchTower is protected in TypeScript but is a plain property
               // at runtime — cast to access it. Subscribing to it increments
@@ -695,20 +698,28 @@ function processRelay(
                 // new connection attempts. The watchTower is share()d so this
                 // just increments the refcount — no duplicate socket is opened.
                 const watchSub = wt.subscribe();
-                // Wait for the next successful open before completing so
-                // defer() re-executes buildLiveSub with a clean error$ state.
+                let backoffSub: { unsubscribe(): void } | undefined;
+                // Wait for the next successful open, then observe the caller's
+                // configured REQ retry delay before emitting. retry() needs an
+                // emission (not completion alone) to resubscribe.
                 const openSub = relayObj.open$.pipe(take(1)).subscribe({
                   next: () => {
-                    // retry() resubscribes on a notifier emission. Completing
-                    // without one would terminate the live query at recovery.
-                    s.next();
-                    s.complete();
+                    const retryDelay$ =
+                      typeof opts.retryDelay === "function"
+                        ? opts.retryDelay(err, reconnectAttempts)
+                        : timer(opts.retryDelay ?? 0);
+                    backoffSub = retryDelay$.subscribe({
+                      next: () => s.next(),
+                      error: (e) => s.error(e),
+                      complete: () => s.complete(),
+                    });
                   },
                   error: (e) => s.error(e),
                 });
                 return () => {
                   watchSub.unsubscribe();
                   openSub.unsubscribe();
+                  backoffSub?.unsubscribe();
                 };
               });
             }
@@ -839,7 +850,7 @@ function processRelay(
           // Preserve the existing no-op for subscriptions that have never
           // received an event. A coverage lease must still prove its resume
           // pass with EOSE, so only lifecycle-aware stable filters re-read the
-          // full filter when there is no event timestamp to use as a cursor.
+          // full filter when there is no safe completed-backfill cursor.
           if (
             lastReceivedAt === undefined &&
             opts.onRelayLifecycle === undefined
@@ -848,38 +859,43 @@ function processRelay(
           }
           gapFillSub?.unsubscribe();
           const lifecycleGeneration = beginLifecycle("catching-up");
+          const gapFillCursor =
+            everReceivedEose && lastReceivedAt !== undefined
+              ? lastReceivedAt - opts.gapFillBuffer
+              : undefined;
           const gapFilters: Filter[] = getFilters().map((f) => ({
             ...f,
-            ...(lastReceivedAt !== undefined
-              ? { since: lastReceivedAt - opts.gapFillBuffer }
-              : {}),
+            ...(gapFillCursor !== undefined ? { since: gapFillCursor } : {}),
           }));
-          let eoseSeen = false;
-          gapFillSub = pool
-            .relay(relay)
-            .subscription(gapFilters, { reconnect: false })
-            .pipe(
-              tap((message) => {
-                if (message === "EOSE") {
-                  eoseSeen = true;
-                  completeLifecycle(lifecycleGeneration, "covered");
-                }
-              }),
-              completeOnEose(),
-              onlyEvents(),
-            )
+          let gapFillEoseSeen = false;
+          const gapFillDone$ = new Subject<void>();
+          gapFillSub = resilientSubscription(pool, [relay], gapFilters, {
+            reconnect: false,
+            gapFill: false,
+            settle: false,
+            paginate: false,
+            retryCount: opts.retryCount,
+            retryDelay: opts.retryDelay,
+            onRelayEose: () => {
+              gapFillEoseSeen = true;
+              completeLifecycle(lifecycleGeneration, "covered");
+              gapFillDone$.next();
+              gapFillDone$.complete();
+            },
+          })
+            .pipe(onlyEvents(), takeUntil(gapFillDone$))
             .subscribe({
               next: (event) => subscriber.next(event),
               error: () => {
-                // Gap-fill errors do not terminate the persistent live stream,
-                // but its coverage remains unavailable until later work EOSEs.
+                // Gap-fill exhaustion does not terminate the persistent live
+                // stream, but its coverage remains unavailable.
                 if (lifecycleGeneration === latestLifecycleGeneration) {
                   beginLifecycle("unavailable");
                 }
               },
               complete: () => {
                 if (
-                  !eoseSeen &&
+                  !gapFillEoseSeen &&
                   lifecycleGeneration === latestLifecycleGeneration
                 ) {
                   beginLifecycle("unavailable");
