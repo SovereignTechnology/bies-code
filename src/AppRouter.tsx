@@ -24,7 +24,6 @@ import CIProviderPage from "./pages/CIProviderPage";
 import Settings from "./pages/Settings";
 import OutboxPage from "./pages/OutboxPage";
 import { NIP19Page } from "./pages/NIP19Page";
-import NgitPage from "./pages/NgitPage";
 import About from "./pages/About";
 import OgImagePreview from "./pages/OgImagePreview";
 import NotFound from "./pages/NotFound";
@@ -34,6 +33,14 @@ import { REPO_KIND } from "./lib/nip34";
 import { getGitWorkshopPath } from "./lib/gitworkshopUrl";
 import { parseRepoRoute } from "./lib/routeUtils";
 import { preloadMarkdownContent } from "./lib/markdownContentLoader";
+import { DOCUMENTATION_URLS } from "./lib/documentation";
+
+const DOCUMENTATION_REDIRECTS = [
+  { path: "/ngit", destination: DOCUMENTATION_URLS.install },
+  { path: "/install", destination: DOCUMENTATION_URLS.install },
+  { path: "/quick-start", destination: DOCUMENTATION_URLS.quickstart },
+  { path: "/docs/*", destination: DOCUMENTATION_URLS.gitworkshop },
+] as const;
 
 let repositoryRoutePromise:
   | Promise<typeof import("./pages/repo/RepoLayout")>
@@ -45,6 +52,25 @@ function loadRepositoryRoute() {
     preloadMarkdownContent(),
   ]).then(([repoLayout]) => repoLayout);
   return repositoryRoutePromise;
+}
+
+function ExternalRedirect({ destination }: { destination: string }) {
+  useEffect(() => {
+    window.location.replace(destination);
+  }, [destination]);
+
+  return (
+    <div className="container max-w-screen-md px-4 py-16 text-center md:px-8">
+      <h1 className="text-2xl font-semibold">Documentation has moved</h1>
+      <p className="mt-3 text-lg text-muted-foreground">
+        Taking you to{" "}
+        <a className="text-pink-500 hover:underline" href={destination}>
+          ngit.dev
+        </a>
+        .
+      </p>
+    </div>
+  );
 }
 
 const RepoLayout = lazy(loadRepositoryRoute);
@@ -389,8 +415,6 @@ function NaddrSubPathRedirect({
 //   /repo/<identifier>     → /search?q=<identifier>
 //   /repos                 → /               (repo listing)
 //   /search/<identifier>   → /search?q=<identifier>
-//   /install[/]            → /ngit
-//   /quick-start[/]        → /ngit
 //   /naddr1.../<subpath>   → /<repoPath>/<subpath>  (naddr with sub-path)
 //   /<any>/.../proposals/  → /<any>/.../prs/  (old PR tab name)
 // ---------------------------------------------------------------------------
@@ -439,16 +463,6 @@ function LegacyRedirect() {
         <Navigate to={`/search?${params.toString()}${location.hash}`} replace />
       );
     }
-  }
-
-  // /install[/] and /quick-start[/] — redirect to /ngit
-  if (
-    raw === "install" ||
-    raw === "install/" ||
-    raw === "quick-start" ||
-    raw === "quick-start/"
-  ) {
-    return <Navigate to="/ngit" replace />;
   }
 
   // /naddr1.../<subpath> — naddr with a sub-path (e.g. /prs/note1..., /issues)
@@ -511,19 +525,15 @@ function AppRouter() {
             <Route path="/settings" element={<Settings />} />
             <Route path="/outbox" element={<OutboxPage />} />
             <Route path="/notifications" element={<NotificationsPage />} />
-            <Route path="/ngit" element={<NgitPage />} />
-            {/* Backwards-compat redirects — must be before /:nip19 */}
-            <Route path="/install" element={<Navigate to="/ngit" replace />} />
-            <Route
-              path="/quick-start"
-              element={
-                <Navigate
-                  to="/ngit"
-                  state={{ expandQuickStart: true }}
-                  replace
-                />
-              }
-            />
+            {/* Portable documentation redirects — these run in Netlify, static
+                builds, nsites, and native builds after the SPA fallback. */}
+            {DOCUMENTATION_REDIRECTS.map(({ path, destination }) => (
+              <Route
+                key={path}
+                path={path}
+                element={<ExternalRedirect destination={destination} />}
+              />
+            ))}
             <Route path="/about" element={<About />} />
             <Route path="/og-preview" element={<OgImagePreview />} />
             {/* /relay/:relaySegment — browse repos on a specific relay.

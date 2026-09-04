@@ -38,6 +38,7 @@ import { useUserRepositories } from "@/hooks/useUserRepositories";
 import { useUserFollowedRepos } from "@/hooks/useUserFollowedRepos";
 import { useAccessiblePrivateRepositories } from "@/hooks/useAccessiblePrivateRepositories";
 import { useUserPinnedCoords } from "@/hooks/useUserPinnedRepos";
+import { DOCUMENTATION_URLS } from "@/lib/documentation";
 import { useNotifications } from "@/hooks/useNotifications";
 import { useUserProfileSubscription } from "@/hooks/useUserProfileSubscription";
 import { useUserPath } from "@/hooks/useUserPath";
@@ -284,10 +285,10 @@ function MyRepositoriesPanel({ pubkey }: { pubkey: string }) {
               No repositories yet
             </p>
             <Button size="sm" variant="outline" asChild className="text-xs">
-              <Link to="/ngit">
+              <a href={DOCUMENTATION_URLS.install}>
                 <Plus className="h-3.5 w-3.5 mr-1.5" />
                 Publish with ngit
-              </Link>
+              </a>
             </Button>
           </div>
         )}

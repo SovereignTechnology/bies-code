@@ -32,6 +32,7 @@ import { useDefaultRepoPath } from "@/hooks/useRepoPath";
 import { UserLink } from "@/components/UserAvatar";
 import { formatDistanceToNow } from "date-fns";
 import type { ResolvedRepo } from "@/lib/nip34";
+import { DOCUMENTATION_URLS } from "@/lib/documentation";
 
 // ---------------------------------------------------------------------------
 // Featured repos strip
@@ -384,10 +385,10 @@ function FooterCTA() {
               asChild
               className="bg-pink-500 hover:bg-pink-600 text-white shadow-lg shadow-pink-500/20"
             >
-              <Link to="/ngit">
+              <a href={DOCUMENTATION_URLS.install}>
                 <Terminal className="h-5 w-5 mr-2" />
                 Install ngit CLI
-              </Link>
+              </a>
             </Button>
             <Button size="lg" variant="outline" asChild>
               <Link to="/search">
@@ -520,10 +521,10 @@ export function LandingPage() {
                 </Link>
               </Button>
               <Button size="lg" variant="outline" asChild className="text-base">
-                <Link to="/ngit">
+                <a href={DOCUMENTATION_URLS.install}>
                   <Terminal className="h-5 w-5 mr-2" />
                   Install ngit CLI
-                </Link>
+                </a>
               </Button>
             </div>
 

@@ -1,5 +1,6 @@
 import { Link } from "react-router-dom";
 import { useSeoMeta } from "@unhead/react";
+import { DOCUMENTATION_URLS } from "@/lib/documentation";
 
 // Praying-hands SVG from Phosphor Icons (MIT licence)
 // https://icon-sets.iconify.design/ph/hands-praying-fill/
@@ -91,9 +92,12 @@ export default function About() {
             GRASP
           </a>
           . gitworkshop.dev,{" "}
-          <Link className="text-pink-500 hover:underline" to="/ngit">
+          <a
+            className="text-pink-500 hover:underline"
+            href={DOCUMENTATION_URLS.home}
+          >
             ngit
-          </Link>{" "}
+          </a>{" "}
           and{" "}
           <a
             className="text-pink-500 hover:underline"
