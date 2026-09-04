@@ -160,6 +160,32 @@ export interface ResilientSubscriptionOptions {
    * settle: false.
    */
   onRelayError?: (relay: string) => void;
+  /**
+   * Reports cycle-valid coverage facts for this exact stable filter set.
+   * Every invalidation starts a newer generation, so consumers can reject
+   * late EOSE from superseded live or foreground-gap-fill requests.
+   *
+   * This callback is intentionally unavailable to additive subscriptions:
+   * their changing filter revisions need finer-grained coverage semantics.
+   */
+  onRelayLifecycle?: (event: ResilientRelayLifecycle) => void;
+}
+
+export type ResilientRelayLifecyclePhase =
+  | "initial"
+  | "covered"
+  | "catching-up"
+  | "unavailable"
+  | "stopped";
+
+export interface ResilientRelayLifecycle {
+  relay: string;
+  generation: number;
+  phase: ResilientRelayLifecyclePhase;
+}
+
+interface InternalResilientSubscriptionOptions extends ResilientSubscriptionOptions {
+  nextLifecycleGeneration?: () => number;
 }
 
 /**
@@ -302,6 +328,8 @@ function processRelay(
     onRelaySettle: ((relay: string) => void) | undefined;
     onRelayEose: ((relay: string) => void) | undefined;
     onRelayError: ((relay: string) => void) | undefined;
+    onRelayLifecycle: ((event: ResilientRelayLifecycle) => void) | undefined;
+    nextLifecycleGeneration: (() => number) | undefined;
     /**
      * Internal hook for the additive coordinator: called at the start of
      * every buildLiveSub re-execution (retry or graceful-close repeat, never
@@ -384,6 +412,26 @@ function processRelay(
     let paginateSub: { unsubscribe(): void } | undefined;
     let manualSub: { unsubscribe(): void } | undefined;
     let gapFillSub: { unsubscribe(): void } | undefined;
+    let latestLifecycleGeneration: number | undefined;
+
+    const beginLifecycle = (
+      phase: Exclude<ResilientRelayLifecyclePhase, "covered">,
+    ): number | undefined => {
+      const generation = opts.nextLifecycleGeneration?.();
+      if (generation !== undefined) {
+        latestLifecycleGeneration = generation;
+        opts.onRelayLifecycle?.({ relay, generation, phase });
+      }
+      return generation;
+    };
+    const completeLifecycle = (
+      generation: number | undefined,
+      phase: "covered",
+    ) => {
+      if (generation !== undefined) {
+        opts.onRelayLifecycle?.({ relay, generation, phase });
+      }
+    };
 
     // Shared pagination window — driven by auto (BehaviorSubject) or manual.
     let window$: Subject<{ since?: number; until?: number }> | undefined;
@@ -481,6 +529,7 @@ function processRelay(
       eoseSeen = false;
       countBeforeEose = 0;
       if (cycleCount++ > 0) opts.onCycleRestart?.(relay);
+      const lifecycleGeneration = beginLifecycle("initial");
 
       const filtersWithSince: Filter[] = getFilters().map((f) => ({
         ...f,
@@ -532,7 +581,13 @@ function processRelay(
           errSub.unsubscribe();
           innerSub.unsubscribe();
         };
-      });
+      }).pipe(
+        tap((message) => {
+          if (message === "EOSE") {
+            completeLifecycle(lifecycleGeneration, "covered");
+          }
+        }),
+      );
 
       // If this relay is currently rate-limited, wait out the cooldown before
       // opening the subscription. This prevents other concurrent subscriptions
@@ -568,6 +623,7 @@ function processRelay(
           // from delay when we want to give up.
           count: Infinity,
           delay: (err) => {
+            beginLifecycle("unavailable");
             // Auth-required: fast-fail — handled asynchronously by the
             // pool-level auth policy in nostr.ts.
             if (err instanceof AuthRequiredError) throw err;
@@ -634,7 +690,7 @@ function processRelay(
               const wt = (
                 relayObj as unknown as { watchTower: Observable<never> }
               ).watchTower;
-              return new Observable<never>((s) => {
+              return new Observable<void>((s) => {
                 // Keep the watchTower alive so the reconnect timer can drive
                 // new connection attempts. The watchTower is share()d so this
                 // just increments the refcount — no duplicate socket is opened.
@@ -642,7 +698,12 @@ function processRelay(
                 // Wait for the next successful open before completing so
                 // defer() re-executes buildLiveSub with a clean error$ state.
                 const openSub = relayObj.open$.pipe(take(1)).subscribe({
-                  next: () => s.complete(),
+                  next: () => {
+                    // retry() resubscribes on a notifier emission. Completing
+                    // without one would terminate the live query at recovery.
+                    s.next();
+                    s.complete();
+                  },
                   error: (e) => s.error(e),
                 });
                 return () => {
@@ -678,6 +739,7 @@ function processRelay(
           : repeat({
               count: Infinity,
               delay: () => {
+                beginLifecycle("unavailable");
                 reconnectAttempts++;
                 if (!everReceivedEose && reconnectAttempts > opts.retryCount)
                   throw new Error(
@@ -774,19 +836,54 @@ function processRelay(
     // Foreground resume gap-fill
     const gapFillResumeSub = opts.gapFill
       ? foregroundResume$.subscribe(() => {
-          if (lastReceivedAt === undefined) return;
+          // Preserve the existing no-op for subscriptions that have never
+          // received an event. A coverage lease must still prove its resume
+          // pass with EOSE, so only lifecycle-aware stable filters re-read the
+          // full filter when there is no event timestamp to use as a cursor.
+          if (
+            lastReceivedAt === undefined &&
+            opts.onRelayLifecycle === undefined
+          ) {
+            return;
+          }
           gapFillSub?.unsubscribe();
+          const lifecycleGeneration = beginLifecycle("catching-up");
           const gapFilters: Filter[] = getFilters().map((f) => ({
             ...f,
-            since: lastReceivedAt! - opts.gapFillBuffer,
+            ...(lastReceivedAt !== undefined
+              ? { since: lastReceivedAt - opts.gapFillBuffer }
+              : {}),
           }));
+          let eoseSeen = false;
           gapFillSub = pool
-            .subscription([relay], gapFilters, { reconnect: false })
-            .pipe(completeOnEose(), onlyEvents())
+            .relay(relay)
+            .subscription(gapFilters, { reconnect: false })
+            .pipe(
+              tap((message) => {
+                if (message === "EOSE") {
+                  eoseSeen = true;
+                  completeLifecycle(lifecycleGeneration, "covered");
+                }
+              }),
+              completeOnEose(),
+              onlyEvents(),
+            )
             .subscribe({
               next: (event) => subscriber.next(event),
               error: () => {
-                /* gap-fill errors are non-fatal */
+                // Gap-fill errors do not terminate the persistent live stream,
+                // but its coverage remains unavailable until later work EOSEs.
+                if (lifecycleGeneration === latestLifecycleGeneration) {
+                  beginLifecycle("unavailable");
+                }
+              },
+              complete: () => {
+                if (
+                  !eoseSeen &&
+                  lifecycleGeneration === latestLifecycleGeneration
+                ) {
+                  beginLifecycle("unavailable");
+                }
               },
             });
         })
@@ -798,6 +895,7 @@ function processRelay(
       manualSub?.unsubscribe();
       gapFillSub?.unsubscribe();
       gapFillResumeSub.unsubscribe();
+      beginLifecycle("stopped");
     };
   });
 }
@@ -836,10 +934,17 @@ export function resilientSubscription(
   filters: Filter[],
   opts: ResilientSubscriptionOptions = {},
 ): Observable<ResilientSubscriptionResponse> {
+  let lifecycleGeneration = 0;
+  const internalOpts: InternalResilientSubscriptionOptions = {
+    ...opts,
+    nextLifecycleGeneration: opts.onRelayLifecycle
+      ? () => ++lifecycleGeneration
+      : undefined,
+  };
   if (relays instanceof Observable) {
-    return resilientSubscriptionReactive(pool, relays, filters, opts);
+    return resilientSubscriptionReactive(pool, relays, filters, internalOpts);
   }
-  return resilientSubscriptionStatic(pool, relays, filters, opts);
+  return resilientSubscriptionStatic(pool, relays, filters, internalOpts);
 }
 
 /**
@@ -849,7 +954,7 @@ function resilientSubscriptionStatic(
   pool: RelayPool,
   relays: string[],
   filters: Filter[],
-  opts: ResilientSubscriptionOptions = {},
+  opts: InternalResilientSubscriptionOptions = {},
 ): Observable<ResilientSubscriptionResponse> {
   const autoClose = opts.autoClose ?? false;
   // autoClose implies one-shot semantics: reconnect and gap-fill are
@@ -867,6 +972,8 @@ function resilientSubscriptionStatic(
   const onRelaySettle = opts.onRelaySettle;
   const onRelayEose = opts.onRelayEose;
   const onRelayError = opts.onRelayError;
+  const onRelayLifecycle = opts.onRelayLifecycle;
+  const nextLifecycleGeneration = opts.nextLifecycleGeneration;
 
   if (relays.length === 0) return EMPTY;
 
@@ -883,6 +990,8 @@ function resilientSubscriptionStatic(
     onRelaySettle,
     onRelayEose,
     onRelayError,
+    onRelayLifecycle,
+    nextLifecycleGeneration,
   };
 
   if (!settle) {
@@ -933,7 +1042,7 @@ function resilientSubscriptionReactive(
   pool: RelayPool,
   relays$: Observable<string[]>,
   filters: Filter[],
-  opts: ResilientSubscriptionOptions = {},
+  opts: InternalResilientSubscriptionOptions = {},
 ): Observable<ResilientSubscriptionResponse> {
   const autoClose = opts.autoClose ?? false;
   const reconnect = opts.reconnect ?? (autoClose ? false : true);
@@ -949,6 +1058,8 @@ function resilientSubscriptionReactive(
   const onRelaySettle = opts.onRelaySettle;
   const onRelayEose = opts.onRelayEose;
   const onRelayError = opts.onRelayError;
+  const onRelayLifecycle = opts.onRelayLifecycle;
+  const nextLifecycleGeneration = opts.nextLifecycleGeneration;
 
   const resolvedOpts = {
     autoClose,
@@ -963,6 +1074,8 @@ function resilientSubscriptionReactive(
     onRelaySettle,
     onRelayEose,
     onRelayError,
+    onRelayLifecycle,
+    nextLifecycleGeneration,
   };
 
   return new Observable<ResilientSubscriptionResponse>((subscriber) => {
@@ -1113,7 +1226,7 @@ export class AdditiveFilterConflictError extends Error {
 
 export interface ResilientAdditiveSubscriptionOptions extends Omit<
   ResilientSubscriptionOptions,
-  "autoClose" | "paginate" | "manualPaginate$"
+  "autoClose" | "paginate" | "manualPaginate$" | "onRelayLifecycle"
 > {
   /**
    * Buffer window in ms coalescing chunk additions into one delta REQ per
@@ -1296,6 +1409,8 @@ export function resilientAdditiveSubscription(
     onRelaySettle: opts.onRelaySettle,
     onRelayEose: opts.onRelayEose,
     onRelayError: opts.onRelayError,
+    onRelayLifecycle: undefined,
+    nextLifecycleGeneration: undefined,
   };
   // Delta streams: no foreground gap-fill (the main stream's gap-fill reads
   // the full chunk set, covering every delta chunk) and no relay callbacks

@@ -11,13 +11,11 @@
  *
  * This hook adds three layers of protection:
  *
- * 1. CONNECTIVITY THRESHOLD CHECK
- *    Before attempting any write, we verify connectivity against the user's
- *    outbox relays and lookup/index relays independently. The rules are:
- *      - No outbox relays configured -> error (can't trust we have the latest)
- *      - 1 outbox connected -> also need >=2 lookup relays as backup
- *      - >1 outbox connected -> pass if >=50% OR >=3 outboxes reachable
- *    navigator.onLine is checked first as a fast-fail for offline mode.
+ * 1. WARM COVERAGE THRESHOLD CHECK
+ *    Before attempting any write, we intersect the user's outbox and lookup
+ *    groups with healthy relays whose current identity-subscription cycle has
+ *    returned a real EOSE. The existing one-outbox and larger-set threshold
+ *    rules are then applied. navigator.onLine remains a fast offline check.
  *
  * 2. FRESH FETCH FROM ALL OUTBOX + LOOKUP RELAYS
  *    We use addressLoader to fetch the latest event of the target kind from
@@ -52,6 +50,8 @@ import { use$ } from "@/hooks/use$";
 import { MailboxesModel } from "applesauce-core/models";
 import { addressLoader, liveness, pool } from "@/services/nostr";
 import { lookupRelays } from "@/services/settings";
+import { userIdentityCoverage } from "@/services/userIdentityCoverage";
+import { normalizeUrl } from "@/lib/url";
 
 // ---------------------------------------------------------------------------
 // Thresholds
@@ -131,41 +131,53 @@ export function useRobustReplaceableAction(): RobustReplaceableActionResult {
     outboxes: string[];
     lookup: string[];
   } => {
-    const outboxes = mailboxes?.outboxes ?? [];
+    const outboxes = [
+      ...new Set((mailboxes?.outboxes ?? []).map(normalizeUrl)),
+    ];
     const outboxSet = new Set(outboxes);
     // Lookup relays that are not already in the outbox set
-    const lookup = lookupRelays.getValue().filter((r) => !outboxSet.has(r));
+    const lookup = [
+      ...new Set(lookupRelays.getValue().map(normalizeUrl)),
+    ].filter((relay) => !outboxSet.has(relay));
     return { outboxes, lookup };
   }, [mailboxes]);
 
   /**
-   * Returns the number of healthy connections in a relay list.
-   * A relay is healthy if: WebSocket is open (pool) AND not dead/backoff (liveness).
+   * Count relays whose exact active-account identity query is cycle-covered,
+   * whose WebSocket remains open, and which are not dead/backing off.
    */
-  const countHealthy = useCallback((relays: string[]): number => {
-    const connected = relays.filter(
-      (url) => pool.relays.get(url)?.connected === true,
-    );
-    return liveness.filter(connected).length;
-  }, []);
+  const countCoveredHealthy = useCallback(
+    (relays: string[]): number => {
+      if (!account?.pubkey) return 0;
+      const covered = userIdentityCoverage.coveredRelays(
+        account.pubkey,
+        relays,
+      );
+      const connected = covered.filter(
+        (url) => pool.relays.get(url)?.connected === true,
+      );
+      return liveness.filter(connected).length;
+    },
+    [account?.pubkey],
+  );
 
   /**
-   * Check that we are connected to enough relays to safely write.
+   * Check that enough relays have current warm coverage to safely write.
    *
-   * Connectivity rules (applied after navigator.onLine fast-fail):
+   * Coverage rules (applied after navigator.onLine fast-fail):
    *
    *   - No outbox relays found -> error: we can't be confident we have the
    *     user's latest event without knowing where they publish.
    *
-   *   - Exactly 1 outbox connected -> also require >=2 lookup/index relays.
+   *   - Exactly 1 covered outbox -> also require >=2 covered lookup relays.
    *     A single outbox relay is not enough confidence on its own.
    *
-   *   - >1 outbox connected -> pass if (>=50% of outboxes OR >=3 outboxes).
+   *   - >1 covered outbox -> pass if (>=50% of outboxes OR >=3 outboxes).
    *     The absolute floor prevents requiring 15/30 on large relay sets.
    *
    * Throws a user-facing error if the threshold is not met.
    */
-  const assertConnectivity = useCallback(
+  const assertWarmCoverage = useCallback(
     (outboxes: string[], lookup: string[], kind: number) => {
       const label = kindLabel(kind);
 
@@ -186,30 +198,32 @@ export function useRobustReplaceableAction(): RobustReplaceableActionResult {
         );
       }
 
-      const healthyOutboxes = countHealthy(outboxes);
-      const healthyLookup = countHealthy(lookup);
+      // Personal-singleton policy consumes only the exact account session's
+      // warm lease. See docs/replaceable-preflight.md, "Phase 1".
+      const healthyOutboxes = countCoveredHealthy(outboxes);
+      const healthyLookup = countCoveredHealthy(lookup);
 
       if (healthyOutboxes === 0) {
         throw new Error(
-          `None of your ${outboxes.length} outbox relay(s) are reachable. ` +
-            "Please check your internet connection and try again.",
+          `None of your ${outboxes.length} outbox relay(s) have current query coverage. ` +
+            "Please wait for relay checks to finish, then try again.",
         );
       }
 
       if (healthyOutboxes === 1) {
-        // Single outbox connection — require backup coverage from index relays
+        // Single covered outbox — require backup coverage from index relays
         if (healthyLookup < MIN_INDEX_RELAYS_FOR_SINGLE_OUTBOX) {
           throw new Error(
-            `Only 1 of your ${outboxes.length} outbox relay(s) is reachable and ` +
-              `only ${healthyLookup} of ${lookup.length} lookup relay(s) are reachable ` +
+            `Only 1 of your ${outboxes.length} outbox relay(s) has current query coverage and ` +
+              `only ${healthyLookup} of ${lookup.length} lookup relay(s) have current query coverage ` +
               `(need at least ${MIN_INDEX_RELAYS_FOR_SINGLE_OUTBOX} lookup relays as backup). ` +
-              "Please check your internet connection and try again.",
+              "Please wait for relay checks to finish, then try again.",
           );
         }
         return; // 1 outbox + >=2 lookup is sufficient
       }
 
-      // >1 outbox connected — pass if >=50% OR >=3 absolute
+      // >1 covered outbox — pass if >=50% OR >=3 absolute
       const fraction = healthyOutboxes / outboxes.length;
       if (
         healthyOutboxes < MIN_OUTBOX_ABSOLUTE &&
@@ -217,13 +231,13 @@ export function useRobustReplaceableAction(): RobustReplaceableActionResult {
       ) {
         throw new Error(
           `Connection is not stable enough to safely update your ${label}. ` +
-            `Only ${healthyOutboxes} of ${outboxes.length} outbox relay(s) are reachable ` +
+            `Only ${healthyOutboxes} of ${outboxes.length} outbox relay(s) have current query coverage ` +
             `(need at least ${MIN_OUTBOX_ABSOLUTE} or ${Math.round(MIN_OUTBOX_FRACTION * 100)}%). ` +
-            "Please check your internet connection and try again.",
+            "Please wait for relay checks to finish, then try again.",
         );
       }
     },
-    [countHealthy],
+    [countCoveredHealthy],
   );
 
   /**
@@ -270,8 +284,8 @@ export function useRobustReplaceableAction(): RobustReplaceableActionResult {
       try {
         const { outboxes, lookup } = getRelaySets();
 
-        // 1. Connectivity check — fail fast with a clear error
-        assertConnectivity(outboxes, lookup, kind);
+        // 1. Warm coverage check — fail fast with a clear error
+        assertWarmCoverage(outboxes, lookup, kind);
 
         // 2. Fetch latest event from all outbox + lookup relays
         const allRelays = [...outboxes, ...lookup];
@@ -283,7 +297,7 @@ export function useRobustReplaceableAction(): RobustReplaceableActionResult {
         setPending(false);
       }
     },
-    [account?.pubkey, getRelaySets, assertConnectivity, prefetchReplaceable],
+    [account?.pubkey, getRelaySets, assertWarmCoverage, prefetchReplaceable],
   );
 
   return { execute, pending };

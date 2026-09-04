@@ -68,7 +68,7 @@
  */
 
 import { subscribeSpyTo } from "@hirez_io/observer-spy";
-import { of } from "rxjs";
+import { BehaviorSubject, of } from "rxjs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WS } from "vitest-websocket-mock";
 import { Relay, RelayPool } from "applesauce-relay";
@@ -78,6 +78,7 @@ import {
   resilientSubscription,
   resilientRequest,
 } from "@/lib/resilientSubscription";
+import { createRelaySubscriptionCoverage } from "@/lib/relaySubscriptionCoverage";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -155,6 +156,39 @@ async function expectReq(ws: WS, filter?: object): Promise<string> {
   return msg[1]; // subscription id
 }
 
+function triggerForegroundResume(): void {
+  const ownDescriptor = Object.getOwnPropertyDescriptor(
+    document,
+    "visibilityState",
+  );
+  const now = Date.now();
+  const nowSpy = vi.spyOn(Date, "now");
+
+  try {
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      value: "hidden",
+    });
+    nowSpy.mockReturnValue(now);
+    document.dispatchEvent(new Event("visibilitychange"));
+
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      value: "visible",
+    });
+    nowSpy.mockReturnValue(now + 31_000);
+    document.dispatchEvent(new Event("visibilitychange"));
+  } finally {
+    nowSpy.mockRestore();
+    if (ownDescriptor) {
+      Object.defineProperty(document, "visibilityState", ownDescriptor);
+    } else {
+      delete (document as unknown as { visibilityState?: string })
+        .visibilityState;
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // 1. Basic event delivery
 // ---------------------------------------------------------------------------
@@ -218,6 +252,158 @@ describe("basic event delivery", () => {
     spy.unsubscribe();
 
     await expect(server).toReceiveMessage(["CLOSE", subId]);
+  });
+});
+
+describe("stable-filter lifecycle coverage", () => {
+  it("requires a real EOSE and stops coverage with its owner", async () => {
+    const coverage = createRelaySubscriptionCoverage();
+    const subscription = resilientSubscription(
+      pool,
+      [RELAY_URL],
+      [{ kinds: [1] }],
+      {
+        settle: false,
+        reconnect: true,
+        gapFill: false,
+        retryDelay: 0,
+        onRelayLifecycle: (event) => coverage.onLifecycle(event),
+      },
+    ).subscribe();
+
+    const subId = await expectReq(server);
+    const initial = coverage.get(RELAY_URL);
+    expect(initial?.phase).toBe("initial");
+    expect(coverage.isCovered(RELAY_URL)).toBe(false);
+
+    server.send(["EOSE", subId]);
+    await vi.waitFor(() => expect(coverage.isCovered(RELAY_URL)).toBe(true));
+    expect(coverage.get(RELAY_URL)?.generation).toBe(initial?.generation);
+
+    subscription.unsubscribe();
+    expect(coverage.get(RELAY_URL)?.phase).toBe("stopped");
+  });
+
+  it("invalidates reconnect and graceful-close cycles until their EOSE", async () => {
+    const coverage = createRelaySubscriptionCoverage();
+    const lifecycle = vi.fn(coverage.onLifecycle);
+    const subscription = resilientSubscription(
+      pool,
+      [RELAY_URL],
+      [{ kinds: [1] }],
+      {
+        settle: false,
+        reconnect: true,
+        gapFill: false,
+        retryDelay: 0,
+        retryCount: Infinity,
+        onRelayLifecycle: lifecycle,
+      },
+    ).subscribe();
+
+    const firstId = await expectReq(server);
+    server.send(["EOSE", firstId]);
+    await vi.waitFor(() => expect(coverage.isCovered(RELAY_URL)).toBe(true));
+
+    const relay = pool.relay(RELAY_URL);
+    relay.error$.next(new Error("transport lost"));
+    await vi.waitFor(() =>
+      expect(coverage.get(RELAY_URL)?.phase).toBe("unavailable"),
+    );
+    expect(coverage.isCovered(RELAY_URL)).toBe(false);
+
+    relay.error$.next(null);
+    relay.open$.next(new Event("open"));
+    const retryId = await vi.waitFor(() => {
+      const requests = server.messages.filter(
+        (message) => Array.isArray(message) && message[0] === "REQ",
+      ) as Array<["REQ", string]>;
+      expect(requests).toHaveLength(2);
+      return requests[1][1];
+    });
+    expect(coverage.get(RELAY_URL)?.phase).toBe("initial");
+    expect(coverage.isCovered(RELAY_URL)).toBe(false);
+    expect(lifecycle).toHaveBeenCalledWith(
+      expect.objectContaining({ relay: RELAY_URL, phase: "unavailable" }),
+    );
+
+    server.send(["EOSE", retryId]);
+    await vi.waitFor(() => expect(coverage.isCovered(RELAY_URL)).toBe(true));
+
+    server.send(["CLOSED", retryId, "relay restarting"]);
+    const repeatId = await vi.waitFor(() => {
+      const requests = server.messages.filter(
+        (message) => Array.isArray(message) && message[0] === "REQ",
+      ) as Array<["REQ", string]>;
+      expect(requests).toHaveLength(3);
+      return requests[2][1];
+    });
+    expect(coverage.get(RELAY_URL)?.phase).toBe("initial");
+    expect(coverage.isCovered(RELAY_URL)).toBe(false);
+
+    server.send(["EOSE", repeatId]);
+    await vi.waitFor(() => expect(coverage.isCovered(RELAY_URL)).toBe(true));
+    subscription.unsubscribe();
+  });
+
+  it("marks foreground gap-fill as catching up until its real EOSE", async () => {
+    const coverage = createRelaySubscriptionCoverage();
+    const subscription = resilientSubscription(
+      pool,
+      [RELAY_URL],
+      [{ kinds: [1] }],
+      {
+        settle: false,
+        reconnect: true,
+        gapFill: true,
+        retryDelay: 0,
+        onRelayLifecycle: (event) => coverage.onLifecycle(event),
+      },
+    ).subscribe();
+
+    const liveId = await expectReq(server);
+    server.send(["EOSE", liveId]);
+    await vi.waitFor(() => expect(coverage.isCovered(RELAY_URL)).toBe(true));
+
+    triggerForegroundResume();
+    expect(coverage.get(RELAY_URL)?.phase).toBe("catching-up");
+    expect(coverage.isCovered(RELAY_URL)).toBe(false);
+
+    const gapFillId = await expectReq(server, { kinds: [1] });
+    server.send(["EOSE", gapFillId]);
+    await vi.waitFor(() => expect(coverage.isCovered(RELAY_URL)).toBe(true));
+    subscription.unsubscribe();
+  });
+
+  it("starts added relays fresh and stops only removed relay coverage", async () => {
+    const relays = new BehaviorSubject<string[]>([RELAY_URL]);
+    const coverage = createRelaySubscriptionCoverage();
+    const subscription = resilientSubscription(pool, relays, [{ kinds: [1] }], {
+      settle: false,
+      reconnect: true,
+      gapFill: false,
+      retryDelay: 0,
+      onRelayLifecycle: (event) => coverage.onLifecycle(event),
+    }).subscribe();
+
+    const firstId = await expectReq(server);
+    server.send(["EOSE", firstId]);
+    await vi.waitFor(() => expect(coverage.isCovered(RELAY_URL)).toBe(true));
+
+    relays.next([RELAY_URL, RELAY_URL_2]);
+    const secondId = await expectReq(server2);
+    expect(coverage.get(RELAY_URL_2)?.phase).toBe("initial");
+    expect(coverage.isCovered(RELAY_URL)).toBe(true);
+
+    server2.send(["EOSE", secondId]);
+    await vi.waitFor(() => expect(coverage.isCovered(RELAY_URL_2)).toBe(true));
+    relays.next([RELAY_URL_2]);
+    await vi.waitFor(() =>
+      expect(coverage.get(RELAY_URL)?.phase).toBe("stopped"),
+    );
+    expect(coverage.isCovered(RELAY_URL_2)).toBe(true);
+
+    subscription.unsubscribe();
   });
 });
 

@@ -41,7 +41,9 @@ import { eventStore, pool } from "./nostr";
 import { lookupRelays } from "./settings";
 import type { Filter } from "applesauce-core/helpers";
 import { resilientSubscription } from "@/lib/resilientSubscription";
+import { createRelaySubscriptionCoverage } from "@/lib/relaySubscriptionCoverage";
 import { normalizeUrl } from "@/lib/url";
+import { userIdentityCoverage } from "@/services/userIdentityCoverage";
 
 /**
  * All replaceable event kinds that define the user's identity, relay
@@ -101,6 +103,17 @@ export function startUserIdentitySubscription(
     ),
   );
 
+  // Personal-singleton warm coverage is owned by this exact account/filter
+  // subscription. See docs/replaceable-preflight.md, "Warm coverage leases".
+  const coverage = createRelaySubscriptionCoverage();
+  const releaseCoverage = userIdentityCoverage.activate(pubkey, coverage);
+  let stopped = false;
+  const stopCoverage = () => {
+    if (stopped) return;
+    stopped = true;
+    releaseCoverage();
+  };
+
   // resilientSubscription provides:
   //   - lastReceivedAt-aware reconnect (avoids replaying full relay history)
   //   - foreground resume gap-fill (recovers events missed while backgrounded)
@@ -110,13 +123,18 @@ export function startUserIdentitySubscription(
     gapFill: true,
     settle: false, // no consumer needs the EOSE signal here
     paginate: false,
+    onRelayLifecycle: (event) => coverage.onLifecycle(event),
   })
     .pipe(onlyEvents(), mapEventsToStore(eventStore))
     .subscribe({
       error: (err) => {
+        stopCoverage();
         console.warn("[userIdentitySubscription] subscription error:", err);
       },
     });
 
-  return () => sub.unsubscribe();
+  return () => {
+    stopCoverage();
+    sub.unsubscribe();
+  };
 }
