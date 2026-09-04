@@ -28,7 +28,7 @@ import {
   useId,
   useRef,
 } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useActiveAccount } from "applesauce-react/hooks";
 import {
   ArrowLeft,
@@ -46,6 +46,7 @@ import {
   Network,
   ChevronDown,
   ChevronRight,
+  ShieldAlert,
 } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import type { EventTemplate } from "nostr-tools";
@@ -119,6 +120,7 @@ import {
 } from "@/lib/repoUpstreamInput";
 import { useResolvedUpstreamNip05 } from "@/hooks/useResolvedUpstreamNip05";
 import { useRepositoryMembershipMutation } from "@/hooks/useRepositoryMembershipMutation";
+import RepoAdvancedRepairPage from "./RepoAdvancedRepairPage";
 
 // ---------------------------------------------------------------------------
 // Known tag names — tags that the settings form explicitly manages.
@@ -254,7 +256,16 @@ export default function RepoSettingsPage() {
   const { resolved, repoState, basePath, announcementsSettled, repoRelayEose } =
     useRepoContext();
   const account = useActiveAccount();
+  const location = useLocation();
   const repo = resolved?.repo;
+
+  // The advanced-repair danger zone gates only on the signer's own existing
+  // announcement, so it must render before the confirmed-maintainer gate:
+  // the broken histories it exists to fix are exactly the ones that can
+  // exclude the affected signer from the confirmed set.
+  if (/\/settings\/advanced\/?$/.test(location.pathname)) {
+    return <RepoAdvancedRepairPage />;
+  }
 
   if (!repo) {
     return (
@@ -2603,6 +2614,38 @@ function RepoSettingsForm({
                 />
               </CollapsibleContent>
             </Collapsible>
+          </section>
+
+          <Separator />
+
+          {/* ── Danger zone ────────────────────────────────────────────── */}
+          <section className="space-y-3">
+            <h2 className="flex items-center gap-1.5 text-sm font-semibold text-destructive">
+              <ShieldAlert className="h-4 w-4" />
+              Danger zone
+            </h2>
+            <div className="flex flex-col gap-3 rounded-lg border border-destructive/40 p-4 sm:flex-row sm:items-center sm:justify-between">
+              <div className="min-w-0">
+                <p className="text-sm font-medium">Advanced repair</p>
+                <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                  Rewrite the raw <code className="font-mono">M</code> /{" "}
+                  <code className="font-mono">m</code> /{" "}
+                  <code className="font-mono">o</code> role records of your own
+                  announcement with a full signed preview — for histories the
+                  guided repairs cannot fix.
+                </p>
+              </div>
+              <Button
+                asChild
+                variant="outline"
+                size="sm"
+                className="shrink-0 border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+              >
+                <Link to={`${basePath}/settings/advanced`}>
+                  Open advanced repair
+                </Link>
+              </Button>
+            </div>
           </section>
 
           {/* ── Error / actions ────────────────────────────────────────── */}

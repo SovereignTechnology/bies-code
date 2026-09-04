@@ -171,6 +171,11 @@ Only confirmed member announcements contribute trusted repository fields:
 - Invited, departed, malformed-role, and unconfirmed moderator announcements
   contribute nothing to those fields.
 
+Every replacement announcement for a private repository must carry at least
+one non-empty `relays` hint. Membership mutation preflight refuses to sign a
+replacement without one rather than relying on the relay that happened to
+index or deliver the existing event.
+
 One narrow presentation exception keeps direct historical routes useful. When
 the selected coordinate is archived, deleted, or carries an invalid
 self-`defer` and has no current authority component, GitWorkshop may show that
@@ -199,8 +204,43 @@ repository can be inspected:
   restart. The current repository remains available and the earlier interval
   stays visible as prior lifecycle history.
 - Malformed or inconsistent role history, including self-`defer`, produces a
-  repair warning. It cannot grant authority or enable membership writes, but it
-  does not replace the repository with a terminal error page.
+  repair warning. The invalid interval cannot grant authority. A strictly later
+  active self-role with a signed start supersedes it for current authority but
+  leaves the historical interval unresolved; an untimed, equal, or older role
+  does not. The warning does not replace the repository with a terminal error
+  page.
+
+Self-`defer` health is author-scoped. Without a superseding role, GitWorkshop
+gates only the affected signer's announcement mutations and role-dependent
+writes; reads and other maintainers' operations continue. Duplicate role
+records are author-scoped in the same way: another author's duplicated
+history never blocks an actor's membership operations, while the affected
+author's own mutations remain fail-closed until their duplicate is
+reconciled. One narrow duplicate shape is repairable: exactly one invalid
+self-`defer` beside one valid same-role record holding a single strictly
+later signed start. There the affected signer's explicit repair and
+invitation acceptance proceed, and the sanctioned repair closes the invalid
+interval at the successor's signed start and merges it with the successor
+into one multi-interval record — one record per role and subject — so the
+repaired announcement parses clean. Genuinely duplicated valid records
+remain a hard conflict and hide the repair controls. With a superseding
+role, the warning is non-blocking. An invalid self-`M` or self-`m` is not signed
+maintainer-departure evidence, including when a valid self-`o` supersedes it; a
+valid numeric-ended self-maintainer record remains departure evidence. Only the
+affected logged-in signer sees repair controls. An unambiguous signed successor
+supplies a proposed numeric end that still requires explicit approval. Otherwise
+the signer chooses whether the interval remains active or supplies its numeric
+end. Unrelated edits retain the invalid tag unchanged. Accepting a new role may
+repair only a simple self-`defer` record containing exactly its signed start and
+`defer`; records containing earlier intervals require the dedicated repair flow
+so the signer explicitly reviews the history that becomes authoritative. For a
+simple record, acceptance closes an unsuperseded invalid interval at the
+acceptance boundary. When exactly one signed successor already superseded it,
+acceptance instead closes the invalid interval at that successor boundary and
+opens the newly accepted role at the acceptance boundary.
+Any additional invalid self-`defer` must already be superseded or have a signed
+start strictly earlier than the acceptance boundary, allowing the newly opened
+self-role to supersede it.
 
 Deletion, archive, and restart notices require a complete initial relay
 snapshot. Progressive snapshots continue rendering repository content but do
@@ -208,10 +248,10 @@ not make an absence-based lifecycle claim.
 
 ## Browser mutation safety
 
-GitWorkshop exposes only four one-at-a-time membership intents: add one
-maintainer, accept one invitation, remove one directly authored relationship,
-and leave a lead-shaped repository. The complete-roster editor and every force
-path remain unavailable.
+GitWorkshop exposes one-at-a-time membership intents: add one maintainer,
+accept one invitation, remove one directly authored relationship, leave a
+lead-shaped repository, or explicitly repair one invalid self-`defer`. The
+complete-roster editor and every force path remain unavailable.
 
 Each intent first looks up the affected authors' mailbox lists through the
 configured discovery relays, then refreshes those lists, announcements, and
@@ -246,6 +286,24 @@ Metadata-only edits still preserve every existing `M`, `m`, `o`, and
 `maintainers` tag byte-for-byte. Persisted v2 jobs are never hydrated and
 pre-stabilization v3 jobs remain quarantined; only fully preflighted v4 jobs
 resume delivery after reload.
+
+## Advanced repair
+
+For announcement histories none of the guided flows can fix — multiple
+invalid self-`defer` records of one role, unparseable role tags, genuinely
+duplicated valid records, or an inconsistent `maintainers` projection — the
+settings danger zone exposes an advanced-repair editor over the signer's own
+raw `M`/`m`/`o` role records. It is the explicit signer-reviewed repair the
+model mandates for complex history: before signing, the edited announcement
+is re-analysed with the production parser and re-resolved through the pure
+component resolver so the signer sees the resulting record classification,
+health warnings, and confirmed-membership delta. Every non-membership tag is
+carried over byte-for-byte, the deprecated `maintainers` projection is
+regenerated from the edited active records, `created_at` is bumped strictly
+past the current announcement, and a private repository replacement without a
+relay hint is refused. Advanced repair grants no authority a keyholder does
+not already have — anyone can publish any event — and its published output
+still resolves through the normal reciprocal authorization model.
 
 ## Resolver contract
 

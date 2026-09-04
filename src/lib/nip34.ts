@@ -2873,6 +2873,10 @@ function uniqueRepositoryHealth(
         warning.role,
         warning.subject,
         warning.message,
+        // Same-role invalid self-defer warnings differ only by their signed
+        // interval start; collapsing them would hide repair-selection
+        // ambiguity from the affected signer.
+        warning.selfDefer?.lastValidStart,
       ]),
       warning,
     );

@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Added
+
+- Add a signer-reviewed advanced-repair danger zone that rewrites the raw
+  `M`/`m`/`o` role records of the signer's own repository announcement for
+  histories the guided repairs cannot fix, previewing record classification,
+  health warnings, and the confirmed-membership delta before signing while
+  carrying every non-membership tag byte-for-byte and regenerating the
+  deprecated `maintainers` projection.
+
 ### Changed
 
 - Render commit lists as a condensed commit graph: one fixed-height row per
@@ -27,6 +36,17 @@
 
 ### Fixes
 
+- Scope duplicate role-record health to its author so another maintainer's
+  duplicated history no longer blocks unrelated membership operations; the
+  affected author's own mutations stay fail-closed.
+- Let the affected signer repair or accept through an invalid self-`defer`
+  that sits beside its valid same-role successor by merging both into one
+  clean multi-interval record; genuinely duplicated valid records remain a
+  hard conflict and no longer render repair controls that cannot succeed.
+- Scope invalid self-`defer` health to its signer, require a strictly later
+  signed self-role to restore current authority, keep other maintainers and
+  superseded roles operational, and offer explicit signer-approved repair or
+  role-acceptance transitions without rewriting unrelated edits.
 - Keep deleted, archived, and same-coordinate restarted repositories readable
   with signed actor/time lifecycle notices; preserve their final announcement
   for historical display, flag invalid self-`defer`, and keep membership writes
