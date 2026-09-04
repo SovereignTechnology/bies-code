@@ -11,6 +11,12 @@
   history merged in from other branches (e.g. "merge master into feature" on
   a stacked PR) collapses behind an expandable count row instead of being
   presented as the branch's own commits.
+- Extend the condensed commit graph to the remaining commit surfaces: the
+  patch commits tab and the push cards on the PR conversation timeline now
+  render the same rail rows. Windows of commits fade into dashed stubs where
+  history continues above or below (earlier ancestors, later pushes built on
+  top), and commits force-pushed away pair the struck-through text with a
+  faded hollow dot; fast-forwarded pushes keep their retained commits intact.
 - Prepare tag-only NIP-82 and Zapstore release publication through ngit while
   retaining the existing zsp manifest as a manual first-release fallback.
 - Publish the production NIP-5A site with ngit through a dedicated established
