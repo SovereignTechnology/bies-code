@@ -75,7 +75,10 @@ function commitTime(commit: Commit): number {
 /**
  * Extract the merged-in source ref from a merge commit subject, e.g.
  * "Merge branch 'master' into feat/x" → "master", "Merge pull request #7
- * from alex/feat" → "alex/feat". Returns null when no pattern matches.
+ * from alex/feat" → "alex/feat". The final pattern accepts free-form
+ * "Merge … X into …" phrasing, taking the word before "into" (e.g. "Merge
+ * current master into the flake proposal" → "master"). Returns null when
+ * no pattern matches.
  */
 export function parseMergeSourceRef(subject: string): string | null {
   const patterns = [
@@ -83,7 +86,7 @@ export function parseMergeSourceRef(subject: string): string | null {
     /^Merge (?:remote-tracking )?branch "([^"]+)"/,
     /^Merge pull request #\d+ (?:in \S+ )?from (\S+)/,
     /^Merge tag '([^']+)'/,
-    /^Merge (\S+) into \S+/,
+    /^Merge (?:.+ )?(\S+) into \S+/,
   ];
   for (const pattern of patterns) {
     const match = subject.match(pattern);

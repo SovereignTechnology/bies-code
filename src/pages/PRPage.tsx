@@ -548,6 +548,17 @@ export default function PRPage() {
     return range.reverse();
   }, [prCommitHistory.commits, effectiveMergeBase]);
 
+  // Branch tips for naming collapsed merged-in groups on the commits tab.
+  const branchTips = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const [ref, resolved] of Object.entries(gitPoolState.effectiveRefs)) {
+      if (ref.startsWith("refs/heads/") && !map.has(resolved.commitId)) {
+        map.set(resolved.commitId, ref.slice("refs/heads/".length));
+      }
+    }
+    return map;
+  }, [gitPoolState.effectiveRefs]);
+
   // Use a deeper history walk for retained-commit checks than the visible
   // commits tab. Large PRs with merge commits can easily exceed the display
   // limit, but retained commits should not be struck through just because they
@@ -1988,6 +1999,7 @@ export default function PRPage() {
                         commits={prCommits}
                         direction="oldest-first"
                         collapseMergedCommits
+                        branchTips={branchTips}
                         basePath={
                           prBasePath ??
                           repoToPath(pubkey, repoId, repo?.relays ?? [], nip05)

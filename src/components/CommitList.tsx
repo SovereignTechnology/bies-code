@@ -153,6 +153,7 @@ export function CommitList({
   basePath,
   direction = "newest-first",
   collapseMergedCommits = false,
+  branchTips,
   refLabels,
   hasMore = false,
   loadingMore = false,
@@ -176,6 +177,12 @@ export function CommitList({
    * first-parent spine as graph rows. For PR-style single-tip ranges.
    */
   collapseMergedCommits?: boolean;
+  /**
+   * Current branch tips (commit hash → short branch name). Names a collapsed
+   * merge group's source branch when a merge parent is a known tip —
+   * ground truth that beats parsing the merge subject.
+   */
+  branchTips?: Map<string, string>;
   /** Branch/tag names per commit hash, shown as badges on their rows. */
   refLabels?: Map<string, CommitRefLabel[]>;
   /** Whether there are more commits to load. */
@@ -233,6 +240,7 @@ export function CommitList({
             <MergedInGroup
               commits={group}
               mergeCommit={row.commit}
+              branchTips={branchTips}
               basePath={basePath}
               lane={row.lane}
               laneColor={row.color}
@@ -336,6 +344,7 @@ function GraphRailSpacer({
 function MergedInGroup({
   commits,
   mergeCommit,
+  branchTips,
   basePath,
   lane,
   laneColor,
@@ -348,6 +357,8 @@ function MergedInGroup({
   commits: Commit[];
   /** The spine merge commit that brought these in — names the source ref. */
   mergeCommit: Commit;
+  /** Current branch tips (commit hash → branch name) for exact naming. */
+  branchTips?: Map<string, string>;
   basePath: string;
   lane: number;
   laneColor: number;
@@ -357,7 +368,14 @@ function MergedInGroup({
   onToggle: () => void;
 }) {
   const SUB_ROW_HEIGHT = 28;
-  const sourceRef = parseMergeSourceRef(mergeCommit.message.split("\n")[0]);
+  // A merge parent that is a current branch tip names the source exactly;
+  // otherwise fall back to parsing the merge subject.
+  const sourceRef =
+    mergeCommit.parents
+      .slice(1)
+      .map((parent) => branchTips?.get(parent))
+      .find((name) => name !== undefined) ??
+    parseMergeSourceRef(mergeCommit.message.split("\n")[0]);
   const ordered =
     direction === "oldest-first" ? [...commits].reverse() : commits;
   const subRows = expanded
