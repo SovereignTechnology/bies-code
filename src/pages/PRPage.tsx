@@ -1630,6 +1630,22 @@ export default function PRPage() {
                           }))
                         : undefined
                   }
+                  commitGraphCommits={
+                    pr.itemType === "pr"
+                      ? hasRevisions
+                        ? originalPRCommits.length > 0
+                          ? originalPRCommits
+                          : undefined
+                        : prCommits.length > 0
+                          ? prCommits
+                          : undefined
+                      : undefined
+                  }
+                  commitsContinueAbove={
+                    pr.itemType === "pr" &&
+                    hasRevisions &&
+                    isLatestFastForwardFromOriginal
+                  }
                   commitsSuperseded={
                     // PR: superseded only when there are updates AND the latest
                     // update is not simply a fast-forward of the original commit

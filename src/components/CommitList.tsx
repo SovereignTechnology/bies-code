@@ -290,6 +290,67 @@ export function GraphCommitRow({
 }
 
 // ---------------------------------------------------------------------------
+// CompactCommitGraphList — shared graph window for conversation cards
+// ---------------------------------------------------------------------------
+
+export interface CompactCommitGraphRowData {
+  key: string;
+  hash: string;
+  shortHash: string;
+  subject: string;
+  href?: string;
+  superseded?: boolean;
+}
+
+/**
+ * A compact, oldest-first graph window used for commits embedded in PR body
+ * cards and push-event timeline rows. `graphCommits` may contain real parent
+ * topology or a synthetic chain from `buildLinearGraphCommits`.
+ */
+export function CompactCommitGraphList({
+  rows,
+  graphCommits,
+  continuesAbove,
+  continuesBelow,
+}: {
+  /** Display rows, oldest first. */
+  rows: CompactCommitGraphRowData[];
+  graphCommits: Commit[];
+  continuesAbove?: boolean;
+  continuesBelow?: boolean;
+}) {
+  const layout = useMemo(
+    () => layoutCommitGraph(graphCommits, { continuesAbove, continuesBelow }),
+    [graphCommits, continuesAbove, continuesBelow],
+  );
+  const ordered = useMemo(() => {
+    const byHash = new Map(rows.map((row) => [row.hash, row]));
+    return [...layout.rows].reverse().flatMap((graphRow) => {
+      const row = byHash.get(graphRow.commit.hash);
+      return row ? [{ graphRow, row }] : [];
+    });
+  }, [layout, rows]);
+
+  return (
+    <div className="rounded-md border border-border/50 bg-muted/20 px-2 py-1">
+      {ordered.map(({ graphRow, row }) => (
+        <GraphCommitRow
+          key={row.key}
+          compact
+          graphRow={graphRow}
+          laneCount={layout.laneCount}
+          flip
+          subject={row.subject}
+          href={row.href}
+          shortHash={row.shortHash}
+          superseded={row.superseded}
+        />
+      ))}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // CommitList — condensed graph rows
 // ---------------------------------------------------------------------------
 

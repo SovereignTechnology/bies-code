@@ -72,6 +72,35 @@ export interface CommitGraphLayout {
   laneCount: number;
 }
 
+/**
+ * Build synthetic Commit objects for a linear window of bare hash + subject
+ * rows (oldest first). Each row's parent is its predecessor, while the oldest
+ * row points at `firstParent` when known. Index-based timestamps are enough
+ * because the linear topology fully determines display order.
+ */
+export function buildLinearGraphCommits(
+  rows: readonly { hash: string; subject: string }[],
+  firstParent?: string,
+): Commit[] {
+  return rows.map((row, index) => {
+    const person = {
+      name: "",
+      email: "",
+      timestamp: index,
+      timezone: "+0000",
+    };
+    return {
+      hash: row.hash,
+      tree: "",
+      parents:
+        index > 0 ? [rows[index - 1].hash] : firstParent ? [firstParent] : [],
+      author: person,
+      committer: person,
+      message: row.subject,
+    };
+  });
+}
+
 function commitTime(commit: Commit): number {
   return commit.committer?.timestamp ?? commit.author.timestamp;
 }

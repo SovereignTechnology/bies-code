@@ -32,12 +32,14 @@ import type { PatchRevision } from "@/hooks/usePatchChain";
 import type { NostrEvent } from "nostr-tools";
 import {
   selectCommitRange,
-  type Commit,
   type GitGraspPool,
   type PoolState,
 } from "@/lib/git-grasp-pool";
-import { layoutCommitGraph } from "@/lib/commit-graph";
-import { GraphCommitRow } from "@/components/CommitList";
+import {
+  CompactCommitGraphList,
+  type CompactCommitGraphRowData,
+} from "@/components/CommitList";
+import { buildLinearGraphCommits } from "@/lib/commit-graph";
 import { useCommitHistory } from "@/hooks/useGitExplorer";
 import { usePRMergeBase } from "@/hooks/usePRMergeBase";
 import { useActiveAccount } from "applesauce-react/hooks";
@@ -63,90 +65,6 @@ import type { NsitePreview } from "@/lib/ciOutputs";
 // ---------------------------------------------------------------------------
 // Shared helpers
 // ---------------------------------------------------------------------------
-
-interface PushCommitRowData {
-  key: string;
-  hash: string;
-  shortHash: string;
-  subject: string;
-  href?: string;
-  superseded?: boolean;
-}
-
-/**
- * Build synthetic Commit objects for a linear window of bare hash + subject
- * rows (oldest first): each row's parent is its predecessor, and the oldest
- * row points at `firstParent` when known (outside the window → natural
- * stub). Timestamps are index-based — the linear topology fully determines
- * the layout order.
- */
-function linearGraphCommits(
-  rows: readonly { hash: string; subject: string }[],
-  firstParent?: string,
-): Commit[] {
-  return rows.map((row, i) => {
-    const person = { name: "", email: "", timestamp: i, timezone: "+0000" };
-    return {
-      hash: row.hash,
-      tree: "",
-      parents: i > 0 ? [rows[i - 1].hash] : firstParent ? [firstParent] : [],
-      author: person,
-      committer: person,
-      message: row.subject,
-    };
-  });
-}
-
-/**
- * The commit list body of a push card: compact commit-graph rows, mirrored
- * oldest-first. `graphCommits` carries the parent links for the same hashes
- * as `rows` — real commits when git history is loaded, or synthetic linear
- * chains from `linearGraphCommits`. Window truncation (`continuesAbove` /
- * `continuesBelow`) is declared by the caller from revision data.
- */
-function PushCommitList({
-  rows,
-  graphCommits,
-  continuesAbove,
-  continuesBelow,
-}: {
-  /** Display rows, oldest first. */
-  rows: PushCommitRowData[];
-  graphCommits: Commit[];
-  continuesAbove?: boolean;
-  continuesBelow?: boolean;
-}) {
-  const layout = useMemo(
-    () => layoutCommitGraph(graphCommits, { continuesAbove, continuesBelow }),
-    [graphCommits, continuesAbove, continuesBelow],
-  );
-  const ordered = useMemo(() => {
-    const byHash = new Map(rows.map((row) => [row.hash, row]));
-    // Layout rows are newest-first; push cards read oldest-first.
-    return [...layout.rows].reverse().flatMap((graphRow) => {
-      const row = byHash.get(graphRow.commit.hash);
-      return row ? [{ graphRow, row }] : [];
-    });
-  }, [layout, rows]);
-
-  return (
-    <div className="rounded-md border border-border/50 bg-muted/20 px-2 py-1">
-      {ordered.map(({ graphRow, row }) => (
-        <GraphCommitRow
-          key={row.key}
-          compact
-          graphRow={graphRow}
-          laneCount={layout.laneCount}
-          flip
-          subject={row.subject}
-          href={row.href}
-          shortHash={row.shortHash}
-          superseded={row.superseded}
-        />
-      ))}
-    </div>
-  );
-}
 
 function commitIsSuperseded(
   hash: string,
@@ -375,7 +293,7 @@ export function PatchSetPushEvent({
                 </div>
 
                 {/* Commits for this group */}
-                <PushCommitList
+                <CompactCommitGraphList
                   rows={group.commits.map((c) => ({
                     key: c.id,
                     hash: c.hash,
@@ -386,7 +304,7 @@ export function PatchSetPushEvent({
                       ? `${basePath}/commit/${c.linkSegment}`
                       : undefined,
                   }))}
-                  graphCommits={linearGraphCommits(
+                  graphCommits={buildLinearGraphCommits(
                     group.commits,
                     // The oldest commit's parent: the previous group's tip,
                     // or (for the first group) the chain's parent-commit tag.
@@ -442,7 +360,7 @@ export function PROpenPushEvent({
     addSuffix: true,
   });
 
-  const rows = useMemo<PushCommitRowData[]>(() => {
+  const rows = useMemo<CompactCommitGraphRowData[]>(() => {
     if (commits && commits.length > 0) {
       return commits.map((c) => ({
         key: c.hash,
@@ -514,9 +432,9 @@ export function PROpenPushEvent({
 
         {/* Commit list */}
         {rows.length > 0 && (
-          <PushCommitList
+          <CompactCommitGraphList
             rows={rows}
-            graphCommits={linearGraphCommits(rows)}
+            graphCommits={buildLinearGraphCommits(rows)}
             continuesAbove={continuesAbove}
             // The PR's merge base always lies below the pushed window.
             continuesBelow
@@ -692,7 +610,7 @@ export function PRUpdatePushEvent({
     return idx === -1 ? loadedCommits : loadedCommits.slice(idx + 1);
   }, [isFastForward, previousTipCommitId, loadedCommits]);
 
-  const rows = useMemo<PushCommitRowData[]>(() => {
+  const rows = useMemo<CompactCommitGraphRowData[]>(() => {
     // Prefer explicitly passed commits, then git-loaded commits.
     const source =
       commits && commits.length > 0
@@ -752,7 +670,7 @@ export function PRUpdatePushEvent({
   const usingLoadedCommits =
     (!commits || commits.length === 0) && displayCommits.length > 0;
   const graphCommits = useMemo(
-    () => (usingLoadedCommits ? displayCommits : linearGraphCommits(rows)),
+    () => (usingLoadedCommits ? displayCommits : buildLinearGraphCommits(rows)),
     [usingLoadedCommits, displayCommits, rows],
   );
 
@@ -824,7 +742,7 @@ export function PRUpdatePushEvent({
           {/* Commit list */}
           {rows.length > 0 && (
             <>
-              <PushCommitList
+              <CompactCommitGraphList
                 rows={rows}
                 graphCommits={graphCommits}
                 continuesAbove={continuesAbove}
