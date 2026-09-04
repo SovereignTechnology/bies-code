@@ -9,11 +9,19 @@
  * commit links become `<basePath>/commit/<hash>`.
  */
 
-import { useMemo, useEffect, useRef } from "react";
+import { useMemo, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Card, CardContent } from "@/components/ui/card";
-import { AlertCircle, GitBranch, GitCommit, Loader2, Tag } from "lucide-react";
+import {
+  AlertCircle,
+  Check,
+  Copy,
+  GitBranch,
+  GitCommit,
+  Loader2,
+  Tag,
+} from "lucide-react";
 import { safeFormatDistanceToNow, safeFormat, cn } from "@/lib/utils";
 import type { Commit } from "@/lib/vendored/git-natural-api";
 import {
@@ -259,8 +267,16 @@ export function CommitRow({
   ciRepo?: ResolvedRepo;
   ciServiceControls?: readonly CIServiceControl[];
 }) {
+  const [copied, setCopied] = useState(false);
   const subject = commit.message.split("\n")[0];
   const shortHash = commit.hash.slice(0, 8);
+
+  const handleCopy = async () => {
+    await navigator.clipboard.writeText(commit.hash);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
   const isMerge = commit.parents.length > 1;
   const timestamp = commit.committer?.timestamp ?? commit.author.timestamp;
   const relativeTime = safeFormatDistanceToNow(timestamp, { addSuffix: true });
@@ -348,6 +364,19 @@ export function CommitRow({
       >
         {shortHash}
       </Link>
+      <button
+        type="button"
+        onClick={handleCopy}
+        aria-label={`Copy commit hash ${shortHash}`}
+        title="Copy full commit hash"
+        className="hidden sm:inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity hover:bg-muted hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
+      >
+        {copied ? (
+          <Check className="h-3.5 w-3.5 text-emerald-500" />
+        ) : (
+          <Copy className="h-3.5 w-3.5" />
+        )}
+      </button>
     </div>
   );
 }
