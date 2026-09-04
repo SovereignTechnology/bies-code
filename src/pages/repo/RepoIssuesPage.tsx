@@ -59,6 +59,10 @@ export default function RepoIssuesPage() {
   const repo = resolved?.repo;
   const account = useActiveAccount();
   const repoOwnerProfile = useProfile(pubkey);
+  const isReadOnlyRepository =
+    repo?.coordinateStatus === "archived" ||
+    repo?.coordinateStatus === "deleted" ||
+    repo?.confirmedMemberCoordinates.length === 0;
 
   // New issue dialog
   const [newIssueOpen, setNewIssueOpen] = useState(false);
@@ -205,7 +209,7 @@ export default function RepoIssuesPage() {
   return (
     <div className="container max-w-screen-xl px-4 md:px-8 py-6">
       {/* New Issue Dialog */}
-      {repo && (
+      {repo && !isReadOnlyRepository && (
         <Dialog open={newIssueOpen} onOpenChange={setNewIssueOpen}>
           <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
@@ -306,7 +310,7 @@ export default function RepoIssuesPage() {
             onChange={(v) => setStatusFilter(v as IssueStatus[])}
             className="border-b-0 pb-0 mb-0 flex-1"
           />
-          {account && repo && (
+          {account && repo && !isReadOnlyRepository && (
             <Button
               size="sm"
               className="gap-1.5 bg-pink-600 hover:bg-pink-700 text-white h-8 text-xs shrink-0 ml-2"

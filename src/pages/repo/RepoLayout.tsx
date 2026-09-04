@@ -60,6 +60,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { RepoContext, type RepoContextValue } from "./RepoContext";
 import {
+  getRepositoryPresentationCoordinates,
   hasAcceptedRepositoryReference,
   type RepoQueryOptions,
   type ResolvedRepo,
@@ -91,6 +92,8 @@ import {
 import { useGitPool } from "@/hooks/useGitPool";
 import { usePrivateGitRelays } from "@/hooks/usePrivateGitRelays";
 import { BuzzRepositoryContext } from "@/contexts/BuzzRepositoryContext";
+import { formatDistanceToNow } from "date-fns";
+
 // ---------------------------------------------------------------------------
 // RepoLayout
 // ---------------------------------------------------------------------------
@@ -206,6 +209,10 @@ function RepoLayoutResolved({
   } = useResolvedRepository(pubkey, repoId, relayHints, nip05Relays);
   const repo = resolved?.repo;
   const isPrivate = privateProbe?.status === "found" || !!repo?.isPrivate;
+  const presentationRepoCoordinates = useMemo(
+    () => (repo ? getRepositoryPresentationCoordinates(repo) : undefined),
+    [repo],
+  );
 
   // Build an encoded base path for intra-repository links. Route wildcard
   // values are decoded by React Router, including `%2F` inside a repository
@@ -298,13 +305,13 @@ function RepoLayoutResolved({
   );
 
   const issues = useIssues(
-    repo?.confirmedMemberCoordinates,
+    presentationRepoCoordinates,
     repoRelayGroup,
     queryOptions,
     repo?.roleHistory,
   );
   const prs = usePRs(
-    repo?.confirmedMemberCoordinates,
+    presentationRepoCoordinates,
     repoRelayGroup,
     queryOptions,
     repo?.roleHistory,
@@ -702,19 +709,6 @@ function RepoLayoutResolved({
   if (leadRedirectPath) {
     return <Navigate to={leadRedirectPath} replace state={location.state} />;
   }
-  // Absence conclusions assert that no relay in the snapshot holds a live
-  // announcement — they need the full all-relay settle (announcement wave +
-  // deletion follow-up), not just the first fresh EOSE.
-  if (repo?.coordinateStatus === "dead" && announcementsSettled) {
-    return <DeadRepositoryCoordinate />;
-  }
-  if (
-    repo?.coordinateStatus === "unsupported_restart" &&
-    announcementsSettled
-  ) {
-    return <UnsupportedRepositoryRestart />;
-  }
-
   return (
     <RepoRelaysContext.Provider value={repoRelayUrls}>
       <div className="min-h-full">
@@ -891,6 +885,14 @@ function RepoLayoutResolved({
             </nav>
           </div>
         </div>
+
+        {repo && announcementsSettled && (
+          <RepositoryLifecycleNotice repo={repo} />
+        )}
+
+        {repo && announcementsSettled && repo.repositoryHealth.length > 0 && (
+          <RepositoryHealthNotice repo={repo} />
+        )}
 
         {repo && !isPrivate && (
           <RepoMaintainerRequestBanner
@@ -1221,58 +1223,80 @@ function Nip05LoadingState({ nip05 }: { nip05: string }) {
   );
 }
 
-function DeadRepositoryCoordinate() {
+function lifecycleTime(createdAt: number | undefined): string | undefined {
+  return createdAt === undefined
+    ? undefined
+    : formatDistanceToNow(new Date(createdAt * 1000), { addSuffix: true });
+}
+
+function RepositoryLifecycleNotice({ repo }: { repo: ResolvedRepo }) {
+  if (
+    repo.coordinateStatus !== "archived" &&
+    repo.coordinateStatus !== "deleted" &&
+    repo.coordinateStatus !== "restarted"
+  ) {
+    return null;
+  }
+
+  const when = lifecycleTime(repo.coordinateStatusChangedAt);
+  const readOnly =
+    repo.coordinateStatus === "archived" || repo.coordinateStatus === "deleted";
+
   return (
-    <div className="min-h-full flex items-center justify-center">
-      <div className="text-center space-y-6 max-w-md px-4">
-        <div className="flex justify-center">
-          <div className="p-4 rounded-full bg-destructive/10">
-            <AlertCircle className="h-8 w-8 text-destructive" />
-          </div>
-        </div>
-        <div className="space-y-2">
-          <h2 className="text-2xl font-bold">Repository coordinate ended</h2>
+    <div className="border-b border-amber-500/30 bg-amber-500/5" role="status">
+      <div className="container flex max-w-screen-xl gap-3 px-4 py-4 md:px-8">
+        <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-amber-700 dark:text-amber-300" />
+        <div className="min-w-0 space-y-1 text-sm">
+          <p className="flex flex-wrap items-center gap-x-1 text-foreground">
+            <UserLink
+              pubkey={repo.selectedMaintainer}
+              avatarSize="xs"
+              variant="inline"
+            />
+            {repo.coordinateStatus === "deleted" && (
+              <span className="font-mono">/{repo.dTag}</span>
+            )}
+            <span>
+              {repo.coordinateStatus === "deleted"
+                ? "deleted this repository"
+                : repo.coordinateStatus === "archived"
+                  ? "archived this repository"
+                  : "restarted this repository"}
+              {when ? ` ${when}` : ""}.
+            </span>
+          </p>
           <p className="text-muted-foreground">
-            This announcement has no active repository role or signed lead
-            redirect. GitWorkshop cannot safely guess which same-identifier
-            repository should replace it.
+            {readOnly
+              ? "Its last signed snapshot remains available here as a read-only archive."
+              : "The current repository remains available, while earlier signed activity is retained as history from its previous lifecycle."}
           </p>
         </div>
-        <Button asChild variant="outline">
-          <Link to="/">
-            <ArrowLeft className="h-4 w-4 mr-2" />
-            Back to repositories
-          </Link>
-        </Button>
       </div>
     </div>
   );
 }
 
-function UnsupportedRepositoryRestart() {
+function RepositoryHealthNotice({ repo }: { repo: ResolvedRepo }) {
+  const selfDefer = repo.repositoryHealth.some(
+    ({ code }) => code === "invalid-self-defer",
+  );
+
   return (
-    <div className="min-h-full flex items-center justify-center">
-      <div className="text-center space-y-6 max-w-md px-4">
-        <div className="flex justify-center">
-          <div className="p-4 rounded-full bg-destructive/10">
-            <AlertCircle className="h-8 w-8 text-destructive" />
-          </div>
-        </div>
-        <div className="space-y-2">
-          <h2 className="text-2xl font-bold">Repository restart unsupported</h2>
+    <div className="border-b border-amber-500/30 bg-amber-500/5" role="alert">
+      <div className="container flex max-w-screen-xl gap-3 px-4 py-4 md:px-8">
+        <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-amber-700 dark:text-amber-300" />
+        <div className="min-w-0 space-y-1 text-sm">
+          <p className="font-medium text-foreground">
+            Repository announcement needs repair
+          </p>
           <p className="text-muted-foreground">
-            This coordinate ended its previous membership and then opened a new
-            self-led repository with the same identifier. GitWorkshop can
-            resolve the signed transition, but does not yet support presenting
-            this aggressive fork safely.
+            {selfDefer
+              ? "A self-authored role ends in defer. Self roles need a numeric end or an active open interval."
+              : "One or more maintainer role records are malformed or inconsistent."}{" "}
+            The repository remains readable, but membership changes stay
+            disabled until its role history is repaired.
           </p>
         </div>
-        <Button asChild variant="outline">
-          <Link to="/">
-            <ArrowLeft className="h-4 w-4 mr-2" />
-            Back to repositories
-          </Link>
-        </Button>
       </div>
     </div>
   );

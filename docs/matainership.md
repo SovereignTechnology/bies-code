@@ -60,8 +60,11 @@ Indexed role tags have the form:
 - `o` assigns or acknowledges moderatorship.
 - With numeric boundaries, an empty history or an odd number of boundaries is
   active. An even number is ended.
-- `defer` is valid only as the final end value. It preserves history but is
-  inactive for current authority and routing.
+- `defer` is valid only as the final end value on copied third-party history.
+  A self-authored role cannot defer its own boundary: it must use a numeric end
+  or remain active with an open interval. Deferred history is inactive for
+  current authority and routing, and a self-`defer` is a repository-health
+  error.
 - Malformed and conflicting role records cannot grant authority.
 
 When any `M`, `m`, or `o` tag is present, indexed roles are authoritative and
@@ -168,10 +171,40 @@ Only confirmed member announcements contribute trusted repository fields:
 - Invited, departed, malformed-role, and unconfirmed moderator announcements
   contribute nothing to those fields.
 
+One narrow presentation exception keeps direct historical routes useful. When
+the selected coordinate is archived, deleted, or carries an invalid
+self-`defer` and has no current authority component, GitWorkshop may show that
+author's final signed name, description, Git URLs, relay hints, and open
+collaboration history addressed to that coordinate. This is a read-only
+snapshot of that coordinate, never shared component metadata and never
+evidence of current authority. In particular, a private historical snapshot
+retains its signed relay hint so the repository is not stranded.
+
 The selected coordinate remains a permanent signed discovery perspective.
 Direct routes retain that perspective while following a complete explicit lead
 path or unique legacy lead; discovery cards use the component's deterministic
 anchor.
+
+## Repository lifecycle presentation
+
+Lifecycle evidence changes what the direct route explains, not whether the
+repository can be inspected:
+
+- A valid kind `5` deletion shows who deleted the selected repository
+  coordinate and when. Its final signed snapshot remains readable.
+- A numeric end to the selected author's self-role without a lead redirect is
+  presented as an archive, including the actor and signed end time. Its final
+  signed snapshot remains readable.
+- A self-led interval reopened after a real timestamp gap is presented as a
+  restart. The current repository remains available and the earlier interval
+  stays visible as prior lifecycle history.
+- Malformed or inconsistent role history, including self-`defer`, produces a
+  repair warning. It cannot grant authority or enable membership writes, but it
+  does not replace the repository with a terminal error page.
+
+Deletion, archive, and restart notices require a complete initial relay
+snapshot. Progressive snapshots continue rendering repository content but do
+not make an absence-based lifecycle claim.
 
 ## Browser mutation safety
 

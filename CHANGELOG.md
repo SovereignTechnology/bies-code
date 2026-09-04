@@ -8,21 +8,25 @@
   retaining the existing zsp manifest as a manual first-release fallback.
 - Publish the production NIP-5A site with ngit through a dedicated established
   CI signer connection, replacing the nsyte-specific signing bridge.
-- Settle repository resolution once over a monotonic initial relay snapshot — one identifier-scoped announcement wave plus a bounded deletion follow-up, with relay failures counted so settlement is always finite. Maintainers, relays, and mailboxes discovered later enrich the page progressively instead of restarting settlement; canonical lead redirects now fire at the first fresh relay EOSE, while dead-coordinate and unsupported-restart conclusions and the membership safety gates keep waiting for the full snapshot.
+- Settle repository resolution once over a monotonic initial relay snapshot — one identifier-scoped announcement wave plus a bounded deletion follow-up, with relay failures counted so settlement is always finite. Maintainers, relays, and mailboxes discovered later enrich the page progressively instead of restarting settlement; canonical lead redirects now fire at the first fresh relay EOSE, while archived, deleted, and restarted lifecycle notices and the membership safety gates keep waiting for the full snapshot.
 - Enable conservative one-at-a-time repository membership changes only after complete relay, history, network Git-object, and relay-publication verification; pre-stabilization acceptance delivery jobs remain quarantined.
 - Make reciprocal NIP-34 membership the repository authority boundary, add indexed `M`/`m`/`o` role and `defer` resolution, separate discovery from confirmed maintainer/member coordinates, retire legacy complete-roster browser writes, and preserve membership tags through metadata edits.
 - Resolve repository leads from the selected coordinate's signed `M` pointer path or legacy vote result, apply redirects only after a bounded current-announcement refresh, preserve the full URL, and leave unresolved or tied routes unchanged.
 - Remount account-authored repository settings when the active account changes so unsaved metadata cannot cross signer scopes.
 - Match ngit's duplicate active role-target handling while retaining a repository-health warning for malformed announcements.
 - Resolve repository discovery through a deterministic reciprocal-component index, progressively group browse, search, profile, pinned, followed, and starred cards without per-coordinate safety requests, keep same-identifier invitations separate, and match ngit's confirmed-member metadata, infrastructure, and privacy merging.
-- Resolve replicated role history for collaboration events at their publication time, retain historical authorization after ordinary exits, require a new acceptance interval after reinvitation, fail dead coordinates closed, and identify unsupported same-coordinate restarts.
+- Resolve replicated role history for collaboration events at their publication time, retain historical authorization after ordinary exits, require a new acceptance interval after reinvitation, and identify archived, deleted, and same-coordinate restarted repository lifecycles without restoring current authority.
 - Support maintainer add, fresh invitation acceptance, direct relationship removal, maintainer leave, and moderator self-leave as exact one-at-a-time operations; signed replacements are durably queued, require a designated relay acknowledgement and exact refetch before success, and fail closed with named errors for unsupported component, lead, history, identity, state, and concurrency cases.
 
 ### Fixes
 
+- Keep deleted, archived, and same-coordinate restarted repositories readable
+  with signed actor/time lifecycle notices; preserve their final announcement
+  for historical display, flag invalid self-`defer`, and keep membership writes
+  fail-closed instead of replacing the repository with a terminal error page.
 - Treat a self-`m` interval ending exactly when self-`M` begins as a continuous
   promotion to lead, so repaired repository announcements no longer appear as
-  unsupported same-identifier restarts.
+  same-identifier restarts.
 - Restore maintainer name autocomplete and resolve invitees' NIP-65 mailboxes
   before membership safety snapshots, without treating optional identity
   lookup relays as repository authorities.

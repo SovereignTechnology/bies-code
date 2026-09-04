@@ -35,6 +35,7 @@ export interface ModeratorEdge {
 
 export type RepositoryHealthCode =
   | "invalid-role-record"
+  | "invalid-self-defer"
   | "duplicate-role-record"
   | "inconsistent-maintainers-projection";
 
@@ -254,6 +255,10 @@ export function parseRepositoryRoleRecord(
     boundaries.push(timestamp);
   }
 
+  if (subject === author && boundaries.at(-1) === "defer") {
+    return undefined;
+  }
+
   return {
     author,
     role: rawRole as RepositoryRole,
@@ -287,9 +292,13 @@ function parseAnnouncement(event: NostrEvent): ParsedAnnouncement {
     const subject = tag[1] ?? "";
     const record = parseRepositoryRoleRecord(event.pubkey, tag);
     if (!record) {
+      const invalidSelfDefer =
+        subject === event.pubkey && tag.at(-1) === "defer";
       health.push({
-        code: "invalid-role-record",
-        message: `Invalid ${role} role record cannot grant authority`,
+        code: invalidSelfDefer ? "invalid-self-defer" : "invalid-role-record",
+        message: invalidSelfDefer
+          ? "A self-authored role cannot end in defer; use a numeric end or an active open interval"
+          : `Invalid ${role} role record cannot grant authority`,
         author: event.pubkey,
         role,
         subject: HEX_PUBKEY.test(subject) ? subject : undefined,

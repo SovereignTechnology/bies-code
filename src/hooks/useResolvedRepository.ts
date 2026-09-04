@@ -79,8 +79,8 @@ export interface ResolvedRepositoryResult {
    * Full-snapshot readiness tier: true once the identifier-only announcement
    * wave plus the one-shot deletion follow-up have settled on every initial
    * relay. Monotonic — enrichment discovery never resets it. Gates absence
-   * conclusions (dead coordinate / unsupported restart) and the fail-closed
-   * membership surfaces.
+   * conclusions (archived, deleted, or restarted coordinate) and the
+   * fail-closed membership surfaces.
    */
   announcementsSettled: boolean;
   /** Coverage detail for the full snapshot (relay and failure counts). */

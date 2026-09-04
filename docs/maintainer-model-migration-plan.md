@@ -60,9 +60,9 @@ indexed roles.
 2. Define the required relay set for each decision. Track actual per-relay
    EOSE and terminal errors against a fixed snapshot and a bounded deadline.
 3. Continue rendering repository content and cards from progressive snapshots.
-4. Permit canonical lead redirects, dead/restart conclusions, and CI trust
-   decisions only from a complete snapshot. Timeout, relay failure, or relay
-   set changes must remain visible and fail closed.
+4. Permit canonical lead redirects, archived/deleted/restarted lifecycle
+   notices, and CI trust decisions only from a complete snapshot. Timeout,
+   relay failure, or relay set changes must remain visible and fail closed.
 5. Keep membership mutations on their existing stricter two-snapshot contract;
    do not substitute the read-side settlement result.
 6. Make stabilized repository resolution deletion-aware:
@@ -85,7 +85,7 @@ indexed roles.
 - [ ] A failed or timed-out relay produces `incomplete`, never `complete`.
 - [ ] Progressive content remains usable while a safety decision is incomplete.
 - [ ] A newer replacement or tombstone on a slower relay prevents a stale
-      redirect, dead-coordinate result, or trust decision.
+      redirect, lifecycle notice, or trust decision.
 - [ ] Mixed-relay and all-relay-failure tests have bounded observable
       deadlines and no fixed sleeps.
 
@@ -103,6 +103,12 @@ through `ngit` v3, `ngit-grasp` v3, and GitWorkshop.
       state or merge authority.
 - [ ] End and re-open role intervals, including `defer`, and compare current
       and publication-time authorization.
+- [ ] Verify that self-`defer` is reported as invalid history without hiding
+      the repository, granting authority, or enabling membership writes.
+- [ ] Verify that deletion and a numeric self-role end retain the final signed
+      snapshot and show the actor and lifecycle time on the direct route.
+- [ ] Verify that a gapped same-coordinate restart renders the current
+      repository with a lifecycle notice instead of a terminal refusal.
 - [ ] Verify that a one-way invitation remains a separate repository result
       and contributes no trusted metadata or infrastructure.
 - [ ] Verify signed announcement and state deletion behavior across split
@@ -142,9 +148,10 @@ Recommended order:
    and removal. Keep ordinary moderator self-leave as the simple case.
 7. **Relay-divergent history reconciliation** — repair conflicting signed
    copies and label estimated departure boundaries explicitly.
-8. **Redirect and coordinate-fork workflows** — handle abandoned redirects
-   and aggressive same-identifier forks while recommending a new identifier
-   for friendly forks.
+8. **Redirect and coordinate-fork write workflows** — handle abandoned
+   redirects and aggressive same-identifier fork mutations while recommending
+   a new identifier for friendly forks. Read-side lifecycle history remains
+   visible independently of these write workflows.
 
 Review
 [`repository-invitation-state-merge-prompt.md`](repository-invitation-state-merge-prompt.md)

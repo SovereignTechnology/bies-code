@@ -847,10 +847,12 @@ export interface FieldProvenance {
 /**
  * The fully-resolved view of a repository after BFS chain resolution.
  *
- * Display fields (name, description, webUrls) use latest-wins across all
- * maintainer announcements. Infrastructure fields (cloneUrls, relays) are
- * unioned. The raw announcements and provenance data are preserved for the
- * detailed maintainership graph view.
+ * Current display fields (name, description, webUrls) use latest-wins across
+ * confirmed member announcements. Infrastructure fields (cloneUrls, relays)
+ * are unioned across that same authority set. A direct archived, deleted, or
+ * invalid-self-defer route may instead expose its author's final signed
+ * snapshot for read-only historical presentation. The raw announcements and
+ * provenance data are preserved for the detailed maintainership graph view.
  */
 export interface ResolvedRepo {
   // --- Identity ---
@@ -862,18 +864,21 @@ export interface ResolvedRepo {
   selectedCoordinate: string;
   /** The d-tag identifier shared by all announcements in this repo */
   dTag: string;
-  /** Whether the selected coordinate is active, forwarding, dead, or unsupported. */
+  /** Current presentation state of the selected repository coordinate. */
   coordinateStatus:
     | "active"
     | "redirect"
-    | "dead"
-    | "unsupported_restart"
+    | "archived"
+    | "deleted"
+    | "restarted"
     | "unresolved";
+  /** Signed lifecycle boundary for archived, deleted, or restarted coordinates. */
+  coordinateStatusChangedAt?: number;
 
   // --- Merged display fields (latest-wins) ---
   name: string;
   description: string;
-  /** Web URLs from the single latest confirmed-member announcement */
+  /** Web URLs from the current component or historical presentation snapshot. */
   webUrls: string[];
   /** Upstream relationships from the same latest metadata announcement. */
   upstreams: RepoUpstream[];
@@ -881,7 +886,7 @@ export interface ResolvedRepo {
   updatedAt: number;
 
   // --- Unioned infrastructure fields ---
-  /** All clone URLs across all maintainer announcements, deduplicated */
+  /** Clone URLs from the current component or historical presentation snapshot. */
   cloneUrls: string[];
   /** Subset of cloneUrls that are Grasp server clone URLs */
   graspCloneUrls: string[];
@@ -891,7 +896,7 @@ export interface ResolvedRepo {
   graspServerDomains: string[];
   /** Unique Grasp service addresses, including mount paths */
   graspServerAddresses: string[];
-  /** All relay URLs across all maintainer announcements, deduplicated */
+  /** Relay URLs from the current component or historical presentation snapshot. */
   relays: string[];
   /** All Blossom server URLs across confirmed-member announcements. */
   blossomUrls: string[];
@@ -956,8 +961,43 @@ export interface ResolvedRepo {
 }
 
 /**
+ * Coordinates that may be queried for open-protocol repository history.
+ *
+ * Current repositories use only their confirmed member component. Archived,
+ * deleted, and selected invalid-self-defer coordinates have no current
+ * authority component, but their selected coordinate remains a safe signed
+ * subject for read-only issue and pull-request discovery. This helper must not
+ * be used as an authority set or as the target of a new collaboration event.
+ */
+export function getRepositoryPresentationCoordinates(
+  repo: Pick<
+    ResolvedRepo,
+    | "confirmedMemberCoordinates"
+    | "coordinateStatus"
+    | "repositoryHealth"
+    | "selectedCoordinate"
+    | "selectedMaintainer"
+  >,
+): string[] {
+  if (repo.confirmedMemberCoordinates.length > 0) {
+    return repo.confirmedMemberCoordinates;
+  }
+  const selectedHasInvalidSelfDefer = repo.repositoryHealth.some(
+    ({ author, code }) =>
+      author === repo.selectedMaintainer && code === "invalid-self-defer",
+  );
+  return repo.coordinateStatus === "archived" ||
+    repo.coordinateStatus === "deleted" ||
+    selectedHasInvalidSelfDefer
+    ? [repo.selectedCoordinate]
+    : [];
+}
+
+/**
  * Whether an issue, PR, or patch explicitly references the selected
  * maintainer or a maintainer with a reciprocal path back into that accepted
+ * component. An archived or deleted direct coordinate remains accepted as a
+ * historical repository reference, but never rejoins the current authority
  * component.
  *
  * Items that reference only directionally authorized / invited coordinates
@@ -966,11 +1006,20 @@ export interface ResolvedRepo {
  */
 export function hasAcceptedRepositoryReference(
   repoCoords: Iterable<string>,
-  repo: Pick<ResolvedRepo, "confirmedMembers" | "dTag">,
+  repo: Pick<
+    ResolvedRepo,
+    "confirmedMembers" | "coordinateStatus" | "dTag" | "selectedCoordinate"
+  >,
 ): boolean {
   const acceptedCoordinates = new Set(
     repo.confirmedMembers.map((pubkey) => repoCoordinate(pubkey, repo.dTag)),
   );
+  if (
+    repo.coordinateStatus === "archived" ||
+    repo.coordinateStatus === "deleted"
+  ) {
+    acceptedCoordinates.add(repo.selectedCoordinate);
+  }
   for (const coordinate of repoCoords) {
     if (acceptedCoordinates.has(coordinate)) return true;
   }
@@ -2470,11 +2519,103 @@ function resolvedRepoFromMembership(
     (event) => event.pubkey === selectedMaintainer,
   )!;
 
+  const selectedSelfRoles = selectedAnnouncement.tags.flatMap((tag) => {
+    const record = parseRepositoryRoleRecord(selectedMaintainer, tag);
+    return record?.subject === selectedMaintainer &&
+      (record.role === "M" || record.role === "m")
+      ? [record]
+      : [];
+  });
+  const activeSelfLeadStarts = selectedSelfRoles.flatMap((record) => {
+    const start = record.boundaries.at(-1);
+    return record.role === "M" && record.active && typeof start === "number"
+      ? [start]
+      : [];
+  });
+  const numericSelfRoleEnds = selectedSelfRoles.flatMap((record) =>
+    record.boundaries.flatMap((boundary, index) =>
+      index % 2 === 1 && typeof boundary === "number" ? [boundary] : [],
+    ),
+  );
+  const roleCoversBoundaryFromBefore = (
+    record: (typeof selectedSelfRoles)[number],
+    boundary: number,
+  ) => {
+    if (record.boundaries.length === 0) return true;
+    for (let index = 0; index < record.boundaries.length; index += 2) {
+      const start = record.boundaries[index];
+      const end = record.boundaries[index + 1];
+      if (
+        typeof start === "number" &&
+        start < boundary &&
+        (end === undefined || (typeof end === "number" && end >= boundary))
+      ) {
+        return true;
+      }
+    }
+    return false;
+  };
+  const restartedAt = [...activeSelfLeadStarts]
+    .sort((a, b) => b - a)
+    .find(
+      (start) =>
+        numericSelfRoleEnds.some((end) => end < start) &&
+        !selectedSelfRoles.some((record) =>
+          roleCoversBoundaryFromBefore(record, start),
+        ),
+    );
+  const deletedAt =
+    membership.deletedAnnouncementTimestamps.get(selectedMaintainer);
+  const archivedAt =
+    numericSelfRoleEnds.length > 0
+      ? Math.max(...numericSelfRoleEnds)
+      : undefined;
+  const selectedHasInvalidSelfDefer = membership.repositoryHealth.some(
+    ({ author, code }) =>
+      author === selectedMaintainer && code === "invalid-self-defer",
+  );
+  const coordinateStatus: ResolvedRepo["coordinateStatus"] =
+    membership.deletedAnnouncementTimestamps.has(selectedMaintainer)
+      ? "deleted"
+      : restartedAt !== undefined
+        ? "restarted"
+        : membership.confirmedMembers.includes(selectedMaintainer)
+          ? "active"
+          : membership.leadResolution.leadMaintainer
+            ? "redirect"
+            : archivedAt !== undefined &&
+                membership.departedMaintainers.includes(selectedMaintainer) &&
+                membership.leadResolution.path.length === 1
+              ? "archived"
+              : "unresolved";
+  const coordinateStatusChangedAt =
+    coordinateStatus === "deleted"
+      ? deletedAt
+      : coordinateStatus === "archived"
+        ? archivedAt
+        : coordinateStatus === "restarted"
+          ? restartedAt
+          : undefined;
+
+  // A coordinate without a current authority component can still present its
+  // own signed final snapshot. This is read-only history and never expands the
+  // confirmed authority sets.
+  const presentationAnnouncements =
+    announcements.length > 0
+      ? announcements
+      : coordinateStatus === "archived" ||
+          coordinateStatus === "deleted" ||
+          selectedHasInvalidSelfDefer
+        ? [selectedAnnouncement]
+        : announcements;
+
   // --- Merge fields ---
 
-  // All ordinary metadata comes from one NIP-01-latest authoritative event.
+  // Current metadata comes from one NIP-01-latest confirmed-member event.
+  // Archived, deleted, and invalid-self-defer routes fall back to the selected
+  // author's signed final announcement for read-only historical presentation.
   let latestEv: NostrEvent | undefined;
-  for (const ev of announcements) {
+  for (const ev of presentationAnnouncements) {
     if (
       !latestEv ||
       ev.created_at > latestEv.created_at ||
@@ -2505,7 +2646,7 @@ function resolvedRepoFromMembership(
   let isPrivate = false;
   let isBuzz = false;
 
-  for (const ev of announcements) {
+  for (const ev of presentationAnnouncements) {
     for (const v of getRepoCloneUrls(ev)) {
       const key = normalizeUrl(v);
       if (!seenClone.has(key)) {
@@ -2545,50 +2686,6 @@ function resolvedRepoFromMembership(
     : [];
 
   const selectedCoordinate = repoCoordinate(selectedMaintainer, dTag);
-  const selectedSelfRoles = selectedAnnouncement.tags.flatMap((tag) => {
-    const record = parseRepositoryRoleRecord(selectedMaintainer, tag);
-    return record?.subject === selectedMaintainer &&
-      (record.role === "M" || record.role === "m")
-      ? [record]
-      : [];
-  });
-  const activeSelfLeadStarts = selectedSelfRoles.flatMap((record) => {
-    const start = record.boundaries.at(-1);
-    return record.role === "M" && record.active && typeof start === "number"
-      ? [start]
-      : [];
-  });
-  // Closing self-m and opening self-M at the same boundary is a continuous
-  // co-maintainer-to-lead transition, not a same-coordinate repository fork.
-  const continuousSelfLeadPromotion = activeSelfLeadStarts.some((start) =>
-    selectedSelfRoles.some(
-      (record) =>
-        record.role === "m" &&
-        !record.active &&
-        record.boundaries.at(-1) === start,
-    ),
-  );
-  const aggressiveSelfLedRestart =
-    activeSelfLeadStarts.length > 0 &&
-    !continuousSelfLeadPromotion &&
-    selectedSelfRoles.some(
-      (record) =>
-        !record.active &&
-        record.boundaries.some((boundary) => boundary !== "defer"),
-    );
-  const coordinateStatus: ResolvedRepo["coordinateStatus"] =
-    membership.deletedAnnouncementTimestamps.has(selectedMaintainer)
-      ? "dead"
-      : aggressiveSelfLedRestart
-        ? "unsupported_restart"
-        : membership.confirmedMembers.includes(selectedMaintainer)
-          ? "active"
-          : membership.leadResolution.leadMaintainer
-            ? "redirect"
-            : membership.departedMaintainers.includes(selectedMaintainer) &&
-                membership.leadResolution.path.length === 1
-              ? "dead"
-              : "unresolved";
 
   const allCloneUrls = cloneUrlProvenance.map((p) => p.value);
   const graspCloneUrls = allCloneUrls.filter(isGraspCloneUrl);
@@ -2616,6 +2713,7 @@ function resolvedRepoFromMembership(
     selectedCoordinate,
     dTag,
     coordinateStatus,
+    coordinateStatusChangedAt,
     name: nameSource.value || dTag,
     description: descriptionSource.value,
     webUrls: latestEv ? getRepoWebUrls(latestEv) : [],
@@ -3033,6 +3131,9 @@ function repositoryForSelectedCoordinate(
     selectedMaintainer: pubkey,
     selectedCoordinate,
     coordinateStatus: rooted?.coordinateStatus ?? component.coordinateStatus,
+    coordinateStatusChangedAt: rooted
+      ? rooted.coordinateStatusChangedAt
+      : component.coordinateStatusChangedAt,
     leadResolution: rooted?.leadResolution ?? component.leadResolution,
     roleHistory: rooted?.roleHistory ?? component.roleHistory,
   };

@@ -600,7 +600,7 @@ describe("replicated role history and exits", () => {
     );
   });
 
-  it("marks a same-coordinate self-led restart as unsupported", () => {
+  it("retains a same-coordinate self-led restart as visible history", () => {
     const resolved = resolveChain(
       [
         announcement(owner, [["M", owner, "10"]]),
@@ -619,7 +619,8 @@ describe("replicated role history and exits", () => {
       repoId,
     );
 
-    expect(resolved?.coordinateStatus).toBe("unsupported_restart");
+    expect(resolved?.coordinateStatus).toBe("restarted");
+    expect(resolved?.coordinateStatusChangedAt).toBe(50);
   });
 });
 
