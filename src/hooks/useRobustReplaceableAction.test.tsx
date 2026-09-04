@@ -79,6 +79,7 @@ describe("useRobustReplaceableAction warm coverage boundary", () => {
   afterEach(() => {
     releaseCoverage?.();
     releaseCoverage = undefined;
+    vi.restoreAllMocks();
   });
 
   it("rejects connected and liveness-healthy relays without current coverage", async () => {
@@ -151,5 +152,36 @@ describe("useRobustReplaceableAction warm coverage boundary", () => {
       pubkey: PUBKEY,
       relays: RELAYS,
     });
+  });
+
+  it("fails immediately when the account has no active coverage lease", async () => {
+    releaseCoverage?.();
+    releaseCoverage = undefined;
+    const action = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    const { result } = renderHook(() => useRobustReplaceableAction());
+
+    await act(async () => {
+      await expect(result.current.execute(3, action)).rejects.toThrow(
+        "current query coverage",
+      );
+    });
+
+    expect(action).not.toHaveBeenCalled();
+    expect(mocks.addressLoader).not.toHaveBeenCalled();
+  });
+
+  it("preserves the fast offline failure while coverage is in flight", async () => {
+    vi.spyOn(navigator, "onLine", "get").mockReturnValue(false);
+    const action = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    const { result } = renderHook(() => useRobustReplaceableAction());
+
+    await act(async () => {
+      await expect(result.current.execute(3, action)).rejects.toThrow(
+        "You appear to be offline",
+      );
+    });
+
+    expect(action).not.toHaveBeenCalled();
+    expect(mocks.addressLoader).not.toHaveBeenCalled();
   });
 });

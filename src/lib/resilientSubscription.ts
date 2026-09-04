@@ -413,6 +413,10 @@ function processRelay(
     let manualSub: { unsubscribe(): void } | undefined;
     let gapFillSub: { unsubscribe(): void } | undefined;
     let latestLifecycleGeneration: number | undefined;
+    // True only while the persistent live REQ itself is subscribed. A
+    // foreground catch-up may prove the missed window, but it must not claim
+    // continuously owned coverage while the live cycle is between attempts.
+    let liveCycleOpen = false;
 
     const beginLifecycle = (
       phase: Exclude<ResilientRelayLifecyclePhase, "covered">,
@@ -569,6 +573,7 @@ function processRelay(
       const relayObj = pool.relay(relay);
       const inner$ = relayObj.subscription(filtersWithSince);
       const sub$ = new Observable<NostrEvent | "EOSE">((s) => {
+        liveCycleOpen = true;
         const errSub = relayObj.error$.subscribe((err) => {
           if (err !== null) s.error(new TransportError(relay));
         });
@@ -578,6 +583,7 @@ function processRelay(
           complete: () => s.complete(),
         });
         return () => {
+          liveCycleOpen = false;
           errSub.unsubscribe();
           innerSub.unsubscribe();
         };
@@ -878,7 +884,12 @@ function processRelay(
             retryDelay: opts.retryDelay,
             onRelayEose: () => {
               gapFillEoseSeen = true;
-              completeLifecycle(lifecycleGeneration, "covered");
+              // Catch-up evidence is current only while the persistent live
+              // REQ remains open. If it is between retry attempts, its next
+              // cycle will establish a fresh generation and EOSE normally.
+              if (liveCycleOpen) {
+                completeLifecycle(lifecycleGeneration, "covered");
+              }
               gapFillDone$.next();
               gapFillDone$.complete();
             },

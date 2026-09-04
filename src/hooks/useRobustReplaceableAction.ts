@@ -192,9 +192,10 @@ export function useRobustReplaceableAction(): RobustReplaceableActionResult {
     (relays: string[]): number => {
       if (!account?.pubkey) return 0;
       const coverage = userIdentityCoverage.get(account.pubkey);
+      if (!coverage) return 0;
       const inFlight = relays.flatMap((url) => {
-        const phase = coverage?.get(normalizeUrl(url))?.phase;
-        if (coverage && phase !== "initial" && phase !== "catching-up") {
+        const phase = coverage.get(normalizeUrl(url))?.phase;
+        if (phase !== "initial" && phase !== "catching-up") {
           return [];
         }
         try {
@@ -296,6 +297,7 @@ export function useRobustReplaceableAction(): RobustReplaceableActionResult {
    */
   const canWarmCoverageStillSucceed = useCallback(
     (outboxes: string[], lookup: string[]) => {
+      if (!navigator.onLine) return false;
       const coveredOutboxes = countCoveredHealthy(outboxes);
       const coveredLookup = countCoveredHealthy(lookup);
       const inFlightOutboxes = countInFlightHealthy(outboxes);
