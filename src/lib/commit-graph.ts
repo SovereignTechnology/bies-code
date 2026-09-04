@@ -72,6 +72,26 @@ function commitTime(commit: Commit): number {
   return commit.committer?.timestamp ?? commit.author.timestamp;
 }
 
+/**
+ * Extract the merged-in source ref from a merge commit subject, e.g.
+ * "Merge branch 'master' into feat/x" → "master", "Merge pull request #7
+ * from alex/feat" → "alex/feat". Returns null when no pattern matches.
+ */
+export function parseMergeSourceRef(subject: string): string | null {
+  const patterns = [
+    /^Merge (?:remote-tracking )?branch '([^']+)'/,
+    /^Merge (?:remote-tracking )?branch "([^"]+)"/,
+    /^Merge pull request #\d+ (?:in \S+ )?from (\S+)/,
+    /^Merge tag '([^']+)'/,
+    /^Merge (\S+) into \S+/,
+  ];
+  for (const pattern of patterns) {
+    const match = subject.match(pattern);
+    if (match) return match[1];
+  }
+  return null;
+}
+
 export interface SpineCollapse {
   /** The tip's first-parent chain — the branch's own commits. */
   spine: Commit[];

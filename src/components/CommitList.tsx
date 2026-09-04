@@ -29,6 +29,7 @@ import type { Commit } from "@/lib/vendored/git-natural-api";
 import {
   layoutCommitGraph,
   collapseMergedInCommits,
+  parseMergeSourceRef,
   GRAPH_LANE_COLORS,
   type CommitGraphRow,
 } from "@/lib/commit-graph";
@@ -231,6 +232,7 @@ export function CommitList({
           const groupRows = group && (
             <MergedInGroup
               commits={group}
+              mergeCommit={row.commit}
               basePath={basePath}
               lane={row.lane}
               laneColor={row.color}
@@ -333,6 +335,7 @@ function GraphRailSpacer({
 
 function MergedInGroup({
   commits,
+  mergeCommit,
   basePath,
   lane,
   laneColor,
@@ -343,6 +346,8 @@ function MergedInGroup({
 }: {
   /** Merged-in commits, newest first. */
   commits: Commit[];
+  /** The spine merge commit that brought these in — names the source ref. */
+  mergeCommit: Commit;
   basePath: string;
   lane: number;
   laneColor: number;
@@ -352,6 +357,7 @@ function MergedInGroup({
   onToggle: () => void;
 }) {
   const SUB_ROW_HEIGHT = 28;
+  const sourceRef = parseMergeSourceRef(mergeCommit.message.split("\n")[0]);
   const ordered =
     direction === "oldest-first" ? [...commits].reverse() : commits;
   const subRows = expanded
@@ -417,8 +423,12 @@ function MergedInGroup({
         <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
       )}
       <span className="min-w-0 truncate text-xs text-muted-foreground">
-        {commits.length} commit{commits.length === 1 ? "" : "s"} merged in from
-        another branch
+        {commits.length} commit{commits.length === 1 ? "" : "s"} merged in from{" "}
+        {sourceRef ? (
+          <span className="font-mono text-foreground/70">{sourceRef}</span>
+        ) : (
+          "another branch"
+        )}
       </span>
     </button>
   );
