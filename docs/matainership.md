@@ -287,6 +287,24 @@ Metadata-only edits still preserve every existing `M`, `m`, `o`, and
 pre-stabilization v3 jobs remain quarantined; only fully preflighted v4 jobs
 resume delivery after reload.
 
+## Advanced repair
+
+For announcement histories none of the guided flows can fix — multiple
+invalid self-`defer` records of one role, unparseable role tags, genuinely
+duplicated valid records, or an inconsistent `maintainers` projection — the
+settings danger zone exposes an advanced-repair editor over the signer's own
+raw `M`/`m`/`o` role records. It is the explicit signer-reviewed repair the
+model mandates for complex history: before signing, the edited announcement
+is re-analysed with the production parser and re-resolved through the pure
+component resolver so the signer sees the resulting record classification,
+health warnings, and confirmed-membership delta. Every non-membership tag is
+carried over byte-for-byte, the deprecated `maintainers` projection is
+regenerated from the edited active records, `created_at` is bumped strictly
+past the current announcement, and a private repository replacement without a
+relay hint is refused. Advanced repair grants no authority a keyholder does
+not already have — anyone can publish any event — and its published output
+still resolves through the normal reciprocal authorization model.
+
 ## Resolver contract
 
 Callers consume the pure resolver through `useResolvedRepository` and must

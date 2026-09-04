@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Added
+
+- Add a signer-reviewed advanced-repair danger zone that rewrites the raw
+  `M`/`m`/`o` role records of the signer's own repository announcement for
+  histories the guided repairs cannot fix, previewing record classification,
+  health warnings, and the confirmed-membership delta before signing while
+  carrying every non-membership tag byte-for-byte and regenerating the
+  deprecated `maintainers` projection.
+
 ### Changed
 
 - Prepare tag-only NIP-82 and Zapstore release publication through ngit while

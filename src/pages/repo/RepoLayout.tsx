@@ -896,6 +896,7 @@ function RepoLayoutResolved({
           <RepositoryHealthNotice
             repo={repo}
             accountPubkey={account?.pubkey}
+            basePath={basePath}
             announcementsSettled={announcementsSettled}
             stateSettled={repoRelayEose}
             relayUrls={[
@@ -1358,6 +1359,7 @@ function dateTimeLocalValue(timestamp: number): string {
 function RepositoryHealthNotice({
   repo,
   accountPubkey,
+  basePath,
   announcementsSettled,
   stateSettled,
   relayUrls,
@@ -1365,6 +1367,7 @@ function RepositoryHealthNotice({
 }: {
   repo: ResolvedRepo;
   accountPubkey?: string;
+  basePath: string;
   announcementsSettled: boolean;
   stateSettled: boolean;
   relayUrls: string[];
@@ -1440,6 +1443,21 @@ function RepositoryHealthNotice({
       .catch(() => undefined);
   };
   const repairPending = mutation.pendingIntent?.type === "repair-self-defer";
+  // Dead-end warnings on the signer's OWN announcement — no guided repair can
+  // fix them, so the explicit advanced-repair editor is the sanctioned exit.
+  // Other authors' warnings never link there: only they can edit their event.
+  const hasOwnUnguidedWarnings =
+    !!accountPubkey &&
+    repo.repositoryHealth.some(
+      (warning) =>
+        warning.author === accountPubkey &&
+        (warning.code === "invalid-role-record" ||
+          warning.code === "inconsistent-maintainers-projection" ||
+          (warning.code === "duplicate-role-record" &&
+            !warning.repairableBySelfDefer)),
+    );
+  const showAdvancedRepairLink =
+    hasOwnUnguidedWarnings || repairSelectionAmbiguous;
   const hasOtherHealth = repo.repositoryHealth.some(
     ({ code, repairableBySelfDefer }) =>
       code !== "invalid-self-defer" &&
@@ -1601,6 +1619,19 @@ function RepositoryHealthNotice({
             <p className="mt-2 text-muted-foreground">
               Other malformed or inconsistent records still require a separate
               repair.
+            </p>
+          )}
+          {showAdvancedRepairLink && (
+            <p className="mt-2 text-muted-foreground">
+              No guided repair covers this part of your announcement&apos;s
+              history.{" "}
+              <Link
+                to={`${basePath}/settings/advanced`}
+                className="font-medium text-foreground underline underline-offset-2"
+              >
+                Open advanced repair
+              </Link>{" "}
+              to review and rewrite your raw role records.
             </p>
           )}
         </div>
