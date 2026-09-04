@@ -99,8 +99,11 @@ invalidated by:
 - owner teardown or account/session replacement.
 
 Each cycle has a generation. Completion from an older request or gap fill must
-never validate a newer generation. Newly added relays start at `initial`; their
-presence does not invalidate still-current coverage on unchanged relays.
+never validate a newer generation. When the subscription owner can add relays
+reactively, newly added relays start at `initial` without invalidating unchanged
+relays. The current account wiring updates lookup relays this way, but an outbox
+list change replaces the identity owner and therefore invalidates every relay
+until the replacement subscription reaches EOSE.
 
 The coverage layer reports lifecycle facts. It does not decide whether one,
 one-third, a majority, or every relay is enough. Category policy intersects its
@@ -140,9 +143,9 @@ for the active account:
   subscription;
 - require relays counted by `useRobustReplaceableAction` to have current
   subscription coverage, not merely an open and healthy connection;
-- wait up to the focused-read deadline when connected identity queries are
-  still capable of reaching the threshold, and wake as soon as their coverage
-  changes rather than requiring a second user action;
+- wait up to the five-second warm-coverage deadline when connected identity
+  queries are still capable of reaching the threshold, and wake as soon as
+  their coverage changes rather than requiring a second user action;
 - retain its existing outbox/lookup sufficiency policy and bounded focused-read
   safety net;
 - verify initial EOSE, reconnect, foreground gap fill, relay membership changes,
@@ -150,6 +153,10 @@ for the active account:
 
 This phase does not introduce a global filter registry, change repository
 preflight, or define universal relay thresholds.
+
+The warm-coverage wait and focused read each have their own five-second bound.
+They run sequentially, so an action missing both forms of evidence can spend up
+to ten seconds in preflight before its writer begins.
 
 ### Phase 2: category adoption
 
