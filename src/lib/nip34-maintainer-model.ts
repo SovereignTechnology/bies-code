@@ -45,6 +45,15 @@ export interface RepositoryHealthWarning {
   author: string;
   role?: RepositoryRole;
   subject?: string;
+  /**
+   * Present only on a duplicate-role-record warning. True when the duplicate
+   * consists of exactly one invalid self-defer beside one valid same-role
+   * record holding a single strictly later signed start, so the signer's
+   * sanctioned self-defer repair (or invitation acceptance) merges both into
+   * one multi-interval record and eliminates the duplicate. Genuinely
+   * duplicated valid records stay false.
+   */
+  repairableBySelfDefer?: boolean;
   /** Repair context present only for a syntactically valid invalid self-defer. */
   selfDefer?: {
     /** Signed start of the unresolved interval. */
@@ -502,6 +511,25 @@ function parseAnnouncement(event: NostrEvent): ParsedAnnouncement {
       proposedEnd: unambiguousSuccessor?.start,
       successorRole: unambiguousSuccessor?.role,
     };
+  }
+  for (const warning of health) {
+    if (warning.code !== "duplicate-role-record" || !warning.subject) continue;
+    const sameKey = (record: RepositoryRoleRecord) =>
+      record.role === warning.role && record.subject === warning.subject;
+    const validRecords = roleRecords.filter(sameKey);
+    const invalidEntries = invalidSelfDeferRecords.filter(({ record }) =>
+      sameKey(record),
+    );
+    const successorStart = validRecords[0]?.boundaries[0];
+    const deferStart = invalidEntries[0]?.warning.selfDefer?.lastValidStart;
+    warning.repairableBySelfDefer =
+      duplicateCounts.get(`${warning.role}:${warning.subject}`) === 2 &&
+      validRecords.length === 1 &&
+      invalidEntries.length === 1 &&
+      validRecords[0].boundaries.length === 1 &&
+      typeof successorStart === "number" &&
+      typeof deferStart === "number" &&
+      successorStart > deferStart;
   }
   const selfDeferWarnings = health.filter(
     (warning) => warning.code === "invalid-self-defer",

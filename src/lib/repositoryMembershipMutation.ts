@@ -470,13 +470,43 @@ function repairSelfDeferTemplate(
     );
   }
 
+  // NIP-34 records one tag per role and subject. A valid same-role successor
+  // must merge with the repaired interval or the replacement would parse as a
+  // duplicate again; anything beyond a single successor interval closed at
+  // its own signed start needs history the signer has not reviewed.
+  const validSameRoleTags = event.tags.filter((tag) => {
+    const record = parseRepositoryRoleRecord(event.pubkey, tag);
+    return record?.role === intent.role && record.subject === event.pubkey;
+  });
+  if (validSameRoleTags.length > 1) {
+    refuse(
+      "history_conflict",
+      `Announcement ${event.id} has duplicate valid self-${intent.role} records.`,
+    );
+  }
+  const successorTag = validSameRoleTags[0];
+  if (successorTag) {
+    const successor = parseRepositoryRoleRecord(event.pubkey, successorTag)!;
+    if (
+      intent.repair.action !== "end" ||
+      successor.boundaries.length !== 1 ||
+      successor.boundaries[0] !== intent.repair.boundary
+    ) {
+      refuse(
+        "history_conflict",
+        `The valid self-${intent.role} record cannot merge with this repair boundary.`,
+      );
+    }
+  }
+
   const repairedRoleTags = event.tags
     .filter(([name]) => name === "M" || name === "m" || name === "o")
+    .filter((tag) => tag !== successorTag)
     .map((tag) => {
       if (tag !== matching[0]) return [...tag];
-      return intent.repair.action === "continue"
-        ? tag.slice(0, -1)
-        : [...tag.slice(0, -1), String(intent.repair.boundary)];
+      if (intent.repair.action === "continue") return tag.slice(0, -1);
+      const repaired = [...tag.slice(0, -1), String(intent.repair.boundary)];
+      return successorTag ? [...repaired, ...successorTag.slice(2)] : repaired;
     });
   return withMembershipTags(event, repairedRoleTags, createdAt);
 }
@@ -778,7 +808,12 @@ export function prepareRepositoryMembershipMutation({
     // history problem never blocks this actor's mutations, while the
     // affected author's own generic mutations stay fail-closed.
     if (warning.author !== actorPubkey) return false;
-    if (warning.code === "duplicate-role-record") return true;
+    if (warning.code === "duplicate-role-record") {
+      // A duplicate made of one invalid self-defer beside its single valid
+      // same-role successor is exactly what the explicit repair and
+      // acceptance flows eliminate; genuine duplicates stay a hard conflict.
+      return !(explicitlyRepairsSelfDefer && warning.repairableBySelfDefer);
+    }
     return !warning.selfDefer?.superseded && !explicitlyRepairsSelfDefer;
   });
   if (blockingHealth.length > 0) {

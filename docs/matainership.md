@@ -216,7 +216,14 @@ writes; reads and other maintainers' operations continue. Duplicate role
 records are author-scoped in the same way: another author's duplicated
 history never blocks an actor's membership operations, while the affected
 author's own mutations remain fail-closed until their duplicate is
-reconciled. With a superseding
+reconciled. One narrow duplicate shape is repairable: exactly one invalid
+self-`defer` beside one valid same-role record holding a single strictly
+later signed start. There the affected signer's explicit repair and
+invitation acceptance proceed, and the sanctioned repair closes the invalid
+interval at the successor's signed start and merges it with the successor
+into one multi-interval record — one record per role and subject — so the
+repaired announcement parses clean. Genuinely duplicated valid records
+remain a hard conflict and hide the repair controls. With a superseding
 role, the warning is non-blocking. An invalid self-`M` or self-`m` is not signed
 maintainer-departure evidence, including when a valid self-`o` supersedes it; a
 valid numeric-ended self-maintainer record remains departure evidence. Only the

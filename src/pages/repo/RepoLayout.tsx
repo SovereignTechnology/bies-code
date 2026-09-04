@@ -1086,6 +1086,7 @@ function MaintainerInvitationSafetyBanner({
   const prospectiveAcceptanceAt = Math.floor(Date.now() / 1000);
   const repairableMaintainerSelfDefer =
     maintainerSelfDeferWarnings.length === 1 &&
+    !hasUnrepairableOwnDuplicates(repo, accountPubkey) &&
     !hasUnsupportedAcceptanceRoleHistory(
       repo,
       accountPubkey,
@@ -1331,6 +1332,22 @@ function RepositoryLifecycleNotice({ repo }: { repo: ResolvedRepo }) {
   );
 }
 
+/** Own duplicate history that no sanctioned self-defer repair can eliminate. */
+function hasUnrepairableOwnDuplicates(
+  repo: ResolvedRepo,
+  accountPubkey: string | undefined,
+): boolean {
+  return (
+    !!accountPubkey &&
+    repo.repositoryHealth.some(
+      ({ author, code, repairableBySelfDefer }) =>
+        author === accountPubkey &&
+        code === "duplicate-role-record" &&
+        !repairableBySelfDefer,
+    )
+  );
+}
+
 function dateTimeLocalValue(timestamp: number): string {
   const date = new Date(timestamp * 1000);
   if (!Number.isFinite(date.getTime())) return "";
@@ -1387,6 +1404,8 @@ function RepositoryHealthNotice({
     !!ownSelfDefer &&
     ownSelfDeferWarnings.filter(({ role }) => role === ownSelfDefer.role)
       .length > 1;
+  const repairBlockedByDuplicates =
+    !!ownSelfDefer && hasUnrepairableOwnDuplicates(repo, accountPubkey);
   const superseded = ownSelfDefer?.selfDefer?.superseded ?? false;
   const proposedEnd = ownSelfDefer?.selfDefer?.proposedEnd;
   const mutation = useRepositoryMembershipMutation({
@@ -1422,7 +1441,9 @@ function RepositoryHealthNotice({
   };
   const repairPending = mutation.pendingIntent?.type === "repair-self-defer";
   const hasOtherHealth = repo.repositoryHealth.some(
-    ({ code }) => code !== "invalid-self-defer",
+    ({ code, repairableBySelfDefer }) =>
+      code !== "invalid-self-defer" &&
+      !(code === "duplicate-role-record" && repairableBySelfDefer),
   );
 
   return (
@@ -1455,9 +1476,16 @@ function RepositoryHealthNotice({
               GitWorkshop from choosing which interval to repair.
             </p>
           )}
+          {repairBlockedByDuplicates && !repairSelectionAmbiguous && (
+            <p className="mt-2 text-muted-foreground">
+              Duplicate role records in your announcement need separate
+              reconciliation before this interval can be repaired.
+            </p>
+          )}
           {ownSelfDefer &&
             !invitationRepairsSelfDefer &&
             !repairSelectionAmbiguous &&
+            !repairBlockedByDuplicates &&
             proposedEnd !== undefined && (
               <div className="mt-3 space-y-2 rounded-lg border border-amber-500/30 bg-background/70 p-3">
                 <p className="text-muted-foreground">
@@ -1493,6 +1521,7 @@ function RepositoryHealthNotice({
           {ownSelfDefer &&
             !invitationRepairsSelfDefer &&
             !repairSelectionAmbiguous &&
+            !repairBlockedByDuplicates &&
             proposedEnd === undefined && (
               <div className="mt-3 space-y-3 rounded-lg border border-amber-500/30 bg-background/70 p-3">
                 {!superseded && (
@@ -1562,6 +1591,7 @@ function RepositoryHealthNotice({
           {ownSelfDefer &&
             !invitationRepairsSelfDefer &&
             !repairSelectionAmbiguous &&
+            !repairBlockedByDuplicates &&
             mutation.failure && (
               <p className="mt-2 text-destructive">
                 {mutation.failure.message}

@@ -23,6 +23,10 @@
 - Scope duplicate role-record health to its author so another maintainer's
   duplicated history no longer blocks unrelated membership operations; the
   affected author's own mutations stay fail-closed.
+- Let the affected signer repair or accept through an invalid self-`defer`
+  that sits beside its valid same-role successor by merging both into one
+  clean multi-interval record; genuinely duplicated valid records remain a
+  hard conflict and no longer render repair controls that cannot succeed.
 - Scope invalid self-`defer` health to its signer, require a strictly later
   signed self-role to restore current authority, keep other maintainers and
   superseded roles operational, and offer explicit signer-approved repair or
