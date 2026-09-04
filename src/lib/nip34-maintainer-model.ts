@@ -86,7 +86,7 @@ export interface LeadResolution {
   path: string[];
 }
 
-interface ParsedAnnouncement {
+export interface ParsedAnnouncement {
   event: NostrEvent;
   roleRecords: RepositoryRoleRecord[];
   activeMaintainers: {
@@ -315,7 +315,12 @@ export function parseInvalidSelfDeferRoleRecord(
 
 const parsedAnnouncementCache = new WeakMap<NostrEvent, ParsedAnnouncement>();
 
-function parseAnnouncement(event: NostrEvent): ParsedAnnouncement {
+/**
+ * Classify one announcement's role records, author flags, and health warnings.
+ * Exported for signer-reviewed previews of an edited own announcement; the
+ * result carries no cross-announcement authority.
+ */
+export function parseAnnouncement(event: NostrEvent): ParsedAnnouncement {
   const cached = parsedAnnouncementCache.get(event);
   if (cached) return cached;
   const roleTags = event.tags.filter(([name]) =>
