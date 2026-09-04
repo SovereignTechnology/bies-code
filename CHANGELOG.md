@@ -36,6 +36,9 @@
 
 ### Fixes
 
+- Re-resolve advanced repository repairs inside the guarded builder and refuse
+  a replacement without its own relay hint when the role edit would make the
+  resulting repository component private.
 - Scope duplicate role-record health to its author so another maintainer's
   duplicated history no longer blocks unrelated membership operations; the
   affected author's own mutations stay fail-closed.

@@ -17,13 +17,15 @@
  * - the deprecated `maintainers` projection is regenerated from the edited
  *   active M/m records, so a replacement can never introduce an
  *   `inconsistent-maintainers-projection` warning;
- * - a private repository replacement without a relay hint is refused;
+ * - a replacement that belongs to a private component before or after the
+ *   edit is refused without its own relay hint;
  * - `created_at` is strictly greater than the existing announcement's;
  * - a signer without an existing announcement is refused outright.
  */
 
 import type { EventTemplate, NostrEvent } from "nostr-tools";
 
+import { resolveChain, type ResolvedRepo } from "@/lib/nip34";
 import {
   parseInvalidSelfDeferRoleRecord,
   parseRepositoryRoleRecord,
@@ -126,8 +128,15 @@ export interface AdvancedRepairReplacementOptions {
   announcement: NostrEvent | undefined;
   /** The edited raw `M` / `m` / `o` tags replacing the current ones. */
   roleTags: string[][];
-  /** Resolved repository privacy; a private replacement needs a relay hint. */
-  isPrivate: boolean;
+  /** Complete loaded resolution context used to preview the replacement. */
+  repository: Pick<
+    ResolvedRepo,
+    | "selectedMaintainer"
+    | "dTag"
+    | "isPrivate"
+    | "discoveredAnnouncements"
+    | "historicalAnnouncements"
+  >;
   createdAt?: number;
 }
 
@@ -137,6 +146,8 @@ export interface AdvancedRepairReplacement {
   simulated: NostrEvent;
   /** The regenerated `maintainers` projection carried by the template. */
   maintainersProjection: string[];
+  /** Repository resolved with the simulated replacement in place. */
+  resolvedRepository: ResolvedRepo | undefined;
 }
 
 function refuse(
@@ -149,7 +160,7 @@ function refuse(
 export function buildAdvancedRepairReplacement({
   announcement,
   roleTags,
-  isPrivate,
+  repository,
   createdAt = Math.floor(Date.now() / 1000),
 }: AdvancedRepairReplacementOptions): AdvancedRepairReplacement {
   if (!announcement) {
@@ -179,8 +190,32 @@ export function buildAdvancedRepairReplacement({
     ...roleTags.map((tag) => [...tag]),
     ["maintainers", ...maintainersProjection],
   ];
+  const template: EventTemplate = {
+    kind: REPOSITORY_ANNOUNCEMENT_KIND,
+    content: announcement.content,
+    created_at: Math.max(createdAt, announcement.created_at + 1),
+    tags,
+  };
+  const simulated: NostrEvent = {
+    id: "0".repeat(64),
+    sig: "0".repeat(128),
+    pubkey: announcement.pubkey,
+    ...template,
+  };
+  const others = new Map<string, NostrEvent>();
+  for (const event of [
+    ...repository.historicalAnnouncements,
+    ...repository.discoveredAnnouncements,
+  ]) {
+    if (event.pubkey !== announcement.pubkey) others.set(event.id, event);
+  }
+  const resolvedRepository = resolveChain(
+    [...others.values(), simulated],
+    repository.selectedMaintainer,
+    repository.dTag,
+  );
   if (
-    isPrivate &&
+    (repository.isPrivate || resolvedRepository?.isPrivate === true) &&
     !tags.some(
       ([name, ...relayUrls]) =>
         name === "relays" && relayUrls.some((url) => url.length > 0),
@@ -192,20 +227,10 @@ export function buildAdvancedRepairReplacement({
     );
   }
 
-  const template: EventTemplate = {
-    kind: REPOSITORY_ANNOUNCEMENT_KIND,
-    content: announcement.content,
-    created_at: Math.max(createdAt, announcement.created_at + 1),
-    tags,
-  };
   return {
     template,
-    simulated: {
-      id: "0".repeat(64),
-      sig: "0".repeat(128),
-      pubkey: announcement.pubkey,
-      ...template,
-    },
+    simulated,
     maintainersProjection,
+    resolvedRepository,
   };
 }

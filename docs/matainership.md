@@ -300,8 +300,9 @@ component resolver so the signer sees the resulting record classification,
 health warnings, and confirmed-membership delta. Every non-membership tag is
 carried over byte-for-byte, the deprecated `maintainers` projection is
 regenerated from the edited active records, `created_at` is bumped strictly
-past the current announcement, and a private repository replacement without a
-relay hint is refused. Advanced repair grants no authority a keyholder does
+past the current announcement, and a replacement without its own relay hint is
+refused when either the current or post-edit resolved component is private.
+Advanced repair grants no authority a keyholder does
 not already have — anyone can publish any event — and its published output
 still resolves through the normal reciprocal authorization model.
 

@@ -31,6 +31,31 @@ function announcement(
   };
 }
 
+function announcementBy(
+  pubkey: string,
+  tags: string[][],
+  createdAt = 1_000,
+): NostrEvent {
+  return {
+    ...announcement(tags, createdAt),
+    id: pubkey,
+    pubkey,
+  };
+}
+
+function repositoryContext(
+  isPrivate = false,
+  announcements: NostrEvent[] = [],
+) {
+  return {
+    selectedMaintainer: author,
+    dTag: "repo",
+    isPrivate,
+    discoveredAnnouncements: announcements,
+    historicalAnnouncements: [],
+  };
+}
+
 function expectRefusal(run: () => unknown, code: string): void {
   try {
     run();
@@ -63,7 +88,7 @@ describe("buildAdvancedRepairReplacement", () => {
     const { template } = buildAdvancedRepairReplacement({
       announcement: event,
       roleTags: [["M", author]],
-      isPrivate: false,
+      repository: repositoryContext(),
     });
     const carried = template.tags.filter(
       ([name]) => !["M", "m", "o", "maintainers"].includes(name),
@@ -88,7 +113,7 @@ describe("buildAdvancedRepairReplacement", () => {
         ["m", author, "100", "defer"], // invalid self-defer — excluded
         ["m", "not-a-pubkey"], // malformed — excluded
       ],
-      isPrivate: false,
+      repository: repositoryContext(),
     });
     expect(maintainersProjection).toEqual([author, carol]);
     expect(template.tags.filter(([name]) => name === "maintainers")).toEqual([
@@ -105,7 +130,7 @@ describe("buildAdvancedRepairReplacement", () => {
     const { simulated } = buildAdvancedRepairReplacement({
       announcement: announcement(baseTags),
       roleTags,
-      isPrivate: false,
+      repository: repositoryContext(),
     });
     expect(
       parseAnnouncement(simulated).health.filter(
@@ -119,14 +144,14 @@ describe("buildAdvancedRepairReplacement", () => {
     const stale = buildAdvancedRepairReplacement({
       announcement: old,
       roleTags: [["M", author]],
-      isPrivate: false,
+      repository: repositoryContext(),
       createdAt: 4_000,
     });
     expect(stale.template.created_at).toBe(5_001);
     const fresh = buildAdvancedRepairReplacement({
       announcement: old,
       roleTags: [["M", author]],
-      isPrivate: false,
+      repository: repositoryContext(),
       createdAt: 6_000,
     });
     expect(fresh.template.created_at).toBe(6_000);
@@ -141,7 +166,7 @@ describe("buildAdvancedRepairReplacement", () => {
         buildAdvancedRepairReplacement({
           announcement: noRelays,
           roleTags: [["M", author]],
-          isPrivate: true,
+          repository: repositoryContext(true),
         }),
       "missing_private_relay_hint",
     );
@@ -150,7 +175,7 @@ describe("buildAdvancedRepairReplacement", () => {
       buildAdvancedRepairReplacement({
         announcement: noRelays,
         roleTags: [["M", author]],
-        isPrivate: false,
+        repository: repositoryContext(),
       }).template.kind,
     ).toBe(30617);
   });
@@ -159,9 +184,56 @@ describe("buildAdvancedRepairReplacement", () => {
     const { template } = buildAdvancedRepairReplacement({
       announcement: announcement(baseTags),
       roleTags: [["M", author]],
-      isPrivate: true,
+      repository: repositoryContext(true),
     });
     expect(template.tags).toContainEqual(["relays", "wss://relay.example.com"]);
+  });
+
+  it("requires a relay hint when the role edit makes the component private", () => {
+    const owner = announcement([
+      ["d", "repo"],
+      ["name", "Repo"],
+      ["clone", "https://git.example.com/repo.git"],
+      ["M", author, "10"],
+      ["m", bob, "10", "20"],
+      ["maintainers", author],
+    ]);
+    const privateMaintainer = announcementBy(bob, [
+      ["d", "repo"],
+      ["name", "Repo"],
+      ["clone", "https://git.example.com/repo.git"],
+      ["relays", "wss://private.example.com"],
+      ["private", "true"],
+      ["M", author, "30"],
+      ["m", bob, "30"],
+      ["maintainers", author, bob],
+    ]);
+    const repairedRoles = [
+      ["M", author, "10"],
+      ["m", bob, "10", "20", "30"],
+    ];
+
+    expectRefusal(
+      () =>
+        buildAdvancedRepairReplacement({
+          announcement: owner,
+          roleTags: repairedRoles,
+          repository: repositoryContext(false, [owner, privateMaintainer]),
+        }),
+      "missing_private_relay_hint",
+    );
+
+    const ownerWithRelay = announcement([
+      ...owner.tags,
+      ["relays", "wss://owner-private.example.com"],
+    ]);
+    const replacement = buildAdvancedRepairReplacement({
+      announcement: ownerWithRelay,
+      roleTags: repairedRoles,
+      repository: repositoryContext(false, [ownerWithRelay, privateMaintainer]),
+    });
+    expect(replacement.resolvedRepository?.isPrivate).toBe(true);
+    expect(replacement.resolvedRepository?.confirmedMaintainers).toContain(bob);
   });
 
   it("refuses when the signer has no existing announcement", () => {
@@ -170,7 +242,7 @@ describe("buildAdvancedRepairReplacement", () => {
         buildAdvancedRepairReplacement({
           announcement: undefined,
           roleTags: [["M", author]],
-          isPrivate: false,
+          repository: repositoryContext(),
         }),
       "history_conflict",
     );
@@ -182,7 +254,7 @@ describe("buildAdvancedRepairReplacement", () => {
         buildAdvancedRepairReplacement({
           announcement: announcement(baseTags),
           roleTags: [["maintainers", author]],
-          isPrivate: false,
+          repository: repositoryContext(),
         }),
       "membership_side_effect",
     );
@@ -191,7 +263,7 @@ describe("buildAdvancedRepairReplacement", () => {
         buildAdvancedRepairReplacement({
           announcement: announcement(baseTags),
           roleTags: [["relays", "wss://evil.example.com"]],
-          isPrivate: false,
+          repository: repositoryContext(),
         }),
       "membership_side_effect",
     );
@@ -204,7 +276,7 @@ describe("buildAdvancedRepairReplacement", () => {
         ["M", author],
         ["m", bob, "100"],
       ],
-      isPrivate: false,
+      repository: repositoryContext(),
     });
     expect(simulated.pubkey).toBe(author);
     expect(simulated.tags).toEqual(template.tags);

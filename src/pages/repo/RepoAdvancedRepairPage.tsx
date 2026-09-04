@@ -56,7 +56,7 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { UserName } from "@/components/UserAvatar";
 
-import { repoCoordinate, resolveChain, type ResolvedRepo } from "@/lib/nip34";
+import { repoCoordinate, type ResolvedRepo } from "@/lib/nip34";
 import {
   parseAnnouncement,
   type RepositoryRole,
@@ -316,7 +316,7 @@ function AdvancedRepairEditor({
         replacement: buildAdvancedRepairReplacement({
           announcement,
           roleTags: editedTags,
-          isPrivate: repo.isPrivate,
+          repository: repo,
         }),
         refusal: undefined,
       };
@@ -329,7 +329,7 @@ function AdvancedRepairEditor({
             : "The replacement could not be constructed.",
       };
     }
-  }, [announcement, editedTags, repo.isPrivate]);
+  }, [announcement, editedTags, repo]);
 
   const previewParsed = useMemo(
     () =>
@@ -339,25 +339,7 @@ function AdvancedRepairEditor({
     [build],
   );
 
-  // Full component re-resolution: substitute the edited announcement for the
-  // signer's current one against every other announcement already loaded on
-  // this page and re-run the pure resolver from the route's coordinate.
-  // Signed deletions are not re-applied in this preview.
-  const previewResolution = useMemo(() => {
-    if (!build.replacement) return undefined;
-    const others = new Map<string, NostrEvent>();
-    for (const event of [
-      ...repo.historicalAnnouncements,
-      ...repo.discoveredAnnouncements,
-    ]) {
-      if (event.pubkey !== announcement.pubkey) others.set(event.id, event);
-    }
-    return resolveChain(
-      [...others.values(), build.replacement.simulated],
-      repo.selectedMaintainer,
-      repo.dTag,
-    );
-  }, [build, repo, announcement.pubkey]);
+  const previewResolution = build.replacement?.resolvedRepository;
 
   const diff = useMemo(
     () => diffRoleTags(currentRoleTags, editedTags),
@@ -428,7 +410,7 @@ function AdvancedRepairEditor({
       const fresh = buildAdvancedRepairReplacement({
         announcement,
         roleTags: editedTags,
-        isPrivate: repo.isPrivate,
+        repository: repo,
         createdAt: Math.floor(Date.now() / 1000),
       });
       const signedEvent = await account.signer.signEvent(fresh.template);
