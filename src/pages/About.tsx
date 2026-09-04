@@ -87,7 +87,7 @@ export default function About() {
           and{" "}
           <a
             className="text-pink-500 hover:underline"
-            href="https://ngit.dev/grasp"
+            href={DOCUMENTATION_URLS.grasp}
           >
             GRASP
           </a>
@@ -101,9 +101,9 @@ export default function About() {
           and{" "}
           <a
             className="text-pink-500 hover:underline"
-            href="https://ngit.dev/relay"
+            href={DOCUMENTATION_URLS.selfHostGrasp}
           >
-            ngit-relay
+            ngit-grasp
           </a>{" "}
           are tightly coupled examples maintained by{" "}
           <Link
@@ -314,16 +314,16 @@ export default function About() {
           learn more at{" "}
           <a
             className="text-pink-500 hover:underline"
-            href="https://ngit.dev/grasp"
+            href={DOCUMENTATION_URLS.grasp}
           >
-            ngit.dev/grasp
+            the GRASP protocol overview
           </a>{" "}
           and see the reference implementation{" "}
           <a
             className="text-pink-500 hover:underline"
-            href="https://ngit.dev/relay"
+            href={DOCUMENTATION_URLS.selfHostGrasp}
           >
-            ngit-relay
+            ngit-grasp
           </a>
         </p>
 

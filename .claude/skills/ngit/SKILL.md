@@ -10,7 +10,7 @@ metadata:
 
 ngit makes `clone`, `fetch`, `push` work with `nostr://` URLs and adds a CLI for PRs, issues, and repo management over the decentralised Nostr protocol.
 
-- Install: `curl -Ls https://ngit.dev/install.sh | bash` (installs `ngit` and `git-remote-nostr`)
+- Install: `curl -fsSL https://ngit.dev/install.sh | bash` (installs `ngit` and `git-remote-nostr`)
 - Web UI: https://gitworkshop.dev
 
 ## How it works

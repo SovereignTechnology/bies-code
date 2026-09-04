@@ -87,6 +87,7 @@ import { useToast } from "@/hooks/useToast";
 import { useNavigate } from "react-router-dom";
 import { useUserPath } from "@/hooks/useUserPath";
 import { normalizeUrl } from "@/lib/url";
+import { DOCUMENTATION_URLS } from "@/lib/documentation";
 
 // ---------------------------------------------------------------------------
 // Helpers (shared)
@@ -1034,7 +1035,7 @@ function NgitCloneField({ cloneUrl }: { cloneUrl: string }) {
           <span className="text-muted-foreground/70">(nostr git plugin)</span>
         </p>
         <a
-          href="https://ngit.dev/install"
+          href={DOCUMENTATION_URLS.install}
           target="_blank"
           rel="noopener noreferrer"
           className="text-xs text-pink-600 dark:text-pink-400 hover:underline flex items-center gap-1"
@@ -1967,7 +1968,7 @@ function CloneDropdown({
                 Clone with ngit
               </p>
               <a
-                href="https://ngit.dev/install"
+                href={DOCUMENTATION_URLS.install}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-xs text-pink-600 dark:text-pink-400 hover:underline flex items-center gap-1"

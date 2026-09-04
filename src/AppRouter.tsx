@@ -45,6 +45,8 @@ const DOCUMENTATION_REDIRECTS: readonly DocumentationRedirect[] = [
   {
     path: "/ngit",
     destination: DOCUMENTATION_URLS.install,
+    // These are explicit compatibility IDs in ngit-docs/docs/quickstart.md,
+    // not heading-generated slugs. Keep the two sides in sync.
     fragmentDestinations: {
       "#contributor": `${DOCUMENTATION_URLS.quickstart}#contributor`,
       "#maintainer": `${DOCUMENTATION_URLS.quickstart}#maintainer`,
