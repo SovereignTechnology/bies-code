@@ -528,6 +528,7 @@ describe("reciprocal maintainer authorization", () => {
   it.each([
     { label: "untimed", successor: ["M", owner] },
     { label: "older", successor: ["M", owner, "5"] },
+    { label: "equal-start", successor: ["M", owner, "10"] },
   ])(
     "does not let an $label apparent successor restore current authority",
     ({ successor }) => {
