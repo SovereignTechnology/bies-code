@@ -180,15 +180,19 @@ maintainer, accept one invitation, remove one directly authored relationship,
 and leave a lead-shaped repository. The complete-roster editor and every force
 path remain unavailable.
 
-Each intent refreshes the affected authors' mailbox lists, announcements, and
-state events, constructs the replacement in memory, simulates its exact member,
-moderator, invitation, and lead result, then repeats the settled fetch and
-compares every announcement, state, deletion, mailbox, and relay frontier
-immediately before signing. Every relay in the recursively discovered safety
-set must return a real EOSE for both bounded snapshots. Every branch and tag
-OID in the current signed state must also be fetched from the simulated
-post-change component's advertised Git servers without using the local object
-cache as evidence.
+Each intent first looks up the affected authors' mailbox lists through the
+configured discovery relays, then refreshes those lists, announcements, and
+state events across the resulting safety set. Discovery-only lookup relays do
+not become safety authorities merely because they helped locate a NIP-65 list;
+the safety set consists of repository relays, discovered mailbox relays,
+configured Git indexes, and fallback publication relays. The client constructs
+the replacement in memory, simulates its exact member, moderator, invitation,
+and lead result, then repeats the settled fetch and compares every announcement,
+state, deletion, mailbox, and relay frontier immediately before signing. Every
+relay in that recursively discovered safety set must return a real EOSE for
+both bounded snapshots. Every branch and tag OID in the current signed state
+must also be fetched from the simulated post-change component's advertised Git
+servers without using the local object cache as evidence.
 
 After signing, the replacement is saved as durable delivery work without an
 optimistic EventStore insertion. At least one settled post-change repository
