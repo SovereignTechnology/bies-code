@@ -22,6 +22,10 @@
  *           drawn as a short fading tail below the dot rather than a
  *           persistent lane (avoids misleading full-height rails when
  *           history is truncated at a range or page boundary).
+ * - `stub-in`: the child-side mirror of `stub` — a short fading tail above
+ *           the dot, marking descendants that exist outside the loaded set
+ *           (e.g. later pushes built on top of a displayed window). Only
+ *           emitted when the caller opts in via `continuesAbove`.
  */
 
 import type { Commit } from "@/lib/git-grasp-pool";
@@ -47,7 +51,7 @@ export interface CommitGraphEdge {
   to: number;
   /** Index into GRAPH_LANE_COLORS. */
   color: number;
-  kind: "pass" | "in" | "out" | "stub";
+  kind: "pass" | "in" | "out" | "stub" | "stub-in";
 }
 
 export interface CommitGraphRow {
@@ -218,16 +222,47 @@ function topologicalOrder(byHash: Map<string, Commit>): Commit[] {
   return ordered;
 }
 
+export interface CommitGraphWindowOptions {
+  /**
+   * The displayed commits are a window with known descendants outside the
+   * set (e.g. later pushes built on top). Tip rows — commits no in-set
+   * commit references as a parent — get a child-side `stub-in` edge so the
+   * rail fades out instead of ending at a hard edge.
+   */
+  continuesAbove?: boolean;
+  /**
+   * History is known to continue past the oldest displayed commit even
+   * where parent links are unavailable. Rows with no parents at all get a
+   * parent-side `stub` edge. Rows whose parents point outside the set
+   * already produce natural stubs; this flag only covers parentless rows
+   * (e.g. windows built from bare hash + subject pairs). Callers must not
+   * set it when the parentless commit is a genuine root.
+   */
+  continuesBelow?: boolean;
+}
+
 /**
  * Compute the graph layout for a set of commits. Duplicate hashes are
  * ignored; parent links pointing outside the set become `stub` edges.
  */
 export function layoutCommitGraph(
   commits: readonly Commit[],
+  options: CommitGraphWindowOptions = {},
 ): CommitGraphLayout {
   const byHash = new Map<string, Commit>();
   for (const commit of commits) {
     if (!byHash.has(commit.hash)) byHash.set(commit.hash, commit);
+  }
+
+  // In-set commits referenced as a parent by another in-set commit — the
+  // complement is the set of tips, which `continuesAbove` decorates.
+  const referencedAsParent = new Set<string>();
+  if (options.continuesAbove) {
+    for (const commit of byHash.values()) {
+      for (const parent of commit.parents) {
+        if (byHash.has(parent)) referencedAsParent.add(parent);
+      }
+    }
   }
 
   const ordered = topologicalOrder(byHash);
@@ -271,6 +306,11 @@ export function layoutCommitGraph(
       if (!laneState) continue;
       edges.push({ from: index, to: lane, color: laneState.color, kind: "in" });
       lanes[index] = null;
+    }
+
+    // Tip of a truncated window: descendants exist beyond the loaded set.
+    if (options.continuesAbove && !referencedAsParent.has(commit.hash)) {
+      edges.push({ from: lane, to: lane, color, kind: "stub-in" });
     }
 
     // Unrelated rails pass straight through this row.
@@ -324,6 +364,12 @@ export function layoutCommitGraph(
         edges.push({ from: lane, to: newLane, color: newColor, kind: "out" });
       }
     });
+
+    // Parentless row in a window known to be truncated below — parent links
+    // are simply unavailable, so fade out rather than ending the rail.
+    if (options.continuesBelow && commit.parents.length === 0) {
+      edges.push({ from: lane, to: lane, color, kind: "stub" });
+    }
 
     for (const edge of edges) {
       laneCount = Math.max(laneCount, edge.from + 1, edge.to + 1);

@@ -114,7 +114,11 @@ function CommitGraphCell({
             case "stub":
               d = `M ${x1} ${half} L ${x1} ${ROW_HEIGHT}`;
               break;
+            case "stub-in":
+              d = `M ${x1} 0 L ${x1} ${half}`;
+              break;
           }
+          const isStub = edge.kind === "stub" || edge.kind === "stub-in";
           return (
             <path
               key={i}
@@ -122,8 +126,8 @@ function CommitGraphCell({
               fill="none"
               stroke={color}
               strokeWidth={2}
-              strokeDasharray={edge.kind === "stub" ? "2 3" : undefined}
-              opacity={edge.kind === "stub" ? 0.5 : 1}
+              strokeDasharray={isStub ? "2 3" : undefined}
+              opacity={isStub ? 0.5 : 1}
             />
           );
         })}
