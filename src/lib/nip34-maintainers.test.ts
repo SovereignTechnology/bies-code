@@ -498,6 +498,33 @@ describe("reciprocal maintainer authorization", () => {
     ]);
   });
 
+  it("keeps same-role invalid self-defer warnings distinct across the component dedup", () => {
+    const resolved = resolveChain(
+      [
+        announcement(
+          owner,
+          [
+            ["m", owner, "10", "defer"],
+            ["m", owner, "25", "defer"],
+            ["M", owner, "30"],
+            ["maintainers", owner],
+          ],
+          40,
+        ),
+      ],
+      owner,
+      repoId,
+    );
+    const warnings = resolved?.repositoryHealth.filter(
+      ({ code }) => code === "invalid-self-defer",
+    );
+
+    expect(resolved?.confirmedMaintainers).toEqual([owner]);
+    expect(warnings?.map(({ selfDefer }) => selfDefer?.lastValidStart)).toEqual(
+      [10, 25],
+    );
+  });
+
   it.each([
     { label: "untimed", successor: ["M", owner] },
     { label: "older", successor: ["M", owner, "5"] },
