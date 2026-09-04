@@ -17,17 +17,17 @@
  *    returned a real EOSE. The existing one-outbox and larger-set threshold
  *    rules are then applied. navigator.onLine remains a fast offline check.
  *
- * 2. FRESH FETCH FROM ALL OUTBOX + LOOKUP RELAYS
+ * 2. BOUNDED FRESH FETCH FROM ALL OUTBOX + LOOKUP RELAYS
  *    We use addressLoader to fetch the latest event of the target kind from
  *    the user's outbox relays AND the configured lookup relays, then wait
  *    for it to land in the EventStore.
  *
  * 3. PERSISTENT BACKGROUND SUBSCRIPTION (handled in accounts.ts)
- *    A continuous pool.subscription() for all user replaceable kinds is kept
- *    open on the union of the user's outbox relays and lookup/index relays
- *    for the lifetime of the session (see userIdentitySubscription.ts). This
- *    means the EventStore is already warm in most cases — the addressLoader
- *    fetch here is a final safety net, not the primary mechanism.
+ *    A continuous resilientSubscription() for all user replaceable kinds is
+ *    kept open on the union of the user's outbox and lookup/index relays for
+ *    the lifetime of the session (see userIdentitySubscription.ts). This means
+ *    the EventStore is already warm in most cases — the addressLoader fetch
+ *    here is a final safety net, not the primary mechanism.
  *
  * USAGE
  * -----
@@ -42,8 +42,8 @@
  */
 
 import { useCallback, useState } from "react";
-import { firstValueFrom, race } from "rxjs";
-import { filter, take } from "rxjs/operators";
+import { firstValueFrom, race, timer } from "rxjs";
+import { filter, startWith, take } from "rxjs/operators";
 import { useActiveAccount } from "applesauce-react/hooks";
 import { useEventStore } from "@/hooks/useEventStore";
 import { use$ } from "@/hooks/use$";
@@ -79,6 +79,21 @@ const MIN_OUTBOX_ABSOLUTE = 3;
  * before proceeding with whatever is already in the EventStore.
  */
 const FETCH_TIMEOUT_MS = 5_000;
+
+function meetsWarmCoverageThreshold(
+  coveredOutboxes: number,
+  totalOutboxes: number,
+  coveredLookup: number,
+): boolean {
+  if (coveredOutboxes === 0) return false;
+  if (coveredOutboxes === 1) {
+    return coveredLookup >= MIN_INDEX_RELAYS_FOR_SINGLE_OUTBOX;
+  }
+  return (
+    coveredOutboxes >= MIN_OUTBOX_ABSOLUTE ||
+    coveredOutboxes / totalOutboxes >= MIN_OUTBOX_FRACTION
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Human-readable kind labels for error messages
@@ -172,6 +187,30 @@ export function useRobustReplaceableAction(): RobustReplaceableActionResult {
     [account?.pubkey],
   );
 
+  /** Count connected, healthy relays whose current query is still settling. */
+  const countInFlightHealthy = useCallback(
+    (relays: string[]): number => {
+      if (!account?.pubkey) return 0;
+      const coverage = userIdentityCoverage.get(account.pubkey);
+      const inFlight = relays.flatMap((url) => {
+        const phase = coverage?.get(normalizeUrl(url))?.phase;
+        if (coverage && phase !== "initial" && phase !== "catching-up") {
+          return [];
+        }
+        try {
+          const transportUrl = normalizeURL(url);
+          return pool.relays.get(transportUrl)?.connected === true
+            ? [transportUrl]
+            : [];
+        } catch {
+          return [];
+        }
+      });
+      return liveness.filter(inFlight).length;
+    },
+    [account?.pubkey],
+  );
+
   /**
    * Check that enough relays have current warm coverage to safely write.
    *
@@ -252,6 +291,64 @@ export function useRobustReplaceableAction(): RobustReplaceableActionResult {
   );
 
   /**
+   * True when connected identity queries are still capable of satisfying the
+   * threshold. Unavailable relays fail immediately instead of adding latency.
+   */
+  const canWarmCoverageStillSucceed = useCallback(
+    (outboxes: string[], lookup: string[]) => {
+      const coveredOutboxes = countCoveredHealthy(outboxes);
+      const coveredLookup = countCoveredHealthy(lookup);
+      const inFlightOutboxes = countInFlightHealthy(outboxes);
+      const inFlightLookup = countInFlightHealthy(lookup);
+
+      if (inFlightOutboxes + inFlightLookup === 0) return false;
+      return meetsWarmCoverageThreshold(
+        coveredOutboxes + inFlightOutboxes,
+        outboxes.length,
+        coveredLookup + inFlightLookup,
+      );
+    },
+    [countCoveredHealthy, countInFlightHealthy],
+  );
+
+  /** Wait for an in-flight identity query to decide the coverage threshold. */
+  const waitForWarmCoverage = useCallback(
+    async (outboxes: string[], lookup: string[], kind: number) => {
+      try {
+        assertWarmCoverage(outboxes, lookup, kind);
+        return;
+      } catch (initialError) {
+        if (!canWarmCoverageStillSucceed(outboxes, lookup)) {
+          throw initialError;
+        }
+      }
+
+      const decisionReady = () => {
+        try {
+          assertWarmCoverage(outboxes, lookup, kind);
+          return true;
+        } catch {
+          return !canWarmCoverageStillSucceed(outboxes, lookup);
+        }
+      };
+
+      await firstValueFrom(
+        race(
+          userIdentityCoverage.changes$.pipe(
+            startWith(undefined),
+            filter(decisionReady),
+            take(1),
+          ),
+          timer(FETCH_TIMEOUT_MS),
+        ),
+      );
+
+      assertWarmCoverage(outboxes, lookup, kind);
+    },
+    [assertWarmCoverage, canWarmCoverageStillSucceed],
+  );
+
+  /**
    * Fetch the latest event of the given kind from the user's relay set and
    * wait for it to land in the EventStore. Times out after FETCH_TIMEOUT_MS
    * and proceeds with whatever is already in the store.
@@ -295,8 +392,8 @@ export function useRobustReplaceableAction(): RobustReplaceableActionResult {
       try {
         const { outboxes, lookup } = getRelaySets();
 
-        // 1. Warm coverage check — fail fast with a clear error
-        assertWarmCoverage(outboxes, lookup, kind);
+        // 1. Warm coverage check — briefly await already-running query work.
+        await waitForWarmCoverage(outboxes, lookup, kind);
 
         // 2. Fetch latest event from all outbox + lookup relays
         const allRelays = [...outboxes, ...lookup];
@@ -308,7 +405,7 @@ export function useRobustReplaceableAction(): RobustReplaceableActionResult {
         setPending(false);
       }
     },
-    [account?.pubkey, getRelaySets, assertWarmCoverage, prefetchReplaceable],
+    [account?.pubkey, getRelaySets, waitForWarmCoverage, prefetchReplaceable],
   );
 
   return { execute, pending };

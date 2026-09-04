@@ -47,8 +47,9 @@
 - Require personal replaceable-event writes to count only relays whose active
   identity subscription has completed its current EOSE cycle, invalidating
   that warm coverage across reconnects, foreground catch-up, relay removal,
-  and account-session replacement while retaining the existing relay threshold
-  and bounded focused-read fallback.
+  and account-session replacement; in-flight connected checks now get a bounded
+  chance to satisfy the existing relay threshold before the action reports an
+  error, while the focused-read fallback remains bounded separately.
 - Re-resolve advanced repository repairs inside the guarded builder and refuse
   a replacement without its own relay hint when the role edit would make the
   resulting repository component private.

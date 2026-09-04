@@ -140,6 +140,9 @@ for the active account:
   subscription;
 - require relays counted by `useRobustReplaceableAction` to have current
   subscription coverage, not merely an open and healthy connection;
+- wait up to the focused-read deadline when connected identity queries are
+  still capable of reaching the threshold, and wake as soon as their coverage
+  changes rather than requiring a second user action;
 - retain its existing outbox/lookup sufficiency policy and bounded focused-read
   safety net;
 - verify initial EOSE, reconnect, foreground gap fill, relay membership changes,

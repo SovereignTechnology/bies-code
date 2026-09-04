@@ -1,5 +1,6 @@
 import { normalizeUrl } from "@/lib/url";
 import type { RelaySubscriptionCoverage } from "@/lib/relaySubscriptionCoverage";
+import { Subject, type Observable, type Subscription } from "rxjs";
 
 interface ActiveUserIdentityCoverage {
   pubkey: string;
@@ -12,14 +13,29 @@ interface ActiveUserIdentityCoverage {
  */
 export class UserIdentityCoverageOwner {
   private active: ActiveUserIdentityCoverage | undefined;
+  private activeChanges: Subscription | undefined;
+  private readonly changes = new Subject<void>();
+
+  /** Emits when the active lease changes or accepts a lifecycle transition. */
+  readonly changes$: Observable<void> = this.changes.asObservable();
 
   activate(pubkey: string, coverage: RelaySubscriptionCoverage): () => void {
+    this.activeChanges?.unsubscribe();
     this.active?.coverage.stop();
     this.active = { pubkey, coverage };
+    this.activeChanges = coverage.changes$.subscribe(() => this.changes.next());
+    this.changes.next();
 
     return () => {
-      coverage.stop();
-      if (this.active?.coverage === coverage) this.active = undefined;
+      if (this.active?.coverage === coverage) {
+        this.activeChanges?.unsubscribe();
+        this.activeChanges = undefined;
+        this.active = undefined;
+        coverage.stop();
+        this.changes.next();
+      } else {
+        coverage.stop();
+      }
     };
   }
 

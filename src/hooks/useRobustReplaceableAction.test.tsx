@@ -82,6 +82,13 @@ describe("useRobustReplaceableAction warm coverage boundary", () => {
   });
 
   it("rejects connected and liveness-healthy relays without current coverage", async () => {
+    RELAYS.forEach((relay, index) => {
+      coverage.onLifecycle({
+        relay,
+        generation: index + 10,
+        phase: "unavailable",
+      });
+    });
     const action = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
     const { result } = renderHook(() => useRobustReplaceableAction());
     let error: unknown;
@@ -101,7 +108,7 @@ describe("useRobustReplaceableAction warm coverage boundary", () => {
     expect(mocks.addressLoader).not.toHaveBeenCalled();
   });
 
-  it("retains the one-outbox-plus-two-lookups threshold for covered relays", async () => {
+  it("waits for the in-flight relay needed by the existing threshold", async () => {
     coverage.onLifecycle({
       relay: OUTBOX,
       generation: 1,
@@ -114,30 +121,23 @@ describe("useRobustReplaceableAction warm coverage boundary", () => {
     });
     const action = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
     const { result } = renderHook(() => useRobustReplaceableAction());
-    let error: unknown;
+    let execution = Promise.resolve();
 
-    await act(async () => {
-      try {
-        await result.current.execute(3, action);
-      } catch (caught) {
-        error = caught;
-      }
+    act(() => {
+      execution = result.current.execute(3, action);
     });
 
-    expect(error).toEqual(
-      expect.objectContaining({
-        message: expect.stringContaining("need at least 2 lookup relays"),
-      }),
-    );
+    expect(result.current.pending).toBe(true);
     expect(action).not.toHaveBeenCalled();
+    expect(mocks.addressLoader).not.toHaveBeenCalled();
 
-    coverage.onLifecycle({
-      relay: LOOKUP_TWO,
-      generation: 3,
-      phase: "covered",
-    });
     await act(async () => {
-      await result.current.execute(3, action);
+      coverage.onLifecycle({
+        relay: LOOKUP_TWO,
+        generation: 3,
+        phase: "covered",
+      });
+      await execution;
     });
 
     expect(action).toHaveBeenCalledTimes(1);

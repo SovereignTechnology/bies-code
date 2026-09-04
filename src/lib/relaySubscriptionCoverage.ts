@@ -1,4 +1,5 @@
 import type { ResilientRelayLifecycle } from "@/lib/resilientSubscription";
+import { Subject, type Observable } from "rxjs";
 
 export type RelayCoveragePhase = ResilientRelayLifecycle["phase"];
 
@@ -9,6 +10,8 @@ export interface RelayCoverageState {
 }
 
 export interface RelaySubscriptionCoverage {
+  /** Emits whenever an accepted lifecycle fact changes current coverage. */
+  readonly changes$: Observable<RelayCoverageState>;
   /** Consume lifecycle facts from the one stable-filter subscription owner. */
   onLifecycle(event: ResilientRelayLifecycle): void;
   /** Return the latest accepted lifecycle fact for a relay. */
@@ -29,14 +32,17 @@ export interface RelaySubscriptionCoverage {
  */
 export function createRelaySubscriptionCoverage(): RelaySubscriptionCoverage {
   const states = new Map<string, RelayCoverageState>();
+  const changes = new Subject<RelayCoverageState>();
   let stopped = false;
 
   return {
+    changes$: changes.asObservable(),
     onLifecycle(event) {
       if (stopped) return;
       const current = states.get(event.relay);
       if (current && event.generation < current.generation) return;
       states.set(event.relay, event);
+      changes.next(event);
     },
     get(relay) {
       return states.get(relay);
@@ -48,8 +54,14 @@ export function createRelaySubscriptionCoverage(): RelaySubscriptionCoverage {
       if (stopped) return;
       stopped = true;
       for (const [relay, state] of states) {
-        states.set(relay, { ...state, phase: "stopped" });
+        const stoppedState: RelayCoverageState = {
+          ...state,
+          phase: "stopped",
+        };
+        states.set(relay, stoppedState);
+        changes.next(stoppedState);
       }
+      changes.complete();
     },
   };
 }
