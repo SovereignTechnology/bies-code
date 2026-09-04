@@ -35,8 +35,21 @@ import { parseRepoRoute } from "./lib/routeUtils";
 import { preloadMarkdownContent } from "./lib/markdownContentLoader";
 import { DOCUMENTATION_URLS } from "./lib/documentation";
 
-const DOCUMENTATION_REDIRECTS = [
-  { path: "/ngit", destination: DOCUMENTATION_URLS.install },
+interface DocumentationRedirect {
+  path: string;
+  destination: string;
+  fragmentDestinations?: Readonly<Record<string, string>>;
+}
+
+const DOCUMENTATION_REDIRECTS: readonly DocumentationRedirect[] = [
+  {
+    path: "/ngit",
+    destination: DOCUMENTATION_URLS.install,
+    fragmentDestinations: {
+      "#contributor": `${DOCUMENTATION_URLS.quickstart}#contributor`,
+      "#maintainer": `${DOCUMENTATION_URLS.quickstart}#maintainer`,
+    },
+  },
   { path: "/install", destination: DOCUMENTATION_URLS.install },
   { path: "/quick-start", destination: DOCUMENTATION_URLS.quickstart },
   { path: "/docs/*", destination: DOCUMENTATION_URLS.gitworkshop },
@@ -54,17 +67,26 @@ function loadRepositoryRoute() {
   return repositoryRoutePromise;
 }
 
-function ExternalRedirect({ destination }: { destination: string }) {
+function ExternalRedirect({
+  destination,
+  fragmentDestinations,
+}: Omit<DocumentationRedirect, "path">) {
+  const location = useLocation();
+  const target = new URL(fragmentDestinations?.[location.hash] ?? destination);
+  target.search = location.search;
+  if (!target.hash) target.hash = location.hash;
+  const targetUrl = target.toString();
+
   useEffect(() => {
-    window.location.replace(destination);
-  }, [destination]);
+    window.location.replace(targetUrl);
+  }, [targetUrl]);
 
   return (
     <div className="container max-w-screen-md px-4 py-16 text-center md:px-8">
       <h1 className="text-2xl font-semibold">Documentation has moved</h1>
       <p className="mt-3 text-lg text-muted-foreground">
         Taking you to{" "}
-        <a className="text-pink-500 hover:underline" href={destination}>
+        <a className="text-pink-500 hover:underline" href={targetUrl}>
           ngit.dev
         </a>
         .
@@ -527,13 +549,20 @@ function AppRouter() {
             <Route path="/notifications" element={<NotificationsPage />} />
             {/* Portable documentation redirects — these run in Netlify, static
                 builds, nsites, and native builds after the SPA fallback. */}
-            {DOCUMENTATION_REDIRECTS.map(({ path, destination }) => (
-              <Route
-                key={path}
-                path={path}
-                element={<ExternalRedirect destination={destination} />}
-              />
-            ))}
+            {DOCUMENTATION_REDIRECTS.map(
+              ({ path, destination, fragmentDestinations }) => (
+                <Route
+                  key={path}
+                  path={path}
+                  element={
+                    <ExternalRedirect
+                      destination={destination}
+                      fragmentDestinations={fragmentDestinations}
+                    />
+                  }
+                />
+              ),
+            )}
             <Route path="/about" element={<About />} />
             <Route path="/og-preview" element={<OgImagePreview />} />
             {/* /relay/:relaySegment — browse repos on a specific relay.

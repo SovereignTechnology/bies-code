@@ -193,7 +193,7 @@ const HOW_IT_WORKS_STEPS = [
     title: "Install the ngit CLI",
     description:
       "One command installs both ngit and git-remote-nostr. Works on macOS, Linux, and Windows.",
-    cta: { label: "Install ngit", to: "/ngit" },
+    cta: { label: "Install ngit", href: DOCUMENTATION_URLS.install },
   },
   {
     number: "02",
@@ -253,10 +253,10 @@ function HowItWorks() {
                     asChild
                     className="self-start mt-auto border-pink-500/30 hover:border-pink-500/60 hover:bg-pink-500/5"
                   >
-                    <Link to={step.cta.to}>
+                    <a href={step.cta.href}>
                       {step.cta.label}
                       <ArrowRight className="h-3.5 w-3.5 ml-1.5" />
-                    </Link>
+                    </a>
                   </Button>
                 )}
               </div>
