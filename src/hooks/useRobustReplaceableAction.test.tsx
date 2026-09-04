@@ -10,6 +10,7 @@ const OUTBOX = "wss://outbox.example.test";
 const LOOKUP_ONE = "wss://lookup-one.example.test";
 const LOOKUP_TWO = "wss://lookup-two.example.test";
 const RELAYS = [OUTBOX, LOOKUP_ONE, LOOKUP_TWO];
+const TRANSPORT_RELAYS = RELAYS.map((relay) => `${relay}/`);
 
 const mocks = vi.hoisted(() => ({
   addressLoader: vi.fn(),
@@ -60,7 +61,7 @@ describe("useRobustReplaceableAction warm coverage boundary", () => {
     mocks.replaceable.mockReset();
     mocks.replaceable.mockReturnValue(of({ id: "cached" }));
     mocks.poolRelays.clear();
-    for (const relay of RELAYS) {
+    for (const relay of TRANSPORT_RELAYS) {
       mocks.poolRelays.set(relay, { connected: true });
     }
 
@@ -140,6 +141,11 @@ describe("useRobustReplaceableAction warm coverage boundary", () => {
     });
 
     expect(action).toHaveBeenCalledTimes(1);
+    expect(mocks.livenessFilter).toHaveBeenCalledWith([`${OUTBOX}/`]);
+    expect(mocks.livenessFilter).toHaveBeenCalledWith([
+      `${LOOKUP_ONE}/`,
+      `${LOOKUP_TWO}/`,
+    ]);
     expect(mocks.addressLoader).toHaveBeenCalledWith({
       kind: 3,
       pubkey: PUBKEY,

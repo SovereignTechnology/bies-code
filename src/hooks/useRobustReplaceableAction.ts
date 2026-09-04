@@ -47,6 +47,7 @@ import { filter, take } from "rxjs/operators";
 import { useActiveAccount } from "applesauce-react/hooks";
 import { useEventStore } from "@/hooks/useEventStore";
 import { use$ } from "@/hooks/use$";
+import { normalizeURL } from "applesauce-core/helpers";
 import { MailboxesModel } from "applesauce-core/models";
 import { addressLoader, liveness, pool } from "@/services/nostr";
 import { lookupRelays } from "@/services/settings";
@@ -153,9 +154,19 @@ export function useRobustReplaceableAction(): RobustReplaceableActionResult {
         account.pubkey,
         relays,
       );
-      const connected = covered.filter(
-        (url) => pool.relays.get(url)?.connected === true,
-      );
+      // Coverage and settings use the app's slash-stripped canonical form,
+      // while Applesauce keys RelayPool and RelayLiveness by normalizeURL(),
+      // which retains the root slash. Translate only at that boundary.
+      const connected = covered.flatMap((url) => {
+        try {
+          const transportUrl = normalizeURL(url);
+          return pool.relays.get(transportUrl)?.connected === true
+            ? [transportUrl]
+            : [];
+        } catch {
+          return [];
+        }
+      });
       return liveness.filter(connected).length;
     },
     [account?.pubkey],
