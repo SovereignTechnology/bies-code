@@ -123,6 +123,9 @@ export function startUserIdentitySubscription(
     gapFill: true,
     settle: false, // no consumer needs the EOSE signal here
     paginate: false,
+    // This lease gates all personal replaceable writes for the session. A
+    // boot-time relay cap or transient outage must not make it terminal.
+    retryCount: Infinity,
     onRelayLifecycle: (event) => coverage.onLifecycle(event),
   })
     .pipe(onlyEvents(), mapEventsToStore(eventStore))

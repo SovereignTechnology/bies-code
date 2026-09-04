@@ -55,26 +55,23 @@
  * static factory and causes the relay to reconnect too aggressively, which
  * sends spurious REQs and breaks permanent-error fast-fail assertions.
  *
- * ## reconnect: false in subscription() vs req()
+ * ## REQ retry ownership
  *
- * resilientSubscription passes `reconnect: false` to pool.relay().subscription().
- * The relay's subscription() forwards this to req() — but req() uses the
- * `resubscribe` option (not `reconnect`) for its customRepeatOperator. So
- * `reconnect: false` does NOT disable the relay's internal repeat(). This is
- * intentional: resilientSubscription owns the reconnect lifecycle via its own
- * retry() + repeat() operators and disables the relay's internal reconnect by
- * passing `reconnect: false` to the relay's subscription() which maps to the
- * relay's own retry config, not the repeat/resubscribe config.
+ * resilientSubscription does not pass `reconnect` or `resubscribe` to the
+ * relay subscription. Applesauce's REQ-level repeat is opt-in, so the wrapper's
+ * retry() + repeat() pipeline owns request-cycle recovery. Applesauce still
+ * owns the shared WebSocket reconnect beneath it.
  */
 
 import { subscribeSpyTo } from "@hirez_io/observer-spy";
-import { BehaviorSubject, of, Subject } from "rxjs";
+import { BehaviorSubject, Observable, of, Subject } from "rxjs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WS } from "vitest-websocket-mock";
 import { Relay, RelayPool } from "applesauce-relay";
 import type { NostrEvent } from "nostr-tools";
 
 import {
+  markRateLimited,
   resilientSubscription,
   resilientRequest,
 } from "@/lib/resilientSubscription";
@@ -256,6 +253,47 @@ describe("basic event delivery", () => {
 });
 
 describe("stable-filter lifecycle coverage", () => {
+  it("reports an active-session retry exhaustion as unavailable", async () => {
+    const coverage = createRelaySubscriptionCoverage();
+    const spy = subscribeSpyTo(
+      resilientSubscription(pool, [RELAY_URL], [{ kinds: [1] }], {
+        settle: false,
+        reconnect: true,
+        gapFill: false,
+        retryCount: 0,
+        retryDelay: 0,
+        onRelayLifecycle: (event) => coverage.onLifecycle(event),
+      }),
+    );
+
+    const subId = await expectReq(server);
+    server.send(["CLOSED", subId, "error: temporary overload"]);
+
+    await vi.waitFor(() => expect(spy.receivedComplete()).toBe(true));
+    expect(coverage.get(RELAY_URL)?.phase).toBe("unavailable");
+  });
+
+  it("reports a shared rate-limit cooldown as unavailable until a REQ opens", () => {
+    const cooldownRelay = "wss://cooldown.relay";
+    markRateLimited(cooldownRelay, Date.now() + 60_000);
+    const coverage = createRelaySubscriptionCoverage();
+    const subscription = resilientSubscription(
+      pool,
+      [cooldownRelay],
+      [{ kinds: [1] }],
+      {
+        settle: false,
+        reconnect: true,
+        gapFill: false,
+        onRelayLifecycle: (event) => coverage.onLifecycle(event),
+      },
+    ).subscribe();
+
+    expect(coverage.get(cooldownRelay)?.phase).toBe("unavailable");
+    subscription.unsubscribe();
+    expect(coverage.get(cooldownRelay)?.phase).toBe("stopped");
+  });
+
   it("requires a real EOSE and stops coverage with its owner", async () => {
     const coverage = createRelaySubscriptionCoverage();
     const subscription = resilientSubscription(
@@ -393,6 +431,45 @@ describe("stable-filter lifecycle coverage", () => {
     subscription.unsubscribe();
   });
 
+  it("tears down a synchronously emitting transport retry delay", async () => {
+    let activeDelaySubscriptions = 0;
+    const retryDelay = () =>
+      new Observable<0>((subscriber) => {
+        activeDelaySubscriptions++;
+        subscriber.next(0);
+        return () => {
+          activeDelaySubscriptions--;
+        };
+      });
+    const subscription = resilientSubscription(
+      pool,
+      [RELAY_URL],
+      [{ kinds: [1] }],
+      {
+        settle: false,
+        reconnect: true,
+        gapFill: false,
+        retryCount: Infinity,
+        retryDelay,
+      },
+    ).subscribe();
+
+    await expectReq(server);
+    const relay = pool.relay(RELAY_URL);
+    relay.error$.next(new Error("transport lost"));
+    relay.error$.next(null);
+    relay.open$.next(new Event("open"));
+
+    await vi.waitFor(() => expect(activeDelaySubscriptions).toBe(0));
+    await vi.waitFor(() => {
+      const requests = server.messages.filter(
+        (message) => Array.isArray(message) && message[0] === "REQ",
+      );
+      expect(requests).toHaveLength(2);
+    });
+    subscription.unsubscribe();
+  });
+
   it("marks foreground gap-fill as catching up until its real EOSE", async () => {
     const coverage = createRelaySubscriptionCoverage();
     const subscription = resilientSubscription(
@@ -450,6 +527,75 @@ describe("stable-filter lifecycle coverage", () => {
 
     server.send(["EOSE", retryGapFillId]);
     await vi.waitFor(() => expect(coverage.isCovered(RELAY_URL)).toBe(true));
+    subscription.unsubscribe();
+  });
+
+  it("restarts the live cycle when bounded gap-fill recovery is exhausted", async () => {
+    const coverage = createRelaySubscriptionCoverage();
+    const subscription = resilientSubscription(
+      pool,
+      [RELAY_URL],
+      [{ kinds: [1] }],
+      {
+        settle: false,
+        reconnect: true,
+        gapFill: true,
+        retryCount: 0,
+        retryDelay: 0,
+        onRelayLifecycle: (event) => coverage.onLifecycle(event),
+      },
+    ).subscribe();
+
+    const liveId = await expectReq(server);
+    server.send(["EOSE", liveId]);
+    await vi.waitFor(() => expect(coverage.isCovered(RELAY_URL)).toBe(true));
+
+    triggerForegroundResume();
+    const gapFillId = await expectReq(server);
+    server.send(["CLOSED", gapFillId, "error: temporary overload"]);
+
+    const restartedLiveId = await vi.waitFor(() => {
+      const requests = server.messages.filter(
+        (message) => Array.isArray(message) && message[0] === "REQ",
+      ) as Array<["REQ", string]>;
+      expect(requests).toHaveLength(3);
+      return requests[2][1];
+    });
+    expect(coverage.get(RELAY_URL)?.phase).toBe("initial");
+
+    server.send(["EOSE", restartedLiveId]);
+    await vi.waitFor(() => expect(coverage.isCovered(RELAY_URL)).toBe(true));
+    subscription.unsubscribe();
+  });
+
+  it("keeps ordinary foreground gap-fill to one attempt", async () => {
+    const subscription = resilientSubscription(
+      pool,
+      [RELAY_URL],
+      [{ kinds: [1] }],
+      {
+        settle: false,
+        reconnect: true,
+        gapFill: true,
+        retryCount: Infinity,
+        retryDelay: 0,
+      },
+    ).subscribe();
+
+    const liveId = await expectReq(server);
+    server.send(["EVENT", liveId, mockEvent]);
+    server.send(["EOSE", liveId]);
+    await tick();
+
+    triggerForegroundResume();
+    const gapFillId = await expectReq(server);
+    server.send(["CLOSED", gapFillId, "error: temporary overload"]);
+    await tick();
+
+    const requests = server.messages.filter(
+      (message) => Array.isArray(message) && message[0] === "REQ",
+    );
+    expect(requests).toHaveLength(2);
     subscription.unsubscribe();
   });
 
@@ -674,6 +820,38 @@ describe("resilientRequest (autoClose)", () => {
       expect.objectContaining({ id: mockEvent.id }),
     );
     expect(spy.getValues()).toContain("EOSE");
+  });
+
+  it("re-issues its one-shot REQ after transport recovery", async () => {
+    const spy = subscribeSpyTo(
+      resilientRequest(pool, [RELAY_URL], [{ kinds: [1] }], {
+        settle: true,
+        settleTime: 1,
+        retryCount: 1,
+        retryDelay: 0,
+      }),
+    );
+
+    await expectReq(server);
+    const relay = pool.relay(RELAY_URL);
+    relay.error$.next(new Error("transport lost"));
+    relay.error$.next(null);
+    relay.open$.next(new Event("open"));
+
+    const retryId = await vi.waitFor(() => {
+      const requests = server.messages.filter(
+        (message) => Array.isArray(message) && message[0] === "REQ",
+      ) as Array<["REQ", string]>;
+      expect(requests).toHaveLength(2);
+      return requests[1][1];
+    });
+    server.send(["EVENT", retryId, mockEvent]);
+    server.send(["EOSE", retryId]);
+
+    await vi.waitFor(() => expect(spy.receivedComplete()).toBe(true));
+    expect(spy.getValues()).toContainEqual(
+      expect.objectContaining({ id: mockEvent.id }),
+    );
   });
 });
 

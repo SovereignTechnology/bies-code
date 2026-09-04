@@ -24,6 +24,10 @@ describe("relay subscription coverage", () => {
       phase: "catching-up",
     });
     expect(coverage.isCovered(RELAY)).toBe(false);
+
+    coverage.stop();
+    coverage.onLifecycle({ relay: RELAY, generation: 3, phase: "covered" });
+    expect(coverage.get(RELAY)?.phase).toBe("stopped");
   });
 
   it("invalidates teardown and account replacement without clearing the successor", () => {

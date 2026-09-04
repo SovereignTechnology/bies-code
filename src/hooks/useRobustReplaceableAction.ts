@@ -74,10 +74,10 @@ const MIN_INDEX_RELAYS_FOR_SINGLE_OUTBOX = 2;
 const MIN_OUTBOX_FRACTION = 0.5;
 const MIN_OUTBOX_ABSOLUTE = 3;
 
-/**
- * How long (ms) to wait for the addressLoader to return the latest event
- * before proceeding with whatever is already in the EventStore.
- */
+/** Maximum wait for the already-running identity query to settle. */
+const WARM_COVERAGE_TIMEOUT_MS = 5_000;
+
+/** Maximum focused-read wait before using the latest EventStore value. */
 const FETCH_TIMEOUT_MS = 5_000;
 
 function meetsWarmCoverageThreshold(
@@ -213,6 +213,28 @@ export function useRobustReplaceableAction(): RobustReplaceableActionResult {
   );
 
   /**
+   * True when connected identity queries are still capable of satisfying the
+   * threshold. Unavailable relays fail immediately instead of adding latency.
+   */
+  const canWarmCoverageStillSucceed = useCallback(
+    (outboxes: string[], lookup: string[]) => {
+      if (!navigator.onLine) return false;
+      const coveredOutboxes = countCoveredHealthy(outboxes);
+      const coveredLookup = countCoveredHealthy(lookup);
+      const inFlightOutboxes = countInFlightHealthy(outboxes);
+      const inFlightLookup = countInFlightHealthy(lookup);
+
+      if (inFlightOutboxes + inFlightLookup === 0) return false;
+      return meetsWarmCoverageThreshold(
+        coveredOutboxes + inFlightOutboxes,
+        outboxes.length,
+        coveredLookup + inFlightLookup,
+      );
+    },
+    [countCoveredHealthy, countInFlightHealthy],
+  );
+
+  /**
    * Check that enough relays have current warm coverage to safely write.
    *
    * Coverage rules (applied after navigator.onLine fast-fail):
@@ -253,11 +275,14 @@ export function useRobustReplaceableAction(): RobustReplaceableActionResult {
       // warm lease. See docs/replaceable-preflight.md, "Phase 1".
       const healthyOutboxes = countCoveredHealthy(outboxes);
       const healthyLookup = countCoveredHealthy(lookup);
+      const advice = canWarmCoverageStillSucceed(outboxes, lookup)
+        ? "Relay checks are still in progress. Please try again shortly."
+        : "Check your relay connections and relay settings, then try again.";
 
       if (healthyOutboxes === 0) {
         throw new Error(
           `None of your ${outboxes.length} outbox relay(s) have current query coverage. ` +
-            "Please wait for relay checks to finish, then try again.",
+            advice,
         );
       }
 
@@ -268,7 +293,7 @@ export function useRobustReplaceableAction(): RobustReplaceableActionResult {
             `Only 1 of your ${outboxes.length} outbox relay(s) has current query coverage and ` +
               `only ${healthyLookup} of ${lookup.length} lookup relay(s) have current query coverage ` +
               `(need at least ${MIN_INDEX_RELAYS_FOR_SINGLE_OUTBOX} lookup relays as backup). ` +
-              "Please wait for relay checks to finish, then try again.",
+              advice,
           );
         }
         return; // 1 outbox + >=2 lookup is sufficient
@@ -284,33 +309,11 @@ export function useRobustReplaceableAction(): RobustReplaceableActionResult {
           `Connection is not stable enough to safely update your ${label}. ` +
             `Only ${healthyOutboxes} of ${outboxes.length} outbox relay(s) have current query coverage ` +
             `(need at least ${MIN_OUTBOX_ABSOLUTE} or ${Math.round(MIN_OUTBOX_FRACTION * 100)}%). ` +
-            "Please wait for relay checks to finish, then try again.",
+            advice,
         );
       }
     },
-    [countCoveredHealthy],
-  );
-
-  /**
-   * True when connected identity queries are still capable of satisfying the
-   * threshold. Unavailable relays fail immediately instead of adding latency.
-   */
-  const canWarmCoverageStillSucceed = useCallback(
-    (outboxes: string[], lookup: string[]) => {
-      if (!navigator.onLine) return false;
-      const coveredOutboxes = countCoveredHealthy(outboxes);
-      const coveredLookup = countCoveredHealthy(lookup);
-      const inFlightOutboxes = countInFlightHealthy(outboxes);
-      const inFlightLookup = countInFlightHealthy(lookup);
-
-      if (inFlightOutboxes + inFlightLookup === 0) return false;
-      return meetsWarmCoverageThreshold(
-        coveredOutboxes + inFlightOutboxes,
-        outboxes.length,
-        coveredLookup + inFlightLookup,
-      );
-    },
-    [countCoveredHealthy, countInFlightHealthy],
+    [canWarmCoverageStillSucceed, countCoveredHealthy],
   );
 
   /** Wait for an in-flight identity query to decide the coverage threshold. */
@@ -341,7 +344,7 @@ export function useRobustReplaceableAction(): RobustReplaceableActionResult {
             filter(decisionReady),
             take(1),
           ),
-          timer(FETCH_TIMEOUT_MS),
+          timer(WARM_COVERAGE_TIMEOUT_MS),
         ),
       );
 

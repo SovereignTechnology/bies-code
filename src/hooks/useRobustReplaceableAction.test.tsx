@@ -79,6 +79,7 @@ describe("useRobustReplaceableAction warm coverage boundary", () => {
   afterEach(() => {
     releaseCoverage?.();
     releaseCoverage = undefined;
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -103,7 +104,9 @@ describe("useRobustReplaceableAction warm coverage boundary", () => {
     });
 
     expect(error).toEqual(
-      expect.objectContaining({ message: expect.stringContaining("coverage") }),
+      expect.objectContaining({
+        message: expect.stringContaining("Check your relay connections"),
+      }),
     );
     expect(action).not.toHaveBeenCalled();
     expect(mocks.addressLoader).not.toHaveBeenCalled();
@@ -183,5 +186,73 @@ describe("useRobustReplaceableAction warm coverage boundary", () => {
 
     expect(action).not.toHaveBeenCalled();
     expect(mocks.addressLoader).not.toHaveBeenCalled();
+  });
+
+  it("reports the bounded warm-coverage timeout", async () => {
+    vi.useFakeTimers();
+    const action = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    const { result } = renderHook(() => useRobustReplaceableAction());
+    let execution = Promise.resolve();
+
+    act(() => {
+      execution = result.current.execute(3, action);
+    });
+    const rejection = expect(execution).rejects.toThrow(
+      "Relay checks are still in progress",
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+      await rejection;
+    });
+
+    expect(action).not.toHaveBeenCalled();
+    expect(mocks.addressLoader).not.toHaveBeenCalled();
+  });
+
+  it("continues a pending wait across active coverage replacement", async () => {
+    coverage.onLifecycle({
+      relay: OUTBOX,
+      generation: 1,
+      phase: "covered",
+    });
+    coverage.onLifecycle({
+      relay: LOOKUP_ONE,
+      generation: 2,
+      phase: "covered",
+    });
+    const action = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    const { result } = renderHook(() => useRobustReplaceableAction());
+    let execution = Promise.resolve();
+
+    act(() => {
+      execution = result.current.execute(3, action);
+    });
+    expect(result.current.pending).toBe(true);
+
+    const replacement = createRelaySubscriptionCoverage();
+    RELAYS.forEach((relay, index) => {
+      replacement.onLifecycle({
+        relay,
+        generation: index + 10,
+        phase: "initial",
+      });
+    });
+    const oldRelease = releaseCoverage;
+    releaseCoverage = userIdentityCoverage.activate(PUBKEY, replacement);
+    oldRelease?.();
+
+    await act(async () => {
+      RELAYS.forEach((relay, index) => {
+        replacement.onLifecycle({
+          relay,
+          generation: index + 10,
+          phase: "covered",
+        });
+      });
+      await execution;
+    });
+
+    expect(action).toHaveBeenCalledTimes(1);
   });
 });
