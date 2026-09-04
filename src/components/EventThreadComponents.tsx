@@ -1,7 +1,13 @@
 /**
  * Shared components used in both IssuePage and PRPage thread views.
  */
-import React, { Suspense, useState, useCallback, type RefObject } from "react";
+import React, {
+  Suspense,
+  useState,
+  useCallback,
+  useMemo,
+  type RefObject,
+} from "react";
 import { formatDistanceToNow, format } from "date-fns";
 import type { NostrEvent } from "nostr-tools";
 import { Link } from "react-router-dom";
@@ -79,6 +85,12 @@ import { ZapsBar } from "@/components/zap/ZapsBar";
 import { NsitePreviewLink } from "@/components/ci/PRNsitePreview";
 import type { NsitePreview } from "@/lib/ciOutputs";
 import MarkdownContent from "@/components/DeferredMarkdownContent";
+import {
+  CompactCommitGraphList,
+  type CompactCommitGraphRowData,
+} from "@/components/CommitList";
+import { buildLinearGraphCommits } from "@/lib/commit-graph";
+import type { Commit } from "@/lib/git-grasp-pool";
 
 // ---------------------------------------------------------------------------
 // EventBodyCard — the main body card for an issue or PR/patch
@@ -100,6 +112,14 @@ interface EventBodyCardProps {
   content?: string;
   /** Optional list of commits to display below the body (for PRs). */
   commits?: CommitEntry[];
+  /** Real git topology for `commits`; falls back to a synthetic linear chain. */
+  commitGraphCommits?: Commit[];
+  /** The displayed tip has later descendants outside this original push. */
+  commitsContinueAbove?: boolean;
+  /** Condense commits introduced by merges into expandable group rows. */
+  collapseMergedCommits?: boolean;
+  /** Graph-resolved source branch per merge commit hash. */
+  mergeSourceNames?: Map<string, string>;
   /** Successful nsite preview produced for the last commit in this revision. */
   commitPreview?: NsitePreview;
   /**
@@ -129,6 +149,10 @@ export function EventBodyCard({
   event,
   content,
   commits,
+  commitGraphCommits,
+  commitsContinueAbove,
+  collapseMergedCommits,
+  mergeSourceNames,
   commitPreview,
   commitsSuperseded,
   commitsLatestHref,
@@ -144,6 +168,28 @@ export function EventBodyCard({
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteReason, setDeleteReason] = useState("");
   const [deleting, setDeleting] = useState(false);
+
+  const commitRows = useMemo<CompactCommitGraphRowData[]>(
+    () =>
+      commits?.map((commit) => ({
+        key: commit.hash,
+        hash: commit.hash,
+        shortHash: commit.noCommitId ? "[unknown]" : commit.hash.slice(0, 7),
+        subject: commit.subject,
+        href: commit.href,
+        superseded: commit.superseded ?? commitsSuperseded,
+      })) ?? [],
+    [commits, commitsSuperseded],
+  );
+  const commitGraph = useMemo(
+    () =>
+      commitGraphCommits && commitGraphCommits.length > 0
+        ? commitGraphCommits
+        : buildLinearGraphCommits(commitRows),
+    [commitGraphCommits, commitRows],
+  );
+  const usesSyntheticCommitGraph =
+    !commitGraphCommits || commitGraphCommits.length === 0;
 
   const confirmDelete = useCallback(async () => {
     if (deleting || !repoCoords) return;
@@ -239,54 +285,16 @@ export function EventBodyCard({
                   </>
                 )}
               </div>
-              <div className="rounded-md border border-border/50 bg-muted/20 px-3 py-1.5 divide-y divide-border/30">
-                {commits.map((c) => {
-                  const commitSuperseded = c.superseded ?? commitsSuperseded;
-                  const inner = (
-                    <>
-                      <span
-                        className={cn(
-                          "text-[11px] shrink-0",
-                          c.noCommitId ? "" : "font-mono",
-                          commitSuperseded
-                            ? "line-through text-muted-foreground/50"
-                            : c.noCommitId
-                              ? "text-muted-foreground/50 italic"
-                              : "text-muted-foreground/70",
-                        )}
-                      >
-                        {c.noCommitId ? "[unknown]" : c.hash.slice(0, 7)}
-                      </span>
-                      <span
-                        className={cn(
-                          "text-sm truncate",
-                          commitSuperseded
-                            ? "line-through text-foreground/40"
-                            : "text-foreground/80",
-                        )}
-                      >
-                        {c.subject}
-                      </span>
-                    </>
-                  );
-                  return c.href ? (
-                    <Link
-                      key={c.hash}
-                      to={c.href}
-                      className="flex items-center gap-2 py-0.5 min-w-0 rounded px-1 -mx-1 transition-colors hover:bg-muted/40"
-                    >
-                      {inner}
-                    </Link>
-                  ) : (
-                    <div
-                      key={c.hash}
-                      className="flex items-center gap-2 py-0.5 min-w-0 rounded px-1 -mx-1"
-                    >
-                      {inner}
-                    </div>
-                  );
-                })}
-              </div>
+              <CompactCommitGraphList
+                rows={commitRows}
+                graphCommits={commitGraph}
+                continuesAbove={commitsContinueAbove}
+                // Real commits carry their boundary parent. Bare patch/hash
+                // rows need an explicit signal that their base lies below.
+                continuesBelow={usesSyntheticCommitGraph}
+                collapseMergedCommits={collapseMergedCommits}
+                mergeSourceNames={mergeSourceNames}
+              />
               {commitPreview && (
                 <NsitePreviewLink preview={commitPreview} className="mt-2" />
               )}

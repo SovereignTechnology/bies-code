@@ -50,6 +50,8 @@ import {
 
 const LANE_WIDTH = 14;
 const ROW_HEIGHT = 36;
+/** Row height for compact graph rows (push-event cards). */
+const COMPACT_ROW_HEIGHT = 26;
 const MAX_LANES = 8;
 
 function laneX(lane: number): number {
@@ -64,31 +66,35 @@ export interface CommitRefLabel {
   isDefault?: boolean;
 }
 
-function CommitGraphCell({
+export function CommitGraphCell({
   row,
   laneCount,
   flip,
+  height = ROW_HEIGHT,
+  superseded,
 }: {
   row: CommitGraphRow;
   laneCount: number;
   /** Mirror vertically for oldest-first lists (children below parents). */
   flip?: boolean;
+  /** Cell height — geometry scales so rails stay continuous between rows. */
+  height?: number;
+  /** Faded hollow dot: the commit is no longer on the branch (force push). */
+  superseded?: boolean;
 }) {
   const width = Math.min(laneCount, MAX_LANES) * LANE_WIDTH;
-  const half = ROW_HEIGHT / 2;
+  const half = height / 2;
   const dotColor = GRAPH_LANE_COLORS[row.color % GRAPH_LANE_COLORS.length];
   const dotX = laneX(row.lane);
 
   return (
     <svg
       width={width}
-      height={ROW_HEIGHT}
+      height={height}
       className="block shrink-0"
       aria-hidden="true"
     >
-      <g
-        transform={flip ? `translate(0 ${ROW_HEIGHT}) scale(1 -1)` : undefined}
-      >
+      <g transform={flip ? `translate(0 ${height}) scale(1 -1)` : undefined}>
         {row.edges.map((edge, i) => {
           const color =
             GRAPH_LANE_COLORS[edge.color % GRAPH_LANE_COLORS.length];
@@ -97,7 +103,7 @@ function CommitGraphCell({
           let d: string;
           switch (edge.kind) {
             case "pass":
-              d = `M ${x1} 0 L ${x2} ${ROW_HEIGHT}`;
+              d = `M ${x1} 0 L ${x2} ${height}`;
               break;
             case "in":
               d =
@@ -108,13 +114,17 @@ function CommitGraphCell({
             case "out":
               d =
                 x1 === x2
-                  ? `M ${x1} ${half} L ${x2} ${ROW_HEIGHT}`
-                  : `M ${x1} ${half} C ${x1} ${ROW_HEIGHT}, ${x2} ${half}, ${x2} ${ROW_HEIGHT}`;
+                  ? `M ${x1} ${half} L ${x2} ${height}`
+                  : `M ${x1} ${half} C ${x1} ${height}, ${x2} ${half}, ${x2} ${height}`;
               break;
             case "stub":
-              d = `M ${x1} ${half} L ${x1} ${ROW_HEIGHT}`;
+              d = `M ${x1} ${half} L ${x1} ${height}`;
+              break;
+            case "stub-in":
+              d = `M ${x1} 0 L ${x1} ${half}`;
               break;
           }
+          const isStub = edge.kind === "stub" || edge.kind === "stub-in";
           return (
             <path
               key={i}
@@ -122,25 +132,271 @@ function CommitGraphCell({
               fill="none"
               stroke={color}
               strokeWidth={2}
-              strokeDasharray={edge.kind === "stub" ? "2 3" : undefined}
-              opacity={edge.kind === "stub" ? 0.5 : 1}
+              strokeDasharray={isStub ? "2 3" : undefined}
+              opacity={isStub ? 0.5 : 1}
             />
           );
         })}
-        {row.isMerge ? (
+        {row.isMerge || superseded ? (
           <circle
             cx={dotX}
             cy={half}
-            r={3}
+            r={row.isMerge ? 3 : 3.5}
             fill="hsl(var(--card))"
             stroke={dotColor}
-            strokeWidth={2}
+            strokeWidth={row.isMerge ? 2 : 1.5}
+            opacity={superseded ? 0.4 : 1}
           />
         ) : (
           <circle cx={dotX} cy={half} r={3.5} fill={dotColor} />
         )}
       </g>
     </svg>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// GraphCommitRow — lean graph row for windows that aren't full Commit lists
+// ---------------------------------------------------------------------------
+
+/**
+ * A leaner sibling of CommitRow for surfaces that show a window of commits
+ * without CI-trust, ref badges, or the copy button: patch chains (one row
+ * per NIP-34 patch event) and push-event cards on the PR conversation tab.
+ * The caller supplies display strings and links directly, so rows can point
+ * at nevent1 patch URLs or omit links entirely. `superseded` renders the
+ * force-pushed-away state: struck-through text and a faded hollow dot.
+ */
+export function GraphCommitRow({
+  graphRow,
+  laneCount = 1,
+  flip,
+  compact = false,
+  height,
+  subject,
+  subjectTitle,
+  href,
+  shortHash,
+  hashHref,
+  hashTitle,
+  authorName,
+  timestamp,
+  badge,
+  superseded = false,
+}: {
+  /** Graph layout for this row — omits the rail column when absent. */
+  graphRow?: CommitGraphRow;
+  laneCount?: number;
+  /** Mirror the rail vertically for oldest-first lists. */
+  flip?: boolean;
+  /** Smaller row height and type for dense push-event cards. */
+  compact?: boolean;
+  /** Explicit row height override; defaults per `compact`. */
+  height?: number;
+  subject: string;
+  /** Hover title for the subject (e.g. the full commit message). */
+  subjectTitle?: string;
+  /** Link target for the subject (and the hash unless hashHref is given). */
+  href?: string;
+  shortHash?: string;
+  hashHref?: string;
+  hashTitle?: string;
+  /** Author/committer name — hidden below md, omitted when absent. */
+  authorName?: string;
+  /** Unix seconds — renders a relative time with a full-date title. */
+  timestamp?: number;
+  /** Extra element rendered between the time and the hash (e.g. a badge). */
+  badge?: React.ReactNode;
+  superseded?: boolean;
+}) {
+  const rowHeight = height ?? (compact ? COMPACT_ROW_HEIGHT : ROW_HEIGHT);
+  const subjectClass = cn(
+    "min-w-0 flex-1 truncate transition-colors",
+    compact ? "text-sm" : "text-sm font-medium",
+    superseded
+      ? "line-through text-foreground/40"
+      : compact
+        ? "text-foreground/80"
+        : undefined,
+    href && "hover:text-pink-600 dark:hover:text-pink-400",
+  );
+  const hashClass = cn(
+    "shrink-0 font-mono transition-colors",
+    compact
+      ? "text-[11px]"
+      : "hidden sm:inline-block rounded bg-muted px-1.5 py-0.5 text-xs",
+    superseded
+      ? "line-through text-muted-foreground/50"
+      : compact
+        ? "text-muted-foreground/70"
+        : "text-muted-foreground",
+    (hashHref ?? href) && !superseded && "hover:text-foreground",
+    (hashHref ?? href) && !compact && "hover:bg-muted/70",
+  );
+  const resolvedHashHref = hashHref ?? href;
+
+  return (
+    <div
+      className={cn(
+        "flex items-center gap-2 hover:bg-muted/20 transition-colors group",
+        compact ? "pl-1 pr-2" : "pl-2 pr-3",
+      )}
+      style={{ height: rowHeight }}
+    >
+      {graphRow && (
+        <CommitGraphCell
+          row={graphRow}
+          laneCount={laneCount}
+          flip={flip}
+          height={rowHeight}
+          superseded={superseded}
+        />
+      )}
+      {href ? (
+        <Link to={href} className={subjectClass} title={subjectTitle}>
+          {subject}
+        </Link>
+      ) : (
+        <span className={subjectClass} title={subjectTitle}>
+          {subject}
+        </span>
+      )}
+      {authorName && (
+        <span className="hidden md:inline shrink-0 max-w-32 truncate text-xs text-muted-foreground">
+          {authorName}
+        </span>
+      )}
+      {timestamp !== undefined && (
+        <span
+          className="shrink-0 whitespace-nowrap text-xs text-muted-foreground/70"
+          title={safeFormat(timestamp, "PPpp") ?? undefined}
+        >
+          {safeFormatDistanceToNow(timestamp, { addSuffix: true })}
+        </span>
+      )}
+      {badge}
+      {shortHash &&
+        (resolvedHashHref ? (
+          <Link to={resolvedHashHref} className={hashClass} title={hashTitle}>
+            {shortHash}
+          </Link>
+        ) : (
+          <span className={hashClass} title={hashTitle}>
+            {shortHash}
+          </span>
+        ))}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// CompactCommitGraphList — shared graph window for conversation cards
+// ---------------------------------------------------------------------------
+
+export interface CompactCommitGraphRowData {
+  key: string;
+  hash: string;
+  shortHash: string;
+  subject: string;
+  href?: string;
+  superseded?: boolean;
+}
+
+/**
+ * A compact, oldest-first graph window used for commits embedded in PR body
+ * cards and push-event timeline rows. `graphCommits` may contain real parent
+ * topology or a synthetic chain from `buildLinearGraphCommits`.
+ */
+export function CompactCommitGraphList({
+  rows,
+  graphCommits,
+  continuesAbove,
+  continuesBelow,
+  collapseMergedCommits = false,
+  mergeSourceNames,
+}: {
+  /** Display rows, oldest first. */
+  rows: CompactCommitGraphRowData[];
+  graphCommits: Commit[];
+  continuesAbove?: boolean;
+  continuesBelow?: boolean;
+  /** Collapse commits brought in through a spine merge behind a toggle row. */
+  collapseMergedCommits?: boolean;
+  /** Graph-resolved source branch per merge commit hash. */
+  mergeSourceNames?: Map<string, string>;
+}) {
+  const collapse = useMemo(
+    () =>
+      collapseMergedCommits ? collapseMergedInCommits(graphCommits) : null,
+    [collapseMergedCommits, graphCommits],
+  );
+  const layout = useMemo(
+    () =>
+      layoutCommitGraph(collapse ? collapse.spine : graphCommits, {
+        continuesAbove,
+        continuesBelow,
+      }),
+    [collapse, graphCommits, continuesAbove, continuesBelow],
+  );
+  const rowsByHash = useMemo(
+    () => new Map(rows.map((row) => [row.hash, row])),
+    [rows],
+  );
+  const ordered = useMemo(
+    () =>
+      [...layout.rows].reverse().flatMap((graphRow) => {
+        const row = rowsByHash.get(graphRow.commit.hash);
+        return row ? [{ graphRow, row }] : [];
+      }),
+    [layout, rowsByHash],
+  );
+  const [expandedMerges, setExpandedMerges] = useState<Set<string>>(
+    () => new Set(),
+  );
+
+  return (
+    <div className="rounded-md border border-border/50 bg-muted/20 px-2 py-1">
+      {ordered.map(({ graphRow, row }) => {
+        const group = collapse?.groups.get(graphRow.commit.hash);
+        return (
+          <Fragment key={row.key}>
+            {group && (
+              <CompactMergedInGroup
+                commits={group}
+                mergeCommit={graphRow.commit}
+                sourceName={mergeSourceNames?.get(graphRow.commit.hash)}
+                rowsByHash={rowsByHash}
+                lane={graphRow.lane}
+                laneColor={graphRow.color}
+                laneCount={layout.laneCount}
+                expanded={expandedMerges.has(graphRow.commit.hash)}
+                onToggle={() =>
+                  setExpandedMerges((previous) => {
+                    const next = new Set(previous);
+                    if (next.has(graphRow.commit.hash)) {
+                      next.delete(graphRow.commit.hash);
+                    } else {
+                      next.add(graphRow.commit.hash);
+                    }
+                    return next;
+                  })
+                }
+              />
+            )}
+            <GraphCommitRow
+              compact
+              graphRow={graphRow}
+              laneCount={layout.laneCount}
+              flip
+              subject={row.subject}
+              href={row.href}
+              shortHash={row.shortHash}
+              superseded={row.superseded}
+            />
+          </Fragment>
+        );
+      })}
+    </div>
   );
 }
 
@@ -338,6 +594,120 @@ function GraphRailSpacer({
         strokeWidth={2}
       />
     </svg>
+  );
+}
+
+function CompactMergedInGroup({
+  commits,
+  mergeCommit,
+  sourceName,
+  rowsByHash,
+  lane,
+  laneColor,
+  laneCount,
+  expanded,
+  onToggle,
+}: {
+  /** Merged-in commits, newest first. */
+  commits: Commit[];
+  mergeCommit: Commit;
+  sourceName?: string;
+  rowsByHash: Map<string, CompactCommitGraphRowData>;
+  lane: number;
+  laneColor: number;
+  laneCount: number;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const sourceRef =
+    sourceName ?? parseMergeSourceRef(mergeCommit.message.split("\n")[0]);
+  const groupSuperseded = commits.every(
+    (commit) => rowsByHash.get(commit.hash)?.superseded,
+  );
+
+  return (
+    <>
+      {expanded &&
+        [...commits].reverse().map((commit) => {
+          const row = rowsByHash.get(commit.hash);
+          if (!row) return null;
+          const subjectClass = cn(
+            "min-w-0 flex-1 truncate text-xs text-muted-foreground transition-colors",
+            row.superseded && "line-through text-muted-foreground/50",
+            row.href &&
+              !row.superseded &&
+              "hover:text-pink-600 dark:hover:text-pink-400",
+          );
+          const hashClass = cn(
+            "hidden shrink-0 font-mono text-[11px] text-muted-foreground/60 sm:inline",
+            row.superseded && "line-through text-muted-foreground/40",
+            row.href && !row.superseded && "hover:text-foreground",
+          );
+          return (
+            <div
+              key={row.key}
+              className="flex items-center gap-2 pl-1 pr-2 hover:bg-muted/20 transition-colors"
+              style={{ height: COMPACT_ROW_HEIGHT }}
+            >
+              <GraphRailSpacer
+                lane={lane}
+                laneColor={laneColor}
+                laneCount={laneCount}
+                height={COMPACT_ROW_HEIGHT}
+              />
+              <span className="w-3.5 shrink-0" />
+              {row.href ? (
+                <Link to={row.href} className={subjectClass}>
+                  {row.subject}
+                </Link>
+              ) : (
+                <span className={subjectClass}>{row.subject}</span>
+              )}
+              {row.href ? (
+                <Link to={row.href} className={hashClass}>
+                  {row.shortHash}
+                </Link>
+              ) : (
+                <span className={hashClass}>{row.shortHash}</span>
+              )}
+            </div>
+          );
+        })}
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={expanded}
+        className="flex w-full items-center gap-2 pl-1 pr-2 text-left hover:bg-muted/20 transition-colors"
+        style={{ height: COMPACT_ROW_HEIGHT }}
+        title="History merged in from another branch — not authored on this branch"
+      >
+        <GraphRailSpacer
+          lane={lane}
+          laneColor={laneColor}
+          laneCount={laneCount}
+          height={COMPACT_ROW_HEIGHT}
+        />
+        {expanded ? (
+          <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        ) : (
+          <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        )}
+        <span
+          className={cn(
+            "min-w-0 truncate text-xs text-muted-foreground",
+            groupSuperseded && "line-through text-muted-foreground/50",
+          )}
+        >
+          {commits.length} commit{commits.length === 1 ? "" : "s"} merged in
+          from{" "}
+          {sourceRef ? (
+            <span className="font-mono text-foreground/70">{sourceRef}</span>
+          ) : (
+            "another branch"
+          )}
+        </span>
+      </button>
+    </>
   );
 }
 
