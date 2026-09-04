@@ -7,7 +7,10 @@
 - Render commit lists as a condensed commit graph: one fixed-height row per
   commit with colored topology rails, hollow merge dots, branch/tag badges on
   the repo commits page, dashed stubs where history is truncated, and a
-  mirrored oldest-first layout for PR commit ranges.
+  mirrored oldest-first layout for PR commit ranges. On the PR commits tab,
+  history merged in from other branches (e.g. "merge master into feature" on
+  a stacked PR) collapses behind an expandable count row instead of being
+  presented as the branch's own commits.
 - Prepare tag-only NIP-82 and Zapstore release publication through ngit while
   retaining the existing zsp manifest as a manual first-release fallback.
 - Publish the production NIP-5A site with ngit through a dedicated established

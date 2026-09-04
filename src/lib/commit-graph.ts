@@ -72,6 +72,87 @@ function commitTime(commit: Commit): number {
   return commit.committer?.timestamp ?? commit.author.timestamp;
 }
 
+export interface SpineCollapse {
+  /** The tip's first-parent chain — the branch's own commits. */
+  spine: Commit[];
+  /**
+   * Commits reachable only through a spine merge's later parents, keyed by
+   * that merge's hash, sorted newest first. These are history merged in from
+   * elsewhere (e.g. "merge master into feature"), not authored on the branch.
+   */
+  groups: Map<string, Commit[]>;
+}
+
+/**
+ * Split a single-tip commit range (e.g. a PR's `reachable(tip) −
+ * reachable(base)` set) into the tip's first-parent spine and, per spine
+ * merge commit, the commits it merged in from other branches. Lets callers
+ * collapse merged-in history instead of presenting it as the branch's own.
+ *
+ * Returns null when the set has no unique tip or nothing to collapse, in
+ * which case the range should be rendered as-is.
+ */
+export function collapseMergedInCommits(
+  commits: readonly Commit[],
+): SpineCollapse | null {
+  const byHash = new Map<string, Commit>();
+  for (const commit of commits) {
+    if (!byHash.has(commit.hash)) byHash.set(commit.hash, commit);
+  }
+  const referenced = new Set<string>();
+  for (const commit of byHash.values()) {
+    for (const parent of commit.parents) referenced.add(parent);
+  }
+  const tips = [...byHash.values()].filter(
+    (commit) => !referenced.has(commit.hash),
+  );
+  if (tips.length !== 1) return null;
+
+  const spineHashes = new Set<string>();
+  let current: Commit | undefined = tips[0];
+  while (current && !spineHashes.has(current.hash)) {
+    spineHashes.add(current.hash);
+    current = byHash.get(current.parents[0] ?? "");
+  }
+  if (spineHashes.size === byHash.size) return null;
+
+  const claimed = new Set<string>();
+  const groups = new Map<string, Commit[]>();
+  // Spine order is newest→oldest, so an outer merge claims commits before
+  // any older merge that can also reach them.
+  for (const spineHash of spineHashes) {
+    const spineCommit = byHash.get(spineHash);
+    if (!spineCommit || spineCommit.parents.length < 2) continue;
+    const group: Commit[] = [];
+    const pending = spineCommit.parents.slice(1);
+    while (pending.length > 0) {
+      const hash = pending.pop();
+      if (!hash || spineHashes.has(hash) || claimed.has(hash)) continue;
+      const commit = byHash.get(hash);
+      if (!commit) continue;
+      claimed.add(hash);
+      group.push(commit);
+      pending.push(...commit.parents);
+    }
+    if (group.length > 0) {
+      group.sort((a, b) => commitTime(b) - commitTime(a));
+      groups.set(spineHash, group);
+    }
+  }
+  if (groups.size === 0) return null;
+
+  // Every commit must be accounted for — if any are neither on the spine nor
+  // claimed by a merge (unexpected for a single-tip reachable set), render
+  // the range as-is rather than hiding commits.
+  if (spineHashes.size + claimed.size !== byHash.size) return null;
+
+  const spine: Commit[] = [];
+  for (const commit of commits) {
+    if (spineHashes.has(commit.hash)) spine.push(commit);
+  }
+  return { spine, groups };
+}
+
 /**
  * Topologically sort commits so every child appears before its parents,
  * preferring newer committer timestamps among the commits that are ready.
