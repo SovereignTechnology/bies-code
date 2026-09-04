@@ -13,6 +13,7 @@ import {
   repositoryRoleStateAt,
 } from "@/lib/nip34-maintainer-model";
 import {
+  hasUnsupportedAcceptanceRoleHistory,
   prepareRepositoryMembershipMutation,
   RepositoryMembershipMutationRefusal,
 } from "@/lib/repositoryMembershipMutation";
@@ -169,7 +170,7 @@ describe("reciprocal maintainer authorization", () => {
     );
   });
 
-  it("treats ended and deferred self roles as departures", () => {
+  it("treats numeric self-role ends as departures but keeps self-defer repairable", () => {
     const ownerEvent = announcement(owner, [
       ["M", owner, "10"],
       ["m", invitee, "10"],
@@ -190,10 +191,344 @@ describe("reciprocal maintainer authorization", () => {
     const resolved = resolveChain([ownerEvent, ended, deferred], owner, repoId);
 
     expect(resolved?.confirmedMaintainers).toEqual([owner]);
-    expect(resolved?.departedMaintainers).toEqual(
-      expect.arrayContaining([invitee, recursiveInvitee]),
+    expect(resolved?.departedMaintainers).toEqual([invitee]);
+    expect(resolved?.invitedMaintainers).toContain(recursiveInvitee);
+    expect(resolved?.repositoryHealth).toContainEqual(
+      expect.objectContaining({
+        code: "invalid-self-defer",
+        author: recursiveInvitee,
+        role: "m",
+        selfDefer: expect.objectContaining({
+          lastValidStart: 10,
+          superseded: false,
+        }),
+      }),
     );
   });
+
+  it("treats a valid self-moderator-only role as a maintainer departure", () => {
+    const ownerEvent = announcement(owner, [
+      ["M", owner, "10"],
+      ["m", invitee, "10"],
+      ["maintainers", owner, invitee],
+    ]);
+    const moderatorOnly = announcement(invitee, [
+      ["M", owner, "20"],
+      ["o", invitee, "20"],
+      ["maintainers", owner],
+    ]);
+
+    const resolved = resolveChain([ownerEvent, moderatorOnly], owner, repoId);
+
+    expect(resolved?.confirmedMaintainers).toEqual([owner]);
+    expect(resolved?.departedMaintainers).toContain(invitee);
+    expect(resolved?.invitedMaintainers).not.toContain(invitee);
+  });
+
+  it("does not turn an invalid self-moderator defer into a maintainer departure or acceptance", () => {
+    const ownerEvent = announcement(owner, [
+      ["M", owner, "10"],
+      ["m", invitee, "10"],
+      ["maintainers", owner, invitee],
+    ]);
+    const invalidModerator = announcement(invitee, [
+      ["M", owner, "20"],
+      ["o", invitee, "20", "defer"],
+      ["maintainers", owner],
+    ]);
+
+    const resolved = resolveChain(
+      [ownerEvent, invalidModerator],
+      owner,
+      repoId,
+    );
+
+    expect(resolved?.confirmedMaintainers).toEqual([owner]);
+    expect(resolved?.departedMaintainers).not.toContain(invitee);
+    expect(resolved?.invitedMaintainers).toContain(invitee);
+    expect(resolved?.repositoryHealth).toContainEqual(
+      expect.objectContaining({
+        code: "invalid-self-defer",
+        author: invitee,
+        role: "o",
+      }),
+    );
+  });
+
+  it("uses a strictly later signed self-role without repairing invalid history", () => {
+    const resolved = resolveChain(
+      [
+        announcement(
+          owner,
+          [
+            ["m", owner, "0", "100", "120", "defer"],
+            ["M", owner, "200"],
+            ["maintainers", owner],
+          ],
+          220,
+        ),
+      ],
+      owner,
+      repoId,
+    );
+
+    expect(resolved?.confirmedMaintainers).toEqual([owner]);
+    expect(resolved?.coordinateStatus).toBe("active");
+    expect(resolved?.repositoryHealth).toContainEqual(
+      expect.objectContaining({
+        code: "invalid-self-defer",
+        author: owner,
+        role: "m",
+        selfDefer: {
+          lastValidStart: 120,
+          hasPriorIntervals: true,
+          superseded: true,
+          proposedEnd: 200,
+          successorRole: "M",
+        },
+      }),
+    );
+    expect(
+      resolved?.roleHistory.resolvedRecords.some(
+        ({ role, subject }) => role === "m" && subject === owner,
+      ),
+    ).toBe(false);
+    expect(
+      isHistoricalRepositoryMember(resolved?.roleHistory, owner, 150),
+    ).toBe(false);
+    expect(
+      isHistoricalRepositoryMember(resolved?.roleHistory, owner, 200),
+    ).toBe(true);
+  });
+
+  it("lets a later signed self-role supersede across maintainer and moderator roles", () => {
+    const promotedMaintainer = resolveChain(
+      [
+        announcement(
+          owner,
+          [
+            ["o", owner, "10", "defer"],
+            ["M", owner, "20"],
+            ["maintainers", owner],
+          ],
+          30,
+        ),
+      ],
+      owner,
+      repoId,
+    );
+    expect(promotedMaintainer?.confirmedMaintainers).toEqual([owner]);
+    expect(promotedMaintainer?.confirmedModerators).toEqual([]);
+    expect(promotedMaintainer?.repositoryHealth).toContainEqual(
+      expect.objectContaining({
+        role: "o",
+        selfDefer: {
+          lastValidStart: 10,
+          hasPriorIntervals: false,
+          superseded: true,
+          proposedEnd: 20,
+          successorRole: "M",
+        },
+      }),
+    );
+
+    const ownerEvent = announcement(owner, [
+      ["M", owner, "5"],
+      ["o", moderator, "5"],
+      ["maintainers", owner],
+    ]);
+    const promotedModerator = resolveChain(
+      [
+        ownerEvent,
+        announcement(
+          moderator,
+          [
+            ["M", owner, "5"],
+            ["m", moderator, "10", "defer"],
+            ["o", moderator, "20"],
+            ["maintainers", owner],
+          ],
+          30,
+        ),
+      ],
+      owner,
+      repoId,
+    );
+    expect(promotedModerator?.confirmedMaintainers).toEqual([owner]);
+    expect(promotedModerator?.confirmedModerators).toEqual([moderator]);
+    expect(promotedModerator?.repositoryHealth).toContainEqual(
+      expect.objectContaining({
+        role: "m",
+        selfDefer: {
+          lastValidStart: 10,
+          hasPriorIntervals: false,
+          superseded: true,
+          proposedEnd: 20,
+          successorRole: "o",
+        },
+      }),
+    );
+  });
+
+  it("does not let an older cross-role survive a newer invalid self-defer", () => {
+    const blockedMaintainer = resolveChain(
+      [
+        announcement(owner, [
+          ["M", owner, "5"],
+          ["o", owner, "10", "defer"],
+          ["maintainers", owner],
+        ]),
+      ],
+      owner,
+      repoId,
+    );
+    expect(blockedMaintainer?.confirmedMaintainers).toEqual([]);
+    expect(blockedMaintainer?.repositoryHealth).toContainEqual(
+      expect.objectContaining({
+        role: "o",
+        selfDefer: expect.objectContaining({ superseded: false }),
+      }),
+    );
+
+    const ownerEvent = announcement(owner, [
+      ["M", owner, "5"],
+      ["o", moderator, "5"],
+      ["maintainers", owner],
+    ]);
+    const blockedModerator = resolveChain(
+      [
+        ownerEvent,
+        announcement(moderator, [
+          ["M", owner, "5"],
+          ["o", moderator, "5"],
+          ["m", moderator, "10", "defer"],
+          ["maintainers", owner],
+        ]),
+      ],
+      owner,
+      repoId,
+    );
+    expect(blockedModerator?.confirmedMaintainers).toEqual([owner]);
+    expect(blockedModerator?.confirmedModerators).toEqual([]);
+    expect(blockedModerator?.repositoryHealth).toContainEqual(
+      expect.objectContaining({
+        role: "m",
+        selfDefer: expect.objectContaining({ superseded: false }),
+      }),
+    );
+  });
+
+  it.each([
+    {
+      label: "the same boundary",
+      successors: [
+        ["M", owner, "20"],
+        ["o", owner, "20"],
+      ],
+    },
+    {
+      label: "different boundaries",
+      successors: [
+        ["M", owner, "20"],
+        ["o", owner, "30"],
+      ],
+    },
+  ])(
+    "does not infer a repair boundary from multiple successors at $label",
+    ({ successors }) => {
+      const resolved = resolveChain(
+        [
+          announcement(owner, [
+            ["m", owner, "10", "defer"],
+            ...successors,
+            ["maintainers", owner],
+          ]),
+        ],
+        owner,
+        repoId,
+      );
+      const warning = resolved?.repositoryHealth.find(
+        ({ code }) => code === "invalid-self-defer",
+      );
+
+      expect(resolved?.confirmedMaintainers).toEqual([owner]);
+      expect(warning?.selfDefer).toEqual({
+        lastValidStart: 10,
+        hasPriorIntervals: false,
+        superseded: true,
+        proposedEnd: undefined,
+        successorRole: undefined,
+      });
+    },
+  );
+
+  it("resolves multiple invalid self-defer records independently without proposing a repair", () => {
+    const resolved = resolveChain(
+      [
+        announcement(owner, [
+          ["m", owner, "10", "defer"],
+          ["m", owner, "25", "defer"],
+          ["M", owner, "20"],
+          ["maintainers", owner],
+        ]),
+      ],
+      owner,
+      repoId,
+    );
+    const warnings = resolved?.repositoryHealth.filter(
+      ({ code }) => code === "invalid-self-defer",
+    );
+
+    expect(resolved?.confirmedMaintainers).toEqual([]);
+    expect(warnings?.map(({ selfDefer }) => selfDefer)).toEqual([
+      {
+        lastValidStart: 10,
+        hasPriorIntervals: false,
+        superseded: true,
+        proposedEnd: undefined,
+        successorRole: undefined,
+      },
+      {
+        lastValidStart: 25,
+        hasPriorIntervals: false,
+        superseded: false,
+        proposedEnd: undefined,
+        successorRole: undefined,
+      },
+    ]);
+  });
+
+  it.each([
+    { label: "untimed", successor: ["M", owner] },
+    { label: "older", successor: ["M", owner, "5"] },
+  ])(
+    "does not let an $label apparent successor restore current authority",
+    ({ successor }) => {
+      const resolved = resolveChain(
+        [
+          announcement(owner, [
+            ["m", owner, "10", "defer"],
+            successor,
+            ["maintainers", owner],
+          ]),
+        ],
+        owner,
+        repoId,
+      );
+
+      expect(resolved?.confirmedMaintainers).toEqual([]);
+      expect(resolved?.coordinateStatus).toBe("unresolved");
+      expect(resolved?.repositoryHealth).toContainEqual(
+        expect.objectContaining({
+          code: "invalid-self-defer",
+          selfDefer: expect.objectContaining({
+            lastValidStart: 10,
+            superseded: false,
+          }),
+        }),
+      );
+    },
+  );
 
   it("authorizes confirmed moderators for member actions but not maintainer actions", () => {
     const resolved = resolveChain(
@@ -717,6 +1052,752 @@ describe("conservative repository membership mutations", () => {
     ).toThrowError(
       expect.objectContaining<Partial<RepositoryMembershipMutationRefusal>>({
         code: "unsupported_existing_state",
+      }),
+    );
+  });
+
+  it("does not make another author's invalid self-defer contagious", () => {
+    const ownerEvent = announcement(owner, [
+      ["M", owner, "10"],
+      ["m", invitee, "10"],
+      ["maintainers", owner, invitee],
+    ]);
+    const invalidInvitee = announcement(invitee, [
+      ["M", owner, "20"],
+      ["m", invitee, "20", "defer"],
+      ["maintainers", owner],
+    ]);
+    const resolved = resolveChain([ownerEvent, invalidInvitee], owner, repoId)!;
+
+    const proposal = prepareRepositoryMembershipMutation({
+      repo: resolved,
+      actorPubkey: owner,
+      intent: { type: "add", targetPubkey: recursiveInvitee },
+      announcements: [ownerEvent, invalidInvitee],
+      stateEvents: [],
+      createdAt: 30,
+    });
+
+    expect(proposal.expectedInvitations).toEqual(
+      expect.arrayContaining([invitee, recursiveInvitee]),
+    );
+  });
+
+  it("preserves a superseded self-defer during an unrelated membership edit", () => {
+    const invalidTag = ["m", owner, "0", "10", "15", "defer"];
+    const ownerEvent = announcement(owner, [
+      invalidTag,
+      ["M", owner, "20"],
+      ["maintainers", owner],
+    ]);
+    const resolved = resolveChain([ownerEvent], owner, repoId)!;
+
+    const proposal = prepareRepositoryMembershipMutation({
+      repo: resolved,
+      actorPubkey: owner,
+      intent: { type: "add", targetPubkey: invitee },
+      announcements: [ownerEvent],
+      stateEvents: [],
+      createdAt: 30,
+    });
+
+    expect(proposal.template.tags).toContainEqual(invalidTag);
+    expect(proposal.expectedMaintainers).toEqual([owner]);
+    expect(proposal.expectedInvitations).toEqual([invitee]);
+  });
+
+  it("repairs a self-defer at its unambiguous signed successor boundary", () => {
+    const ownerEvent = announcement(owner, [
+      ["m", owner, "0", "10", "15", "defer"],
+      ["M", owner, "20"],
+      ["maintainers", owner],
+    ]);
+    const resolved = resolveChain([ownerEvent], owner, repoId)!;
+
+    const proposal = prepareRepositoryMembershipMutation({
+      repo: resolved,
+      actorPubkey: owner,
+      intent: {
+        type: "repair-self-defer",
+        role: "m",
+        repair: { action: "end", boundary: 20 },
+      },
+      announcements: [ownerEvent],
+      stateEvents: [],
+      createdAt: 30,
+    });
+
+    expect(proposal.template.tags).toContainEqual([
+      "m",
+      owner,
+      "0",
+      "10",
+      "15",
+      "20",
+    ]);
+    expect(proposal.template.tags).toContainEqual(["M", owner, "20"]);
+    expect(proposal.expectedMaintainers).toEqual([owner]);
+  });
+
+  it("refuses to repair a private announcement without a relay hint", () => {
+    const ownerEvent = announcement(owner, [
+      ["M", owner, "10", "defer"],
+      ["maintainers"],
+      ["private", "true"],
+    ]);
+    const resolved = resolveChain([ownerEvent], owner, repoId)!;
+
+    expect(resolved.isPrivate).toBe(true);
+    expect(() =>
+      prepareRepositoryMembershipMutation({
+        repo: resolved,
+        actorPubkey: owner,
+        intent: {
+          type: "repair-self-defer",
+          role: "M",
+          repair: { action: "continue" },
+        },
+        announcements: [ownerEvent],
+        stateEvents: [],
+        createdAt: 20,
+      }),
+    ).toThrowError(
+      expect.objectContaining<Partial<RepositoryMembershipMutationRefusal>>({
+        code: "missing_private_relay_hint",
+      }),
+    );
+  });
+
+  it("lets the signer explicitly continue an ambiguous self-defer", () => {
+    const ownerEvent = announcement(owner, [
+      ["M", owner, "10", "defer"],
+      ["maintainers"],
+    ]);
+    const resolved = resolveChain([ownerEvent], owner, repoId)!;
+
+    const proposal = prepareRepositoryMembershipMutation({
+      repo: resolved,
+      actorPubkey: owner,
+      intent: {
+        type: "repair-self-defer",
+        role: "M",
+        repair: { action: "continue" },
+      },
+      announcements: [ownerEvent],
+      stateEvents: [],
+      createdAt: 20,
+    });
+
+    expect(proposal.template.tags).toContainEqual(["M", owner, "10"]);
+    expect(proposal.expectedMaintainers).toEqual([owner]);
+  });
+
+  it("validates self-defer repairs against the effective replacement timestamp", () => {
+    const futureAnnouncement = announcement(
+      owner,
+      [["M", owner, "90", "defer"], ["maintainers"]],
+      100,
+    );
+    const resolved = resolveChain([futureAnnouncement], owner, repoId)!;
+    const proposal = prepareRepositoryMembershipMutation({
+      repo: resolved,
+      actorPubkey: owner,
+      intent: {
+        type: "repair-self-defer",
+        role: "M",
+        repair: { action: "end", boundary: 95 },
+      },
+      announcements: [futureAnnouncement],
+      stateEvents: [],
+      createdAt: 50,
+    });
+
+    expect(proposal.template.created_at).toBe(101);
+    expect(proposal.template.tags).toContainEqual(["M", owner, "90", "95"]);
+    expect(() =>
+      prepareRepositoryMembershipMutation({
+        repo: resolved,
+        actorPubkey: owner,
+        intent: {
+          type: "repair-self-defer",
+          role: "M",
+          repair: { action: "end", boundary: 102 },
+        },
+        announcements: [futureAnnouncement],
+        stateEvents: [],
+        createdAt: 50,
+      }),
+    ).toThrowError(
+      expect.objectContaining<Partial<RepositoryMembershipMutationRefusal>>({
+        code: "history_conflict",
+      }),
+    );
+  });
+
+  it("refuses to repair a self-defer whose start is later than its replacement", () => {
+    const futureStart = announcement(
+      owner,
+      [["M", owner, "50", "defer"], ["maintainers"]],
+      20,
+    );
+    const resolved = resolveChain([futureStart], owner, repoId)!;
+
+    for (const repair of [
+      { action: "continue" as const },
+      { action: "end" as const, boundary: 50 },
+    ]) {
+      expect(() =>
+        prepareRepositoryMembershipMutation({
+          repo: resolved,
+          actorPubkey: owner,
+          intent: { type: "repair-self-defer", role: "M", repair },
+          announcements: [futureStart],
+          stateEvents: [],
+          createdAt: 30,
+        }),
+      ).toThrowError(
+        expect.objectContaining<Partial<RepositoryMembershipMutationRefusal>>({
+          code: "history_conflict",
+        }),
+      );
+    }
+  });
+
+  it("gates an unrelated write only for the unresolved self-defer author", () => {
+    const ownerEvent = announcement(owner, [
+      ["M", owner, "10", "defer"],
+      ["maintainers"],
+    ]);
+    const resolved = resolveChain([ownerEvent], owner, repoId)!;
+
+    expect(() =>
+      prepareRepositoryMembershipMutation({
+        repo: resolved,
+        actorPubkey: owner,
+        intent: { type: "leave" },
+        announcements: [ownerEvent],
+        stateEvents: [],
+        createdAt: 20,
+      }),
+    ).toThrowError(
+      expect.objectContaining<Partial<RepositoryMembershipMutationRefusal>>({
+        code: "history_conflict",
+      }),
+    );
+  });
+
+  it("repairs self-defer while accepting a new maintainer role", () => {
+    const ownerInvitation = announcement(owner, [
+      ["M", owner, "10"],
+      ["m", invitee, "10"],
+      ["maintainers", owner, invitee],
+    ]);
+    const invalidAcceptance = announcement(
+      invitee,
+      [
+        ["M", owner, "20"],
+        ["m", invitee, "20", "defer"],
+        ["maintainers", owner],
+      ],
+      25,
+    );
+    const invited = resolveChain(
+      [ownerInvitation, invalidAcceptance],
+      owner,
+      repoId,
+    )!;
+
+    expect(invited.invitedMaintainers).toContain(invitee);
+    const proposal = prepareRepositoryMembershipMutation({
+      repo: invited,
+      actorPubkey: invitee,
+      intent: { type: "accept" },
+      announcements: [ownerInvitation, invalidAcceptance],
+      stateEvents: [],
+      createdAt: 30,
+    });
+
+    expect(proposal.template.tags).toContainEqual([
+      "m",
+      invitee,
+      "20",
+      "30",
+      "30",
+    ]);
+    expect(proposal.template.created_at).toBe(30);
+    expect(proposal.expectedMaintainers).toEqual([owner, invitee]);
+    expect(proposal.expectedInvitations).toEqual([]);
+  });
+
+  it("refuses self-defer acceptance without a private relay hint", () => {
+    const ownerInvitation = announcement(owner, [
+      ["M", owner, "10"],
+      ["m", invitee, "10"],
+      ["maintainers", owner, invitee],
+      ["private", "true"],
+    ]);
+    const invalidAcceptance = announcement(
+      invitee,
+      [
+        ["M", owner, "20"],
+        ["m", invitee, "20", "defer"],
+        ["maintainers", owner],
+      ],
+      25,
+    );
+    const invited = resolveChain(
+      [ownerInvitation, invalidAcceptance],
+      owner,
+      repoId,
+    )!;
+
+    expect(invited.isPrivate).toBe(true);
+    expect(invited.relays).toEqual([]);
+    expect(() =>
+      prepareRepositoryMembershipMutation({
+        repo: invited,
+        actorPubkey: invitee,
+        intent: { type: "accept" },
+        announcements: [ownerInvitation, invalidAcceptance],
+        stateEvents: [],
+        createdAt: 30,
+      }),
+    ).toThrowError(
+      expect.objectContaining<Partial<RepositoryMembershipMutationRefusal>>({
+        code: "missing_private_relay_hint",
+      }),
+    );
+  });
+
+  it("requires dedicated repair when self-defer contains earlier intervals", () => {
+    const ownerInvitation = announcement(owner, [
+      ["M", owner, "10"],
+      ["m", invitee, "25"],
+      ["maintainers", owner, invitee],
+    ]);
+    const invalidAcceptance = announcement(
+      invitee,
+      [
+        ["M", owner, "20"],
+        ["m", invitee, "1", "5", "10", "defer"],
+        ["maintainers", owner],
+      ],
+      25,
+    );
+    const invited = resolveChain(
+      [ownerInvitation, invalidAcceptance],
+      owner,
+      repoId,
+    )!;
+
+    expect(invited.invitedMaintainers).toContain(invitee);
+    expect(invited.repositoryHealth).toContainEqual(
+      expect.objectContaining({
+        code: "invalid-self-defer",
+        author: invitee,
+        role: "m",
+        selfDefer: expect.objectContaining({ hasPriorIntervals: true }),
+      }),
+    );
+    expect(() =>
+      prepareRepositoryMembershipMutation({
+        repo: invited,
+        actorPubkey: invitee,
+        intent: { type: "accept" },
+        announcements: [ownerInvitation, invalidAcceptance],
+        stateEvents: [],
+        createdAt: 30,
+      }),
+    ).toThrowError(
+      expect.objectContaining<Partial<RepositoryMembershipMutationRefusal>>({
+        code: "unsupported_role_effect_import",
+      }),
+    );
+
+    const explicitRepair = prepareRepositoryMembershipMutation({
+      repo: invited,
+      actorPubkey: invitee,
+      intent: {
+        type: "repair-self-defer",
+        role: "m",
+        repair: { action: "end", boundary: 20 },
+      },
+      announcements: [ownerInvitation, invalidAcceptance],
+      stateEvents: [],
+      createdAt: 30,
+    });
+    expect(explicitRepair.template.tags).toContainEqual([
+      "m",
+      invitee,
+      "1",
+      "5",
+      "10",
+      "20",
+    ]);
+  });
+
+  it("accepts after a unique moderator successor without inventing another self-defer", () => {
+    const ownerInvitation = announcement(owner, [
+      ["M", owner, "10"],
+      ["m", invitee, "25"],
+      ["o", invitee, "20"],
+      ["maintainers", owner, invitee],
+    ]);
+    const supersededInvalidAcceptance = announcement(
+      invitee,
+      [
+        ["M", owner, "20"],
+        ["m", invitee, "10", "defer"],
+        ["o", invitee, "20"],
+        ["maintainers", owner],
+      ],
+      25,
+    );
+    const invited = resolveChain(
+      [ownerInvitation, supersededInvalidAcceptance],
+      owner,
+      repoId,
+    )!;
+
+    expect(invited.confirmedModerators).toContain(invitee);
+    expect(invited.departedMaintainers).not.toContain(invitee);
+    expect(invited.invitedMaintainers).toContain(invitee);
+    const proposal = prepareRepositoryMembershipMutation({
+      repo: invited,
+      actorPubkey: invitee,
+      intent: { type: "accept" },
+      announcements: [ownerInvitation, supersededInvalidAcceptance],
+      stateEvents: [],
+      createdAt: 30,
+    });
+    const replacement: NostrEvent = {
+      id: "f".repeat(64),
+      sig: "f".repeat(128),
+      pubkey: invitee,
+      ...proposal.template,
+    };
+    const accepted = resolveChain(
+      [ownerInvitation, replacement],
+      owner,
+      repoId,
+    );
+
+    expect(proposal.template.tags).toContainEqual([
+      "m",
+      invitee,
+      "10",
+      "20",
+      "30",
+    ]);
+    expect(proposal.template.tags).toContainEqual(["o", invitee, "20"]);
+    expect(proposal.template.created_at).toBe(30);
+    expect(accepted?.confirmedMaintainers).toContain(invitee);
+    expect(accepted?.confirmedModerators).not.toContain(invitee);
+    expect(accepted?.repositoryHealth).not.toContainEqual(
+      expect.objectContaining({ code: "invalid-self-defer" }),
+    );
+  });
+
+  it("does not advertise acceptance that would import moderator history", () => {
+    const ownerInvitation = announcement(owner, [
+      ["M", owner, "10"],
+      ["m", invitee, "25"],
+      ["o", invitee, "1", "5", "20"],
+      ["maintainers", owner, invitee],
+    ]);
+    const supersededInvalidAcceptance = announcement(
+      invitee,
+      [
+        ["M", owner, "20"],
+        ["m", invitee, "10", "defer"],
+        ["o", invitee, "1", "5", "20"],
+        ["maintainers", owner],
+      ],
+      25,
+    );
+    const invited = resolveChain(
+      [ownerInvitation, supersededInvalidAcceptance],
+      owner,
+      repoId,
+    )!;
+
+    expect(invited.confirmedModerators).toContain(invitee);
+    expect(invited.invitedMaintainers).toContain(invitee);
+    expect(hasUnsupportedAcceptanceRoleHistory(invited, invitee, 30)).toBe(
+      true,
+    );
+    expect(() =>
+      prepareRepositoryMembershipMutation({
+        repo: invited,
+        actorPubkey: invitee,
+        intent: { type: "accept" },
+        announcements: [ownerInvitation, supersededInvalidAcceptance],
+        stateEvents: [],
+        createdAt: 30,
+      }),
+    ).toThrowError(
+      expect.objectContaining<Partial<RepositoryMembershipMutationRefusal>>({
+        code: "unsupported_role_effect_import",
+      }),
+    );
+  });
+
+  it("requires acceptance to start after every additional self-defer", () => {
+    const ownerInvitation = announcement(owner, [
+      ["M", owner, "10"],
+      ["m", invitee, "10"],
+      ["maintainers", owner, invitee],
+    ]);
+    const invalidAcceptance = announcement(
+      invitee,
+      [
+        ["M", owner, "20"],
+        ["m", invitee, "10", "defer"],
+        ["o", invitee, "2000", "defer"],
+        ["maintainers", owner],
+      ],
+      25,
+    );
+    const invited = resolveChain(
+      [ownerInvitation, invalidAcceptance],
+      owner,
+      repoId,
+    )!;
+
+    expect(hasUnsupportedAcceptanceRoleHistory(invited, invitee, 1000)).toBe(
+      true,
+    );
+    expect(hasUnsupportedAcceptanceRoleHistory(invited, invitee, 2000)).toBe(
+      true,
+    );
+    expect(hasUnsupportedAcceptanceRoleHistory(invited, invitee, 2001)).toBe(
+      false,
+    );
+    expect(() =>
+      prepareRepositoryMembershipMutation({
+        repo: invited,
+        actorPubkey: invitee,
+        intent: { type: "accept" },
+        announcements: [ownerInvitation, invalidAcceptance],
+        stateEvents: [],
+        createdAt: 1000,
+      }),
+    ).toThrowError(
+      expect.objectContaining<Partial<RepositoryMembershipMutationRefusal>>({
+        code: "unsupported_role_effect_import",
+      }),
+    );
+
+    const laterAcceptance = prepareRepositoryMembershipMutation({
+      repo: invited,
+      actorPubkey: invitee,
+      intent: { type: "accept" },
+      announcements: [ownerInvitation, invalidAcceptance],
+      stateEvents: [],
+      createdAt: 2001,
+    });
+    expect(laterAcceptance.template.tags).toContainEqual([
+      "o",
+      invitee,
+      "2000",
+      "defer",
+    ]);
+    expect(laterAcceptance.expectedMaintainers).toContain(invitee);
+  });
+
+  it("refuses acceptance when a superseded self-defer has multiple successors", () => {
+    const ownerInvitation = announcement(owner, [
+      ["M", owner, "10"],
+      ["m", invitee, "5", "15", "25"],
+      ["o", invitee, "20"],
+      ["maintainers", owner, invitee],
+    ]);
+    const ambiguousAcceptance = announcement(
+      invitee,
+      [
+        ["M", owner, "20"],
+        ["m", invitee, "10", "defer"],
+        ["o", invitee, "20"],
+        ["o", invitee, "30"],
+        ["maintainers", owner],
+      ],
+      35,
+    );
+    const invited = resolveChain(
+      [ownerInvitation, ambiguousAcceptance],
+      owner,
+      repoId,
+    )!;
+
+    expect(invited.invitedMaintainers).toContain(invitee);
+    expect(() =>
+      prepareRepositoryMembershipMutation({
+        repo: invited,
+        actorPubkey: invitee,
+        intent: { type: "accept" },
+        announcements: [ownerInvitation, ambiguousAcceptance],
+        stateEvents: [],
+        createdAt: 40,
+      }),
+    ).toThrowError(
+      expect.objectContaining<Partial<RepositoryMembershipMutationRefusal>>({
+        code: "history_conflict",
+      }),
+    );
+  });
+
+  it("refuses acceptance with multiple invalid self-maintainer records", () => {
+    const ownerInvitation = announcement(owner, [
+      ["M", owner, "10"],
+      ["m", invitee, "5", "15", "25"],
+      ["maintainers", owner, invitee],
+    ]);
+    const ambiguousAcceptance = announcement(
+      invitee,
+      [
+        ["M", owner, "20"],
+        ["M", invitee, "10", "defer"],
+        ["m", invitee, "10", "defer"],
+        ["maintainers", owner],
+      ],
+      30,
+    );
+    const invited = resolveChain(
+      [ownerInvitation, ambiguousAcceptance],
+      owner,
+      repoId,
+    )!;
+
+    expect(invited.invitedMaintainers).toContain(invitee);
+    expect(() =>
+      prepareRepositoryMembershipMutation({
+        repo: invited,
+        actorPubkey: invitee,
+        intent: { type: "accept" },
+        announcements: [ownerInvitation, ambiguousAcceptance],
+        stateEvents: [],
+        createdAt: 40,
+      }),
+    ).toThrowError(
+      expect.objectContaining<Partial<RepositoryMembershipMutationRefusal>>({
+        code: "unsupported_existing_announcement",
+      }),
+    );
+  });
+
+  it("does not repair acceptance across a valid numeric maintainer departure", () => {
+    const ownerInvitation = announcement(owner, [
+      ["M", owner, "10"],
+      ["m", invitee, "5", "15", "25"],
+      ["maintainers", owner, invitee],
+    ]);
+    const departedAcceptance = announcement(
+      invitee,
+      [
+        ["M", owner, "20"],
+        ["M", invitee, "25", "defer"],
+        ["m", invitee, "10", "20"],
+        ["maintainers", owner],
+      ],
+      30,
+    );
+    const invited = resolveChain(
+      [ownerInvitation, departedAcceptance],
+      owner,
+      repoId,
+    )!;
+
+    expect(invited.departedMaintainers).toContain(invitee);
+    expect(invited.invitedMaintainers).toContain(invitee);
+    expect(() =>
+      prepareRepositoryMembershipMutation({
+        repo: invited,
+        actorPubkey: invitee,
+        intent: { type: "accept" },
+        announcements: [ownerInvitation, departedAcceptance],
+        stateEvents: [],
+        createdAt: 40,
+      }),
+    ).toThrowError(
+      expect.objectContaining<Partial<RepositoryMembershipMutationRefusal>>({
+        code: "unsupported_role_effect_import",
+      }),
+    );
+  });
+
+  it("does not treat an unrelated invalid moderator defer as repairable acceptance", () => {
+    const ownerInvitation = announcement(owner, [
+      ["M", owner, "10"],
+      ["m", invitee, "10", "20", "30"],
+      ["maintainers", owner, invitee],
+    ]);
+    const departedInvitee = announcement(
+      invitee,
+      [
+        ["M", owner, "10"],
+        ["m", invitee, "10", "20"],
+        ["o", invitee, "10", "defer"],
+        ["maintainers", owner],
+      ],
+      25,
+    );
+    const invited = resolveChain(
+      [ownerInvitation, departedInvitee],
+      owner,
+      repoId,
+    )!;
+
+    expect(invited.departedMaintainers).toContain(invitee);
+    expect(invited.invitedMaintainers).toContain(invitee);
+    expect(() =>
+      prepareRepositoryMembershipMutation({
+        repo: invited,
+        actorPubkey: invitee,
+        intent: { type: "accept" },
+        announcements: [ownerInvitation, departedInvitee],
+        stateEvents: [],
+        createdAt: 40,
+      }),
+    ).toThrowError(
+      expect.objectContaining<Partial<RepositoryMembershipMutationRefusal>>({
+        code: "unsupported_existing_announcement",
+      }),
+    );
+  });
+
+  it("refuses acceptance when an invalid maintainer defer starts in the future", () => {
+    const ownerInvitation = announcement(owner, [
+      ["M", owner, "10"],
+      ["m", invitee, "10"],
+      ["maintainers", owner, invitee],
+    ]);
+    const futureInvalidAcceptance = announcement(
+      invitee,
+      [
+        ["M", owner, "20"],
+        ["m", invitee, "50", "defer"],
+        ["maintainers", owner],
+      ],
+      20,
+    );
+    const invited = resolveChain(
+      [ownerInvitation, futureInvalidAcceptance],
+      owner,
+      repoId,
+    )!;
+
+    expect(() =>
+      prepareRepositoryMembershipMutation({
+        repo: invited,
+        actorPubkey: invitee,
+        intent: { type: "accept" },
+        announcements: [ownerInvitation, futureInvalidAcceptance],
+        stateEvents: [],
+        createdAt: 30,
+      }),
+    ).toThrowError(
+      expect.objectContaining<Partial<RepositoryMembershipMutationRefusal>>({
+        code: "history_conflict",
       }),
     );
   });

@@ -104,7 +104,12 @@ through `ngit` v3, `ngit-grasp` v3, and GitWorkshop.
 - [ ] End and re-open role intervals, including `defer`, and compare current
       and publication-time authorization.
 - [ ] Verify that self-`defer` is reported as invalid history without hiding
-      the repository, granting authority, or enabling membership writes.
+      the repository or granting authority; only the affected signer is gated
+      without a strictly later signed self-role, while other maintainers and a
+      superseded signer's current writes continue.
+- [ ] Exercise signer-approved self-`defer` repair using an unambiguous
+      successor boundary, an explicit continue/end choice, and acceptance of a
+      new role; unrelated announcement edits must preserve the malformed tag.
 - [ ] Verify that deletion and a numeric self-role end retain the final signed
       snapshot and show the actor and lifecycle time on the direct route.
 - [ ] Verify that a gapped same-coordinate restart renders the current

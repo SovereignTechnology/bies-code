@@ -20,6 +20,10 @@
 
 ### Fixes
 
+- Scope invalid self-`defer` health to its signer, require a strictly later
+  signed self-role to restore current authority, keep other maintainers and
+  superseded roles operational, and offer explicit signer-approved repair or
+  role-acceptance transitions without rewriting unrelated edits.
 - Keep deleted, archived, and same-coordinate restarted repositories readable
   with signed actor/time lifecycle notices; preserve their final announcement
   for historical display, flag invalid self-`defer`, and keep membership writes

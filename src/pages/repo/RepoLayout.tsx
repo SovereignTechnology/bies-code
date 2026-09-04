@@ -25,6 +25,7 @@ import { usePrefetchNip05 } from "@/hooks/usePrefetchNip05";
 import { useDnsIdentity } from "@/hooks/useDnsIdentity";
 import { useRepositoryState } from "@/hooks/useRepositoryState";
 import { useRepositoryMembershipMutation } from "@/hooks/useRepositoryMembershipMutation";
+import { hasUnsupportedAcceptanceRoleHistory } from "@/lib/repositoryMembershipMutation";
 import type { RepositoryState } from "@/casts/RepositoryState";
 import { use$ } from "@/hooks/use$";
 import { useProfile } from "@/hooks/useProfile";
@@ -37,6 +38,7 @@ import { nip34SupplementalRelayLoader } from "@/services/nostr";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { nip19 } from "nostr-tools";
 import {
   ArrowLeft,
@@ -891,7 +893,21 @@ function RepoLayoutResolved({
         )}
 
         {repo && announcementsSettled && repo.repositoryHealth.length > 0 && (
-          <RepositoryHealthNotice repo={repo} />
+          <RepositoryHealthNotice
+            repo={repo}
+            accountPubkey={account?.pubkey}
+            announcementsSettled={announcementsSettled}
+            stateSettled={repoRelayEose}
+            relayUrls={[
+              ...new Set([
+                ...repoRelayUrls,
+                ...(extraRelaysForMaintainerMailboxCoverage?.relays.map(
+                  ({ url }) => url,
+                ) ?? []),
+              ]),
+            ]}
+            repoState={repoState}
+          />
         )}
 
         {repo && !isPrivate && (
@@ -1058,6 +1074,31 @@ function MaintainerInvitationSafetyBanner({
   const moderator = repo.confirmedModerators.includes(accountPubkey);
   if (!invited && !moderator) return null;
 
+  const hasOwnAnnouncement = repo.discoveredAnnouncements.some(
+    ({ pubkey }) => pubkey === accountPubkey,
+  );
+  const maintainerSelfDeferWarnings = repo.repositoryHealth.filter(
+    ({ author, code, role }) =>
+      author === accountPubkey &&
+      code === "invalid-self-defer" &&
+      (role === "M" || role === "m"),
+  );
+  const prospectiveAcceptanceAt = Math.floor(Date.now() / 1000);
+  const repairableMaintainerSelfDefer =
+    maintainerSelfDeferWarnings.length === 1 &&
+    !hasUnsupportedAcceptanceRoleHistory(
+      repo,
+      accountPubkey,
+      prospectiveAcceptanceAt,
+    ) &&
+    !maintainerSelfDeferWarnings[0].selfDefer?.hasPriorIntervals &&
+    (!maintainerSelfDeferWarnings[0].selfDefer?.superseded ||
+      maintainerSelfDeferWarnings[0].selfDefer.proposedEnd !== undefined)
+      ? maintainerSelfDeferWarnings[0]
+      : undefined;
+  const unsupportedExistingAcceptance =
+    invited && hasOwnAnnouncement && !repairableMaintainerSelfDefer;
+
   const inviters = Array.from(
     new Set(
       (invited ? repo.maintainerEdges : repo.moderatorEdges)
@@ -1093,6 +1134,19 @@ function MaintainerInvitationSafetyBanner({
                   ))}
                 </div>
               )}
+              {invited && repairableMaintainerSelfDefer && (
+                <p className="text-sm text-muted-foreground">
+                  {repairableMaintainerSelfDefer.selfDefer?.superseded
+                    ? "Accepting closes your invalid interval at its signed successor boundary and opens the maintainer role at the acceptance time."
+                    : "Accepting explicitly closes your invalid deferred interval and opens the new role at the same signed boundary."}
+                </p>
+              )}
+              {unsupportedExistingAcceptance && (
+                <p className="text-sm text-muted-foreground">
+                  Your existing announcement needs separate role-history
+                  reconciliation before GitWorkshop can accept this invitation.
+                </p>
+              )}
             </div>
           </div>
           <div className="max-w-md space-y-2">
@@ -1103,7 +1157,8 @@ function MaintainerInvitationSafetyBanner({
                   !!pendingIntent ||
                   accepted ||
                   !announcementsSettled ||
-                  !stateSettled
+                  !stateSettled ||
+                  unsupportedExistingAcceptance
                 }
                 onClick={() => {
                   void mutate(invited ? { type: "accept" } : { type: "leave" })
@@ -1276,9 +1331,98 @@ function RepositoryLifecycleNotice({ repo }: { repo: ResolvedRepo }) {
   );
 }
 
-function RepositoryHealthNotice({ repo }: { repo: ResolvedRepo }) {
-  const selfDefer = repo.repositoryHealth.some(
+function dateTimeLocalValue(timestamp: number): string {
+  const date = new Date(timestamp * 1000);
+  if (!Number.isFinite(date.getTime())) return "";
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 16);
+}
+
+function RepositoryHealthNotice({
+  repo,
+  accountPubkey,
+  announcementsSettled,
+  stateSettled,
+  relayUrls,
+  repoState,
+}: {
+  repo: ResolvedRepo;
+  accountPubkey?: string;
+  announcementsSettled: boolean;
+  stateSettled: boolean;
+  relayUrls: string[];
+  repoState?: RepositoryState | null;
+}) {
+  const selfDeferWarnings = repo.repositoryHealth.filter(
     ({ code }) => code === "invalid-self-defer",
+  );
+  const ownSelfDeferWarnings = selfDeferWarnings.filter(
+    ({ author }) => author === accountPubkey,
+  );
+  const hasCurrentInvitation =
+    !!accountPubkey && repo.invitedMaintainers.includes(accountPubkey);
+  const ownMaintainerSelfDeferWarnings = ownSelfDeferWarnings.filter(
+    ({ role }) => role === "M" || role === "m",
+  );
+  const acceptanceHasUnsupportedRoleHistory = accountPubkey
+    ? hasUnsupportedAcceptanceRoleHistory(
+        repo,
+        accountPubkey,
+        Math.floor(Date.now() / 1000),
+      )
+    : true;
+  const acceptanceSelfDefer =
+    hasCurrentInvitation &&
+    !acceptanceHasUnsupportedRoleHistory &&
+    ownMaintainerSelfDeferWarnings.length === 1
+      ? ownMaintainerSelfDeferWarnings.find(
+          ({ selfDefer }) =>
+            !selfDefer?.hasPriorIntervals &&
+            (!selfDefer?.superseded || selfDefer.proposedEnd !== undefined),
+        )
+      : undefined;
+  const ownSelfDefer = acceptanceSelfDefer ?? ownSelfDeferWarnings[0];
+  const invitationRepairsSelfDefer = !!acceptanceSelfDefer;
+  const repairSelectionAmbiguous =
+    !!ownSelfDefer &&
+    ownSelfDeferWarnings.filter(({ role }) => role === ownSelfDefer.role)
+      .length > 1;
+  const superseded = ownSelfDefer?.selfDefer?.superseded ?? false;
+  const proposedEnd = ownSelfDefer?.selfDefer?.proposedEnd;
+  const mutation = useRepositoryMembershipMutation({
+    repo,
+    announcementsSettled,
+    stateSettled,
+    relayUrls,
+    repoState,
+  });
+  const [chosenEnd, setChosenEnd] = useState(() =>
+    dateTimeLocalValue(Math.floor(Date.now() / 1000)),
+  );
+  const [repairPublished, setRepairPublished] = useState(false);
+  const chosenBoundary = Math.floor(new Date(chosenEnd).getTime() / 1000);
+  const chosenBoundaryValid =
+    Number.isSafeInteger(chosenBoundary) &&
+    chosenBoundary >= (ownSelfDefer?.selfDefer?.lastValidStart ?? 0) &&
+    chosenBoundary <= Math.floor(Date.now() / 1000);
+  const repair = (
+    repairIntent: { action: "continue" } | { action: "end"; boundary: number },
+  ) => {
+    if (!ownSelfDefer?.role) return;
+    mutation.clearFailure();
+    setRepairPublished(false);
+    void mutation
+      .mutate({
+        type: "repair-self-defer",
+        role: ownSelfDefer.role,
+        repair: repairIntent,
+      })
+      .then(() => setRepairPublished(true))
+      .catch(() => undefined);
+  };
+  const repairPending = mutation.pendingIntent?.type === "repair-self-defer";
+  const hasOtherHealth = repo.repositoryHealth.some(
+    ({ code }) => code !== "invalid-self-defer",
   );
 
   return (
@@ -1290,12 +1434,145 @@ function RepositoryHealthNotice({ repo }: { repo: ResolvedRepo }) {
             Repository announcement needs repair
           </p>
           <p className="text-muted-foreground">
-            {selfDefer
-              ? "A self-authored role ends in defer. Self roles need a numeric end or an active open interval."
+            {selfDeferWarnings.length > 0
+              ? "A self-authored role ends in defer, so its unresolved interval grants no authority."
               : "One or more maintainer role records are malformed or inconsistent."}{" "}
-            The repository remains readable, but membership changes stay
-            disabled until its role history is repaired.
+            {ownSelfDefer
+              ? superseded
+                ? invitationRepairsSelfDefer
+                  ? "Your later signed active role remains authoritative. Accepting the current invitation will close the invalid interval at that signed boundary and open your maintainer role at the acceptance time."
+                  : "Your later signed active role remains authoritative, so this warning does not block current writes."
+                : invitationRepairsSelfDefer
+                  ? "Only your role-dependent writes are blocked; accepting the current invitation explicitly closes this interval and opens the new role."
+                  : "Only your role-dependent writes are blocked; choose how your signed role interval should end."
+              : selfDeferWarnings.length > 0
+                ? "Only the affected signer is gated; repository reads and other maintainers continue normally."
+                : "Authority remains fail-closed until the affected history is repaired."}
           </p>
+          {repairSelectionAmbiguous && (
+            <p className="mt-2 text-muted-foreground">
+              Multiple invalid self-{ownSelfDefer?.role} records prevent
+              GitWorkshop from choosing which interval to repair.
+            </p>
+          )}
+          {ownSelfDefer &&
+            !invitationRepairsSelfDefer &&
+            !repairSelectionAmbiguous &&
+            proposedEnd !== undefined && (
+              <div className="mt-3 space-y-2 rounded-lg border border-amber-500/30 bg-background/70 p-3">
+                <p className="text-muted-foreground">
+                  The later signed self-{ownSelfDefer.selfDefer?.successorRole}{" "}
+                  role supplies an unambiguous boundary. Approving this changes
+                  only the final value of the invalid self-{ownSelfDefer.role}{" "}
+                  record from <code className="font-mono">defer</code> to{" "}
+                  <code className="font-mono">{proposedEnd}</code>.
+                </p>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={
+                    !mutation.enabled ||
+                    repairPending ||
+                    repairPublished ||
+                    !stateSettled
+                  }
+                  onClick={() =>
+                    repair({ action: "end", boundary: proposedEnd })
+                  }
+                >
+                  {repairPending && (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  )}
+                  {repairPublished
+                    ? "Repair published"
+                    : "Approve signed repair"}
+                </Button>
+              </div>
+            )}
+          {ownSelfDefer &&
+            !invitationRepairsSelfDefer &&
+            !repairSelectionAmbiguous &&
+            proposedEnd === undefined && (
+              <div className="mt-3 space-y-3 rounded-lg border border-amber-500/30 bg-background/70 p-3">
+                {!superseded && (
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <p className="text-muted-foreground">
+                      Continue the self-{ownSelfDefer.role} interval as active.
+                    </p>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      disabled={
+                        !mutation.enabled ||
+                        repairPending ||
+                        repairPublished ||
+                        !stateSettled
+                      }
+                      onClick={() => repair({ action: "continue" })}
+                    >
+                      {repairPending && (
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      )}
+                      Continue role
+                    </Button>
+                  </div>
+                )}
+                <div className="space-y-2 border-t border-amber-500/20 pt-3">
+                  <label
+                    htmlFor="self-defer-end"
+                    className="text-muted-foreground"
+                  >
+                    Or choose the signed time when the interval ended
+                  </label>
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <Input
+                      id="self-defer-end"
+                      type="datetime-local"
+                      value={chosenEnd}
+                      min={dateTimeLocalValue(
+                        ownSelfDefer.selfDefer?.lastValidStart ?? 0,
+                      )}
+                      max={dateTimeLocalValue(Math.floor(Date.now() / 1000))}
+                      onChange={(event) => setChosenEnd(event.target.value)}
+                      className="sm:max-w-xs"
+                    />
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      disabled={
+                        !mutation.enabled ||
+                        repairPending ||
+                        repairPublished ||
+                        !stateSettled ||
+                        !chosenBoundaryValid
+                      }
+                      onClick={() =>
+                        repair({ action: "end", boundary: chosenBoundary })
+                      }
+                    >
+                      End role at this time
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            )}
+          {ownSelfDefer &&
+            !invitationRepairsSelfDefer &&
+            !repairSelectionAmbiguous &&
+            mutation.failure && (
+              <p className="mt-2 text-destructive">
+                {mutation.failure.message}
+              </p>
+            )}
+          {hasOtherHealth && selfDeferWarnings.length > 0 && (
+            <p className="mt-2 text-muted-foreground">
+              Other malformed or inconsistent records still require a separate
+              repair.
+            </p>
+          )}
         </div>
       </div>
     </div>

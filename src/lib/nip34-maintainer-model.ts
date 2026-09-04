@@ -45,6 +45,19 @@ export interface RepositoryHealthWarning {
   author: string;
   role?: RepositoryRole;
   subject?: string;
+  /** Repair context present only for a syntactically valid invalid self-defer. */
+  selfDefer?: {
+    /** Signed start of the unresolved interval. */
+    lastValidStart: number;
+    /** Earlier closed intervals make implicit acceptance repair unsafe. */
+    hasPriorIntervals: boolean;
+    /** A strictly later signed active self-role can restore current authority. */
+    superseded: boolean;
+    /** Unambiguous numeric boundary a signer may approve as a repair. */
+    proposedEnd?: number;
+    /** Role of the unambiguous active successor, when one exists. */
+    successorRole?: RepositoryRole;
+  };
 }
 
 export type LeadResolutionSource =
@@ -81,6 +94,8 @@ interface ParsedAnnouncement {
   hasLegacyMaintainersTag: boolean;
   authorDeclinesMaintainership: boolean;
   authorDeclinesModeratorship: boolean;
+  authorCannotMaintain: boolean;
+  authorCannotModerate: boolean;
   health: RepositoryHealthWarning[];
 }
 
@@ -228,7 +243,7 @@ function repositoryAnnouncementDeletionTimes(
   return deletedAt;
 }
 
-export function parseRepositoryRoleRecord(
+function parseRepositoryRoleRecordSyntax(
   author: string,
   tag: string[],
 ): RepositoryRoleRecord | undefined {
@@ -255,10 +270,6 @@ export function parseRepositoryRoleRecord(
     boundaries.push(timestamp);
   }
 
-  if (subject === author && boundaries.at(-1) === "defer") {
-    return undefined;
-  }
-
   return {
     author,
     role: rawRole as RepositoryRole,
@@ -266,6 +277,31 @@ export function parseRepositoryRoleRecord(
     boundaries,
     active: boundaries.length === 0 || boundaries.length % 2 === 1,
   };
+}
+
+/** Parse a valid role record. A self-authored defer is deliberately invalid. */
+export function parseRepositoryRoleRecord(
+  author: string,
+  tag: string[],
+): RepositoryRoleRecord | undefined {
+  const record = parseRepositoryRoleRecordSyntax(author, tag);
+  return record?.subject === author && record.boundaries.at(-1) === "defer"
+    ? undefined
+    : record;
+}
+
+/**
+ * Return the otherwise well-formed record behind an invalid self-defer. This is
+ * diagnostic and repair input only; callers must never treat it as authority.
+ */
+export function parseInvalidSelfDeferRoleRecord(
+  author: string,
+  tag: string[],
+): RepositoryRoleRecord | undefined {
+  const record = parseRepositoryRoleRecordSyntax(author, tag);
+  return record?.subject === author && record.boundaries.at(-1) === "defer"
+    ? record
+    : undefined;
 }
 
 const parsedAnnouncementCache = new WeakMap<NostrEvent, ParsedAnnouncement>();
@@ -286,15 +322,22 @@ function parseAnnouncement(event: NostrEvent): ParsedAnnouncement {
   const health: RepositoryHealthWarning[] = [];
   const duplicateCounts = new Map<string, number>();
   const roleRecords: RepositoryRoleRecord[] = [];
+  const roleRecordTags = new Map<RepositoryRoleRecord, string[]>();
+  const invalidSelfDeferRecords: {
+    record: RepositoryRoleRecord;
+    warning: RepositoryHealthWarning;
+  }[] = [];
 
   for (const tag of roleTags) {
     const role = tag[0] as RepositoryRole;
     const subject = tag[1] ?? "";
     const record = parseRepositoryRoleRecord(event.pubkey, tag);
     if (!record) {
-      const invalidSelfDefer =
-        subject === event.pubkey && tag.at(-1) === "defer";
-      health.push({
+      const invalidSelfDefer = parseInvalidSelfDeferRoleRecord(
+        event.pubkey,
+        tag,
+      );
+      const warning: RepositoryHealthWarning = {
         code: invalidSelfDefer ? "invalid-self-defer" : "invalid-role-record",
         message: invalidSelfDefer
           ? "A self-authored role cannot end in defer; use a numeric end or an active open interval"
@@ -302,9 +345,14 @@ function parseAnnouncement(event: NostrEvent): ParsedAnnouncement {
         author: event.pubkey,
         role,
         subject: HEX_PUBKEY.test(subject) ? subject : undefined,
-      });
+      };
+      health.push(warning);
+      if (invalidSelfDefer) {
+        invalidSelfDeferRecords.push({ record: invalidSelfDefer, warning });
+      }
     } else {
       roleRecords.push(record);
+      roleRecordTags.set(record, tag);
     }
     const key = `${role}:${subject}`;
     duplicateCounts.set(key, (duplicateCounts.get(key) ?? 0) + 1);
@@ -413,11 +461,64 @@ function parseAnnouncement(event: NostrEvent): ParsedAnnouncement {
   const selfRoleRecords = roleRecords.filter(
     (record) => record.subject === event.pubkey,
   );
-  const authorDeclinesMaintainership =
-    authorHasRoleEntry &&
-    !selfRoleRecords.some(
-      (record) => record.active && (record.role === "M" || record.role === "m"),
+  const activeSelfMaintainerRecords = selfRoleRecords.filter(
+    (record) => record.active && (record.role === "M" || record.role === "m"),
+  );
+  const activeSelfModeratorRecords = selfRoleRecords.filter(
+    (record) => record.active && record.role === "o",
+  );
+  for (const { record: invalidRecord, warning } of invalidSelfDeferRecords) {
+    const lastValidStart = invalidRecord.boundaries.at(-2);
+    if (typeof lastValidStart !== "number") continue;
+    const successorsByTag = new Map<
+      string,
+      { role: RepositoryRole; start: number }
+    >();
+    for (const record of selfRoleRecords) {
+      const start = record.boundaries.at(-1);
+      if (
+        !record.active ||
+        typeof start !== "number" ||
+        start <= lastValidStart
+      ) {
+        continue;
+      }
+      const tag = roleRecordTags.get(record);
+      if (tag)
+        successorsByTag.set(JSON.stringify(tag), { role: record.role, start });
+    }
+    const successors = [...successorsByTag.values()];
+    const sameRoleInvalidRecords = invalidSelfDeferRecords.filter(
+      ({ record }) => record.role === invalidRecord.role,
     );
+    const unambiguousSuccessor =
+      successors.length === 1 && sameRoleInvalidRecords.length === 1
+        ? successors[0]
+        : undefined;
+    warning.selfDefer = {
+      lastValidStart,
+      hasPriorIntervals: invalidRecord.boundaries.length > 2,
+      superseded: successors.length > 0,
+      proposedEnd: unambiguousSuccessor?.start,
+      successorRole: unambiguousSuccessor?.role,
+    };
+  }
+  const selfDeferWarnings = health.filter(
+    (warning) => warning.code === "invalid-self-defer",
+  );
+  const unresolvedSelfDefer = selfDeferWarnings.some(
+    (warning) => !warning.selfDefer?.superseded,
+  );
+  const hasValidSelfMaintainerRecord = selfRoleRecords.some(
+    ({ role }) => role === "M" || role === "m",
+  );
+  const hasInvalidSelfMaintainerDefer = invalidSelfDeferRecords.some(
+    ({ record }) => record.role === "M" || record.role === "m",
+  );
+  const authorDeclinesMaintainership =
+    activeSelfMaintainerRecords.length === 0 &&
+    (hasValidSelfMaintainerRecord ||
+      (selfRoleRecords.length > 0 && !hasInvalidSelfMaintainerDefer));
   const selfModeratorRecords = selfRoleRecords.filter(
     (record) => record.role === "o",
   );
@@ -425,8 +526,13 @@ function parseAnnouncement(event: NostrEvent): ParsedAnnouncement {
     ([role, subject]) => role === "o" && subject === event.pubkey,
   );
   const authorDeclinesModeratorship =
+    selfModeratorRecords.length > 0 && activeSelfModeratorRecords.length === 0;
+  const authorCannotMaintain =
+    authorHasRoleEntry &&
+    (activeSelfMaintainerRecords.length === 0 || unresolvedSelfDefer);
+  const authorCannotModerate =
     authorHasModeratorEntry &&
-    !selfModeratorRecords.some((record) => record.active);
+    (activeSelfModeratorRecords.length === 0 || unresolvedSelfDefer);
 
   const parsed: ParsedAnnouncement = {
     event,
@@ -439,6 +545,8 @@ function parseAnnouncement(event: NostrEvent): ParsedAnnouncement {
     hasLegacyMaintainersTag,
     authorDeclinesMaintainership,
     authorDeclinesModeratorship,
+    authorCannotMaintain,
+    authorCannotModerate,
     health,
   };
   parsedAnnouncementCache.set(event, parsed);
@@ -609,7 +717,7 @@ function resolveLead(
     path.push(target);
     if (visited.has(target)) return { source: "conflict", path };
     visited.add(target);
-    if (parsedByPubkey.get(target)?.authorDeclinesMaintainership) {
+    if (parsedByPubkey.get(target)?.authorCannotMaintain) {
       return { source: "conflict", path };
     }
     current = target;
@@ -623,6 +731,12 @@ function selfAcceptanceCoversAssignment(
   },
 ): boolean {
   if (!candidate) return false;
+  if (
+    (edge.role === "o" && candidate.authorCannotModerate) ||
+    (edge.role !== "o" && candidate.authorCannotMaintain)
+  ) {
+    return false;
+  }
   const acceptedRoles =
     edge.role === "o"
       ? new Set<RepositoryRole>(["o"])
@@ -635,7 +749,7 @@ function selfAcceptanceCoversAssignment(
   );
   return (
     selfRecords.length > 0 ||
-    (edge.role !== "o" && !candidate.authorDeclinesMaintainership)
+    (edge.role !== "o" && !candidate.authorCannotMaintain)
   );
 }
 
@@ -748,7 +862,7 @@ export function resolveRepositoryMembershipFromLatest(
     ),
   );
 
-  const declinedMaintainers = new Set([
+  const departedMaintainers = new Set([
     ...[...parsedByPubkey.values()]
       .filter(
         ({ authorDeclinesMaintainership }) => authorDeclinesMaintainership,
@@ -756,11 +870,17 @@ export function resolveRepositoryMembershipFromLatest(
       .map(({ event }) => event.pubkey),
     ...applicableDeletedTimestamps.keys(),
   ]);
+  const ineligibleMaintainers = new Set([
+    ...[...parsedByPubkey.values()]
+      .filter(({ authorCannotMaintain }) => authorCannotMaintain)
+      .map(({ event }) => event.pubkey),
+    ...applicableDeletedTimestamps.keys(),
+  ]);
   const confirmedMaintainerSet = new Set<string>();
   const seed = resolveConfirmationSeed(
     selectedMaintainer,
     parsedByPubkey,
-    declinedMaintainers,
+    ineligibleMaintainers,
   );
   if (seed) confirmedMaintainerSet.add(seed);
 
@@ -770,7 +890,7 @@ export function resolveRepositoryMembershipFromLatest(
     for (const candidate of maintainerCandidates) {
       if (
         confirmedMaintainerSet.has(candidate) ||
-        declinedMaintainers.has(candidate)
+        ineligibleMaintainers.has(candidate)
       ) {
         continue;
       }
@@ -805,9 +925,15 @@ export function resolveRepositoryMembershipFromLatest(
       pushUnique(assignedModerators, moderator);
     }
   }
-  const declinedModerators = new Set([
+  const departedModerators = new Set([
     ...[...parsedByPubkey.values()]
       .filter(({ authorDeclinesModeratorship }) => authorDeclinesModeratorship)
+      .map(({ event }) => event.pubkey),
+    ...applicableDeletedTimestamps.keys(),
+  ]);
+  const ineligibleModerators = new Set([
+    ...[...parsedByPubkey.values()]
+      .filter(({ authorCannotModerate }) => authorCannotModerate)
       .map(({ event }) => event.pubkey),
     ...applicableDeletedTimestamps.keys(),
   ]);
@@ -819,7 +945,7 @@ export function resolveRepositoryMembershipFromLatest(
     for (const candidate of assignedModerators) {
       if (
         confirmedModerators.includes(candidate) ||
-        declinedModerators.has(candidate)
+        ineligibleModerators.has(candidate)
       ) {
         continue;
       }
@@ -887,7 +1013,7 @@ export function resolveRepositoryMembershipFromLatest(
       );
       if (incomingAssignments.length === 0) return false;
       return (
-        !declinedMaintainers.has(pubkey) ||
+        !departedMaintainers.has(pubkey) ||
         incomingAssignments.some(({ requiresFreshAcceptance }) =>
           Boolean(requiresFreshAcceptance),
         )
@@ -895,7 +1021,7 @@ export function resolveRepositoryMembershipFromLatest(
     }),
     invitedModerators: assignedModerators.filter((pubkey) => {
       if (confirmedModerators.includes(pubkey)) return false;
-      if (!declinedModerators.has(pubkey)) return true;
+      if (!departedModerators.has(pubkey)) return true;
       return moderatorEdges.some(
         (edge) =>
           edge.to === pubkey &&
@@ -903,8 +1029,8 @@ export function resolveRepositoryMembershipFromLatest(
           edge.requiresFreshAcceptance,
       );
     }),
-    departedMaintainers: [...declinedMaintainers],
-    departedModerators: [...declinedModerators],
+    departedMaintainers: [...departedMaintainers],
+    departedModerators: [...departedModerators],
     discoveryPubkeys,
     discoveredAnnouncements,
     historyPubkeys,
