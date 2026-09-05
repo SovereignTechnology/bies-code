@@ -324,20 +324,38 @@ describe("useRobustReplaceableAction warm coverage boundary", () => {
     expect(result.current.pending).toBe(true);
 
     const oldRelease = releaseCoverage;
-    let replacement: ReturnType<typeof createRelaySubscriptionCoverage>;
-    act(() => {
+    let outcome: "pending" | "resolved" | "rejected" = "pending";
+    const observed = execution.then(
+      () => {
+        outcome = "resolved";
+      },
+      () => {
+        outcome = "rejected";
+      },
+    );
+
+    await act(async () => {
       oldRelease?.();
       releaseCoverage = undefined;
-      replacement = createRelaySubscriptionCoverage();
-      releaseCoverage = userIdentityCoverage.activate(PUBKEY, replacement);
-      RELAYS.forEach((relay, index) => {
-        replacement.onLifecycle({
-          relay,
-          generation: index + 10,
-          phase: "initial",
-        });
+      await Promise.resolve();
+    });
+    expect(outcome).toBe("pending");
+
+    // Production starts the successor subscription before making its coverage
+    // handle active, so the lease is first observed with initial facts.
+    const replacement = createRelaySubscriptionCoverage();
+    RELAYS.forEach((relay, index) => {
+      replacement.onLifecycle({
+        relay,
+        generation: index + 10,
+        phase: "initial",
       });
     });
+    await act(async () => {
+      releaseCoverage = userIdentityCoverage.activate(PUBKEY, replacement);
+      await Promise.resolve();
+    });
+    expect(outcome).toBe("pending");
 
     await act(async () => {
       RELAYS.forEach((relay, index) => {
@@ -347,9 +365,10 @@ describe("useRobustReplaceableAction warm coverage boundary", () => {
           phase: "covered",
         });
       });
-      await execution;
+      await observed;
     });
 
+    expect(outcome).toBe("resolved");
     expect(action).toHaveBeenCalledTimes(1);
   });
 

@@ -111,12 +111,13 @@ export function startUserIdentitySubscription(
   const coverage = createRelaySubscriptionCoverage({
     settlementTimeoutMs: USER_IDENTITY_COVERAGE_SETTLEMENT_TIMEOUT_MS,
   });
-  const releaseCoverage = userIdentityCoverage.activate(pubkey, coverage);
   let stopped = false;
+  let releaseCoverage: (() => void) | undefined;
   const stopCoverage = () => {
     if (stopped) return;
     stopped = true;
-    releaseCoverage();
+    releaseCoverage?.();
+    coverage.stop();
   };
 
   // resilientSubscription provides:
@@ -140,6 +141,15 @@ export function startUserIdentitySubscription(
         console.warn("[userIdentitySubscription] subscription error:", err);
       },
     });
+
+  // Subscribe before publishing the new owner. relays$ emits synchronously, so
+  // the handle already contains its initial lifecycle facts when activate()
+  // announces it. A pending writer therefore observes either no lease (the
+  // deliberate hand-off gap) or a successor capable of settling, never an
+  // empty successor that looks terminal.
+  if (!stopped) {
+    releaseCoverage = userIdentityCoverage.activate(pubkey, coverage);
+  }
 
   return () => {
     stopCoverage();
