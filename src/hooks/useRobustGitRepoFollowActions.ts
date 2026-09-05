@@ -3,8 +3,8 @@
  * repositories follow list (kind:10018).
  *
  * Thin wrapper around useRobustReplaceableAction that provides a convenient
- * follow/unfollow API. All connectivity checks, freshness prefetching, and
- * error handling are delegated to the generic hook.
+ * follow/unfollow API. All warm-coverage, local-cache, and error handling
+ * safeguards are delegated to the generic hook.
  *
  * Unlike the social follow (kind:3), we do NOT warn when no existing list is
  * found — kind:10018 is new and most users won't have one yet, so silently

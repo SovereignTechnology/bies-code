@@ -270,7 +270,9 @@ describe("stable-filter lifecycle coverage", () => {
     server.send(["CLOSED", subId, "error: temporary overload"]);
 
     await vi.waitFor(() => expect(spy.receivedComplete()).toBe(true));
-    expect(coverage.get(RELAY_URL)?.phase).toBe("unavailable");
+    expect(coverage.get(RELAY_URL)).toEqual(
+      expect.objectContaining({ phase: "unavailable", reason: "closed" }),
+    );
   });
 
   it("reports a shared rate-limit cooldown as unavailable until a REQ opens", () => {
@@ -289,7 +291,12 @@ describe("stable-filter lifecycle coverage", () => {
       },
     ).subscribe();
 
-    expect(coverage.get(cooldownRelay)?.phase).toBe("unavailable");
+    expect(coverage.get(cooldownRelay)).toEqual(
+      expect.objectContaining({
+        phase: "unavailable",
+        reason: "rate-limited",
+      }),
+    );
     subscription.unsubscribe();
     expect(coverage.get(cooldownRelay)?.phase).toBe("stopped");
   });
@@ -362,7 +369,11 @@ describe("stable-filter lifecycle coverage", () => {
     expect(coverage.get(RELAY_URL)?.phase).toBe("initial");
     expect(coverage.isCovered(RELAY_URL)).toBe(false);
     expect(lifecycle).toHaveBeenCalledWith(
-      expect.objectContaining({ relay: RELAY_URL, phase: "unavailable" }),
+      expect.objectContaining({
+        relay: RELAY_URL,
+        phase: "unavailable",
+        reason: "transport",
+      }),
     );
 
     server.send(["EOSE", retryId]);

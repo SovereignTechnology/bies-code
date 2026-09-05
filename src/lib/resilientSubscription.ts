@@ -168,6 +168,10 @@ export interface ResilientSubscriptionOptions {
    * Every invalidation starts a newer generation, so consumers can reject
    * late EOSE from superseded live or foreground-gap-fill requests.
    *
+   * Use only with stable, unpaginated filters. An EOSE for a filter with
+   * `limit`, `paginate`, or `manualPaginate$` does not prove full-history
+   * coverage and must not be used as confirmed-absence evidence.
+   *
    * This callback is intentionally unavailable to additive subscriptions:
    * their changing filter revisions need finer-grained coverage semantics.
    */
@@ -181,10 +185,20 @@ export type ResilientRelayLifecyclePhase =
   | "unavailable"
   | "stopped";
 
+export type ResilientRelayUnavailableReason =
+  | "transport"
+  | "closed"
+  | "rate-limited"
+  | "auth"
+  | "permanent"
+  | "error";
+
 export interface ResilientRelayLifecycle {
   relay: string;
   generation: number;
   phase: ResilientRelayLifecyclePhase;
+  /** Present when phase is unavailable so consumers can explain recovery. */
+  reason?: ResilientRelayUnavailableReason;
 }
 
 interface InternalResilientSubscriptionOptions extends ResilientSubscriptionOptions {
@@ -420,6 +434,7 @@ function processRelay(
     let gapFillSub: { unsubscribe(): void } | undefined;
     let latestLifecycleGeneration: number | undefined;
     let livePipelineCompleted = false;
+    let lastUnavailableReason: ResilientRelayUnavailableReason | undefined;
     const liveRestart$ = new Subject<Error>();
     // True only while the persistent live REQ itself is subscribed. A
     // foreground catch-up may prove the missed window, but it must not claim
@@ -428,11 +443,20 @@ function processRelay(
 
     const beginLifecycle = (
       phase: Exclude<ResilientRelayLifecyclePhase, "covered">,
+      reason?: ResilientRelayUnavailableReason,
     ): number | undefined => {
+      lastUnavailableReason = phase === "unavailable" ? reason : undefined;
       const generation = opts.nextLifecycleGeneration?.();
       if (generation !== undefined) {
         latestLifecycleGeneration = generation;
-        opts.onRelayLifecycle?.({ relay, generation, phase });
+        opts.onRelayLifecycle?.({
+          relay,
+          generation,
+          phase,
+          ...(phase === "unavailable" && reason !== undefined
+            ? { reason }
+            : {}),
+        });
       }
       return generation;
     };
@@ -440,6 +464,7 @@ function processRelay(
       generation: number | undefined,
       phase: "covered",
     ) => {
+      lastUnavailableReason = undefined;
       if (generation !== undefined) {
         opts.onRelayLifecycle?.({ relay, generation, phase });
       }
@@ -633,7 +658,7 @@ function processRelay(
       // events — it just won't contribute to the initial EOSE settle window.
       const remaining = getRateLimitCooldownRemaining(relay);
       if (remaining > 0) {
-        beginLifecycle("unavailable");
+        beginLifecycle("unavailable", "rate-limited");
         signal.settle(relay);
         opts.onRelaySettle?.(relay);
         return timer(remaining).pipe(switchMap(() => sub$));
@@ -657,17 +682,23 @@ function processRelay(
           // from delay when we want to give up.
           count: Infinity,
           delay: (err) => {
-            beginLifecycle("unavailable");
             // Auth-required: fast-fail — handled asynchronously by the
             // pool-level auth policy in nostr.ts.
-            if (err instanceof AuthRequiredError) throw err;
+            if (err instanceof AuthRequiredError) {
+              beginLifecycle("unavailable", "auth");
+              throw err;
+            }
             // Permanent policy errors: the relay will never accept this
             // subscription regardless of retries. Fast-fail immediately.
-            if (isPermanentError(err)) throw err;
+            if (isPermanentError(err)) {
+              beginLifecycle("unavailable", "permanent");
+              throw err;
+            }
             // Rate-limited: relay is overloaded. Record the cooldown so all
             // other concurrent subscriptions to this relay also hold off,
             // preventing a stampede that would reset the relay's window.
             if (isRateLimited(err)) {
+              beginLifecycle("unavailable", "rate-limited");
               reconnectAttempts++;
               if (!hasBaselineEose && reconnectAttempts > opts.retryCount)
                 throw err;
@@ -715,6 +746,7 @@ function processRelay(
             // here preserves that cadence while also letting autoClose callers
             // re-issue their one-shot REQ after recovery.
             if (err instanceof TransportError) {
+              beginLifecycle("unavailable", "transport");
               signal.error(relay);
               opts.onRelayError?.(relay);
               reconnectAttempts++;
@@ -762,6 +794,10 @@ function processRelay(
             }
             // NIP-01 CLOSED (non-rate-limited, non-permanent): use our own
             // backoff. The WebSocket is still open so waitForReady won't block.
+            beginLifecycle(
+              "unavailable",
+              err instanceof RelayClosedError ? "closed" : "error",
+            );
             reconnectAttempts++;
             if (!hasBaselineEose && reconnectAttempts > opts.retryCount)
               throw err;
@@ -787,7 +823,7 @@ function processRelay(
           : repeat({
               count: Infinity,
               delay: () => {
-                beginLifecycle("unavailable");
+                beginLifecycle("unavailable", "closed");
                 reconnectAttempts++;
                 if (!hasBaselineEose && reconnectAttempts > opts.retryCount)
                   throw new Error(
@@ -918,7 +954,7 @@ function processRelay(
                 new Error(`foreground gap-fill exhausted for ${relay}`),
               );
             } else {
-              beginLifecycle("unavailable");
+              beginLifecycle("unavailable", "error");
             }
           };
           // Resume bursts remain one-shot for ordinary consumers. Coverage
@@ -965,7 +1001,10 @@ function processRelay(
       gapFillSub?.unsubscribe();
       gapFillResumeSub.unsubscribe();
       liveRestart$.complete();
-      beginLifecycle(livePipelineCompleted ? "unavailable" : "stopped");
+      beginLifecycle(
+        livePipelineCompleted ? "unavailable" : "stopped",
+        livePipelineCompleted ? (lastUnavailableReason ?? "error") : undefined,
+      );
     };
   });
 }

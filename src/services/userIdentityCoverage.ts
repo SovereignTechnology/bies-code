@@ -7,6 +7,9 @@ interface ActiveUserIdentityCoverage {
   coverage: RelaySubscriptionCoverage;
 }
 
+/** Maximum time an identity query generation remains an in-flight candidate. */
+export const USER_IDENTITY_COVERAGE_SETTLEMENT_TIMEOUT_MS = 5_000;
+
 /**
  * Holds only the active account subscription's coverage lease. This is a
  * single owner pointer, not a registry of filters or historical EOSE results.

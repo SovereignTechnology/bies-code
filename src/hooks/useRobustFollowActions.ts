@@ -3,8 +3,8 @@
  * UnfollowUser directly via useAction.
  *
  * This is a thin wrapper around useRobustReplaceableAction that provides
- * a convenient follow/unfollow API. All connectivity checks, freshness
- * prefetching, and error handling are delegated to the generic hook.
+ * a convenient follow/unfollow API. All warm-coverage, local-cache, and error
+ * handling safeguards are delegated to the generic hook.
  *
  * See useRobustReplaceableAction.ts for the full safety rationale.
  */

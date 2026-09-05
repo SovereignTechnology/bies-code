@@ -97,11 +97,18 @@ filter, a relay can have one of these phases:
 - `initial`: the current request cycle has not returned a real EOSE;
 - `covered`: the current cycle returned EOSE and remains continuously owned;
 - `catching-up`: foreground resume or another gap-recovery pass is in progress;
-- `unavailable`: the current cycle disconnected, closed, or failed;
-- `stopped`: the owning session ended.
+- `not-responding`: the current `initial` or `catching-up` generation exceeded
+  its bounded EOSE deadline, while its request remains owned and may recover;
+- `unavailable`: the current cycle disconnected, closed, was rate-limited,
+  required authentication, or failed;
+- `stopped`: the owning session ended or removed the relay.
 
-Coverage becomes valid only after a real EOSE for the declared filter. It is
-invalidated by:
+Coverage becomes valid only after a real EOSE for the complete declared filter.
+Before the owner has received that baseline EOSE, every retry repeats the full
+filter. Afterwards reconnect and foreground recovery may use a bounded `since`
+cursor; the cursor is clamped to the current time before subtracting its overlap
+to prevent a future-dated event from skipping ordinary events. It is invalidated
+by:
 
 - a relay disconnect or subscription-cycle restart;
 - foreground resume until its gap-fill request receives EOSE;
@@ -115,6 +122,13 @@ reactively, newly added relays start at `initial` without invalidating unchanged
 relays. The current account wiring updates lookup relays this way, but an outbox
 list change replaces the identity owner and therefore invalidates every relay
 until the replacement subscription reaches EOSE.
+
+The coverage projection gives `initial` and `catching-up` generations a bounded
+settlement deadline. Crossing it projects `not-responding` so a silent relay no
+longer votes as in-flight forever, but does not cancel or restart the underlying
+request. A late EOSE for the same generation still restores `covered`.
+`unavailable` facts retain a compact reason so action errors can distinguish
+disconnected, rate-limited, authentication, rejection, and recovery states.
 
 The coverage layer reports lifecycle facts. It does not decide whether one,
 one-third, a majority, or every relay is enough. Category policy intersects its
@@ -131,6 +145,11 @@ coverage for them requires per-filter-revision or per-chunk generations,
 including additions during initial settlement and consolidation after
 reconnect. Until that complexity is justified, their writers use bounded,
 focused action-time reads for missing evidence.
+
+Limited and paginated filters are also excluded from full-snapshot coverage. An
+EOSE for their first page does not establish confirmed absence, so lifecycle
+coverage must not be combined with `limit`, automatic pagination, or manual
+pagination until the lifecycle can represent completion of the whole scope.
 
 ## Maintainer invitation example
 
@@ -165,12 +184,20 @@ for the active account:
   their coverage changes rather than requiring a second user action;
 - retain its existing outbox/lookup sufficiency policy and use the covered
   identity subscription directly, without a duplicate action-time request;
+- when that snapshot has no target event, perform a bounded exact local cache
+  lookup and route any result through the EventStore before writing; this adds
+  no relay request and preserves the previous cache evidence;
+- stop treating a relay as in-flight after its five-second EOSE deadline while
+  leaving the live request open for a late recovery, and report an exact status
+  breakdown for the outbox and lookup groups;
 - verify initial EOSE, reconnect, foreground gap fill, relay membership changes,
   stale generations, and teardown with focused tests.
 
 This phase does not introduce a global filter registry, change repository
-preflight, or define universal relay thresholds. Its only action-time wait is
-the five-second bound for already-running identity coverage to settle.
+preflight, define universal relay thresholds, query fallback relays, or add a
+relay-details popover. The network decision waits at most five seconds for the
+already-running identity coverage to settle; only the absence path may then add
+up to one second for the local cache lookup.
 
 ### Phase 2: category adoption
 

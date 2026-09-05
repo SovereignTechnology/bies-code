@@ -43,7 +43,10 @@ import type { Filter } from "applesauce-core/helpers";
 import { resilientSubscription } from "@/lib/resilientSubscription";
 import { createRelaySubscriptionCoverage } from "@/lib/relaySubscriptionCoverage";
 import { normalizeUrl } from "@/lib/url";
-import { userIdentityCoverage } from "@/services/userIdentityCoverage";
+import {
+  USER_IDENTITY_COVERAGE_SETTLEMENT_TIMEOUT_MS,
+  userIdentityCoverage,
+} from "@/services/userIdentityCoverage";
 
 /**
  * All replaceable event kinds that define the user's identity, relay
@@ -105,7 +108,9 @@ export function startUserIdentitySubscription(
 
   // Personal-singleton warm coverage is owned by this exact account/filter
   // subscription. See docs/replaceable-preflight.md, "Warm coverage leases".
-  const coverage = createRelaySubscriptionCoverage();
+  const coverage = createRelaySubscriptionCoverage({
+    settlementTimeoutMs: USER_IDENTITY_COVERAGE_SETTLEMENT_TIMEOUT_MS,
+  });
   const releaseCoverage = userIdentityCoverage.activate(pubkey, coverage);
   let stopped = false;
   const stopCoverage = () => {

@@ -3,7 +3,10 @@ import { of } from "rxjs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createRelaySubscriptionCoverage } from "@/lib/relaySubscriptionCoverage";
-import { userIdentityCoverage } from "@/services/userIdentityCoverage";
+import {
+  USER_IDENTITY_COVERAGE_SETTLEMENT_TIMEOUT_MS,
+  userIdentityCoverage,
+} from "@/services/userIdentityCoverage";
 
 const PUBKEY = "a".repeat(64);
 const OUTBOX = "wss://outbox.example.test";
@@ -15,6 +18,7 @@ const TRANSPORT_RELAYS = RELAYS.map((relay) => `${relay}/`);
 const mocks = vi.hoisted(() => ({
   add: vi.fn(),
   cacheRequest: vi.fn(),
+  cooldownRemaining: vi.fn(),
   livenessFilter: vi.fn(),
   lookupRelays: [
     "wss://lookup-one.example.test",
@@ -54,16 +58,24 @@ vi.mock("@/services/settings", () => ({
   lookupRelays: { getValue: () => mocks.lookupRelays },
 }));
 
+vi.mock("@/lib/resilientSubscription", () => ({
+  getRateLimitCooldownRemaining: mocks.cooldownRemaining,
+}));
+
 import { useRobustReplaceableAction } from "./useRobustReplaceableAction";
 
 describe("useRobustReplaceableAction warm coverage boundary", () => {
   let releaseCoverage: (() => void) | undefined;
-  let coverage = createRelaySubscriptionCoverage();
+  let coverage = createRelaySubscriptionCoverage({
+    settlementTimeoutMs: USER_IDENTITY_COVERAGE_SETTLEMENT_TIMEOUT_MS,
+  });
 
   beforeEach(() => {
     mocks.add.mockReset();
     mocks.cacheRequest.mockReset();
     mocks.cacheRequest.mockResolvedValue([]);
+    mocks.cooldownRemaining.mockReset();
+    mocks.cooldownRemaining.mockReturnValue(0);
     mocks.livenessFilter.mockReset();
     mocks.livenessFilter.mockImplementation((relays: string[]) => relays);
     mocks.replaceable.mockReset();
@@ -73,7 +85,9 @@ describe("useRobustReplaceableAction warm coverage boundary", () => {
       mocks.poolRelays.set(relay, { connected: true });
     }
 
-    coverage = createRelaySubscriptionCoverage();
+    coverage = createRelaySubscriptionCoverage({
+      settlementTimeoutMs: USER_IDENTITY_COVERAGE_SETTLEMENT_TIMEOUT_MS,
+    });
     releaseCoverage = userIdentityCoverage.activate(PUBKEY, coverage);
     RELAYS.forEach((relay, index) => {
       coverage.onLifecycle({
@@ -113,7 +127,9 @@ describe("useRobustReplaceableAction warm coverage boundary", () => {
 
     expect(error).toEqual(
       expect.objectContaining({
-        message: expect.stringContaining("Check your relay connections"),
+        message: expect.stringContaining(
+          "Outbox relays: 1 unavailable. Lookup relays: 2 unavailable.",
+        ),
       }),
     );
     expect(action).not.toHaveBeenCalled();
@@ -153,11 +169,6 @@ describe("useRobustReplaceableAction warm coverage boundary", () => {
     });
 
     expect(action).toHaveBeenCalledTimes(1);
-    expect(mocks.livenessFilter).toHaveBeenCalledWith([`${OUTBOX}/`]);
-    expect(mocks.livenessFilter).toHaveBeenCalledWith([
-      `${LOOKUP_ONE}/`,
-      `${LOOKUP_TWO}/`,
-    ]);
     expect(mocks.cacheRequest).not.toHaveBeenCalled();
   });
 
@@ -250,7 +261,20 @@ describe("useRobustReplaceableAction warm coverage boundary", () => {
   });
 
   it("reports the bounded warm-coverage timeout", async () => {
+    releaseCoverage?.();
+    releaseCoverage = undefined;
     vi.useFakeTimers();
+    coverage = createRelaySubscriptionCoverage({
+      settlementTimeoutMs: USER_IDENTITY_COVERAGE_SETTLEMENT_TIMEOUT_MS,
+    });
+    releaseCoverage = userIdentityCoverage.activate(PUBKEY, coverage);
+    RELAYS.forEach((relay, index) => {
+      coverage.onLifecycle({
+        relay,
+        generation: index + 20,
+        phase: "initial",
+      });
+    });
     const action = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
     const { result } = renderHook(() => useRobustReplaceableAction());
     let execution = Promise.resolve();
@@ -258,15 +282,23 @@ describe("useRobustReplaceableAction warm coverage boundary", () => {
     act(() => {
       execution = result.current.execute(3, action);
     });
-    const rejection = expect(execution).rejects.toThrow(
-      "Relay checks are still in progress",
-    );
+    let error: unknown;
+    const settled = execution.catch((caught) => {
+      error = caught;
+    });
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(5_000);
-      await rejection;
+      await settled;
     });
 
+    expect(error).toEqual(
+      expect.objectContaining({
+        message: expect.stringContaining(
+          "Outbox relays: 1 not responding. Lookup relays: 2 checking.",
+        ),
+      }),
+    );
     expect(action).not.toHaveBeenCalled();
     expect(mocks.cacheRequest).not.toHaveBeenCalled();
   });
@@ -291,17 +323,21 @@ describe("useRobustReplaceableAction warm coverage boundary", () => {
     });
     expect(result.current.pending).toBe(true);
 
-    const replacement = createRelaySubscriptionCoverage();
-    RELAYS.forEach((relay, index) => {
-      replacement.onLifecycle({
-        relay,
-        generation: index + 10,
-        phase: "initial",
+    const oldRelease = releaseCoverage;
+    let replacement: ReturnType<typeof createRelaySubscriptionCoverage>;
+    act(() => {
+      oldRelease?.();
+      releaseCoverage = undefined;
+      replacement = createRelaySubscriptionCoverage();
+      releaseCoverage = userIdentityCoverage.activate(PUBKEY, replacement);
+      RELAYS.forEach((relay, index) => {
+        replacement.onLifecycle({
+          relay,
+          generation: index + 10,
+          phase: "initial",
+        });
       });
     });
-    const oldRelease = releaseCoverage;
-    releaseCoverage = userIdentityCoverage.activate(PUBKEY, replacement);
-    oldRelease?.();
 
     await act(async () => {
       RELAYS.forEach((relay, index) => {
@@ -315,5 +351,31 @@ describe("useRobustReplaceableAction warm coverage boundary", () => {
     });
 
     expect(action).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports an exact relay-state breakdown", async () => {
+    coverage.onLifecycle({
+      relay: OUTBOX,
+      generation: 10,
+      phase: "unavailable",
+      reason: "auth",
+    });
+    coverage.onLifecycle({
+      relay: LOOKUP_ONE,
+      generation: 11,
+      phase: "unavailable",
+      reason: "rate-limited",
+    });
+    mocks.poolRelays.set(`${LOOKUP_TWO}/`, { connected: false });
+    const action = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    const { result } = renderHook(() => useRobustReplaceableAction());
+
+    await act(async () => {
+      await expect(result.current.execute(3, action)).rejects.toThrow(
+        "Outbox relays: 1 requiring authentication. Lookup relays: 1 rate-limited, 1 disconnected.",
+      );
+    });
+
+    expect(action).not.toHaveBeenCalled();
   });
 });
