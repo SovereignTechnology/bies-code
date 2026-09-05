@@ -49,9 +49,10 @@
   that warm coverage across reconnects, foreground catch-up, relay removal,
   and account-session replacement; in-flight connected checks now get a bounded
   chance to satisfy the existing relay threshold before the action reports an
-  error, while the focused-read fallback remains bounded separately. Keep the
-  identity query retrying for the account session and restart its live cycle
-  when bounded foreground recovery is exhausted.
+  error. Reuse sufficient warm evidence directly instead of issuing a duplicate
+  action-time request to the same relays. Keep the identity query retrying for
+  the account session and restart its live cycle when bounded foreground
+  recovery is exhausted.
 - Re-issue resilient one-shot requests after WebSocket recovery, applying the
   configured REQ retry delay after the socket opens; persistent subscriptions
   retain their previous retry/repeat budget and backoff semantics.

@@ -1,5 +1,4 @@
 import { act, renderHook } from "@testing-library/react";
-import { EMPTY, of } from "rxjs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createRelaySubscriptionCoverage } from "@/lib/relaySubscriptionCoverage";
@@ -22,7 +21,6 @@ const mocks = vi.hoisted(() => ({
   outbox: "wss://outbox.example.test",
   poolRelays: new Map<string, { connected: boolean }>(),
   pubkey: "a".repeat(64),
-  replaceable: vi.fn(),
 }));
 
 vi.mock("applesauce-react/hooks", () => ({
@@ -30,7 +28,7 @@ vi.mock("applesauce-react/hooks", () => ({
 }));
 
 vi.mock("@/hooks/useEventStore", () => ({
-  useEventStore: () => ({ replaceable: mocks.replaceable }),
+  useEventStore: () => ({}),
 }));
 
 vi.mock("@/hooks/use$", () => ({
@@ -55,11 +53,8 @@ describe("useRobustReplaceableAction warm coverage boundary", () => {
 
   beforeEach(() => {
     mocks.addressLoader.mockReset();
-    mocks.addressLoader.mockReturnValue(EMPTY);
     mocks.livenessFilter.mockReset();
     mocks.livenessFilter.mockImplementation((relays: string[]) => relays);
-    mocks.replaceable.mockReset();
-    mocks.replaceable.mockReturnValue(of({ id: "cached" }));
     mocks.poolRelays.clear();
     for (const relay of TRANSPORT_RELAYS) {
       mocks.poolRelays.set(relay, { connected: true });
@@ -112,7 +107,7 @@ describe("useRobustReplaceableAction warm coverage boundary", () => {
     expect(mocks.addressLoader).not.toHaveBeenCalled();
   });
 
-  it("waits for the in-flight relay needed by the existing threshold", async () => {
+  it("uses warm evidence without repeating the in-flight query", async () => {
     coverage.onLifecycle({
       relay: OUTBOX,
       generation: 1,
@@ -150,11 +145,7 @@ describe("useRobustReplaceableAction warm coverage boundary", () => {
       `${LOOKUP_ONE}/`,
       `${LOOKUP_TWO}/`,
     ]);
-    expect(mocks.addressLoader).toHaveBeenCalledWith({
-      kind: 3,
-      pubkey: PUBKEY,
-      relays: RELAYS,
-    });
+    expect(mocks.addressLoader).not.toHaveBeenCalled();
   });
 
   it("fails immediately when the account has no active coverage lease", async () => {

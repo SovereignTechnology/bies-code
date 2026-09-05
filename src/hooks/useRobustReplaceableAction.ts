@@ -9,25 +9,26 @@
  * stale copy and an action modifies it, the published event will silently
  * overwrite changes made on another client.
  *
- * This hook adds three layers of protection:
+ * This hook combines two layers of protection:
  *
- * 1. WARM COVERAGE THRESHOLD CHECK
+ * 1. PERSISTENT BACKGROUND SUBSCRIPTION (handled in accounts.ts)
+ *    A continuous resilientSubscription() for all user replaceable kinds is
+ *    kept open on the union of the user's outbox and lookup/index relays for
+ *    the lifetime of the session (see userIdentitySubscription.ts). It writes
+ *    the initial snapshot and subsequent live updates into the EventStore.
+ *
+ * 2. WARM COVERAGE THRESHOLD CHECK
  *    Before attempting any write, we intersect the user's outbox and lookup
  *    groups with healthy relays whose current identity-subscription cycle has
  *    returned a real EOSE. The existing one-outbox and larger-set threshold
- *    rules are then applied. navigator.onLine remains a fast offline check.
+ *    rules are then applied. Once they pass, the covered subscription is the
+ *    freshness evidence: repeating its query at action time would add relay
+ *    load and latency without increasing assurance. navigator.onLine remains
+ *    a fast offline check.
  *
- * 2. BOUNDED FRESH FETCH FROM ALL OUTBOX + LOOKUP RELAYS
- *    We use addressLoader to fetch the latest event of the target kind from
- *    the user's outbox relays AND the configured lookup relays, then wait
- *    for it to land in the EventStore.
- *
- * 3. PERSISTENT BACKGROUND SUBSCRIPTION (handled in accounts.ts)
- *    A continuous resilientSubscription() for all user replaceable kinds is
- *    kept open on the union of the user's outbox and lookup/index relays for
- *    the lifetime of the session (see userIdentitySubscription.ts). This means
- *    the EventStore is already warm in most cases — the addressLoader fetch
- *    here is a final safety net, not the primary mechanism.
+ * Evidence outside this stable account/filter scope must be warmed by its own
+ * subscription or a bounded focused read before invoking the writer. See
+ * docs/replaceable-preflight.md.
  *
  * USAGE
  * -----
@@ -49,7 +50,7 @@ import { useEventStore } from "@/hooks/useEventStore";
 import { use$ } from "@/hooks/use$";
 import { normalizeURL } from "applesauce-core/helpers";
 import { MailboxesModel } from "applesauce-core/models";
-import { addressLoader, liveness, pool } from "@/services/nostr";
+import { liveness, pool } from "@/services/nostr";
 import { lookupRelays } from "@/services/settings";
 import { userIdentityCoverage } from "@/services/userIdentityCoverage";
 import { normalizeUrl } from "@/lib/url";
@@ -76,9 +77,6 @@ const MIN_OUTBOX_ABSOLUTE = 3;
 
 /** Maximum wait for the already-running identity query to settle. */
 const WARM_COVERAGE_TIMEOUT_MS = 5_000;
-
-/** Maximum focused-read wait before using the latest EventStore value. */
-const FETCH_TIMEOUT_MS = 5_000;
 
 function meetsWarmCoverageThreshold(
   coveredOutboxes: number,
@@ -353,40 +351,6 @@ export function useRobustReplaceableAction(): RobustReplaceableActionResult {
     [assertWarmCoverage, canWarmCoverageStillSucceed],
   );
 
-  /**
-   * Fetch the latest event of the given kind from the user's relay set and
-   * wait for it to land in the EventStore. Times out after FETCH_TIMEOUT_MS
-   * and proceeds with whatever is already in the store.
-   */
-  const prefetchReplaceable = useCallback(
-    async (pubkey: string, kind: number, relays: string[]) => {
-      if (relays.length === 0) return;
-
-      await Promise.race([
-        firstValueFrom(
-          race(
-            // Wait for the store to emit the replaceable event for this
-            // pubkey+kind (may already be there, resolves immediately)
-            store.replaceable(kind, pubkey).pipe(
-              filter((e) => e !== undefined),
-              take(1),
-            ),
-            // Kick off the actual relay fetch in parallel
-            new Promise<void>((resolve) => {
-              addressLoader({ kind, pubkey, relays }).subscribe({
-                complete: resolve,
-                error: resolve, // don't let fetch errors block the action
-              });
-            }) as never,
-          ),
-        ),
-        // Hard timeout — proceed with whatever is in the store
-        new Promise<void>((resolve) => setTimeout(resolve, FETCH_TIMEOUT_MS)),
-      ]);
-    },
-    [store],
-  );
-
   const execute = useCallback(
     async (kind: number, action: () => Promise<void>) => {
       if (!account?.pubkey) {
@@ -397,20 +361,18 @@ export function useRobustReplaceableAction(): RobustReplaceableActionResult {
       try {
         const { outboxes, lookup } = getRelaySets();
 
-        // 1. Warm coverage check — briefly await already-running query work.
+        // Reuse the exact identity query's evidence. A covered EOSE means its
+        // snapshot (including absence) and subsequent live updates are already
+        // represented in the EventStore, so do not issue a duplicate REQ.
         await waitForWarmCoverage(outboxes, lookup, kind);
 
-        // 2. Fetch latest event from all outbox + lookup relays
-        const allRelays = [...outboxes, ...lookup];
-        await prefetchReplaceable(account.pubkey, kind, allRelays);
-
-        // 3. Run the action — now guaranteed to start from the freshest state
+        // Run the action against the state maintained by that subscription.
         await action();
       } finally {
         setPending(false);
       }
     },
-    [account?.pubkey, getRelaySets, waitForWarmCoverage, prefetchReplaceable],
+    [account?.pubkey, getRelaySets, waitForWarmCoverage],
   );
 
   return { execute, pending };

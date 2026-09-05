@@ -28,8 +28,11 @@ Every writer of a replaceable or addressable event should follow this pattern:
 4. Expand discovery without blocking as user intent becomes known, such as
    when an identifier is entered or a prospective maintainer is selected.
 5. At action time, freeze the authority and relay scope used for the decision.
-6. Reuse current warm coverage. Wait for in-flight warm work or issue bounded,
-   focused reads only for evidence that is genuinely missing.
+6. Reuse current warm coverage. When an owned subscription covers the exact
+   evidence scope and satisfies the category's relay threshold, do not repeat
+   that request at action time. Wait for relevant in-flight warm work. Issue a
+   bounded, focused read only for required authors, coordinates, filters, or
+   relay groups that the existing requests do not cover.
 7. Rebase the user's intended change onto the current winning event, preserving
    fields that the editing surface does not own, then apply category invariants.
 8. Sign only after preflight succeeds.
@@ -37,8 +40,16 @@ Every writer of a replaceable or addressable event should follow this pattern:
    acknowledgement and post-write verification are separate from read
    preflight.
 
-A bounded one-shot read can satisfy the current action, but it does not create
-lasting warm coverage after that request closes.
+A second request for an already-covered filter on the same relays does not
+increase freshness assurance: the subscription's EOSE establishes its initial
+snapshot (including the absence of a matching event), and its continued
+ownership supplies subsequent live updates. Repeating the request only adds
+latency and relay load.
+
+A bounded one-shot read can satisfy genuinely new evidence required by the
+current action, but it does not create lasting warm coverage after that request
+closes. Prefer starting that discovery as soon as the new scope is known so it
+can become warm before action time.
 
 ## Categories
 
@@ -109,6 +120,12 @@ The coverage layer reports lifecycle facts. It does not decide whether one,
 one-third, a majority, or every relay is enough. Category policy intersects its
 relay groups with current coverage and makes that decision separately.
 
+Once that policy is satisfied, the covered subscription is the preflight read
+for its exact filter and relay scope. Writers must consume its EventStore state
+without issuing a duplicate action-time request. A focused read is appropriate
+only when the action introduces required evidence outside that scope; it must
+name the uncovered evidence rather than re-querying covered relays defensively.
+
 Dynamic additive filters are not covered by the first implementation. Correct
 coverage for them requires per-filter-revision or per-chunk generations,
 including additions during initial settlement and consolidation after
@@ -146,17 +163,14 @@ for the active account:
 - wait up to the five-second warm-coverage deadline when connected identity
   queries are still capable of reaching the threshold, and wake as soon as
   their coverage changes rather than requiring a second user action;
-- retain its existing outbox/lookup sufficiency policy and bounded focused-read
-  safety net;
+- retain its existing outbox/lookup sufficiency policy and use the covered
+  identity subscription directly, without a duplicate action-time request;
 - verify initial EOSE, reconnect, foreground gap fill, relay membership changes,
   stale generations, and teardown with focused tests.
 
 This phase does not introduce a global filter registry, change repository
-preflight, or define universal relay thresholds.
-
-The warm-coverage wait and focused read each have their own five-second bound.
-They run sequentially, so an action missing both forms of evidence can spend up
-to ten seconds in preflight before its writer begins.
+preflight, or define universal relay thresholds. Its only action-time wait is
+the five-second bound for already-running identity coverage to settle.
 
 ### Phase 2: category adoption
 
@@ -181,6 +195,7 @@ Before adding or changing a replaceable/addressable writer, answer:
 - Which relay groups vote toward sufficiency and which only contribute evidence?
 - Which subscription normally warms the evidence, and who owns its lifetime?
 - What invalidates that coverage?
-- What bounded fallback runs when warm coverage is insufficient?
+- Which required evidence lies outside the warm scope, and what bounded focused
+  read obtains only that evidence?
 - How is the user's delta rebased without losing unknown fields?
 - What publication and post-write guarantees are separate from read preflight?
