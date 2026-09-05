@@ -1,5 +1,4 @@
 import { act, renderHook } from "@testing-library/react";
-import { of } from "rxjs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createRelaySubscriptionCoverage } from "@/lib/relaySubscriptionCoverage";
@@ -27,7 +26,7 @@ const mocks = vi.hoisted(() => ({
   outbox: "wss://outbox.example.test",
   poolRelays: new Map<string, { connected: boolean }>(),
   pubkey: "a".repeat(64),
-  replaceable: vi.fn(),
+  getReplaceable: vi.fn(),
 }));
 
 vi.mock("applesauce-react/hooks", () => ({
@@ -37,7 +36,7 @@ vi.mock("applesauce-react/hooks", () => ({
 vi.mock("@/hooks/useEventStore", () => ({
   useEventStore: () => ({
     add: mocks.add,
-    replaceable: mocks.replaceable,
+    getReplaceable: mocks.getReplaceable,
   }),
 }));
 
@@ -78,8 +77,8 @@ describe("useRobustReplaceableAction warm coverage boundary", () => {
     mocks.cooldownRemaining.mockReturnValue(0);
     mocks.livenessFilter.mockReset();
     mocks.livenessFilter.mockImplementation((relays: string[]) => relays);
-    mocks.replaceable.mockReset();
-    mocks.replaceable.mockReturnValue(of({ id: "in-memory" }));
+    mocks.getReplaceable.mockReset();
+    mocks.getReplaceable.mockReturnValue({ id: "in-memory" });
     mocks.poolRelays.clear();
     for (const relay of TRANSPORT_RELAYS) {
       mocks.poolRelays.set(relay, { connected: true });
@@ -181,7 +180,7 @@ describe("useRobustReplaceableAction warm coverage boundary", () => {
       });
     });
     const cached = { id: "cached" };
-    mocks.replaceable.mockReturnValue(of(undefined));
+    mocks.getReplaceable.mockReturnValueOnce(undefined).mockReturnValue(cached);
     mocks.cacheRequest.mockResolvedValue([cached]);
     const action = vi.fn(async () => {
       expect(mocks.add).toHaveBeenCalledWith(cached);
@@ -196,6 +195,10 @@ describe("useRobustReplaceableAction warm coverage boundary", () => {
       { kinds: [3], authors: [PUBKEY] },
     ]);
     expect(mocks.add).toHaveBeenCalledTimes(1);
+    expect(action).toHaveBeenCalledWith({
+      event: cached,
+      outboxes: [OUTBOX],
+    });
     expect(action).toHaveBeenCalledTimes(1);
   });
 
@@ -208,7 +211,7 @@ describe("useRobustReplaceableAction warm coverage boundary", () => {
         phase: "covered",
       });
     });
-    mocks.replaceable.mockReturnValue(of(undefined));
+    mocks.getReplaceable.mockReturnValue(undefined);
     mocks.cacheRequest.mockReturnValue(new Promise(() => {}));
     const action = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
     const { result } = renderHook(() => useRobustReplaceableAction());
@@ -238,6 +241,20 @@ describe("useRobustReplaceableAction warm coverage boundary", () => {
     await act(async () => {
       await expect(result.current.execute(3, action)).rejects.toThrow(
         "current query coverage",
+      );
+    });
+
+    expect(action).not.toHaveBeenCalled();
+    expect(mocks.cacheRequest).not.toHaveBeenCalled();
+  });
+
+  it("rejects kinds outside the identity subscription filter", async () => {
+    const action = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    const { result } = renderHook(() => useRobustReplaceableAction());
+
+    await act(async () => {
+      await expect(result.current.execute(1, action)).rejects.toThrow(
+        "uncovered kind:1",
       );
     });
 

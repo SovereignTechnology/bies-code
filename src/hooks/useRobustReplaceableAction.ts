@@ -41,8 +41,8 @@
  * const execute = useRobustReplaceableAction();
  *
  * // Wrap any action that modifies a replaceable event:
- * await execute(3, async () => {
- *   await followUser(pubkey);
+ * await execute(3, async ({ event, outboxes }) => {
+ *   await modifyKnownContacts(event, outboxes, pubkey);
  * });
  * ```
  */
@@ -50,6 +50,7 @@
 import { useCallback, useState } from "react";
 import { firstValueFrom, race, timer } from "rxjs";
 import { filter, startWith, take } from "rxjs/operators";
+import type { NostrEvent } from "nostr-tools";
 import { useActiveAccount } from "applesauce-react/hooks";
 import { useEventStore } from "@/hooks/useEventStore";
 import { use$ } from "@/hooks/use$";
@@ -64,6 +65,7 @@ import {
 } from "@/services/userIdentityCoverage";
 import { normalizeUrl } from "@/lib/url";
 import { getRateLimitCooldownRemaining } from "@/lib/resilientSubscription";
+import { USER_REPLACEABLE_KINDS } from "@/services/userIdentitySubscription";
 
 // ---------------------------------------------------------------------------
 // Thresholds
@@ -126,6 +128,8 @@ const RELAY_STATUS_ORDER: RelayPreflightStatus[] = [
   "not-checked",
 ];
 
+const USER_REPLACEABLE_KIND_SET = new Set<number>(USER_REPLACEABLE_KINDS);
+
 function meetsWarmCoverageThreshold(
   coveredOutboxes: number,
   totalOutboxes: number,
@@ -169,11 +173,20 @@ export interface RobustReplaceableActionResult {
    * and freshness safeguards.
    *
    * @param kind    - The replaceable event kind being modified
-   * @param action  - The async action to execute after safety checks pass
+   * @param action  - The async action to execute with the resolved snapshot
    */
-  execute: (kind: number, action: () => Promise<void>) => Promise<void>;
+  execute: (
+    kind: number,
+    action: (snapshot: ReplaceablePreflightSnapshot) => Promise<void>,
+  ) => Promise<void>;
   /** True while an action is in progress. */
   pending: boolean;
+}
+
+/** Exact state frozen after warm coverage and local-cache hydration. */
+export interface ReplaceablePreflightSnapshot {
+  event: NostrEvent | undefined;
+  outboxes: string[];
 }
 
 export function useRobustReplaceableAction(): RobustReplaceableActionResult {
@@ -462,27 +475,38 @@ export function useRobustReplaceableAction(): RobustReplaceableActionResult {
    * never repeated, and fallback-relay discovery remains a separate policy.
    */
   const hydrateCachedReplaceable = useCallback(
-    async (pubkey: string, kind: number) => {
-      const current = await firstValueFrom(
-        store.replaceable(kind, pubkey).pipe(take(1)),
-      );
-      if (current !== undefined) return;
+    async (pubkey: string, kind: number): Promise<NostrEvent | undefined> => {
+      const current = store.getReplaceable(kind, pubkey);
+      if (current !== undefined) return current;
 
+      let timeoutId: ReturnType<typeof setTimeout> | undefined;
+      const timeout = new Promise<never[]>((resolve) => {
+        timeoutId = setTimeout(() => resolve([]), CACHE_HYDRATION_TIMEOUT_MS);
+      });
       const cachedEvents = await Promise.race([
         cacheRequest([{ kinds: [kind], authors: [pubkey] }]).catch(() => []),
-        new Promise<never[]>((resolve) => {
-          setTimeout(() => resolve([]), CACHE_HYDRATION_TIMEOUT_MS);
-        }),
-      ]);
+        timeout,
+      ]).finally(() => {
+        if (timeoutId !== undefined) clearTimeout(timeoutId);
+      });
       cachedEvents.forEach((event) => store.add(event));
+      return store.getReplaceable(kind, pubkey);
     },
     [store],
   );
 
   const execute = useCallback(
-    async (kind: number, action: () => Promise<void>) => {
+    async (
+      kind: number,
+      action: (snapshot: ReplaceablePreflightSnapshot) => Promise<void>,
+    ) => {
       if (!account?.pubkey) {
         throw new Error("Not logged in.");
+      }
+      if (!USER_REPLACEABLE_KIND_SET.has(kind)) {
+        throw new Error(
+          `Cannot use personal replaceable preflight for uncovered kind:${kind}.`,
+        );
       }
 
       setPending(true);
@@ -496,10 +520,11 @@ export function useRobustReplaceableAction(): RobustReplaceableActionResult {
 
         // The persistent relay subscription does not hydrate IndexedDB. On an
         // absent target only, preserve any retained local copy before writing.
-        await hydrateCachedReplaceable(account.pubkey, kind);
+        const event = await hydrateCachedReplaceable(account.pubkey, kind);
 
-        // Run the action against the state maintained by that subscription.
-        await action();
+        // Supply the resolved state directly. Writers must not reopen a model
+        // whose fallback loader could issue an action-time relay request.
+        await action({ event, outboxes });
       } finally {
         setPending(false);
       }

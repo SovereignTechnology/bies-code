@@ -11,9 +11,12 @@
 
 import { useCallback } from "react";
 import { useAction } from "@/hooks/useAction";
-import { FollowUser, UnfollowUser } from "applesauce-actions/actions";
 import { useRobustReplaceableAction } from "@/hooks/useRobustReplaceableAction";
 import type { ProfilePointer } from "applesauce-core/helpers";
+import {
+  FollowUserFromPreflight,
+  UnfollowUserFromPreflight,
+} from "@/actions/preflightReplaceableActions";
 
 /** kind:3 — NIP-02 contact / follow list */
 const CONTACTS_KIND = 3;
@@ -32,19 +35,23 @@ export interface RobustFollowActionsResult {
 }
 
 export function useRobustFollowActions(): RobustFollowActionsResult {
-  const { run: followUser } = useAction(FollowUser);
-  const { run: unfollowUser } = useAction(UnfollowUser);
+  const { run: followUser } = useAction(FollowUserFromPreflight);
+  const { run: unfollowUser } = useAction(UnfollowUserFromPreflight);
   const { execute, pending } = useRobustReplaceableAction();
 
   const follow = useCallback(
     (pubkey: string | ProfilePointer) =>
-      execute(CONTACTS_KIND, () => followUser(pubkey)),
+      execute(CONTACTS_KIND, ({ event, outboxes }) =>
+        followUser(event, outboxes, pubkey),
+      ),
     [execute, followUser],
   );
 
   const unfollow = useCallback(
     (pubkey: string | ProfilePointer) =>
-      execute(CONTACTS_KIND, () => unfollowUser(pubkey)),
+      execute(CONTACTS_KIND, ({ event, outboxes }) =>
+        unfollowUser(event, outboxes, pubkey),
+      ),
     [execute, unfollowUser],
   );
 

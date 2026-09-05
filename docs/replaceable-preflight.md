@@ -33,8 +33,10 @@ Every writer of a replaceable or addressable event should follow this pattern:
    that request at action time. Wait for relevant in-flight warm work. Issue a
    bounded, focused read only for required authors, coordinates, filters, or
    relay groups that the existing requests do not cover.
-7. Rebase the user's intended change onto the current winning event, preserving
-   fields that the editing surface does not own, then apply category invariants.
+7. Pass the resolved winning event into the writer. Rebase the user's intended
+   change onto it, preserving fields that the editing surface does not own,
+   then apply category invariants. The writer must not reopen a model whose
+   fallback loader would repeat covered relay work.
 8. Sign only after preflight succeeds.
 9. Publish with the transition guarantees required by the category. Publication
    acknowledgement and post-write verification are separate from read
@@ -187,6 +189,10 @@ for the active account:
 - when that snapshot has no target event, perform a bounded exact local cache
   lookup and route any result through the EventStore before writing; this adds
   no relay request and preserves the previous cache evidence;
+- pass the resulting event and frozen outboxes directly into contact and
+  mailbox writers, avoiding Applesauce model fallback reads after confirmed
+  absence; the other Phase 1 writers already consume local absence without
+  subscribing to the loader;
 - stop treating a relay as in-flight after its five-second EOSE deadline while
   leaving the live request open for a late recovery, and report an exact status
   breakdown for the outbox and lookup groups;
