@@ -52,6 +52,7 @@ import { normalizeURL } from "applesauce-core/helpers";
 import { MailboxesModel } from "applesauce-core/models";
 import { liveness, pool } from "@/services/nostr";
 import { lookupRelays } from "@/services/settings";
+import { cacheRequest } from "@/services/cache";
 import { userIdentityCoverage } from "@/services/userIdentityCoverage";
 import { normalizeUrl } from "@/lib/url";
 
@@ -77,6 +78,9 @@ const MIN_OUTBOX_ABSOLUTE = 3;
 
 /** Maximum wait for the already-running identity query to settle. */
 const WARM_COVERAGE_TIMEOUT_MS = 5_000;
+
+/** Maximum local IndexedDB wait when the EventStore has no target event. */
+const CACHE_HYDRATION_TIMEOUT_MS = 1_000;
 
 function meetsWarmCoverageThreshold(
   coveredOutboxes: number,
@@ -351,6 +355,29 @@ export function useRobustReplaceableAction(): RobustReplaceableActionResult {
     [assertWarmCoverage, canWarmCoverageStillSucceed],
   );
 
+  /**
+   * Preserve an existing local copy when the warm relay snapshot found no
+   * target event. This is deliberately cache-only: covered relay requests are
+   * never repeated, and fallback-relay discovery remains a separate policy.
+   */
+  const hydrateCachedReplaceable = useCallback(
+    async (pubkey: string, kind: number) => {
+      const current = await firstValueFrom(
+        store.replaceable(kind, pubkey).pipe(take(1)),
+      );
+      if (current !== undefined) return;
+
+      const cachedEvents = await Promise.race([
+        cacheRequest([{ kinds: [kind], authors: [pubkey] }]).catch(() => []),
+        new Promise<never[]>((resolve) => {
+          setTimeout(() => resolve([]), CACHE_HYDRATION_TIMEOUT_MS);
+        }),
+      ]);
+      cachedEvents.forEach((event) => store.add(event));
+    },
+    [store],
+  );
+
   const execute = useCallback(
     async (kind: number, action: () => Promise<void>) => {
       if (!account?.pubkey) {
@@ -366,13 +393,22 @@ export function useRobustReplaceableAction(): RobustReplaceableActionResult {
         // represented in the EventStore, so do not issue a duplicate REQ.
         await waitForWarmCoverage(outboxes, lookup, kind);
 
+        // The persistent relay subscription does not hydrate IndexedDB. On an
+        // absent target only, preserve any retained local copy before writing.
+        await hydrateCachedReplaceable(account.pubkey, kind);
+
         // Run the action against the state maintained by that subscription.
         await action();
       } finally {
         setPending(false);
       }
     },
-    [account?.pubkey, getRelaySets, waitForWarmCoverage],
+    [
+      account?.pubkey,
+      getRelaySets,
+      waitForWarmCoverage,
+      hydrateCachedReplaceable,
+    ],
   );
 
   return { execute, pending };

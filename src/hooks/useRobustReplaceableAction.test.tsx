@@ -1,4 +1,5 @@
 import { act, renderHook } from "@testing-library/react";
+import { of } from "rxjs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createRelaySubscriptionCoverage } from "@/lib/relaySubscriptionCoverage";
@@ -12,7 +13,8 @@ const RELAYS = [OUTBOX, LOOKUP_ONE, LOOKUP_TWO];
 const TRANSPORT_RELAYS = RELAYS.map((relay) => `${relay}/`);
 
 const mocks = vi.hoisted(() => ({
-  addressLoader: vi.fn(),
+  add: vi.fn(),
+  cacheRequest: vi.fn(),
   livenessFilter: vi.fn(),
   lookupRelays: [
     "wss://lookup-one.example.test",
@@ -21,6 +23,7 @@ const mocks = vi.hoisted(() => ({
   outbox: "wss://outbox.example.test",
   poolRelays: new Map<string, { connected: boolean }>(),
   pubkey: "a".repeat(64),
+  replaceable: vi.fn(),
 }));
 
 vi.mock("applesauce-react/hooks", () => ({
@@ -28,7 +31,10 @@ vi.mock("applesauce-react/hooks", () => ({
 }));
 
 vi.mock("@/hooks/useEventStore", () => ({
-  useEventStore: () => ({}),
+  useEventStore: () => ({
+    add: mocks.add,
+    replaceable: mocks.replaceable,
+  }),
 }));
 
 vi.mock("@/hooks/use$", () => ({
@@ -36,9 +42,12 @@ vi.mock("@/hooks/use$", () => ({
 }));
 
 vi.mock("@/services/nostr", () => ({
-  addressLoader: mocks.addressLoader,
   liveness: { filter: mocks.livenessFilter },
   pool: { relays: mocks.poolRelays },
+}));
+
+vi.mock("@/services/cache", () => ({
+  cacheRequest: mocks.cacheRequest,
 }));
 
 vi.mock("@/services/settings", () => ({
@@ -52,9 +61,13 @@ describe("useRobustReplaceableAction warm coverage boundary", () => {
   let coverage = createRelaySubscriptionCoverage();
 
   beforeEach(() => {
-    mocks.addressLoader.mockReset();
+    mocks.add.mockReset();
+    mocks.cacheRequest.mockReset();
+    mocks.cacheRequest.mockResolvedValue([]);
     mocks.livenessFilter.mockReset();
     mocks.livenessFilter.mockImplementation((relays: string[]) => relays);
+    mocks.replaceable.mockReset();
+    mocks.replaceable.mockReturnValue(of({ id: "in-memory" }));
     mocks.poolRelays.clear();
     for (const relay of TRANSPORT_RELAYS) {
       mocks.poolRelays.set(relay, { connected: true });
@@ -104,7 +117,7 @@ describe("useRobustReplaceableAction warm coverage boundary", () => {
       }),
     );
     expect(action).not.toHaveBeenCalled();
-    expect(mocks.addressLoader).not.toHaveBeenCalled();
+    expect(mocks.cacheRequest).not.toHaveBeenCalled();
   });
 
   it("uses warm evidence without repeating the in-flight query", async () => {
@@ -128,7 +141,7 @@ describe("useRobustReplaceableAction warm coverage boundary", () => {
 
     expect(result.current.pending).toBe(true);
     expect(action).not.toHaveBeenCalled();
-    expect(mocks.addressLoader).not.toHaveBeenCalled();
+    expect(mocks.cacheRequest).not.toHaveBeenCalled();
 
     await act(async () => {
       coverage.onLifecycle({
@@ -145,7 +158,64 @@ describe("useRobustReplaceableAction warm coverage boundary", () => {
       `${LOOKUP_ONE}/`,
       `${LOOKUP_TWO}/`,
     ]);
-    expect(mocks.addressLoader).not.toHaveBeenCalled();
+    expect(mocks.cacheRequest).not.toHaveBeenCalled();
+  });
+
+  it("hydrates an exact cached event when the warm snapshot is absent", async () => {
+    RELAYS.forEach((relay, index) => {
+      coverage.onLifecycle({
+        relay,
+        generation: index + 1,
+        phase: "covered",
+      });
+    });
+    const cached = { id: "cached" };
+    mocks.replaceable.mockReturnValue(of(undefined));
+    mocks.cacheRequest.mockResolvedValue([cached]);
+    const action = vi.fn(async () => {
+      expect(mocks.add).toHaveBeenCalledWith(cached);
+    });
+    const { result } = renderHook(() => useRobustReplaceableAction());
+
+    await act(async () => {
+      await result.current.execute(3, action);
+    });
+
+    expect(mocks.cacheRequest).toHaveBeenCalledWith([
+      { kinds: [3], authors: [PUBKEY] },
+    ]);
+    expect(mocks.add).toHaveBeenCalledTimes(1);
+    expect(action).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds an absent EventStore cache lookup", async () => {
+    vi.useFakeTimers();
+    RELAYS.forEach((relay, index) => {
+      coverage.onLifecycle({
+        relay,
+        generation: index + 1,
+        phase: "covered",
+      });
+    });
+    mocks.replaceable.mockReturnValue(of(undefined));
+    mocks.cacheRequest.mockReturnValue(new Promise(() => {}));
+    const action = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    const { result } = renderHook(() => useRobustReplaceableAction());
+    let execution = Promise.resolve();
+
+    act(() => {
+      execution = result.current.execute(3, action);
+    });
+    expect(action).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+      await execution;
+    });
+
+    expect(mocks.cacheRequest).toHaveBeenCalledTimes(1);
+    expect(mocks.add).not.toHaveBeenCalled();
+    expect(action).toHaveBeenCalledTimes(1);
   });
 
   it("fails immediately when the account has no active coverage lease", async () => {
@@ -161,7 +231,7 @@ describe("useRobustReplaceableAction warm coverage boundary", () => {
     });
 
     expect(action).not.toHaveBeenCalled();
-    expect(mocks.addressLoader).not.toHaveBeenCalled();
+    expect(mocks.cacheRequest).not.toHaveBeenCalled();
   });
 
   it("preserves the fast offline failure while coverage is in flight", async () => {
@@ -176,7 +246,7 @@ describe("useRobustReplaceableAction warm coverage boundary", () => {
     });
 
     expect(action).not.toHaveBeenCalled();
-    expect(mocks.addressLoader).not.toHaveBeenCalled();
+    expect(mocks.cacheRequest).not.toHaveBeenCalled();
   });
 
   it("reports the bounded warm-coverage timeout", async () => {
@@ -198,7 +268,7 @@ describe("useRobustReplaceableAction warm coverage boundary", () => {
     });
 
     expect(action).not.toHaveBeenCalled();
-    expect(mocks.addressLoader).not.toHaveBeenCalled();
+    expect(mocks.cacheRequest).not.toHaveBeenCalled();
   });
 
   it("continues a pending wait across active coverage replacement", async () => {
