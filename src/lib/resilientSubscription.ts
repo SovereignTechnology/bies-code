@@ -3,11 +3,10 @@
  *
  * resilientSubscription — a wrapper around pool.subscription() that provides:
  *
- *   A. lastReceivedAt-aware reconnect — uses defer() + retry() + repeat() so
- *      that on reconnect (whether from an error or a graceful relay close) we
- *      inject since: lastReceivedAt - gapFillBuffer instead of replaying the
- *      full relay history. Same pattern as processRelayStream in
- *      tagValuePaginatedLoader.ts.
+ *   A. lastReceivedAt-aware reconnect — after the relay has completed one
+ *      full declared-filter EOSE, defer() + retry() + repeat() inject a bounded
+ *      since cursor instead of replaying the full relay history. Before that
+ *      baseline exists, every retry remains a full-filter request.
  *
  *   B. Foreground resume gap-fill — subscribes to foregroundResume$. On
  *      resume, runs a bounded catch-up query with since: lastReceivedAt -
@@ -404,10 +403,11 @@ function processRelay(
     let oldestSeen: number | undefined;
     let lastReceivedAt: number | undefined;
     let eoseSeen = false;
-    // Persists across retry/repeat cycles. Once true, any subsequent drop is
-    // treated as transient and retried indefinitely (with backoff) rather than
-    // consuming the fixed retryCount budget.
-    let everReceivedEose = false;
+    // Persists across retry/repeat cycles. It becomes true only when the live
+    // request completes the caller's full declared filter before any recovery
+    // cursor can be injected. Besides making subsequent drops retryable without
+    // the pre-EOSE budget, this is the proof required for bounded recovery.
+    let hasBaselineEose = false;
     // Reconnect attempt counter for backoff calculation. Reset to 0 each time
     // EOSE is received so that a relay that has been healthy for a long time
     // starts its next reconnect from 1s rather than the capped maximum.
@@ -443,6 +443,17 @@ function processRelay(
       if (generation !== undefined) {
         opts.onRelayLifecycle?.({ relay, generation, phase });
       }
+    };
+
+    /**
+     * A recovery cursor is safe only after this relay owner completed its full
+     * declared filter. Clamp future-dated events to now so one skewed publisher
+     * cannot move the reconnect window ahead of legitimate current events.
+     */
+    const getSafeRecoveryCursor = (): number | undefined => {
+      if (!hasBaselineEose || lastReceivedAt === undefined) return undefined;
+      const now = Math.floor(Date.now() / 1_000);
+      return Math.min(lastReceivedAt, now) - opts.gapFillBuffer;
     };
 
     // Shared pagination window — driven by auto (BehaviorSubject) or manual.
@@ -515,8 +526,8 @@ function processRelay(
 
     // Build the live subscription factory. defer() re-executes on each retry
     // (error) and repeat (graceful close) so lastReceivedAt is read fresh on
-    // every reconnect attempt, injecting since: lastReceivedAt - gapFillBuffer
-    // to avoid replaying the full relay history.
+    // every reconnect attempt. A bounded cursor is injected only after a full
+    // declared-filter EOSE established the relay owner's baseline.
     //
     // Note on applesauce's `reconnect` / `resubscribe` options: in
     // applesauce-relay@6.0.0 the `reconnect` option on subscription() /
@@ -536,18 +547,19 @@ function processRelay(
     const buildLiveSub = () => {
       // Reset per-subscription-cycle state so that countBeforeEose and
       // oldestSeen are tracked correctly after a retry or graceful-close repeat.
-      // lastReceivedAt is intentionally NOT reset — it persists across cycles
-      // so the reconnect REQ uses since: lastReceivedAt - gapFillBuffer.
+      // lastReceivedAt and hasBaselineEose intentionally persist across cycles
+      // so a proven baseline can use bounded recovery after a disruption.
       eoseSeen = false;
       countBeforeEose = 0;
       if (cycleCount++ > 0) opts.onCycleRestart?.(relay);
       let lifecycleGeneration: number | undefined;
 
+      const recoveryCursor = opts.reconnect
+        ? getSafeRecoveryCursor()
+        : undefined;
       const filtersWithSince: Filter[] = getFilters().map((f) => ({
         ...f,
-        ...(opts.reconnect && lastReceivedAt !== undefined
-          ? { since: lastReceivedAt - opts.gapFillBuffer }
-          : {}),
+        ...(recoveryCursor !== undefined ? { since: recoveryCursor } : {}),
       }));
 
       // Use the single-relay API so the stream still emits NostrEvent | "EOSE"
@@ -601,6 +613,10 @@ function processRelay(
       }).pipe(
         tap((message) => {
           if (message === "EOSE") {
+            // getSafeRecoveryCursor cannot return a value before this flag is
+            // true, so the first live EOSE necessarily covers the full declared
+            // filter. Publish the baseline fact before lifecycle coverage.
+            hasBaselineEose = true;
             completeLifecycle(lifecycleGeneration, "covered");
           }
         }),
@@ -653,7 +669,7 @@ function processRelay(
             // preventing a stampede that would reset the relay's window.
             if (isRateLimited(err)) {
               reconnectAttempts++;
-              if (!everReceivedEose && reconnectAttempts > opts.retryCount)
+              if (!hasBaselineEose && reconnectAttempts > opts.retryCount)
                 throw err;
               const { ms, timer$ } = rateLimitedRetryDelay(
                 err,
@@ -702,7 +718,7 @@ function processRelay(
               signal.error(relay);
               opts.onRelayError?.(relay);
               reconnectAttempts++;
-              if (!everReceivedEose && reconnectAttempts > opts.retryCount)
+              if (!hasBaselineEose && reconnectAttempts > opts.retryCount)
                 throw err;
               const relayObj = pool.relay(relay);
               // watchTower is protected in TypeScript but is a plain property
@@ -747,7 +763,7 @@ function processRelay(
             // NIP-01 CLOSED (non-rate-limited, non-permanent): use our own
             // backoff. The WebSocket is still open so waitForReady won't block.
             reconnectAttempts++;
-            if (!everReceivedEose && reconnectAttempts > opts.retryCount)
+            if (!hasBaselineEose && reconnectAttempts > opts.retryCount)
               throw err;
             return typeof opts.retryDelay === "function"
               ? opts.retryDelay(err, reconnectAttempts)
@@ -773,7 +789,7 @@ function processRelay(
               delay: () => {
                 beginLifecycle("unavailable");
                 reconnectAttempts++;
-                if (!everReceivedEose && reconnectAttempts > opts.retryCount)
+                if (!hasBaselineEose && reconnectAttempts > opts.retryCount)
                   throw new Error(
                     `relay ${relay} gave up after ${reconnectAttempts} graceful closes`,
                   );
@@ -811,7 +827,6 @@ function processRelay(
         next: (msg) => {
           if (msg === "EOSE") {
             eoseSeen = true;
-            everReceivedEose = true;
             reconnectAttempts = 0;
             opts.onRelayEose?.(relay);
             if (opts.paginate || opts.manualPaginate$) {
@@ -881,10 +896,7 @@ function processRelay(
           }
           gapFillSub?.unsubscribe();
           const lifecycleGeneration = beginLifecycle("catching-up");
-          const gapFillCursor =
-            everReceivedEose && lastReceivedAt !== undefined
-              ? lastReceivedAt - opts.gapFillBuffer
-              : undefined;
+          const gapFillCursor = getSafeRecoveryCursor();
           const gapFilters: Filter[] = getFilters().map((f) => ({
             ...f,
             ...(gapFillCursor !== undefined ? { since: gapFillCursor } : {}),

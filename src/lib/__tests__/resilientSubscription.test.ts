@@ -877,7 +877,43 @@ describe("reconnect with since: lastReceivedAt", () => {
     spy.unsubscribe();
   });
 
-  it("injects since: lastReceivedAt - gapFillBuffer on reconnect after error", async () => {
+  it("retries the full filter when an event arrives before the first EOSE", async () => {
+    const coverage = createRelaySubscriptionCoverage();
+    const subscription = resilientSubscription(
+      pool,
+      [RELAY_URL],
+      [{ kinds: [1] }],
+      {
+        settle: false,
+        reconnect: true,
+        gapFill: false,
+        gapFillBuffer: 600,
+        retryDelay: 0,
+        retryCount: Infinity,
+        onRelayLifecycle: (event) => coverage.onLifecycle(event),
+      },
+    ).subscribe();
+
+    const subId = await expectReq(server, { kinds: [1] });
+    server.send(["EVENT", subId, mockEvent]);
+    await tick();
+    server.send(["CLOSED", subId, "error: temporary outage"]);
+    await tick();
+
+    const retry = (await server.nextMessage) as [
+      string,
+      string,
+      { since?: number },
+    ];
+    expect(retry[0]).toBe("REQ");
+    expect(retry[2]).not.toHaveProperty("since");
+
+    server.send(["EOSE", retry[1]]);
+    await vi.waitFor(() => expect(coverage.isCovered(RELAY_URL)).toBe(true));
+    subscription.unsubscribe();
+  });
+
+  it("injects since: lastReceivedAt - gapFillBuffer after a baseline EOSE", async () => {
     const spy = subscribeSpyTo(
       resilientSubscription(pool, [RELAY_URL], [{ kinds: [1] }], {
         settle: false,
@@ -891,8 +927,9 @@ describe("reconnect with since: lastReceivedAt", () => {
 
     const subId = await expectReq(server, { kinds: [1] });
 
-    // Deliver one event so lastReceivedAt is set
+    // Deliver one event and finish the full declared-filter baseline.
     server.send(["EVENT", subId, mockEvent]);
+    server.send(["EOSE", subId]);
     await tick();
 
     // Trigger a retry via a transient CLOSED error (no WebSocket reconnect needed)
@@ -907,6 +944,39 @@ describe("reconnect with since: lastReceivedAt", () => {
     ];
     expect(reconnectMsg[0]).toBe("REQ");
     expect(reconnectMsg[2].since).toBe(mockEvent.created_at - 600);
+
+    spy.unsubscribe();
+  });
+
+  it("clamps a future-dated event before building the recovery cursor", async () => {
+    const now = mockEvent.created_at;
+    vi.spyOn(Date, "now").mockReturnValue(now * 1_000);
+    const futureEvent = { ...mockEvent, created_at: now + 3_600 };
+    const spy = subscribeSpyTo(
+      resilientSubscription(pool, [RELAY_URL], [{ kinds: [1] }], {
+        settle: false,
+        reconnect: true,
+        gapFill: false,
+        gapFillBuffer: 600,
+        retryDelay: 0,
+        retryCount: Infinity,
+      }),
+    );
+
+    const subId = await expectReq(server, { kinds: [1] });
+    server.send(["EVENT", subId, futureEvent]);
+    server.send(["EOSE", subId]);
+    await tick();
+    server.send(["CLOSED", subId, "error: temporary outage"]);
+    await tick();
+
+    const retry = (await server.nextMessage) as [
+      string,
+      string,
+      { since?: number },
+    ];
+    expect(retry[0]).toBe("REQ");
+    expect(retry[2].since).toBe(now - 600);
 
     spy.unsubscribe();
   });
