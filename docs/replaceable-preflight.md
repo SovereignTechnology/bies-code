@@ -219,6 +219,83 @@ should reference this document. Exceptional call sites should name the category
 and modifier in a short comment. When a new category or exception is required,
 update this document in the same change.
 
+#### Personal-singleton adoption decision
+
+Phase 2 starts by applying one policy to every active-account personal
+singleton. This section records the intended design before the implementation
+commits so differences between writers remain visible and reviewable.
+
+The category contains kinds `0`, `3`, `10002`, `10017`, `10018`, `10063`,
+`10317`, `10318`, and `10617`. A kind does not leave the category merely because
+its content is encrypted (`10318`) or because GitWorkshop does not currently
+offer an editor for it (`10063`). Kind `62` is not part of the editable state or
+its preflight: after requesting a global vanish, a user is not expected to keep
+editing personal state in this application.
+
+The common policy is:
+
+1. One account-owned subscription covers all of these singleton kinds for the
+   active author on the same normalized union of NIP-65 outboxes and configured
+   user-index/lookup relays. Writers must not create a per-kind subscription.
+2. Preserve the Phase 1 sufficiency rule. At least one outbox must answer. A
+   single answered outbox also needs two answered lookup relays; with multiple
+   answered outboxes, three or half of the declared outboxes is sufficient.
+   Lookup relays contribute backup evidence but do not make an unknown mailbox
+   set safe by themselves.
+3. The first-account creation of kinds `0` and `10002` declares the existing
+   bootstrap-identity modifier. Every later edit uses the common preflight.
+4. Kind `10002` additionally declares the relay-frontier modifier. Its snapshot
+   freezes the old mailbox event, and publication must reach the appropriate old
+   and proposed relay sets rather than silently deriving every destination from
+   whichever list wins optimistic local insertion.
+5. Personal-singleton events are published to the user's outboxes and user
+   index relays. Kinds `0` and `10002` are explicitly included because they are
+   what other clients need to discover the user and the user's mailboxes. Kind
+   `10317` also retains Git-index publication. Encryption does not give kind
+   `10318` a different read-preflight or publication rule; its decryption and
+   private-repository effects remain downstream concerns.
+6. A missing warm winner triggers the existing bounded local-cache hydration.
+   It does not trigger another relay request for the singleton filter.
+
+NIP-09 deletion evidence applies to kinds `10017`, `10018`, `10063`, `10317`,
+`10318`, and `10617`. It is deliberately not added for the foundational kinds
+`0`, `3`, and `10002` in this phase. Coordinate deletion filters can be declared
+up front. Exact `e`-pointer filters depend on candidate IDs, so one account-owned
+batcher should accumulate pointers across all personal singleton kinds for a
+deliberately generous coalescing window and issue one shared focused deletion
+request per relay/batch. It must not open one subscription per kind or per
+writer. An action reached before that evidence settles may wait within the
+existing bounded preflight deadline. This is new, uncovered evidence under step
+6 of the execution pattern, not permission to repeat the covered singleton
+query.
+
+Concurrent cross-client edits can still land between freezing the winner and
+publishing its replacement. Adding compare-and-rebase retries would introduce a
+second transaction protocol for a rare race, so this phase records but does not
+implement it. The shared signing path should contain a short extension-point
+comment identifying where a future winner-stability check and rebase would run.
+The exception should be revisited only with evidence that the race occurs often
+enough to justify that complexity.
+
+Ordinary personal-singleton writes do not require a post-write relay echo in
+this phase. They retain the durable outbox retry/status behavior, while the warm
+subscription naturally receives later relay updates. A writer must never open a
+fresh post-write REQ for an event already covered by that subscription. If a
+future category needs stronger confirmation, consume a relay `OK` or expose
+event-receipt provenance from the existing live subscription instead.
+
+Purgatory-backed repository transitions are not personal-singleton writes. They
+need confirmation that the staged state reached the required repository relay
+before dependent Git data is pushed, followed by the category's post-Git
+broadcast check. Those receipt and broadcast guarantees belong to the
+repository transition; they are not a reason to impose echo confirmation on
+profile and list settings.
+
+Implementation is intentionally split after this decision commit: first the
+shared subscription/evidence model, then coherent writer groups and their
+publication modifiers. Until those commits land, this subsection describes the
+adopted Phase 2 target rather than claiming every listed writer already complies.
+
 ## Writer checklist
 
 Before adding or changing a replaceable/addressable writer, answer:
