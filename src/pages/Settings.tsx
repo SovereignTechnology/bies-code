@@ -53,7 +53,6 @@ import { NwcQrConnect } from "@/components/zap/NwcQrConnect";
 import { useGraspServers } from "@/hooks/useGraspServers";
 import { usePrivateGitRelays } from "@/hooks/usePrivateGitRelays";
 import { normalizePrivateGitRelayUrls } from "@/lib/private-git-relays";
-import { usePublish } from "@/hooks/usePublish";
 import {
   useRobustReplaceableAction,
   type ReplaceablePreflightSnapshot,
@@ -65,6 +64,10 @@ import {
   RemoveInboxRelayFromPreflight,
   RemoveOutboxRelayFromPreflight,
 } from "@/actions/preflightReplaceableActions";
+import {
+  GRASP_LIST_KIND,
+  ReplaceGraspListFromPreflight,
+} from "@/actions/graspListActions";
 import { runner } from "@/services/actions";
 import { cn } from "@/lib/utils";
 import {
@@ -380,13 +383,10 @@ function InboxRelaysSection() {
   );
 }
 
-const GRASP_LIST_KIND = 10317;
-
 function GraspRelaysSection() {
   const account = useAccount();
   const pubkey = account?.pubkey;
   const { servers, isFromUserList, isLoading } = useGraspServers(pubkey);
-  const { publishEvent } = usePublish();
   const { execute } = useRobustReplaceableAction();
   const { toast } = useToast();
 
@@ -536,18 +536,14 @@ function GraspRelaysSection() {
       if (!account) return;
       setPublishing(true);
       try {
-        await execute(GRASP_LIST_KIND, async () => {
-          const tags = addresses.map((address) => [
-            "g",
-            graspServiceAddressToRelayUrl(address),
-          ]);
-          await publishEvent({
-            kind: GRASP_LIST_KIND,
-            content: "",
-            tags,
-            created_at: Math.floor(Date.now() / 1000),
-          });
-        });
+        await execute(GRASP_LIST_KIND, ({ event, outboxes }) =>
+          runner.run(
+            ReplaceGraspListFromPreflight,
+            event,
+            outboxes,
+            addresses.map(graspServiceAddressToRelayUrl),
+          ),
+        );
         setDraftAddresses(null); // close draft on success
       } catch (err) {
         toast({
@@ -562,7 +558,7 @@ function GraspRelaysSection() {
         setPublishing(false);
       }
     },
-    [account, publishEvent, execute, toast],
+    [account, execute, toast],
   );
 
   const handleSave = useCallback(async () => {

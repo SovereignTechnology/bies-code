@@ -43,7 +43,12 @@ import {
 } from "@/hooks/useCreateRepo";
 import { useGraspServers, type GraspServer } from "@/hooks/useGraspServers";
 import { useRepoPath } from "@/hooks/useRepoPath";
-import { usePublish } from "@/hooks/usePublish";
+import { useRobustReplaceableAction } from "@/hooks/useRobustReplaceableAction";
+import {
+  GRASP_LIST_KIND,
+  ReplaceGraspListFromPreflight,
+} from "@/actions/graspListActions";
+import { runner } from "@/services/actions";
 import { GraspServerSelector } from "@/components/GraspServerSelector";
 import { graspServerFromAddress } from "@/lib/grasp";
 import { usePrivateGitRelays } from "@/hooks/usePrivateGitRelays";
@@ -51,8 +56,6 @@ import { usePrivateGitRelays } from "@/hooks/usePrivateGitRelays";
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
-
-const GRASP_LIST_KIND = 10317;
 
 // ---------------------------------------------------------------------------
 // Props
@@ -194,7 +197,7 @@ export function CreateRepoDialog({ isOpen, onClose }: CreateRepoDialogProps) {
 
   const { state, execute, retryPush, reset } = useCreateRepo();
   const { state: privateRelayState } = usePrivateGitRelays();
-  const { publishEvent } = usePublish();
+  const { execute: executePersonalSingleton } = useRobustReplaceableAction();
 
   // Form state
   const [name, setName] = useState("");
@@ -309,13 +312,14 @@ export function CreateRepoDialog({ isOpen, onClose }: CreateRepoDialogProps) {
     // Optionally save as defaults before creating
     if (!privateRepository && saveAsDefaults && account) {
       try {
-        const tags = selectedServers.map((s) => ["g", s.wsUrl]);
-        await publishEvent({
-          kind: GRASP_LIST_KIND,
-          content: "",
-          tags,
-          created_at: Math.floor(Date.now() / 1000),
-        });
+        await executePersonalSingleton(GRASP_LIST_KIND, ({ event, outboxes }) =>
+          runner.run(
+            ReplaceGraspListFromPreflight,
+            event,
+            outboxes,
+            selectedServers.map((server) => server.wsUrl),
+          ),
+        );
       } catch {
         // Non-fatal — continue with repo creation even if saving defaults fails
       }
@@ -335,7 +339,7 @@ export function CreateRepoDialog({ isOpen, onClose }: CreateRepoDialogProps) {
     saveAsDefaults,
     account,
     selectedServers,
-    publishEvent,
+    executePersonalSingleton,
     name,
     description,
     identifier,
