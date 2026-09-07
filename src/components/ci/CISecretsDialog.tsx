@@ -33,7 +33,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/useToast";
 import {
   CI_SECRET_NAME_PATTERN,
-  isCISecretsDecryptionBunkerUri,
+  isCISecretsDecryptionBunkerConnection,
   isCISecretNameReserved,
 } from "@/factories/CIRepositorySecretUpdateFactory";
 import { CI_SECRETS_DECRYPTION_BUNKER_NAME } from "@/lib/ci";
@@ -95,8 +95,8 @@ export function CISecretsDialog({
   ]);
   const [removeText, setRemoveText] = useState("");
   const [showValues, setShowValues] = useState(false);
-  const [bunkerUri, setBunkerUri] = useState("");
-  const [showBunkerUri, setShowBunkerUri] = useState(false);
+  const [bunkerConnection, setBunkerConnection] = useState("");
+  const [showBunkerConnection, setShowBunkerConnection] = useState(false);
   const [removeBunker, setRemoveBunker] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
@@ -119,7 +119,7 @@ export function CISecretsDialog({
     [removeText],
   );
   const hasChanges =
-    bunkerUri.trim().length > 0 ||
+    bunkerConnection.trim().length > 0 ||
     removeBunker ||
     removalNames.length > 0 ||
     rows.some((row) => row.name.trim().length > 0 || row.value.length > 0);
@@ -129,8 +129,8 @@ export function CISecretsDialog({
     setNextRowId(2);
     setRemoveText("");
     setShowValues(false);
-    setBunkerUri("");
-    setShowBunkerUri(false);
+    setBunkerConnection("");
+    setShowBunkerConnection(false);
     setRemoveBunker(false);
   }, []);
 
@@ -167,18 +167,18 @@ export function CISecretsDialog({
     if (!account) return;
 
     const set: Record<string, string> = {};
-    const trimmedBunkerUri = bunkerUri.trim();
-    if (trimmedBunkerUri) {
-      if (!isCISecretsDecryptionBunkerUri(trimmedBunkerUri)) {
+    const trimmedBunkerConnection = bunkerConnection.trim();
+    if (trimmedBunkerConnection) {
+      if (!isCISecretsDecryptionBunkerConnection(trimmedBunkerConnection)) {
         toast({
-          title: "Check the decryption bunker URI",
+          title: "Check the decryption bunker connection",
           description:
-            "Use a valid bunker:// URI containing a remote signer public key and at least one ws:// or wss:// relay.",
+            "Use a valid fresh bunker:// pairing URL or established nbunksec connection with at least one ws:// or wss:// relay.",
           variant: "destructive",
         });
         return;
       }
-      set[CI_SECRETS_DECRYPTION_BUNKER_NAME] = trimmedBunkerUri;
+      set[CI_SECRETS_DECRYPTION_BUNKER_NAME] = trimmedBunkerConnection;
     }
 
     for (const row of rows) {
@@ -299,7 +299,7 @@ export function CISecretsDialog({
     coordinator.repositoryStatus?.event.id,
     onOpenChange,
     onSubmitted,
-    bunkerUri,
+    bunkerConnection,
     removeBunker,
     removalNames,
     repo.dTag,
@@ -409,10 +409,11 @@ export function CISecretsDialog({
                     </Badge>
                   </div>
                   <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                    Supply a NIP-46 bunker so the coordinator can choose to
-                    store your secret values sealed against it. When it does,
-                    authorized runs ask your bunker to unlock them once per
-                    workflow, immediately before execution.
+                    Supply a fresh NIP-46 <code>bunker://</code> pairing URL or
+                    an established <code>nbunksec</code> connection so the
+                    coordinator can choose to store your secret values sealed
+                    against it. Authorized runs ask your bunker to unlock them
+                    once per workflow, immediately before execution.
                   </p>
                 </div>
               </div>
@@ -461,24 +462,26 @@ export function CISecretsDialog({
                 </div>
               ) : (
                 <div className="space-y-2">
-                  <Label htmlFor="ci-secrets-bunker-uri">
+                  <Label htmlFor="ci-secrets-bunker-connection">
                     {bunkerBinding
                       ? "Replace decryption bunker"
-                      : "Decryption bunker URI"}
+                      : "Decryption bunker connection"}
                   </Label>
                   <div className="flex gap-2">
                     <Input
-                      id="ci-secrets-bunker-uri"
-                      type={showBunkerUri ? "text" : "password"}
-                      value={bunkerUri}
-                      onChange={(event) => setBunkerUri(event.target.value)}
-                      placeholder="bunker://<remote-pubkey>?relay=wss%3A%2F%2F…"
+                      id="ci-secrets-bunker-connection"
+                      type={showBunkerConnection ? "text" : "password"}
+                      value={bunkerConnection}
+                      onChange={(event) =>
+                        setBunkerConnection(event.target.value)
+                      }
+                      placeholder="bunker://… or nbunksec1…"
                       autoCapitalize="none"
                       autoComplete="new-password"
                       spellCheck={false}
                       disabled={submitting}
                       className="min-w-0 font-mono text-xs"
-                      aria-describedby="ci-secrets-bunker-help"
+                      aria-describedby="ci-secrets-bunker-connection-help"
                     />
                     <Button
                       type="button"
@@ -486,12 +489,16 @@ export function CISecretsDialog({
                       size="icon"
                       className="h-10 w-10 shrink-0"
                       aria-label={
-                        showBunkerUri ? "Hide bunker URI" : "Show bunker URI"
+                        showBunkerConnection
+                          ? "Hide bunker connection"
+                          : "Show bunker connection"
                       }
-                      onClick={() => setShowBunkerUri((visible) => !visible)}
+                      onClick={() =>
+                        setShowBunkerConnection((visible) => !visible)
+                      }
                       disabled={submitting}
                     >
-                      {showBunkerUri ? (
+                      {showBunkerConnection ? (
                         <EyeOff className="h-4 w-4" />
                       ) : (
                         <Eye className="h-4 w-4" />
@@ -499,13 +506,14 @@ export function CISecretsDialog({
                     </Button>
                   </div>
                   <p
-                    id="ci-secrets-bunker-help"
+                    id="ci-secrets-bunker-connection-help"
                     className="text-[11px] leading-relaxed text-muted-foreground"
                   >
-                    The URI contains connection credentials. It is encrypted in
-                    transit and is never injected into a workflow. Replacing a
-                    bunker may require resubmitting values sealed to the old
-                    one.
+                    A <code>bunker://</code> URL pairs a dedicated connection;
+                    an <code>nbunksec</code> reuses an established one. Treat
+                    either as a private credential. It is encrypted in transit
+                    and never injected into a workflow. Replacing a bunker may
+                    require resubmitting values sealed to the old one.
                   </p>
                   {bunkerBinding && (
                     <Button
@@ -514,8 +522,8 @@ export function CISecretsDialog({
                       size="sm"
                       className="h-8 gap-1.5 px-2 text-xs text-muted-foreground hover:text-destructive"
                       onClick={() => {
-                        setBunkerUri("");
-                        setShowBunkerUri(false);
+                        setBunkerConnection("");
+                        setShowBunkerConnection(false);
                         setRemoveBunker(true);
                       }}
                       disabled={submitting}
