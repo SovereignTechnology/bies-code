@@ -77,11 +77,13 @@ function defaultServers(): GraspServer[] {
  *   - `servers`: The resolved GraspServer array (from kind:10317 or defaults)
  *   - `isFromUserList`: Whether the servers came from the user's published list
  *   - `isLoading`: Whether we're still waiting for the store to emit
+ *   - `sourceEvent`: The event whose ID a full-replacement draft must freeze
  */
 export function useGraspServers(pubkey: string | undefined): {
   servers: GraspServer[];
   isFromUserList: boolean;
   isLoading: boolean;
+  sourceEvent?: NostrEvent;
 } {
   const store = useEventStore();
 
@@ -130,9 +132,15 @@ export function useGraspServers(pubkey: string | undefined): {
         servers: defaultServers(),
         isFromUserList: false,
         isLoading: false,
+        sourceEvent: graspListEvent,
       };
     }
 
-    return { servers: parsed, isFromUserList: true, isLoading: false };
+    return {
+      servers: parsed,
+      isFromUserList: true,
+      isLoading: false,
+      sourceEvent: graspListEvent,
+    };
   }, [pubkey, graspListEvent]);
 }

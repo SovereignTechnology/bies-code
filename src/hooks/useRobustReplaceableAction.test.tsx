@@ -328,6 +328,29 @@ describe("useRobustReplaceableAction warm coverage boundary", () => {
     });
   });
 
+  it("rejects a full-replacement draft when cache hydration changes its base", async () => {
+    RELAYS.forEach((relay, index) => {
+      coverage.onLifecycle({
+        relay,
+        generation: index + 1,
+        phase: "covered",
+      });
+    });
+    const cached = { id: "cached" };
+    mocks.getReplaceable.mockReturnValueOnce(undefined).mockReturnValue(cached);
+    mocks.cacheRequest.mockResolvedValue([cached]);
+    const action = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    const { result } = renderHook(() => useRobustReplaceableAction());
+
+    await act(async () => {
+      await expect(
+        result.current.execute(3, action, { expectedEventId: null }),
+      ).rejects.toThrow("changed after you began editing");
+    });
+
+    expect(action).not.toHaveBeenCalled();
+  });
+
   it("bounds an absent EventStore cache lookup", async () => {
     vi.useFakeTimers();
     RELAYS.forEach((relay, index) => {

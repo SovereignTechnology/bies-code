@@ -386,7 +386,8 @@ function InboxRelaysSection() {
 function GraspRelaysSection() {
   const account = useAccount();
   const pubkey = account?.pubkey;
-  const { servers, isFromUserList, isLoading } = useGraspServers(pubkey);
+  const { servers, isFromUserList, isLoading, sourceEvent } =
+    useGraspServers(pubkey);
   const { execute } = useRobustReplaceableAction();
   const { toast } = useToast();
 
@@ -396,6 +397,7 @@ function GraspRelaysSection() {
 
   // null = no draft open (showing published state)
   const [draftAddresses, setDraftAddresses] = useState<string[] | null>(null);
+  const draftBaseEventId = useRef<string | null>(null);
 
   // Sync draft when the published list changes from underneath us (e.g. first
   // load), but only if the user hasn't started editing yet.
@@ -419,11 +421,17 @@ function GraspRelaysSection() {
       ));
 
   const openDraft = useCallback(
-    (initial: string[]) => setDraftAddresses([...initial]),
-    [],
+    (initial: string[]) => {
+      draftBaseEventId.current = sourceEvent?.id ?? null;
+      setDraftAddresses([...initial]);
+    },
+    [sourceEvent?.id],
   );
 
-  const discardDraft = useCallback(() => setDraftAddresses(null), []);
+  const discardDraft = useCallback(() => {
+    draftBaseEventId.current = null;
+    setDraftAddresses(null);
+  }, []);
 
   // ---------------------------------------------------------------------------
   // Add-server input with 1.5 s debounce auto-validation
@@ -506,6 +514,9 @@ function GraspRelaysSection() {
     }
 
     // Open draft if not already open, then append
+    if (draftAddresses === null) {
+      draftBaseEventId.current = sourceEvent?.id ?? null;
+    }
     setDraftAddresses((previous) => {
       const base = previous ?? servers.map((server) => server.serviceAddress);
       return [...base, address];
@@ -513,16 +524,27 @@ function GraspRelaysSection() {
     setCustomAddress("");
     setCustomAddressError(undefined);
     setValidationState("idle");
-  }, [customAddress, activeAddresses, validationState, runValidation, servers]);
+  }, [
+    customAddress,
+    activeAddresses,
+    validationState,
+    runValidation,
+    servers,
+    draftAddresses,
+    sourceEvent?.id,
+  ]);
 
   const handleRemoveAddress = useCallback(
     (address: string) => {
+      if (draftAddresses === null) {
+        draftBaseEventId.current = sourceEvent?.id ?? null;
+      }
       setDraftAddresses((previous) => {
         const base = previous ?? servers.map((server) => server.serviceAddress);
         return base.filter((candidate) => candidate !== address);
       });
     },
-    [servers],
+    [draftAddresses, servers, sourceEvent?.id],
   );
 
   // ---------------------------------------------------------------------------
@@ -532,18 +554,22 @@ function GraspRelaysSection() {
   const [publishing, setPublishing] = useState(false);
 
   const publishGraspList = useCallback(
-    async (addresses: string[]) => {
+    async (addresses: string[], expectedEventId: string | null) => {
       if (!account) return;
       setPublishing(true);
       try {
-        await execute(GRASP_LIST_KIND, ({ event, outboxes }) =>
-          runner.run(
-            ReplaceGraspListFromPreflight,
-            event,
-            outboxes,
-            addresses.map(graspServiceAddressToRelayUrl),
-          ),
+        await execute(
+          GRASP_LIST_KIND,
+          ({ event, outboxes }) =>
+            runner.run(
+              ReplaceGraspListFromPreflight,
+              event,
+              outboxes,
+              addresses.map(graspServiceAddressToRelayUrl),
+            ),
+          { expectedEventId },
         );
+        draftBaseEventId.current = null;
         setDraftAddresses(null); // close draft on success
       } catch (err) {
         toast({
@@ -562,12 +588,17 @@ function GraspRelaysSection() {
   );
 
   const handleSave = useCallback(async () => {
-    await publishGraspList(draftAddresses ?? activeAddresses);
-  }, [publishGraspList, draftAddresses, activeAddresses]);
+    await publishGraspList(
+      draftAddresses ?? activeAddresses,
+      draftAddresses === null
+        ? (sourceEvent?.id ?? null)
+        : draftBaseEventId.current,
+    );
+  }, [publishGraspList, draftAddresses, activeAddresses, sourceEvent?.id]);
 
   const handleSaveDefaults = useCallback(async () => {
-    await publishGraspList([...DEFAULT_GRASP_SERVERS]);
-  }, [publishGraspList]);
+    await publishGraspList([...DEFAULT_GRASP_SERVERS], sourceEvent?.id ?? null);
+  }, [publishGraspList, sourceEvent?.id]);
 
   // ---------------------------------------------------------------------------
   // Render helpers

@@ -278,13 +278,20 @@ settlement window, so a rapid second edit does not lose relay response time.
 This is new, uncovered evidence under step 6 of the execution pattern, not
 permission to repeat the covered singleton query.
 
-Concurrent cross-client edits can still land between freezing the winner and
-publishing its replacement. Adding compare-and-rebase retries would introduce a
-second transaction protocol for a rare race, so this phase records but does not
-implement it. The shared signing path should contain a short extension-point
-comment identifying where a future winner-stability check and rebase would run.
-The exception should be revisited only with evidence that the race occurs often
-enough to justify that complexity.
+Long-lived editors that replace a complete list declare the **full-replacement
+draft** modifier. They freeze the displayed event ID when editing begins and
+must abort if preflight resolves a different winner, including one recovered
+from the local cache. The kind `10317` editor currently uses this guard. It
+prevents a locally detectable stale draft from replacing data the user never saw
+without adding relay work or a rebase protocol.
+
+Concurrent cross-client edits can still land after preflight freezes the winner
+and before its replacement is published. Adding compare-and-rebase retries
+would introduce a second transaction protocol for a rare race, so this phase
+records but does not implement it. The shared signing path should contain a
+short extension-point comment identifying where a future winner-stability check
+and rebase would run. Revisit it only with evidence that the remaining race
+occurs often enough to justify that complexity.
 
 Ordinary personal-singleton writes do not require a post-write relay echo in
 this phase. They retain the durable outbox retry/status behavior, while the warm

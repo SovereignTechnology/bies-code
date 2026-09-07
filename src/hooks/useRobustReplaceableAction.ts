@@ -189,6 +189,7 @@ export interface RobustReplaceableActionResult {
   execute: (
     kind: number,
     action: (snapshot: ReplaceablePreflightSnapshot) => Promise<void>,
+    options?: ReplaceablePreflightOptions,
   ) => Promise<void>;
   /** True while an action is in progress. */
   pending: boolean;
@@ -198,6 +199,12 @@ export interface RobustReplaceableActionResult {
 export interface ReplaceablePreflightSnapshot {
   event: NostrEvent | undefined;
   outboxes: string[];
+}
+
+/** Optional safeguards required by a writer's declared modifiers. */
+export interface ReplaceablePreflightOptions {
+  /** Event shown when a full-replacement draft began; null means absent. */
+  expectedEventId: string | null;
 }
 
 export function useRobustReplaceableAction(): RobustReplaceableActionResult {
@@ -605,6 +612,7 @@ export function useRobustReplaceableAction(): RobustReplaceableActionResult {
     async (
       kind: number,
       action: (snapshot: ReplaceablePreflightSnapshot) => Promise<void>,
+      options?: ReplaceablePreflightOptions,
     ) => {
       if (!account?.pubkey) {
         throw new Error("Not logged in.");
@@ -645,6 +653,16 @@ export function useRobustReplaceableAction(): RobustReplaceableActionResult {
             );
           }
           event = afterDeletionEvidence;
+        }
+
+        if (
+          options !== undefined &&
+          (event?.id ?? null) !== options.expectedEventId
+        ) {
+          throw new Error(
+            `Your ${kindLabel(kind)} changed after you began editing. ` +
+              "Review the latest value before saving.",
+          );
         }
 
         // Supply the resolved state directly. Writers must not reopen a model
