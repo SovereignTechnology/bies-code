@@ -44,6 +44,25 @@
 
 ### Fixes
 
+- Require personal replaceable-event writes to count only relays whose active
+  identity subscription has completed its current EOSE cycle, invalidating
+  that warm coverage across reconnects, foreground catch-up, relay removal,
+  and account-session replacement; in-flight connected checks now get a bounded
+  chance to satisfy the existing relay threshold before the action reports an
+  exact outbox/lookup status breakdown. Require a full baseline EOSE before
+  cursor-based recovery, let silent requests recover after their settlement
+  deadline, and preserve an absent target from the local cache. Reuse sufficient
+  warm evidence directly instead of issuing a duplicate action-time request to
+  the same relays, and pass that resolved state into contact and mailbox writers
+  so their model fallback cannot quietly reopen one. Keep the identity query
+  retrying for the account session and restart its live cycle when bounded
+  foreground recovery is exhausted.
+- Re-issue resilient one-shot requests after WebSocket recovery, applying the
+  configured REQ retry delay after the socket opens; persistent subscriptions
+  retain their previous retry/repeat budget and backoff semantics. Before the
+  first full EOSE, all resilient consumers now retry the complete filter, and
+  later recovery cursors clamp future-dated event timestamps to the current
+  time.
 - Re-resolve advanced repository repairs inside the guarded builder and refuse
   a replacement without its own relay hint when the role edit would make the
   resulting repository component private.

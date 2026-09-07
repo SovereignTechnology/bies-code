@@ -54,14 +54,17 @@ import { useGraspServers } from "@/hooks/useGraspServers";
 import { usePrivateGitRelays } from "@/hooks/usePrivateGitRelays";
 import { normalizePrivateGitRelayUrls } from "@/lib/private-git-relays";
 import { usePublish } from "@/hooks/usePublish";
-import { useRobustReplaceableAction } from "@/hooks/useRobustReplaceableAction";
+import {
+  useRobustReplaceableAction,
+  type ReplaceablePreflightSnapshot,
+} from "@/hooks/useRobustReplaceableAction";
 import { useToast } from "@/hooks/useToast";
 import {
-  AddInboxRelay,
-  AddOutboxRelay,
-  RemoveInboxRelay,
-  RemoveOutboxRelay,
-} from "applesauce-actions/actions/mailboxes";
+  AddInboxRelayFromPreflight,
+  AddOutboxRelayFromPreflight,
+  RemoveInboxRelayFromPreflight,
+  RemoveOutboxRelayFromPreflight,
+} from "@/actions/preflightReplaceableActions";
 import { runner } from "@/services/actions";
 import { cn } from "@/lib/utils";
 import {
@@ -270,7 +273,9 @@ function OutboxRelaysSection() {
 
   if (!account) return null;
 
-  const safeRun = async (action: () => Promise<void>) => {
+  const safeRun = async (
+    action: (snapshot: ReplaceablePreflightSnapshot) => Promise<void>,
+  ) => {
     try {
       await execute(MAILBOXES_KIND, action);
     } catch (err) {
@@ -298,13 +303,19 @@ function OutboxRelaysSection() {
               key={index}
               relay={outbox}
               onRemove={() =>
-                safeRun(() => runner.run(RemoveOutboxRelay, outbox))
+                safeRun(({ event }) =>
+                  runner.run(RemoveOutboxRelayFromPreflight, event, outbox),
+                )
               }
             />
           ))}
         </div>
         <NewRelayForm
-          onAdd={(relay) => safeRun(() => runner.run(AddOutboxRelay, relay))}
+          onAdd={(relay) =>
+            safeRun(({ event }) =>
+              runner.run(AddOutboxRelayFromPreflight, event, relay),
+            )
+          }
         />
       </CardContent>
     </Card>
@@ -320,7 +331,9 @@ function InboxRelaysSection() {
 
   if (!account) return null;
 
-  const safeRun = async (action: () => Promise<void>) => {
+  const safeRun = async (
+    action: (snapshot: ReplaceablePreflightSnapshot) => Promise<void>,
+  ) => {
     try {
       await execute(MAILBOXES_KIND, action);
     } catch (err) {
@@ -348,13 +361,19 @@ function InboxRelaysSection() {
               key={index}
               relay={inbox}
               onRemove={() =>
-                safeRun(() => runner.run(RemoveInboxRelay, inbox))
+                safeRun(({ event }) =>
+                  runner.run(RemoveInboxRelayFromPreflight, event, inbox),
+                )
               }
             />
           ))}
         </div>
         <NewRelayForm
-          onAdd={(relay) => safeRun(() => runner.run(AddInboxRelay, relay))}
+          onAdd={(relay) =>
+            safeRun(({ event }) =>
+              runner.run(AddInboxRelayFromPreflight, event, relay),
+            )
+          }
         />
       </CardContent>
     </Card>

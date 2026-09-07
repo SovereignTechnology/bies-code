@@ -3,8 +3,8 @@
  * list (kind:10617).
  *
  * Thin wrapper around useRobustReplaceableAction that provides a convenient
- * pin/unpin API. All connectivity checks, freshness prefetching, and error
- * handling are delegated to the generic hook.
+ * pin/unpin API. All warm-coverage, local-cache, and error handling safeguards
+ * are delegated to the generic hook.
  *
  * kind:10617 is new and most users won't have one yet, so silently creating a
  * fresh list is the expected behaviour (no warning dialog needed).

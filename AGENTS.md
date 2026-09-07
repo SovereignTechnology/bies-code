@@ -163,6 +163,18 @@ Relay fetching for the main collaboration surfaces is already invoked at the pag
 
 Inside any component or hook on those pages, the right move is `store.getByFilters(...)` / `store.timeline(...)` / `store.model(...)` (see `src/hooks/useInlineComments.ts` for an example). Only reach for `resilientSubscription` or a new `createPaginatedTagValueLoader` instance when the data isn't already in scope of one of the pre-wired loaders.
 
+### Replaceable and Addressable Event Preflight
+
+Before adding or changing a writer for a replaceable or addressable event, read
+[`docs/replaceable-preflight.md`](docs/replaceable-preflight.md). Classify the
+writer by its ownership category and modifiers, reuse session- or page-owned
+warm evidence where the documented coverage semantics apply, and keep relay
+lifecycle facts separate from the category's sufficiency policy. An open relay
+connection alone is not query coverage. Adoption is deliberately staged; do
+not extend stable-filter coverage claims to additive filters without supplying
+the stronger per-revision semantics described there. Document new categories
+or exceptions in the same change.
+
 ### Custom Event Kinds — Factory + Cast + Hook
 
 For any project-specific kind, use the three-layer pattern: **Factory** in `src/factories/` (builds + signs), **Cast** in `src/casts/` (typed wrapper with `Symbol.for(...)`-cached getters), **Hook** in `src/hooks/` (subscribes and casts via `castTimelineStream`). **Never** manually parse `NostrEvent.tags` in hooks or components.

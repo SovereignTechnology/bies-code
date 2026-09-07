@@ -3,15 +3,15 @@
  *
  * resilientSubscription — a wrapper around pool.subscription() that provides:
  *
- *   A. lastReceivedAt-aware reconnect — uses defer() + retry() + repeat() so
- *      that on reconnect (whether from an error or a graceful relay close) we
- *      inject since: lastReceivedAt - gapFillBuffer instead of replaying the
- *      full relay history. Same pattern as processRelayStream in
- *      tagValuePaginatedLoader.ts.
+ *   A. lastReceivedAt-aware reconnect — after the relay has completed one
+ *      full declared-filter EOSE, defer() + retry() + repeat() inject a bounded
+ *      since cursor instead of replaying the full relay history. Before that
+ *      baseline exists, every retry remains a full-filter request.
  *
  *   B. Foreground resume gap-fill — subscribes to foregroundResume$. On
- *      resume, fires a one-shot REQ with since: lastReceivedAt - gapFillBuffer
- *      and merges results into the main stream.
+ *      resume, runs a bounded catch-up query with since: lastReceivedAt -
+ *      gapFillBuffer and merges results into the main stream. Ordinary callers
+ *      make one attempt; lifecycle-aware coverage callers may retry briefly.
  *
  *   C. EOSE settle signal — emits "EOSE" after a debounce window once all
  *      relays have signalled EOSE. Uses makeSettleSignal from settleSignal.ts.
@@ -36,7 +36,6 @@
 
 import type { RelayPool } from "applesauce-relay";
 import {
-  completeOnEose,
   onlyEvents,
   AuthRequiredError,
   RelayClosedError,
@@ -62,6 +61,7 @@ import {
   share,
   switchMap,
   take,
+  takeUntil,
   tap,
   timer,
   catchError,
@@ -87,7 +87,10 @@ import { foregroundResume$ } from "./foregroundResume";
  * relay.reconnectTimer (configured in nostr.ts as a 3-phase curve). Our
  * retry handler subscribes to the watchTower (keeping it alive so the
  * reconnect timer can drive new connection attempts) and waits for open$
- * to confirm a successful connection before re-executing buildLiveSub.
+ * to confirm a successful connection, then applies the configured REQ
+ * backoff before re-executing buildLiveSub. This also lets resilientRequest
+ * re-issue its one-shot REQ after transport recovery instead of completing
+ * empty.
  */
 export class TransportError extends Error {
   constructor(relay: string) {
@@ -160,7 +163,49 @@ export interface ResilientSubscriptionOptions {
    * settle: false.
    */
   onRelayError?: (relay: string) => void;
+  /**
+   * Reports cycle-valid coverage facts for this exact stable filter set.
+   * Every invalidation starts a newer generation, so consumers can reject
+   * late EOSE from superseded live or foreground-gap-fill requests.
+   *
+   * Use only with stable, unpaginated filters. An EOSE for a filter with
+   * `limit`, `paginate`, or `manualPaginate$` does not prove full-history
+   * coverage and must not be used as confirmed-absence evidence.
+   *
+   * This callback is intentionally unavailable to additive subscriptions:
+   * their changing filter revisions need finer-grained coverage semantics.
+   */
+  onRelayLifecycle?: (event: ResilientRelayLifecycle) => void;
 }
+
+export type ResilientRelayLifecyclePhase =
+  | "initial"
+  | "covered"
+  | "catching-up"
+  | "unavailable"
+  | "stopped";
+
+export type ResilientRelayUnavailableReason =
+  | "transport"
+  | "closed"
+  | "rate-limited"
+  | "auth"
+  | "permanent"
+  | "error";
+
+export interface ResilientRelayLifecycle {
+  relay: string;
+  generation: number;
+  phase: ResilientRelayLifecyclePhase;
+  /** Present when phase is unavailable so consumers can explain recovery. */
+  reason?: ResilientRelayUnavailableReason;
+}
+
+interface InternalResilientSubscriptionOptions extends ResilientSubscriptionOptions {
+  nextLifecycleGeneration?: () => number;
+}
+
+const DEFAULT_RETRY_COUNT = 3;
 
 /**
  * Default exponential backoff: 1s × 2^(n-1), capped at 5 minutes.
@@ -302,6 +347,8 @@ function processRelay(
     onRelaySettle: ((relay: string) => void) | undefined;
     onRelayEose: ((relay: string) => void) | undefined;
     onRelayError: ((relay: string) => void) | undefined;
+    onRelayLifecycle: ((event: ResilientRelayLifecycle) => void) | undefined;
+    nextLifecycleGeneration: (() => number) | undefined;
     /**
      * Internal hook for the additive coordinator: called at the start of
      * every buildLiveSub re-execution (retry or graceful-close repeat, never
@@ -370,10 +417,11 @@ function processRelay(
     let oldestSeen: number | undefined;
     let lastReceivedAt: number | undefined;
     let eoseSeen = false;
-    // Persists across retry/repeat cycles. Once true, any subsequent drop is
-    // treated as transient and retried indefinitely (with backoff) rather than
-    // consuming the fixed retryCount budget.
-    let everReceivedEose = false;
+    // Persists across retry/repeat cycles. It becomes true only when the live
+    // request completes the caller's full declared filter before any recovery
+    // cursor can be injected. Besides making subsequent drops retryable without
+    // the pre-EOSE budget, this is the proof required for bounded recovery.
+    let hasBaselineEose = false;
     // Reconnect attempt counter for backoff calculation. Reset to 0 each time
     // EOSE is received so that a relay that has been healthy for a long time
     // starts its next reconnect from 1s rather than the capped maximum.
@@ -384,6 +432,54 @@ function processRelay(
     let paginateSub: { unsubscribe(): void } | undefined;
     let manualSub: { unsubscribe(): void } | undefined;
     let gapFillSub: { unsubscribe(): void } | undefined;
+    let latestLifecycleGeneration: number | undefined;
+    let livePipelineCompleted = false;
+    let lastUnavailableReason: ResilientRelayUnavailableReason | undefined;
+    const liveRestart$ = new Subject<Error>();
+    // True only while the persistent live REQ itself is subscribed. A
+    // foreground catch-up may prove the missed window, but it must not claim
+    // continuously owned coverage while the live cycle is between attempts.
+    let liveCycleOpen = false;
+
+    const beginLifecycle = (
+      phase: Exclude<ResilientRelayLifecyclePhase, "covered">,
+      reason?: ResilientRelayUnavailableReason,
+    ): number | undefined => {
+      lastUnavailableReason = phase === "unavailable" ? reason : undefined;
+      const generation = opts.nextLifecycleGeneration?.();
+      if (generation !== undefined) {
+        latestLifecycleGeneration = generation;
+        opts.onRelayLifecycle?.({
+          relay,
+          generation,
+          phase,
+          ...(phase === "unavailable" && reason !== undefined
+            ? { reason }
+            : {}),
+        });
+      }
+      return generation;
+    };
+    const completeLifecycle = (
+      generation: number | undefined,
+      phase: "covered",
+    ) => {
+      lastUnavailableReason = undefined;
+      if (generation !== undefined) {
+        opts.onRelayLifecycle?.({ relay, generation, phase });
+      }
+    };
+
+    /**
+     * A recovery cursor is safe only after this relay owner completed its full
+     * declared filter. Clamp future-dated events to now so one skewed publisher
+     * cannot move the reconnect window ahead of legitimate current events.
+     */
+    const getSafeRecoveryCursor = (): number | undefined => {
+      if (!hasBaselineEose || lastReceivedAt === undefined) return undefined;
+      const now = Math.floor(Date.now() / 1_000);
+      return Math.min(lastReceivedAt, now) - opts.gapFillBuffer;
+    };
 
     // Shared pagination window — driven by auto (BehaviorSubject) or manual.
     let window$: Subject<{ since?: number; until?: number }> | undefined;
@@ -455,8 +551,8 @@ function processRelay(
 
     // Build the live subscription factory. defer() re-executes on each retry
     // (error) and repeat (graceful close) so lastReceivedAt is read fresh on
-    // every reconnect attempt, injecting since: lastReceivedAt - gapFillBuffer
-    // to avoid replaying the full relay history.
+    // every reconnect attempt. A bounded cursor is injected only after a full
+    // declared-filter EOSE established the relay owner's baseline.
     //
     // Note on applesauce's `reconnect` / `resubscribe` options: in
     // applesauce-relay@6.0.0 the `reconnect` option on subscription() /
@@ -472,21 +568,23 @@ function processRelay(
     // relay.reconnectTimer (replaced with a 3-phase curve in nostr.ts).
     // Our retry handler subscribes to the watchTower (keeping it alive so
     // the reconnect timer can drive new connection attempts) and waits for
-    // open$ to confirm a successful connection before re-executing buildLiveSub.
+    // open$ plus the configured REQ delay before re-executing buildLiveSub.
     const buildLiveSub = () => {
       // Reset per-subscription-cycle state so that countBeforeEose and
       // oldestSeen are tracked correctly after a retry or graceful-close repeat.
-      // lastReceivedAt is intentionally NOT reset — it persists across cycles
-      // so the reconnect REQ uses since: lastReceivedAt - gapFillBuffer.
+      // lastReceivedAt and hasBaselineEose intentionally persist across cycles
+      // so a proven baseline can use bounded recovery after a disruption.
       eoseSeen = false;
       countBeforeEose = 0;
       if (cycleCount++ > 0) opts.onCycleRestart?.(relay);
+      let lifecycleGeneration: number | undefined;
 
+      const recoveryCursor = opts.reconnect
+        ? getSafeRecoveryCursor()
+        : undefined;
       const filtersWithSince: Filter[] = getFilters().map((f) => ({
         ...f,
-        ...(opts.reconnect && lastReceivedAt !== undefined
-          ? { since: lastReceivedAt - opts.gapFillBuffer }
-          : {}),
+        ...(recoveryCursor !== undefined ? { since: recoveryCursor } : {}),
       }));
 
       // Use the single-relay API so the stream still emits NostrEvent | "EOSE"
@@ -520,6 +618,9 @@ function processRelay(
       const relayObj = pool.relay(relay);
       const inner$ = relayObj.subscription(filtersWithSince);
       const sub$ = new Observable<NostrEvent | "EOSE">((s) => {
+        lifecycleGeneration = beginLifecycle("initial");
+        liveCycleOpen = true;
+        const restartSub = liveRestart$.subscribe((error) => s.error(error));
         const errSub = relayObj.error$.subscribe((err) => {
           if (err !== null) s.error(new TransportError(relay));
         });
@@ -529,10 +630,22 @@ function processRelay(
           complete: () => s.complete(),
         });
         return () => {
+          liveCycleOpen = false;
+          restartSub.unsubscribe();
           errSub.unsubscribe();
           innerSub.unsubscribe();
         };
-      });
+      }).pipe(
+        tap((message) => {
+          if (message === "EOSE") {
+            // getSafeRecoveryCursor cannot return a value before this flag is
+            // true, so the first live EOSE necessarily covers the full declared
+            // filter. Publish the baseline fact before lifecycle coverage.
+            hasBaselineEose = true;
+            completeLifecycle(lifecycleGeneration, "covered");
+          }
+        }),
+      );
 
       // If this relay is currently rate-limited, wait out the cooldown before
       // opening the subscription. This prevents other concurrent subscriptions
@@ -545,6 +658,7 @@ function processRelay(
       // events — it just won't contribute to the initial EOSE settle window.
       const remaining = getRateLimitCooldownRemaining(relay);
       if (remaining > 0) {
+        beginLifecycle("unavailable", "rate-limited");
         signal.settle(relay);
         opts.onRelaySettle?.(relay);
         return timer(remaining).pipe(switchMap(() => sub$));
@@ -570,16 +684,23 @@ function processRelay(
           delay: (err) => {
             // Auth-required: fast-fail — handled asynchronously by the
             // pool-level auth policy in nostr.ts.
-            if (err instanceof AuthRequiredError) throw err;
+            if (err instanceof AuthRequiredError) {
+              beginLifecycle("unavailable", "auth");
+              throw err;
+            }
             // Permanent policy errors: the relay will never accept this
             // subscription regardless of retries. Fast-fail immediately.
-            if (isPermanentError(err)) throw err;
+            if (isPermanentError(err)) {
+              beginLifecycle("unavailable", "permanent");
+              throw err;
+            }
             // Rate-limited: relay is overloaded. Record the cooldown so all
             // other concurrent subscriptions to this relay also hold off,
             // preventing a stampede that would reset the relay's window.
             if (isRateLimited(err)) {
+              beginLifecycle("unavailable", "rate-limited");
               reconnectAttempts++;
-              if (!everReceivedEose && reconnectAttempts > opts.retryCount)
+              if (!hasBaselineEose && reconnectAttempts > opts.retryCount)
                 throw err;
               const { ms, timer$ } = rateLimitedRetryDelay(
                 err,
@@ -618,14 +739,19 @@ function processRelay(
             // need to fast-settle their settle signal immediately rather
             // than wait for the underlying retry cycle to complete.
             //
-            // No retryCount budget here — while the socket is bouncing we
-            // patiently wait. If the relay never recovers, open$ never fires
-            // and the subscription quietly remains dormant; if a caller
-            // unsubscribes, the watchTower sub and take(1) are torn down
-            // with no leak.
+            // Wait for the socket to recover, then apply the configured REQ
+            // retry budget/backoff before emitting the retry notifier.
+            // Persistent callers previously reached the same delay through
+            // repeat() when this notifier completed without emitting. Emitting
+            // here preserves that cadence while also letting autoClose callers
+            // re-issue their one-shot REQ after recovery.
             if (err instanceof TransportError) {
+              beginLifecycle("unavailable", "transport");
               signal.error(relay);
               opts.onRelayError?.(relay);
+              reconnectAttempts++;
+              if (!hasBaselineEose && reconnectAttempts > opts.retryCount)
+                throw err;
               const relayObj = pool.relay(relay);
               // watchTower is protected in TypeScript but is a plain property
               // at runtime — cast to access it. Subscribing to it increments
@@ -634,27 +760,46 @@ function processRelay(
               const wt = (
                 relayObj as unknown as { watchTower: Observable<never> }
               ).watchTower;
-              return new Observable<never>((s) => {
+              return new Observable<void>((s) => {
+                const retrySubs = new Subscription();
                 // Keep the watchTower alive so the reconnect timer can drive
                 // new connection attempts. The watchTower is share()d so this
                 // just increments the refcount — no duplicate socket is opened.
-                const watchSub = wt.subscribe();
-                // Wait for the next successful open before completing so
-                // defer() re-executes buildLiveSub with a clean error$ state.
-                const openSub = relayObj.open$.pipe(take(1)).subscribe({
-                  next: () => s.complete(),
-                  error: (e) => s.error(e),
-                });
-                return () => {
-                  watchSub.unsubscribe();
-                  openSub.unsubscribe();
-                };
+                retrySubs.add(wt.subscribe());
+                // Wait for the next successful open, then observe the caller's
+                // configured REQ retry delay before emitting. retry() needs an
+                // emission (not completion alone) to resubscribe.
+                retrySubs.add(
+                  relayObj.open$.pipe(take(1)).subscribe({
+                    next: () => {
+                      const retryDelay$ =
+                        typeof opts.retryDelay === "function"
+                          ? opts.retryDelay(err, reconnectAttempts)
+                          : timer(opts.retryDelay ?? 0);
+                      // Adding to an already-closed container immediately
+                      // unsubscribes a synchronously emitting delay source.
+                      retrySubs.add(
+                        retryDelay$.subscribe({
+                          next: () => s.next(),
+                          error: (e) => s.error(e),
+                          complete: () => s.complete(),
+                        }),
+                      );
+                    },
+                    error: (e) => s.error(e),
+                  }),
+                );
+                return retrySubs;
               });
             }
             // NIP-01 CLOSED (non-rate-limited, non-permanent): use our own
             // backoff. The WebSocket is still open so waitForReady won't block.
+            beginLifecycle(
+              "unavailable",
+              err instanceof RelayClosedError ? "closed" : "error",
+            );
             reconnectAttempts++;
-            if (!everReceivedEose && reconnectAttempts > opts.retryCount)
+            if (!hasBaselineEose && reconnectAttempts > opts.retryCount)
               throw err;
             return typeof opts.retryDelay === "function"
               ? opts.retryDelay(err, reconnectAttempts)
@@ -678,8 +823,9 @@ function processRelay(
           : repeat({
               count: Infinity,
               delay: () => {
+                beginLifecycle("unavailable", "closed");
                 reconnectAttempts++;
-                if (!everReceivedEose && reconnectAttempts > opts.retryCount)
+                if (!hasBaselineEose && reconnectAttempts > opts.retryCount)
                   throw new Error(
                     `relay ${relay} gave up after ${reconnectAttempts} graceful closes`,
                   );
@@ -717,7 +863,6 @@ function processRelay(
         next: (msg) => {
           if (msg === "EOSE") {
             eoseSeen = true;
-            everReceivedEose = true;
             reconnectAttempts = 0;
             opts.onRelayEose?.(relay);
             if (opts.paginate || opts.manualPaginate$) {
@@ -759,6 +904,7 @@ function processRelay(
           }
         },
         complete: () => {
+          livePipelineCompleted = true;
           // autoClose: a graceful relay close (CLOSED without error prefix)
           // means the relay is done — treat it as settled rather than
           // reconnecting. Without autoClose the repeat() operator above would
@@ -774,19 +920,75 @@ function processRelay(
     // Foreground resume gap-fill
     const gapFillResumeSub = opts.gapFill
       ? foregroundResume$.subscribe(() => {
-          if (lastReceivedAt === undefined) return;
+          // Preserve the existing no-op for subscriptions that have never
+          // received an event. A coverage lease must still prove its resume
+          // pass with EOSE, so only lifecycle-aware stable filters re-read the
+          // full filter when there is no safe completed-backfill cursor.
+          if (
+            lastReceivedAt === undefined &&
+            opts.onRelayLifecycle === undefined
+          ) {
+            return;
+          }
           gapFillSub?.unsubscribe();
+          const lifecycleGeneration = beginLifecycle("catching-up");
+          const gapFillCursor = getSafeRecoveryCursor();
           const gapFilters: Filter[] = getFilters().map((f) => ({
             ...f,
-            since: lastReceivedAt! - opts.gapFillBuffer,
+            ...(gapFillCursor !== undefined ? { since: gapFillCursor } : {}),
           }));
-          gapFillSub = pool
-            .subscription([relay], gapFilters, { reconnect: false })
-            .pipe(completeOnEose(), onlyEvents())
+          let gapFillEoseSeen = false;
+          const gapFillDone$ = new Subject<void>();
+          const gapFillFailed = () => {
+            if (
+              opts.onRelayLifecycle === undefined ||
+              lifecycleGeneration !== latestLifecycleGeneration
+            ) {
+              return;
+            }
+            if (liveCycleOpen) {
+              // The catch-up budget was exhausted while the previously
+              // covered live REQ was still healthy. Restart that REQ so a
+              // fresh initial → covered cycle can re-establish ownership.
+              liveRestart$.next(
+                new Error(`foreground gap-fill exhausted for ${relay}`),
+              );
+            } else {
+              beginLifecycle("unavailable", "error");
+            }
+          };
+          // Resume bursts remain one-shot for ordinary consumers. Coverage
+          // owners may retry, but an always-on live retry budget (Infinity)
+          // must not turn a temporary catch-up into an unbounded burst.
+          const gapFillRetryCount =
+            opts.onRelayLifecycle === undefined
+              ? 0
+              : Math.min(Math.max(0, opts.retryCount), DEFAULT_RETRY_COUNT);
+          gapFillSub = resilientSubscription(pool, [relay], gapFilters, {
+            reconnect: false,
+            gapFill: false,
+            settle: false,
+            paginate: false,
+            retryCount: gapFillRetryCount,
+            retryDelay: opts.retryDelay,
+            onRelayEose: () => {
+              gapFillEoseSeen = true;
+              // Catch-up evidence is current only while the persistent live
+              // REQ remains open. If it is between retry attempts, its next
+              // cycle will establish a fresh generation and EOSE normally.
+              if (liveCycleOpen) {
+                completeLifecycle(lifecycleGeneration, "covered");
+              }
+              gapFillDone$.next();
+              gapFillDone$.complete();
+            },
+          })
+            .pipe(onlyEvents(), takeUntil(gapFillDone$))
             .subscribe({
               next: (event) => subscriber.next(event),
-              error: () => {
-                /* gap-fill errors are non-fatal */
+              error: gapFillFailed,
+              complete: () => {
+                if (!gapFillEoseSeen) gapFillFailed();
               },
             });
         })
@@ -798,6 +1000,11 @@ function processRelay(
       manualSub?.unsubscribe();
       gapFillSub?.unsubscribe();
       gapFillResumeSub.unsubscribe();
+      liveRestart$.complete();
+      beginLifecycle(
+        livePipelineCompleted ? "unavailable" : "stopped",
+        livePipelineCompleted ? (lastUnavailableReason ?? "error") : undefined,
+      );
     };
   });
 }
@@ -836,10 +1043,17 @@ export function resilientSubscription(
   filters: Filter[],
   opts: ResilientSubscriptionOptions = {},
 ): Observable<ResilientSubscriptionResponse> {
+  let lifecycleGeneration = 0;
+  const internalOpts: InternalResilientSubscriptionOptions = {
+    ...opts,
+    nextLifecycleGeneration: opts.onRelayLifecycle
+      ? () => ++lifecycleGeneration
+      : undefined,
+  };
   if (relays instanceof Observable) {
-    return resilientSubscriptionReactive(pool, relays, filters, opts);
+    return resilientSubscriptionReactive(pool, relays, filters, internalOpts);
   }
-  return resilientSubscriptionStatic(pool, relays, filters, opts);
+  return resilientSubscriptionStatic(pool, relays, filters, internalOpts);
 }
 
 /**
@@ -849,7 +1063,7 @@ function resilientSubscriptionStatic(
   pool: RelayPool,
   relays: string[],
   filters: Filter[],
-  opts: ResilientSubscriptionOptions = {},
+  opts: InternalResilientSubscriptionOptions = {},
 ): Observable<ResilientSubscriptionResponse> {
   const autoClose = opts.autoClose ?? false;
   // autoClose implies one-shot semantics: reconnect and gap-fill are
@@ -861,12 +1075,14 @@ function resilientSubscriptionStatic(
   const settleTime = opts.settleTime ?? DEFAULT_SETTLE_TIME;
   const paginate = opts.paginate ?? false;
   const limit = opts.limit ?? 500;
-  const retryCount = opts.retryCount ?? 3;
+  const retryCount = opts.retryCount ?? DEFAULT_RETRY_COUNT;
   const retryDelay = opts.retryDelay ?? defaultRetryDelay;
   const manualPaginate$ = opts.manualPaginate$;
   const onRelaySettle = opts.onRelaySettle;
   const onRelayEose = opts.onRelayEose;
   const onRelayError = opts.onRelayError;
+  const onRelayLifecycle = opts.onRelayLifecycle;
+  const nextLifecycleGeneration = opts.nextLifecycleGeneration;
 
   if (relays.length === 0) return EMPTY;
 
@@ -883,6 +1099,8 @@ function resilientSubscriptionStatic(
     onRelaySettle,
     onRelayEose,
     onRelayError,
+    onRelayLifecycle,
+    nextLifecycleGeneration,
   };
 
   if (!settle) {
@@ -933,7 +1151,7 @@ function resilientSubscriptionReactive(
   pool: RelayPool,
   relays$: Observable<string[]>,
   filters: Filter[],
-  opts: ResilientSubscriptionOptions = {},
+  opts: InternalResilientSubscriptionOptions = {},
 ): Observable<ResilientSubscriptionResponse> {
   const autoClose = opts.autoClose ?? false;
   const reconnect = opts.reconnect ?? (autoClose ? false : true);
@@ -943,12 +1161,14 @@ function resilientSubscriptionReactive(
   const settleTime = opts.settleTime ?? DEFAULT_SETTLE_TIME;
   const paginate = opts.paginate ?? false;
   const limit = opts.limit ?? 500;
-  const retryCount = opts.retryCount ?? 3;
+  const retryCount = opts.retryCount ?? DEFAULT_RETRY_COUNT;
   const retryDelay = opts.retryDelay ?? defaultRetryDelay;
   const manualPaginate$ = opts.manualPaginate$;
   const onRelaySettle = opts.onRelaySettle;
   const onRelayEose = opts.onRelayEose;
   const onRelayError = opts.onRelayError;
+  const onRelayLifecycle = opts.onRelayLifecycle;
+  const nextLifecycleGeneration = opts.nextLifecycleGeneration;
 
   const resolvedOpts = {
     autoClose,
@@ -963,6 +1183,8 @@ function resilientSubscriptionReactive(
     onRelaySettle,
     onRelayEose,
     onRelayError,
+    onRelayLifecycle,
+    nextLifecycleGeneration,
   };
 
   return new Observable<ResilientSubscriptionResponse>((subscriber) => {
@@ -1113,7 +1335,7 @@ export class AdditiveFilterConflictError extends Error {
 
 export interface ResilientAdditiveSubscriptionOptions extends Omit<
   ResilientSubscriptionOptions,
-  "autoClose" | "paginate" | "manualPaginate$"
+  "autoClose" | "paginate" | "manualPaginate$" | "onRelayLifecycle"
 > {
   /**
    * Buffer window in ms coalescing chunk additions into one delta REQ per
@@ -1278,7 +1500,7 @@ export function resilientAdditiveSubscription(
   const settle = opts.settle ?? true;
   const settleTime = opts.settleTime ?? DEFAULT_SETTLE_TIME;
   const limit = opts.limit ?? 500;
-  const retryCount = opts.retryCount ?? 3;
+  const retryCount = opts.retryCount ?? DEFAULT_RETRY_COUNT;
   const retryDelay = opts.retryDelay ?? defaultRetryDelay;
   const deltaBufferTime = opts.deltaBufferTime ?? 25;
   const deltaBufferSize = Math.max(1, Math.floor(opts.deltaBufferSize ?? 200));
@@ -1296,6 +1518,8 @@ export function resilientAdditiveSubscription(
     onRelaySettle: opts.onRelaySettle,
     onRelayEose: opts.onRelayEose,
     onRelayError: opts.onRelayError,
+    onRelayLifecycle: undefined,
+    nextLifecycleGeneration: undefined,
   };
   // Delta streams: no foreground gap-fill (the main stream's gap-fill reads
   // the full chunk set, covering every delta chunk) and no relay callbacks
@@ -1595,7 +1819,7 @@ export function resilientSingleRelayRequest(
   filters: Filter[],
   opts: Pick<ResilientSubscriptionOptions, "retryCount" | "retryDelay"> = {},
 ): Observable<NostrEvent> {
-  const retryCount = opts.retryCount ?? 3;
+  const retryCount = opts.retryCount ?? DEFAULT_RETRY_COUNT;
   let reconnectAttempts = 0;
   let everSucceeded = false;
 

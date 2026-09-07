@@ -41,7 +41,12 @@ import { eventStore, pool } from "./nostr";
 import { lookupRelays } from "./settings";
 import type { Filter } from "applesauce-core/helpers";
 import { resilientSubscription } from "@/lib/resilientSubscription";
+import { createRelaySubscriptionCoverage } from "@/lib/relaySubscriptionCoverage";
 import { normalizeUrl } from "@/lib/url";
+import {
+  USER_IDENTITY_COVERAGE_SETTLEMENT_TIMEOUT_MS,
+  userIdentityCoverage,
+} from "@/services/userIdentityCoverage";
 
 /**
  * All replaceable event kinds that define the user's identity, relay
@@ -101,6 +106,20 @@ export function startUserIdentitySubscription(
     ),
   );
 
+  // Personal-singleton warm coverage is owned by this exact account/filter
+  // subscription. See docs/replaceable-preflight.md, "Warm coverage leases".
+  const coverage = createRelaySubscriptionCoverage({
+    settlementTimeoutMs: USER_IDENTITY_COVERAGE_SETTLEMENT_TIMEOUT_MS,
+  });
+  let stopped = false;
+  let releaseCoverage: (() => void) | undefined;
+  const stopCoverage = () => {
+    if (stopped) return;
+    stopped = true;
+    releaseCoverage?.();
+    coverage.stop();
+  };
+
   // resilientSubscription provides:
   //   - lastReceivedAt-aware reconnect (avoids replaying full relay history)
   //   - foreground resume gap-fill (recovers events missed while backgrounded)
@@ -110,13 +129,30 @@ export function startUserIdentitySubscription(
     gapFill: true,
     settle: false, // no consumer needs the EOSE signal here
     paginate: false,
+    // This lease gates all personal replaceable writes for the session. A
+    // boot-time relay cap or transient outage must not make it terminal.
+    retryCount: Infinity,
+    onRelayLifecycle: (event) => coverage.onLifecycle(event),
   })
     .pipe(onlyEvents(), mapEventsToStore(eventStore))
     .subscribe({
       error: (err) => {
+        stopCoverage();
         console.warn("[userIdentitySubscription] subscription error:", err);
       },
     });
 
-  return () => sub.unsubscribe();
+  // Subscribe before publishing the new owner. relays$ emits synchronously, so
+  // the handle already contains its initial lifecycle facts when activate()
+  // announces it. A pending writer therefore observes either no lease (the
+  // deliberate hand-off gap) or a successor capable of settling, never an
+  // empty successor that looks terminal.
+  if (!stopped) {
+    releaseCoverage = userIdentityCoverage.activate(pubkey, coverage);
+  }
+
+  return () => {
+    stopCoverage();
+    sub.unsubscribe();
+  };
 }
