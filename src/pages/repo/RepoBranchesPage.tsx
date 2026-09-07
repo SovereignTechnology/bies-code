@@ -111,10 +111,6 @@ export default function RepoBranchesPage() {
 
   const { pool, poolState } = useGitPool(cloneUrls, {
     private: repo?.isPrivate,
-    headRef: repoState?.headRef,
-    knownHeadCommit: repoState?.headCommitId,
-    stateRefs: repoState?.refs,
-    stateCreatedAt: repoState ? repoState.event.created_at : undefined,
   });
 
   const stateBehindGit =

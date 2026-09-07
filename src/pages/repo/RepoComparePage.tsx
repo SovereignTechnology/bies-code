@@ -480,7 +480,6 @@ function useComparison(
 export default function RepoComparePage() {
   const {
     cloneUrls,
-    repoState,
     resolved,
     pubkey,
     repoId,
@@ -499,10 +498,6 @@ export default function RepoComparePage() {
 
   const { pool, poolState } = useGitPool(cloneUrls, {
     private: repo?.isPrivate,
-    headRef: repoState?.headRef,
-    knownHeadCommit: repoState?.headCommitId,
-    stateRefs: repoState?.refs,
-    stateCreatedAt: repoState ? repoState.event.created_at : undefined,
   });
 
   const sourceParam = searchParams.get("source");

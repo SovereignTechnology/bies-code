@@ -18,8 +18,6 @@
  *   pool's URL set is a subset of the requested URLs
  */
 
-import type { Observable } from "rxjs";
-import type { StateEventInput } from "./types";
 import { GitGraspPool } from "./pool";
 import type { GitHttpAuthorizationProvider } from "@/lib/git-http-auth";
 
@@ -78,7 +76,6 @@ function findOverlappingPool(
 
 export interface GetPoolOptions {
   cloneUrls: string[];
-  stateEvent$?: Observable<StateEventInput>;
   corsProxyBase?: string | null;
   knownCorsBlockedOrigins?: string[];
   evictionGracePeriodMs?: number;
@@ -108,7 +105,6 @@ export function getOrCreatePool(options: GetPoolOptions): GitGraspPool {
         rest.expectRepositoryProvisioning,
       );
     }
-    if (rest.stateEvent$) existing.setStateEventSource(rest.stateEvent$);
     return existing;
   }
 
@@ -126,9 +122,6 @@ export function getOrCreatePool(options: GetPoolOptions): GitGraspPool {
         rest.expectRepositoryProvisioning,
       );
     }
-    if (rest.stateEvent$)
-      overlapping.pool.setStateEventSource(rest.stateEvent$);
-
     // Re-key the registry if the key changed
     if (overlapping.key !== key) {
       registry.delete(overlapping.key);

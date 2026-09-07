@@ -5,7 +5,6 @@
  * (or from the barrel index.ts).
  */
 
-import type { Observable } from "rxjs";
 import type { GitHttpAuthorizationProvider } from "@/lib/git-http-auth";
 import type {
   Commit,
@@ -402,13 +401,6 @@ export interface PoolOptions {
   cloneUrls: string[];
   /** Account/repository-scoped NIP-98 authorization for private Git HTTP. */
   authorizationProvider?: GitHttpAuthorizationProvider;
-  /**
-   * Observable that emits the current Nostr state event for this repo.
-   * - undefined = still loading
-   * - null = confirmed no state event
-   * - StateEvent = have state event data
-   */
-  stateEvent$?: Observable<StateEventInput>;
   /**
    * CORS proxy base URL. Defaults to "https://cors.isomorphic-git.org".
    * Set to null to disable CORS proxy entirely.

@@ -125,6 +125,7 @@ export default function RepoLayout() {
   if (parsed.type === "npub") {
     return (
       <RepoLayoutResolved
+        key={`${parsed.pubkey}:${parsed.repoId}`}
         pubkey={parsed.pubkey}
         repoId={parsed.repoId}
         relayHints={parsed.relayHints}
@@ -175,6 +176,7 @@ function RepoLayoutNip05({
 
   return (
     <RepoLayoutResolved
+      key={`${identity.pubkey}:${repoId}`}
       pubkey={identity.pubkey}
       repoId={repoId}
       nip05Relays={identity.relays}
@@ -637,8 +639,16 @@ function RepoLayoutResolved({
   }, [repoPageSuffix]);
 
   const cloneUrls = repo?.cloneUrls ?? [];
+  // RepoLayout is the single live owner of signed state for this repository.
+  // The pool retains that knowledge for state-less consumers and across its
+  // eviction grace period; route cleanup never changes repository truth.
   const { pool: commitLinkPool, privateAccessError } = useGitPool(cloneUrls, {
     private: isPrivate,
+    headRef: repoState?.headRef,
+    knownHeadCommit: repoState?.headCommitId,
+    stateRefs: repoState?.refs,
+    stateCreatedAt: repoState ? repoState.event.created_at : undefined,
+    stateSettled: repoRelayEose && repoState !== undefined,
   });
 
   // The PR base path: basePath + /prs/<prId> — used for PR sub-route links.

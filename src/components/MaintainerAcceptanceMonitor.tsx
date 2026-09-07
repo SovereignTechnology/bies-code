@@ -55,6 +55,7 @@ function MaintainerAcceptanceJobMonitor({
       knownHeadCommit: job.knownHeadCommit,
       stateRefs: job.stateRefs,
       stateCreatedAt: job.stateCreatedAt,
+      stateEventRole: "seed",
       expectRepositoryProvisioning: shouldPollGit,
     },
   );
