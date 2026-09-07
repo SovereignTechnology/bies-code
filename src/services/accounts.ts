@@ -99,7 +99,7 @@ let isApplyingCrossTabSync = false;
   });
 
   // Keep a persistent subscription open for the active user's replaceable
-  // events (kinds 0, 3, 10002, 10017, 10018, 10317) on the union of their
+  // personal-singleton events on the union of their
   // outbox relays and lookup/index relays.
   //
   // Strategy: whenever the active account changes OR their NIP-65 outbox relay

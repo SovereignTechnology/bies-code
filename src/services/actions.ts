@@ -4,37 +4,12 @@ import { eventStore, publish } from "./nostr";
 import { accounts } from "./accounts";
 
 /**
- * Kinds that user index relays (purplepag.es, etc.) are known to accept.
- * These are profile, contact, relay, and list kinds. Kind 30078 (NIP-78 app
- * data) is intentionally excluded — index relays reject application data
- * events as they are not list information.
- */
-const INDEX_RELAY_KINDS = new Set<number>([
-  0, // profile metadata
-  3, // contact / follow list
-  10002, // NIP-65 relay list (mailboxes)
-  10017, // NIP-51 Git authors follow list
-  10018, // NIP-51 Git repositories follow list
-  10317, // Grasp server list
-]);
-
-/**
  * Publish function passed to the ActionRunner.
  *
- * For profile, contact, relay, and list kinds, lookup/index relays are added
- * as a separate "User Index Relays" group so that the updated event reaches
- * well-connected index relays in addition to the user's own outbox relays.
- * This improves discoverability for other clients.
- *
- * Kind 30078 (NIP-78 app data) is intentionally excluded — index relays
- * reject application data events as they are not list information.
- *
- * For all other events the call is forwarded to publish() unchanged.
+ * Category publication routing lives in nostr.publish() so direct writers and
+ * ActionRunner-based writers receive the same durable outbox policy.
  */
 function runnerPublish(event: NostrEvent): Promise<void> {
-  if (INDEX_RELAY_KINDS.has(event.kind)) {
-    return publish(event, ["index-relays"]);
-  }
   return publish(event);
 }
 

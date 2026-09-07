@@ -191,9 +191,11 @@ for the active account:
   no relay request and preserves the previous cache evidence;
 - pass the resulting event directly into contact and mailbox writers, avoiding
   Applesauce model fallback reads after confirmed absence; relay arrays are
-  retained on those actions for API parity, but GitWorkshop's global runner
-  chooses the actual publication groups; the other Phase 1 writers already
-  consume local absence without subscribing to the loader;
+  retained on contact actions for API parity, while mailbox actions use them to
+  freeze their old relay frontier; GitWorkshop's global runner chooses ordinary
+  publication groups and interprets the mailbox frontier explicitly; the other
+  Phase 1 writers already consume local absence without subscribing to the
+  loader;
 - stop treating a relay as in-flight after its five-second EOSE deadline while
   leaving the live request open for a late recovery, and report an exact status
   breakdown for the outbox and lookup groups;
@@ -250,9 +252,13 @@ The common policy is:
    whichever list wins optimistic local insertion.
 5. Personal-singleton events are published to the user's outboxes and user
    index relays. Kinds `0` and `10002` are explicitly included because they are
-   what other clients need to discover the user and the user's mailboxes. Kind
-   `10317` also retains Git-index publication. Encryption does not give kind
-   `10318` a different read-preflight or publication rule; its decryption and
+   what other clients need to discover the user and the user's mailboxes. User
+   index delivery remains required for the previously routed kinds `0`, `3`,
+   `10002`, `10017`, `10018`, and `10317`; delivery of the newly routed
+   application lists `10063`, `10318`, and `10617` is best-effort because
+   generic user-index acceptance of those kinds is not established. Kind
+   `10317` also retains required Git-index publication. Encryption does not
+   give kind `10318` a different read-preflight rule; its decryption and
    private-repository effects remain downstream concerns.
 6. A missing warm winner triggers the existing bounded local-cache hydration.
    It does not trigger another relay request for the singleton filter.
