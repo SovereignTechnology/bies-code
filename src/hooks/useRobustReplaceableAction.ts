@@ -65,7 +65,13 @@ import {
 } from "@/services/userIdentityCoverage";
 import { normalizeUrl } from "@/lib/url";
 import { getRateLimitCooldownRemaining } from "@/lib/resilientSubscription";
-import { isPersonalSingletonKind } from "@/lib/personalSingletons";
+import {
+  isPersonalSingletonKind,
+  PERSONAL_DELETION_BATCH_WINDOW_MS,
+  personalSingletonNeedsDeletionEvidence,
+} from "@/lib/personalSingletons";
+import type { RelaySubscriptionCoverage } from "@/lib/relaySubscriptionCoverage";
+import { userPersonalDeletionCoverage } from "@/services/userPersonalDeletionCoverage";
 
 // ---------------------------------------------------------------------------
 // Thresholds
@@ -77,6 +83,11 @@ import { isPersonalSingletonKind } from "@/lib/personalSingletons";
  * A single outbox relay is not enough confidence on its own.
  */
 const MIN_INDEX_RELAYS_FOR_SINGLE_OUTBOX = 2;
+
+/** Preserve a full relay-settlement window after a candidate batch rebinds. */
+const PERSONAL_DELETION_COVERAGE_WAIT_TIMEOUT_MS =
+  PERSONAL_DELETION_BATCH_WINDOW_MS +
+  USER_IDENTITY_COVERAGE_SETTLEMENT_TIMEOUT_MS;
 
 /**
  * When >1 outbox relays are connected, we pass if either:
@@ -219,10 +230,12 @@ export function useRobustReplaceableAction(): RobustReplaceableActionResult {
 
   /** Project lifecycle and transport facts into one user-facing relay state. */
   const classifyRelay = useCallback(
-    (url: string): RelayPreflightStatus => {
-      if (!account?.pubkey) return "not-checked";
+    (
+      url: string,
+      coverage: RelaySubscriptionCoverage | undefined,
+    ): RelayPreflightStatus => {
       const normalized = normalizeUrl(url);
-      const state = userIdentityCoverage.get(account.pubkey)?.get(normalized);
+      const state = coverage?.get(normalized);
       let transportUrl: string;
       try {
         // Coverage and settings use the app's slash-stripped form, while the
@@ -266,11 +279,12 @@ export function useRobustReplaceableAction(): RobustReplaceableActionResult {
       if (state?.phase === "not-responding") return "not-responding";
       return "not-checked";
     },
-    [account?.pubkey],
+    [],
   );
 
   const getRelayStatuses = useCallback(
-    (relays: string[]) => relays.map(classifyRelay),
+    (relays: string[], coverage: RelaySubscriptionCoverage | undefined) =>
+      relays.map((relay) => classifyRelay(relay, coverage)),
     [classifyRelay],
   );
 
@@ -291,9 +305,13 @@ export function useRobustReplaceableAction(): RobustReplaceableActionResult {
   );
 
   const getCoverageCounts = useCallback(
-    (outboxes: string[], lookup: string[]) => {
-      const outboxStatuses = getRelayStatuses(outboxes);
-      const lookupStatuses = getRelayStatuses(lookup);
+    (
+      outboxes: string[],
+      lookup: string[],
+      coverage: RelaySubscriptionCoverage | undefined,
+    ) => {
+      const outboxStatuses = getRelayStatuses(outboxes, coverage);
+      const lookupStatuses = getRelayStatuses(lookup, coverage);
       return {
         coveredOutboxes: outboxStatuses.filter((status) => status === "ready")
           .length,
@@ -315,14 +333,18 @@ export function useRobustReplaceableAction(): RobustReplaceableActionResult {
    * threshold. Unavailable relays fail immediately instead of adding latency.
    */
   const canWarmCoverageStillSucceed = useCallback(
-    (outboxes: string[], lookup: string[]) => {
+    (
+      outboxes: string[],
+      lookup: string[],
+      coverage: RelaySubscriptionCoverage | undefined,
+    ) => {
       if (!navigator.onLine) return false;
       const {
         coveredOutboxes,
         coveredLookup,
         inFlightOutboxes,
         inFlightLookup,
-      } = getCoverageCounts(outboxes, lookup);
+      } = getCoverageCounts(outboxes, lookup, coverage);
 
       if (inFlightOutboxes + inFlightLookup === 0) return false;
       return meetsWarmCoverageThreshold(
@@ -351,8 +373,16 @@ export function useRobustReplaceableAction(): RobustReplaceableActionResult {
    * Throws a user-facing error if the threshold is not met.
    */
   const assertWarmCoverage = useCallback(
-    (outboxes: string[], lookup: string[], kind: number) => {
+    (
+      outboxes: string[],
+      lookup: string[],
+      kind: number,
+      coverage: RelaySubscriptionCoverage | undefined,
+      evidence: "identity" | "deletion" = "identity",
+    ) => {
       const label = kindLabel(kind);
+      const coverageLabel =
+        evidence === "deletion" ? "deletion-query coverage" : "query coverage";
 
       // Layer 1: fast-fail on navigator.onLine (catches DevTools offline mode
       // immediately, before WebSocket close events have had time to propagate)
@@ -377,14 +407,14 @@ export function useRobustReplaceableAction(): RobustReplaceableActionResult {
         coveredOutboxes: healthyOutboxes,
         coveredLookup: healthyLookup,
         summary,
-      } = getCoverageCounts(outboxes, lookup);
-      const advice = canWarmCoverageStillSucceed(outboxes, lookup)
+      } = getCoverageCounts(outboxes, lookup, coverage);
+      const advice = canWarmCoverageStillSucceed(outboxes, lookup, coverage)
         ? "Relay checks are still in progress."
         : "Try again shortly; if this persists, review the relay status.";
 
       if (healthyOutboxes === 0) {
         throw new Error(
-          `None of your ${outboxes.length} outbox relay(s) have current query coverage. ` +
+          `None of your ${outboxes.length} outbox relay(s) have current ${coverageLabel}. ` +
             `${summary} ${advice}`,
         );
       }
@@ -393,8 +423,8 @@ export function useRobustReplaceableAction(): RobustReplaceableActionResult {
         // Single covered outbox — require backup coverage from index relays
         if (healthyLookup < MIN_INDEX_RELAYS_FOR_SINGLE_OUTBOX) {
           throw new Error(
-            `Only 1 of your ${outboxes.length} outbox relay(s) has current query coverage and ` +
-              `only ${healthyLookup} of ${lookup.length} lookup relay(s) have current query coverage ` +
+            `Only 1 of your ${outboxes.length} outbox relay(s) has current ${coverageLabel} and ` +
+              `only ${healthyLookup} of ${lookup.length} lookup relay(s) have current ${coverageLabel} ` +
               `(need at least ${MIN_INDEX_RELAYS_FOR_SINGLE_OUTBOX} lookup relays as backup). ` +
               `${summary} ${advice}`,
           );
@@ -410,7 +440,7 @@ export function useRobustReplaceableAction(): RobustReplaceableActionResult {
       ) {
         throw new Error(
           `Connection is not stable enough to safely update your ${label}. ` +
-            `Only ${healthyOutboxes} of ${outboxes.length} outbox relay(s) have current query coverage ` +
+            `Only ${healthyOutboxes} of ${outboxes.length} outbox relay(s) have current ${coverageLabel} ` +
             `(need at least ${MIN_OUTBOX_ABSOLUTE} or ${Math.round(MIN_OUTBOX_FRACTION * 100)}%). ` +
             `${summary} ${advice}`,
         );
@@ -422,14 +452,16 @@ export function useRobustReplaceableAction(): RobustReplaceableActionResult {
   /** Wait for an in-flight identity query to decide the coverage threshold. */
   const waitForWarmCoverage = useCallback(
     async (outboxes: string[], lookup: string[], kind: number) => {
+      const currentCoverage = () =>
+        account?.pubkey ? userIdentityCoverage.get(account.pubkey) : undefined;
       const startedWithCoverageLease = account?.pubkey
         ? userIdentityCoverage.get(account.pubkey) !== undefined
         : false;
       try {
-        assertWarmCoverage(outboxes, lookup, kind);
+        assertWarmCoverage(outboxes, lookup, kind, currentCoverage());
         return;
       } catch (initialError) {
-        if (!canWarmCoverageStillSucceed(outboxes, lookup)) {
+        if (!canWarmCoverageStillSucceed(outboxes, lookup, currentCoverage())) {
           throw initialError;
         }
       }
@@ -446,10 +478,14 @@ export function useRobustReplaceableAction(): RobustReplaceableActionResult {
           return false;
         }
         try {
-          assertWarmCoverage(outboxes, lookup, kind);
+          assertWarmCoverage(outboxes, lookup, kind, currentCoverage());
           return true;
         } catch {
-          return !canWarmCoverageStillSucceed(outboxes, lookup);
+          return !canWarmCoverageStillSucceed(
+            outboxes,
+            lookup,
+            currentCoverage(),
+          );
         }
       };
 
@@ -464,9 +500,79 @@ export function useRobustReplaceableAction(): RobustReplaceableActionResult {
         ),
       );
 
-      assertWarmCoverage(outboxes, lookup, kind);
+      assertWarmCoverage(outboxes, lookup, kind, currentCoverage());
     },
     [account?.pubkey, assertWarmCoverage, canWarmCoverageStillSucceed],
+  );
+
+  /** Wait for the shared, candidate-specific NIP-09 query when required. */
+  const waitForDeletionCoverage = useCallback(
+    async (
+      outboxes: string[],
+      lookup: string[],
+      kind: number,
+      candidateId: string | undefined,
+    ) => {
+      if (!account?.pubkey) throw new Error("Not logged in.");
+      const pubkey = account.pubkey;
+      const matchingLease = () => {
+        const lease = userPersonalDeletionCoverage.get(pubkey);
+        if (!lease) return undefined;
+        const leaseCandidateId = lease.candidateIds.get(kind);
+        if (leaseCandidateId === candidateId) return lease;
+
+        // An exact deletion can remove the candidate while its batched lease
+        // is settling. The replacement lease no longer needs that event ID;
+        // accept it only when the EventStore confirms the candidate is gone.
+        if (
+          candidateId !== undefined &&
+          leaseCandidateId === undefined &&
+          store.getReplaceable(kind, pubkey) === undefined
+        ) {
+          return lease;
+        }
+        return undefined;
+      };
+      const decisionReady = () => {
+        const lease = matchingLease();
+        if (!lease) return false;
+        try {
+          assertWarmCoverage(
+            outboxes,
+            lookup,
+            kind,
+            lease.coverage,
+            "deletion",
+          );
+          return true;
+        } catch {
+          return !canWarmCoverageStillSucceed(outboxes, lookup, lease.coverage);
+        }
+      };
+
+      if (!decisionReady()) {
+        await firstValueFrom(
+          race(
+            userPersonalDeletionCoverage.changes$.pipe(
+              startWith(undefined),
+              filter(decisionReady),
+              take(1),
+            ),
+            timer(PERSONAL_DELETION_COVERAGE_WAIT_TIMEOUT_MS),
+          ),
+        );
+      }
+
+      const lease = matchingLease();
+      if (!lease) {
+        throw new Error(
+          `Deletion checks for your ${kindLabel(kind)} did not settle in time. ` +
+            "Please try again shortly.",
+        );
+      }
+      assertWarmCoverage(outboxes, lookup, kind, lease.coverage, "deletion");
+    },
+    [account?.pubkey, assertWarmCoverage, canWarmCoverageStillSucceed, store],
   );
 
   /**
@@ -520,10 +626,32 @@ export function useRobustReplaceableAction(): RobustReplaceableActionResult {
 
         // The persistent relay subscription does not hydrate IndexedDB. On an
         // absent target only, preserve any retained local copy before writing.
-        const event = await hydrateCachedReplaceable(account.pubkey, kind);
+        let event = await hydrateCachedReplaceable(account.pubkey, kind);
+
+        if (personalSingletonNeedsDeletionEvidence(kind)) {
+          const candidateId = event?.id;
+          await waitForDeletionCoverage(outboxes, lookup, kind, candidateId);
+          const afterDeletionEvidence = store.getReplaceable(
+            kind,
+            account.pubkey,
+          );
+          if (
+            afterDeletionEvidence !== undefined &&
+            afterDeletionEvidence.id !== candidateId
+          ) {
+            throw new Error(
+              `Your ${kindLabel(kind)} changed while its deletion evidence was checked. ` +
+                "Please review the latest value and try again.",
+            );
+          }
+          event = afterDeletionEvidence;
+        }
 
         // Supply the resolved state directly. Writers must not reopen a model
         // whose fallback loader could issue an action-time relay request.
+        // Extension point: if concurrent cross-client writes prove common, a
+        // winner-stability comparison and delta rebase belongs here, before the
+        // action signs. Phase 2 deliberately does not add that transaction.
         await action({ event, outboxes });
       } finally {
         setPending(false);
@@ -533,7 +661,9 @@ export function useRobustReplaceableAction(): RobustReplaceableActionResult {
       account?.pubkey,
       getRelaySets,
       waitForWarmCoverage,
+      waitForDeletionCoverage,
       hydrateCachedReplaceable,
+      store,
     ],
   );
 

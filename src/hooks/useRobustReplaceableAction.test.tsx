@@ -6,6 +6,7 @@ import {
   USER_IDENTITY_COVERAGE_SETTLEMENT_TIMEOUT_MS,
   userIdentityCoverage,
 } from "@/services/userIdentityCoverage";
+import { userPersonalDeletionCoverage } from "@/services/userPersonalDeletionCoverage";
 
 const PUBKEY = "a".repeat(64);
 const OUTBOX = "wss://outbox.example.test";
@@ -65,6 +66,7 @@ import { useRobustReplaceableAction } from "./useRobustReplaceableAction";
 
 describe("useRobustReplaceableAction warm coverage boundary", () => {
   let releaseCoverage: (() => void) | undefined;
+  let releaseDeletionCoverage: (() => void) | undefined;
   let coverage = createRelaySubscriptionCoverage({
     settlementTimeoutMs: USER_IDENTITY_COVERAGE_SETTLEMENT_TIMEOUT_MS,
   });
@@ -98,6 +100,8 @@ describe("useRobustReplaceableAction warm coverage boundary", () => {
   });
 
   afterEach(() => {
+    releaseDeletionCoverage?.();
+    releaseDeletionCoverage = undefined;
     releaseCoverage?.();
     releaseCoverage = undefined;
     vi.useRealTimers();
@@ -200,6 +204,128 @@ describe("useRobustReplaceableAction warm coverage boundary", () => {
       outboxes: [OUTBOX],
     });
     expect(action).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts a rebound deletion lease after its candidate is removed", async () => {
+    RELAYS.forEach((relay, index) => {
+      coverage.onLifecycle({
+        relay,
+        generation: index + 1,
+        phase: "covered",
+      });
+    });
+    const candidate = { id: "candidate" };
+    mocks.getReplaceable
+      .mockReturnValueOnce(candidate)
+      .mockReturnValue(undefined);
+
+    const deletionCoverage = createRelaySubscriptionCoverage();
+    RELAYS.forEach((relay, index) => {
+      deletionCoverage.onLifecycle({
+        relay,
+        generation: index + 10,
+        phase: "covered",
+      });
+    });
+    releaseDeletionCoverage = userPersonalDeletionCoverage.activate(
+      PUBKEY,
+      new Map(),
+      deletionCoverage,
+    );
+
+    const action = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    const { result } = renderHook(() => useRobustReplaceableAction());
+
+    await act(async () => {
+      await result.current.execute(10317, action);
+    });
+
+    expect(action).toHaveBeenCalledWith({
+      event: undefined,
+      outboxes: [OUTBOX],
+    });
+  });
+
+  it("preserves a full settlement window after a deletion lease rebinds", async () => {
+    vi.useFakeTimers();
+    RELAYS.forEach((relay, index) => {
+      coverage.onLifecycle({
+        relay,
+        generation: index + 1,
+        phase: "covered",
+      });
+    });
+    const candidate = { id: "fresh-candidate" };
+    mocks.getReplaceable.mockReturnValue(candidate);
+
+    const staleDeletionCoverage = createRelaySubscriptionCoverage();
+    RELAYS.forEach((relay, index) => {
+      staleDeletionCoverage.onLifecycle({
+        relay,
+        generation: index + 10,
+        phase: "covered",
+      });
+    });
+    releaseDeletionCoverage = userPersonalDeletionCoverage.activate(
+      PUBKEY,
+      new Map([[10317, "previous-candidate"]]),
+      staleDeletionCoverage,
+    );
+
+    const action = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    const { result } = renderHook(() => useRobustReplaceableAction());
+    let execution = Promise.resolve();
+    let outcome: "pending" | "resolved" | "rejected" = "pending";
+
+    act(() => {
+      execution = result.current.execute(10317, action);
+    });
+    const observed = execution.then(
+      () => {
+        outcome = "resolved";
+      },
+      () => {
+        outcome = "rejected";
+      },
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+      const reboundCoverage = createRelaySubscriptionCoverage({
+        settlementTimeoutMs: USER_IDENTITY_COVERAGE_SETTLEMENT_TIMEOUT_MS,
+      });
+      RELAYS.forEach((relay, index) => {
+        reboundCoverage.onLifecycle({
+          relay,
+          generation: index + 20,
+          phase: "initial",
+        });
+      });
+      releaseDeletionCoverage = userPersonalDeletionCoverage.activate(
+        PUBKEY,
+        new Map([[10317, candidate.id]]),
+        reboundCoverage,
+      );
+
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(outcome).toBe("pending");
+
+      await vi.advanceTimersByTimeAsync(500);
+      RELAYS.forEach((relay, index) => {
+        reboundCoverage.onLifecycle({
+          relay,
+          generation: index + 20,
+          phase: "covered",
+        });
+      });
+      await observed;
+    });
+
+    expect(outcome).toBe("resolved");
+    expect(action).toHaveBeenCalledWith({
+      event: candidate,
+      outboxes: [OUTBOX],
+    });
   });
 
   it("bounds an absent EventStore cache lookup", async () => {

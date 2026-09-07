@@ -23,6 +23,9 @@ export const PERSONAL_SINGLETON_DELETION_KINDS = [
   10017, 10018, 10063, 10317, 10318, 10617,
 ] as const;
 
+/** Coalesce candidate changes before replacing the shared deletion query. */
+export const PERSONAL_DELETION_BATCH_WINDOW_MS = 1_000;
+
 const personalSingletonKindSet = new Set<number>(PERSONAL_SINGLETON_KINDS);
 const deletionKindSet = new Set<number>(PERSONAL_SINGLETON_DELETION_KINDS);
 

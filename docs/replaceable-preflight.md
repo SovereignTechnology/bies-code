@@ -265,9 +265,11 @@ batcher should accumulate pointers across all personal singleton kinds for a
 deliberately generous coalescing window and issue one shared focused deletion
 request per relay/batch. It must not open one subscription per kind or per
 writer. An action reached before that evidence settles may wait within the
-existing bounded preflight deadline. This is new, uncovered evidence under step
-6 of the execution pattern, not permission to repeat the covered singleton
-query.
+existing bounded preflight deadline. The action-time wait budgets the
+one-second coalescing window before the relay's full five-second coverage
+settlement window, so a rapid second edit does not lose relay response time.
+This is new, uncovered evidence under step 6 of the execution pattern, not
+permission to repeat the covered singleton query.
 
 Concurrent cross-client edits can still land between freezing the winner and
 publishing its replacement. Adding compare-and-rebase retries would introduce a

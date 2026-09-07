@@ -49,6 +49,7 @@ import {
   userIdentityCoverage,
 } from "@/services/userIdentityCoverage";
 import { PERSONAL_SINGLETON_KINDS } from "@/lib/personalSingletons";
+import { startUserPersonalDeletionSubscription } from "@/services/userPersonalDeletionSubscription";
 
 /**
  * All replaceable event kinds that define the user's identity, relay
@@ -144,8 +145,13 @@ export function startUserIdentitySubscription(
   if (!stopped) {
     releaseCoverage = userIdentityCoverage.activate(pubkey, coverage);
   }
+  const stopDeletionCoverage = startUserPersonalDeletionSubscription(
+    pubkey,
+    relays$,
+  );
 
   return () => {
+    stopDeletionCoverage();
     stopCoverage();
     sub.unsubscribe();
   };
