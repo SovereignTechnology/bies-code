@@ -40,9 +40,7 @@ export function useUserRepositories(
     use$(() => gitIndexRelays, []) ?? gitIndexRelays.getValue();
   const privateRelayState = use$(privateGitRelayList$);
   const privateRelays =
-    account &&
-    privateRelayState.status === "ready" &&
-    privateRelayState.pubkey === account.pubkey
+    account && privateRelayState.pubkey === account.pubkey
       ? privateRelayState.relayUrls
       : [];
   const repositoryRelays = [

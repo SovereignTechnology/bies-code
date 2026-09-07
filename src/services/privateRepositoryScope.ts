@@ -61,6 +61,7 @@ export function installPrivateServiceRelays(
 ): string[] {
   const next = new Set(relayUrls.map(normalizeUrl));
   const removed: string[] = [];
+  let membershipChanged = false;
   beginPrivateRelayTrustSession(accountId, pubkey, generation);
   for (const [relay, session] of privateRelaySessions) {
     if (session.accountId !== accountId || session.generation !== generation) {
@@ -73,6 +74,7 @@ export function installPrivateServiceRelays(
     ) {
       privateRelaySessions.delete(relay);
       removed.push(relay);
+      membershipChanged = true;
     }
   }
   for (const relay of next) {
@@ -89,9 +91,10 @@ export function installPrivateServiceRelays(
         generation,
         sources: new Set(["list"]),
       });
+      membershipChanged = true;
     }
   }
-  if (removed.length > 0 || next.size > 0) emitRevision();
+  if (membershipChanged) emitRevision();
   return removed;
 }
 

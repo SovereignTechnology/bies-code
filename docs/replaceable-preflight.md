@@ -224,8 +224,8 @@ update this document in the same change.
 #### Personal-singleton adoption decision
 
 Phase 2 starts by applying one policy to every active-account personal
-singleton. This section records the intended design before the implementation
-commits so differences between writers remain visible and reviewable.
+singleton. This section records both the decision and its current implementation
+so differences between later categories remain visible and reviewable.
 
 The category contains kinds `0`, `3`, `10002`, `10017`, `10018`, `10063`,
 `10317`, `10318`, and `10617`. A kind does not leave the category merely because
@@ -281,9 +281,9 @@ permission to repeat the covered singleton query.
 Long-lived editors that replace a complete list declare the **full-replacement
 draft** modifier. They freeze the displayed event ID when editing begins and
 must abort if preflight resolves a different winner, including one recovered
-from the local cache. The kind `10317` editor currently uses this guard. It
-prevents a locally detectable stale draft from replacing data the user never saw
-without adding relay work or a rebase protocol.
+from the local cache. Kind `10317` and `10318` editors currently use this guard.
+It prevents a locally detectable stale draft from replacing data the user never
+saw without adding relay work or a rebase protocol.
 
 Concurrent cross-client edits can still land after preflight freezes the winner
 and before its replacement is published. Adding compare-and-rebase retries
@@ -307,10 +307,16 @@ broadcast check. Those receipt and broadcast guarantees belong to the
 repository transition; they are not a reason to impose echo confirmation on
 profile and list settings.
 
-Implementation is intentionally split after this decision commit: first the
-shared subscription/evidence model, then coherent writer groups and their
-publication modifiers. Until those commits land, this subsection describes the
-adopted Phase 2 target rather than claiming every listed writer already complies.
+The implementation is intentionally split into independently reviewable
+commits: the shared kind scope, batched deletion evidence, publication routing,
+mailbox relay-frontier handling, public list writers, and encrypted private-list
+projection. Current writers for kinds `3`, `10002`, `10017`, `10018`, `10317`,
+`10318`, and `10617` consume the common preflight snapshot. Kind `10063` has no
+editor, and current kind `0` creation is the documented bootstrap path. The
+kind `10318` projection decrypts the winner supplied by the shared identity
+subscription and does not own another network request. It does not project an
+absent list until every preferred outbox has settled; accounts without outboxes
+use the same rule over the warm lookup-relay set.
 
 ## Writer checklist
 

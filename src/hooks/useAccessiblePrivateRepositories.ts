@@ -28,10 +28,7 @@ export function useAccessiblePrivateRepositories(pubkey: string) {
   const privateRelayState = use$(privateGitRelayList$);
   const privateScopeRevision = use$(privateRepositoryScopeRevision$);
   const isCurrentAccount = privateRelayState.pubkey === pubkey;
-  const privateRelays =
-    isCurrentAccount && privateRelayState.status === "ready"
-      ? privateRelayState.relayUrls
-      : [];
+  const privateRelays = isCurrentAccount ? privateRelayState.relayUrls : [];
   const privateRelayKey = privateRelays.join(",");
 
   // Layer 1: private services expose their authenticated announcement set.
@@ -55,7 +52,10 @@ export function useAccessiblePrivateRepositories(pubkey: string) {
   // Layer 2: reuse the resolved component list, then retain only components
   // with a coordinate admitted through the current private-service session.
   const repos = use$(() => {
-    if (!isCurrentAccount || privateRelayState.status !== "ready") {
+    if (!isCurrentAccount) {
+      return undefined;
+    }
+    if (privateRelays.length === 0 && privateRelayState.status !== "ready") {
       return undefined;
     }
     if (privateRelays.length === 0) return of([] as ResolvedRepo[]);

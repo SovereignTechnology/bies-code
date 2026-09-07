@@ -1,11 +1,10 @@
-import type { ISigner } from "applesauce-signers";
+import type { EventSigner } from "applesauce-core";
 import { verifyEvent, type NostrEvent } from "nostr-tools";
 
 import { normalizeUrl } from "@/lib/url";
 
 /** GRASP-08 encrypted private Git relay list. */
 export const PRIVATE_GIT_RELAY_LIST_KIND = 10_318;
-export const GLOBAL_VANISH_KIND = 62;
 
 export type PrivateGitRelayListDecodeFailure = "invalid" | "signer";
 
@@ -145,21 +144,48 @@ function parsePrivateItems(plaintext: string): string[] {
   return normalizePrivateGitRelayUrls(relayUrls);
 }
 
+/** Verify cryptographically without trusting cached symbol metadata. */
+export function verifyPrivateGitRelayListEventSignature(
+  event: NostrEvent,
+): boolean {
+  const plainEvent: NostrEvent = {
+    id: event.id,
+    pubkey: event.pubkey,
+    created_at: event.created_at,
+    kind: event.kind,
+    tags: event.tags.map((tag) => [...tag]),
+    content: event.content,
+    sig: event.sig,
+  };
+  return verifyEvent(plainEvent);
+}
+
 export function isStructurallyValidPrivateGitRelayListEvent(
   event: NostrEvent,
   pubkey: string,
 ): boolean {
   return (
+    verifyPrivateGitRelayListEventSignature(event) &&
     event.kind === PRIVATE_GIT_RELAY_LIST_KIND &&
     event.pubkey === pubkey &&
     event.tags.length === 0
   );
 }
 
+/** Ignore unverified winners when choosing the next replacement timestamp. */
+export function privateGitRelayListTimestampFloor(
+  event: NostrEvent | undefined,
+  pubkey: string,
+): number {
+  return event && isStructurallyValidPrivateGitRelayListEvent(event, pubkey)
+    ? event.created_at
+    : 0;
+}
+
 export async function decodePrivateGitRelayListEvent(
   event: NostrEvent,
   pubkey: string,
-  signer: ISigner,
+  signer: EventSigner,
 ): Promise<string[]> {
   if (!isStructurallyValidPrivateGitRelayListEvent(event, pubkey)) {
     throw new PrivateGitRelayListDecodeError(
@@ -167,6 +193,8 @@ export async function decodePrivateGitRelayListEvent(
       "Private Git relay list has an invalid public envelope",
     );
   }
+  const cached = loadPrivateGitRelayListCache(pubkey);
+  if (cached?.eventId === event.id) return cached.relayUrls;
   if (!signer.nip44) {
     throw new PrivateGitRelayListDecodeError(
       "signer",
@@ -185,144 +213,15 @@ export async function decodePrivateGitRelayListEvent(
     );
   }
 
-  return parsePrivateItems(plaintext);
-}
-
-function newestFirst(left: NostrEvent, right: NostrEvent): number {
-  return right.created_at - left.created_at || left.id.localeCompare(right.id);
-}
-
-function isGlobalVanishEvent(event: NostrEvent): boolean {
-  return (
-    event.kind === GLOBAL_VANISH_KIND &&
-    event.tags.some(
-      ([name, value]) => name === "relay" && value === "ALL_RELAYS",
-    )
-  );
-}
-
-function isDeleted(
-  event: NostrEvent,
-  deletions: Iterable<NostrEvent>,
-): boolean {
-  for (const deletion of deletions) {
-    if (
-      deletion.kind === 5 &&
-      deletion.pubkey === event.pubkey &&
-      deletion.created_at >= event.created_at &&
-      verifyEvent(deletion) &&
-      deletion.tags.some(([name, value]) => name === "e" && value === event.id)
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function isVanished(
-  event: NostrEvent,
-  vanishes: Iterable<NostrEvent>,
-): boolean {
-  for (const vanish of vanishes) {
-    if (
-      verifyEvent(vanish) &&
-      vanish.pubkey === event.pubkey &&
-      vanish.created_at >= event.created_at &&
-      isGlobalVanishEvent(vanish)
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
-
-export interface DecodedPrivateGitRelayList {
-  event: NostrEvent;
-  relayUrls: string[];
-}
-
-export interface PrivateGitRelayListEvidence {
-  deletions?: Iterable<NostrEvent>;
-  vanishes?: Iterable<NostrEvent>;
-}
-
-/** Select the newest valid, undeleted list using NIP-01 tie ordering. */
-export async function selectPrivateGitRelayList(
-  candidates: Iterable<NostrEvent>,
-  pubkey: string,
-  signer: ISigner,
-  evidence: PrivateGitRelayListEvidence = {},
-): Promise<DecodedPrivateGitRelayList | undefined> {
-  const cached = loadPrivateGitRelayListCache(pubkey);
-
-  for (const event of [...candidates].sort(newestFirst)) {
-    if (
-      !verifyEvent(event) ||
-      !isStructurallyValidPrivateGitRelayListEvent(event, pubkey)
-    ) {
-      continue;
-    }
-
-    try {
-      const relayUrls =
-        cached?.eventId === event.id
-          ? cached.relayUrls
-          : await decodePrivateGitRelayListEvent(event, pubkey, signer);
-      if (
-        isDeleted(event, evidence.deletions ?? []) ||
-        isVanished(event, evidence.vanishes ?? [])
-      ) {
-        return undefined;
-      }
-      if (cached?.eventId !== event.id) {
-        savePrivateGitRelayListCache(pubkey, { eventId: event.id, relayUrls });
-      }
-      return { event, relayUrls };
-    } catch (error) {
-      if (
-        error instanceof PrivateGitRelayListDecodeError &&
-        error.failure === "invalid"
-      ) {
-        continue;
-      }
-      throw error;
-    }
-  }
-
-  return undefined;
-}
-
-export function privateGitRelayListTimestampFloor(
-  candidates: Iterable<NostrEvent>,
-  vanishes: Iterable<NostrEvent>,
-  pubkey: string,
-): number {
-  let floor = 0;
-  for (const event of candidates) {
-    if (
-      event.pubkey === pubkey &&
-      event.kind === PRIVATE_GIT_RELAY_LIST_KIND &&
-      verifyEvent(event)
-    ) {
-      floor = Math.max(floor, event.created_at);
-    }
-  }
-  for (const event of vanishes) {
-    if (
-      event.pubkey === pubkey &&
-      verifyEvent(event) &&
-      isGlobalVanishEvent(event)
-    ) {
-      floor = Math.max(floor, event.created_at);
-    }
-  }
-  return floor;
+  const relayUrls = parsePrivateItems(plaintext);
+  savePrivateGitRelayListCache(pubkey, { eventId: event.id, relayUrls });
+  return relayUrls;
 }
 
 /** Sign an exact encrypted kind:10318 replacement with no public tags. */
 export async function createPrivateGitRelayListEvent(
   pubkey: string,
-  signer: ISigner,
+  signer: EventSigner,
   relayUrls: readonly string[],
   minimumCreatedAt = 0,
 ): Promise<NostrEvent> {
@@ -361,11 +260,6 @@ export async function createPrivateGitRelayListEvent(
   ) {
     throw new Error("The signer returned an unreadable private Git relay list");
   }
-
-  savePrivateGitRelayListCache(pubkey, {
-    eventId: event.id,
-    relayUrls: roundTrip,
-  });
 
   return event;
 }

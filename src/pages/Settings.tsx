@@ -847,6 +847,7 @@ function PrivateGitRelaysSection() {
   const { state, retry, save } = usePrivateGitRelays();
   const { toast } = useToast();
   const [draft, setDraft] = useState<{
+    baseEventId?: string;
     base: string[];
     next: string[];
   } | null>(null);
@@ -874,10 +875,14 @@ function PrivateGitRelaysSection() {
       setDraft((current) => {
         const base = current?.base ?? [...published];
         const next = update(current?.next ?? [...published]);
-        return { base, next: [...new Set(next)].sort() };
+        return {
+          baseEventId: current?.baseEventId ?? state.sourceEvent?.id,
+          base,
+          next: [...new Set(next)].sort(),
+        };
       });
     },
-    [published],
+    [published, state.sourceEvent?.id],
   );
 
   const add = useCallback(() => {
@@ -901,7 +906,7 @@ function PrivateGitRelaysSection() {
     if (!draft) return;
     setSaving(true);
     try {
-      await save(draft.base, draft.next);
+      await save(draft.next, draft.baseEventId);
       setDraft(null);
       toast({
         title: "Private Git service list updated",
@@ -939,7 +944,7 @@ function PrivateGitRelaysSection() {
         ) : state.status === "loading" ? (
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            Decrypting your private service list...
+            Checking and decrypting your private service list...
           </div>
         ) : state.status === "unavailable" ? (
           <div
@@ -1012,7 +1017,13 @@ function PrivateGitRelaysSection() {
                       variant="outline"
                       size="sm"
                       className="mt-3 h-8 text-xs"
-                      onClick={() => setDraft({ base: [], next: [] })}
+                      onClick={() =>
+                        setDraft({
+                          baseEventId: state.sourceEvent?.id,
+                          base: [],
+                          next: [],
+                        })
+                      }
                       disabled={saving}
                     >
                       Publish encrypted empty list
