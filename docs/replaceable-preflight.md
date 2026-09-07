@@ -318,6 +318,67 @@ subscription and does not own another network request. It does not project an
 absent list until every preferred outbox has settled; accounts without outboxes
 use the same rule over the warm lookup-relay set.
 
+#### Notification-state adoption decision
+
+Notification read/archive state is **convergent application state** with the
+**confidential scope**, **derived signer**, and **high-frequency merge**
+modifiers. It is represented by two kind `30078` addressable events that form
+one logical state:
+
+- `git-notifications-nsec`, authored by the active account, contains the
+  encrypted notification-state private key;
+- `git-notifications-state`, authored by that derived key, contains the
+  encrypted read/archive state.
+
+The account-owned notification store is the sole network owner for both
+coordinates. It keeps one request open on the union of the user's NIP-65
+outboxes and the configured fallback relays. The request uses two exact filters,
+not the cross-product of both authors and both identifiers. When the derived
+pubkey is already cached, both filters start together. Otherwise the owner first
+warms the envelope filter, decrypts the winning envelope, then replaces that
+lease with a new lease covering both exact filters. Replacing the filter
+invalidates all prior coverage until the new request receives EOSE.
+
+The relay rule follows the personal-state precedent but counts fallback relays
+instead of user-index relays, because generic indexes commonly reject kind
+`30078` while fallback relays are actual publication destinations:
+
+1. With configured outboxes, at least one outbox must be covered. One covered
+   outbox also requires two covered fallback relays. With multiple outboxes,
+   three covered outboxes or half of the configured outboxes is sufficient.
+2. Without configured outboxes, two thirds of the fallback set, capped at three
+   relays and floored at one, must be covered.
+3. `initial` and `catching-up` relays may be awaited within the existing bounded
+   settlement deadline. Failed, disconnected, rate-limited, and
+   `not-responding` relays do not block indefinitely.
+
+Once this threshold is warm for the current two-filter lease, writers consume
+the EventStore winners and decrypted projection without an action-time relay
+request. A missing envelope may create a fresh random derived key only after the
+envelope-only lease proves absence at the same threshold. The resulting state
+coordinate is a fresh unique address under that random key, but the combined
+warm lease is still established before its first state write. Both encrypted
+events publish to the same outbox and fallback frontier so the read evidence and
+durable destinations agree. Publishing encrypted content to those relays still
+reveals event existence, timing, and approximate size; it does not reveal the
+plaintext.
+
+Read/archive actions remain immediate while coverage or decryption is pending.
+The store records their updater functions as local deltas, decrypts the current
+remote winner, and replays those deltas over it before signing. It must not
+publish a stale whole-state snapshot merely because local UI state changed
+first. Several rapid actions are debounced into one write. A new remote winner
+restarts reconciliation; a failed current-envelope or current-state decrypt is
+not retried passively on every store or lifecycle emission. The UI exposes an
+explicit retry and describes the failure as paused cross-device state sync,
+because notification delivery and the local read/archive controls still work.
+
+This adoption removes the older address-loader reads and overlapping NIP-78
+subscriptions. It does not add NIP-09 deletion discovery, a post-write echo
+request, or a compare-and-swap protocol between concurrent clients. Later
+warm-subscription events continue to reconcile cross-client updates, while the
+durable outbox reports publication delivery separately.
+
 ## Writer checklist
 
 Before adding or changing a replaceable/addressable writer, answer:
