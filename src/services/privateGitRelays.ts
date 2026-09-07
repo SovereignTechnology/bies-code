@@ -10,6 +10,7 @@ import {
   GLOBAL_VANISH_KIND,
   normalizePrivateGitRelayUrls,
   PRIVATE_GIT_RELAY_LIST_KIND,
+  PrivateGitRelayListDecodeError,
   privateGitRelayListTimestampFloor,
   selectPrivateGitRelayList,
   type DecodedPrivateGitRelayList,
@@ -57,6 +58,7 @@ interface PrivateGitRelaySession {
   identityRelays: string[];
   writeRelays: string[];
   stopped: boolean;
+  decryptBlocked: boolean;
   retryAttempt: number;
   retryTimer?: ReturnType<typeof setTimeout>;
   refreshInFlight?: Promise<void>;
@@ -269,12 +271,18 @@ function scheduleRefreshRetry(session: PrivateGitRelaySession): void {
   }, delay);
 }
 
-async function refreshSession(session: PrivateGitRelaySession): Promise<void> {
+async function refreshSession(
+  session: PrivateGitRelaySession,
+  allowSignerRetry = false,
+): Promise<void> {
+  if (session.decryptBlocked && !allowSignerRetry) return;
   if (session.refreshInFlight) return session.refreshInFlight;
+  if (allowSignerRetry) session.decryptBlocked = false;
   const refresh = (async () => {
     try {
       const snapshot = await requestPrivateGitRelaySnapshot(session);
       installSnapshot(session, snapshot);
+      session.decryptBlocked = false;
       session.retryAttempt = 0;
       clearRefreshRetry(session);
     } catch (error) {
@@ -289,7 +297,19 @@ async function refreshSession(session: PrivateGitRelaySession): Promise<void> {
             ? error.message
             : "The private Git relay list could not be read safely",
       });
-      scheduleRefreshRetry(session);
+      if (
+        error instanceof PrivateGitRelayListDecodeError &&
+        error.failure === "signer"
+      ) {
+        // A signer rejection or timeout is a user-decision boundary, not a
+        // transient relay failure. Replaying the same passive decrypt on the
+        // timer or when a relay re-sends the event spams external signers.
+        // Leave the existing Retry now control as the explicit recovery path.
+        session.decryptBlocked = true;
+        clearRefreshRetry(session);
+      } else {
+        scheduleRefreshRetry(session);
+      }
     }
   })().finally(() => {
     if (session.refreshInFlight === refresh)
@@ -326,6 +346,7 @@ export function startPrivateGitRelaySession(
     identityRelays: uniqueRelays(identityRelays),
     writeRelays: uniqueRelays(writeRelays),
     stopped: false,
+    decryptBlocked: false,
     retryAttempt: 0,
   };
   activeSession = session;
@@ -496,6 +517,7 @@ export function retryPrivateGitRelayList(generationToRetry: number): void {
     return;
   }
   clearRefreshRetry(session);
+  session.decryptBlocked = false;
   session.retryAttempt = 0;
   privateGitRelayList$.next({
     generation: session.generation,
@@ -503,7 +525,7 @@ export function retryPrivateGitRelayList(generationToRetry: number): void {
     status: "loading",
     relayUrls: [],
   });
-  void refreshSession(session);
+  void refreshSession(session, true);
 }
 
 /** Apply an editor delta to the freshest list and confirm the replacement. */

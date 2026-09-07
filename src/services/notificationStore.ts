@@ -364,9 +364,11 @@ export function acquireNotificationStore(
     ? null
     : (eventStore.timeline([nsecFilter]) as unknown as Observable<NostrEvent[]>)
         .pipe(
-          startWith([] as NostrEvent[]),
-          switchMap(async (envelopes) => {
-            if (envelopes.length === 0) return null;
+          map((envelopes) => envelopes[0]?.id ?? null),
+          startWith(null),
+          distinctUntilChanged(),
+          switchMap(async (envelopeId) => {
+            if (!envelopeId) return null;
 
             const notifSigner = await getOrCreateNotificationSigner(pubkey);
             if (!notifSigner) return null;

@@ -244,9 +244,21 @@ export async function getOrCreateNotificationSigner(
         });
         return signer;
       }
-    } catch {
-      // Decryption failed — fall through to generate a new one
+    } catch (error) {
+      // An existing encrypted envelope is authoritative. Ignoring or rejecting
+      // its signer prompt must not rotate it into a new key (and a new series
+      // of encryption/signing prompts) behind the user's back.
+      console.warn(
+        "[notifications] Could not decrypt the current notification key envelope:",
+        error,
+      );
+      return null;
     }
+
+    console.warn(
+      "[notifications] Current notification key envelope has no usable key",
+    );
+    return null;
   }
 
   // 4. Generate a fresh nsec and publish the envelope

@@ -209,9 +209,11 @@ interface RunResult<T> {
  * Runs `op` with:
  * - A nudge toast after NUDGE_DELAY_MS if still pending.
  * - A hard timeout at HARD_TIMEOUT_MS.
- * - On Android, automatic retry when the app returns to the foreground
- *   (WebSocket connections are frozen while backgrounded, so NIP-46 responses
- *   are missed).
+ * - On Android, automatic retry of signing and encryption when the app returns
+ *   to the foreground (WebSocket connections are frozen while backgrounded,
+ *   so NIP-46 responses are missed). Decryption stays single-flight because
+ *   passive readers may ask for the same ciphertext again while the signer is
+ *   still waiting for a decision.
  *
  * Uses an iterative retry loop instead of recursion.
  */
@@ -330,9 +332,10 @@ async function runWithNudge<T>(
  *
  * - Shows a nudge toast after 4 s if a signing or encryption op is still
  *   pending, so the user knows to check their signer app.
- * - On Android, automatically retries when the app returns to the foreground,
- *   recovering from missed NIP-46 responses dropped while the WebSocket was
- *   frozen in the background.
+ * - On Android, automatically retries signing and encryption when the app
+ *   returns to the foreground, recovering from missed NIP-46 responses dropped
+ *   while the WebSocket was frozen in the background. Decryption requests are
+ *   coalesced and remain single-flight until the signer responds.
  * - When a nip44 encrypt is immediately followed by a signEvent (e.g. saving
  *   encrypted settings), shows a phase-transition toast so the user knows to
  *   approve the second request.
@@ -349,6 +352,7 @@ export function signerWithNudge(
   options: { retryOnAndroidResume?: boolean } = {},
 ): ISigner {
   const retryOnAndroidResume = options.retryOnAndroidResume ?? true;
+  const pendingDecryptions = new Map<string, Promise<string>>();
   // Multi-phase state: set to true when a nip44 encrypt completes with the
   // nudge shown. Cleared on the next signEvent. Used to detect encrypt-then-sign
   // flows for kinds whose content is encrypted by the user's signer.
@@ -384,10 +388,13 @@ export function signerWithNudge(
   };
 
   // Shared wrapper for nip04/nip44 encrypt and decrypt methods.
-  function wrapCrypto(crypto: {
-    encrypt: (pubkey: string, plaintext: string) => Promise<string>;
-    decrypt: (pubkey: string, ciphertext: string) => Promise<string>;
-  }) {
+  function wrapCrypto(
+    protocol: "nip04" | "nip44",
+    crypto: {
+      encrypt: (pubkey: string, plaintext: string) => Promise<string>;
+      decrypt: (pubkey: string, ciphertext: string) => Promise<string>;
+    },
+  ) {
     return {
       encrypt: (pubkey: string, plaintext: string) =>
         runWithNudge(() => crypto.encrypt(pubkey, plaintext), {
@@ -399,8 +406,35 @@ export function signerWithNudge(
           pendingEncryptNudge = nudgeFired;
           return value;
         }),
-      decrypt: (pubkey: string, ciphertext: string) =>
-        run(() => crypto.decrypt(pubkey, ciphertext), undefined, "decrypt"),
+      decrypt: (pubkey: string, ciphertext: string) => {
+        const key = `${protocol}\u0000${pubkey}\u0000${ciphertext}`;
+        const pending = pendingDecryptions.get(key);
+        if (pending) return pending;
+
+        // Keep the underlying request single-flight even after the UI-facing
+        // timeout. NIP-46 requests are not cancellable, so dispatching another
+        // request while the first is unresolved only queues duplicate approval
+        // prompts in the signer. A foreground resume must not resend a passive
+        // decryption either; callers can explicitly retry after it settles.
+        const raw = Promise.resolve().then(() =>
+          crypto.decrypt(pubkey, ciphertext),
+        );
+        const result = runWithNudge(() => raw, {
+          kind: undefined,
+          opType: "decrypt",
+          isBunkerConnected,
+          retryOnAndroidResume: false,
+        }).then(({ value }) => value);
+
+        pendingDecryptions.set(key, result);
+        const clear = () => {
+          if (pendingDecryptions.get(key) === result) {
+            pendingDecryptions.delete(key);
+          }
+        };
+        void raw.then(clear, clear);
+        return result;
+      },
     };
   }
 
@@ -413,14 +447,14 @@ export function signerWithNudge(
       enumerable: true,
       get: () => {
         const crypto = signer.nip04;
-        return crypto ? wrapCrypto(crypto) : undefined;
+        return crypto ? wrapCrypto("nip04", crypto) : undefined;
       },
     },
     nip44: {
       enumerable: true,
       get: () => {
         const crypto = signer.nip44;
-        return crypto ? wrapCrypto(crypto) : undefined;
+        return crypto ? wrapCrypto("nip44", crypto) : undefined;
       },
     },
   });

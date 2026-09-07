@@ -44,6 +44,10 @@
 
 ### Fixes
 
+- Keep passive NIP-44 decryption requests single-flight until the external
+  signer responds, stop foreground resume from duplicating them, and require an
+  explicit retry after private-service decryption fails. A declined or timed-out
+  notification-key decrypt no longer rotates the key behind the user's back.
 - Accept established NIP-46 `nbunksec` connections for CI secret sealing in
   addition to fresh `bunker://` pairing URLs, matching ngit-ci's maintainer
   binding flow.
