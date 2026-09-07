@@ -11,6 +11,7 @@
  *   kind 10002 — NIP-65 relay list (mailboxes)
  *   kind 10017 — NIP-51 Git authors follow list
  *   kind 10018 — NIP-51 Git repositories follow list
+ *   kind 10063 — Blossom server list
  *   kind 10317 — Grasp server list
  *   kind 10318 — encrypted private Git relay list
  *   kind 10617 — pinned git repositories list
@@ -47,25 +48,18 @@ import {
   USER_IDENTITY_COVERAGE_SETTLEMENT_TIMEOUT_MS,
   userIdentityCoverage,
 } from "@/services/userIdentityCoverage";
+import { PERSONAL_SINGLETON_KINDS } from "@/lib/personalSingletons";
 
 /**
  * All replaceable event kinds that define the user's identity, relay
  * configuration, and list preferences. Any kind added here will be
  * persistently subscribed to for the active user's session.
  *
- * This is the single source of truth — import it from here when you need
- * to check whether a kind is a "user replaceable" kind.
+ * The canonical policy list lives in personalSingletons.ts. Keep this export
+ * for callers that treat the identity subscription as the source of its exact
+ * filter.
  */
-export const USER_REPLACEABLE_KINDS = [
-  0, // profile metadata
-  3, // contact / follow list
-  10002, // NIP-65 relay list (mailboxes)
-  10017, // NIP-51 Git authors follow list
-  10018, // NIP-51 Git repositories follow list
-  10317, // Grasp server list
-  10318, // encrypted private Git relay list (GRASP-08)
-  10617, // pinned git repositories list
-] as const;
+export const USER_REPLACEABLE_KINDS = PERSONAL_SINGLETON_KINDS;
 
 /**
  * Open a persistent subscription for the user's replaceable events on the

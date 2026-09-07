@@ -65,7 +65,7 @@ import {
 } from "@/services/userIdentityCoverage";
 import { normalizeUrl } from "@/lib/url";
 import { getRateLimitCooldownRemaining } from "@/lib/resilientSubscription";
-import { USER_REPLACEABLE_KINDS } from "@/services/userIdentitySubscription";
+import { isPersonalSingletonKind } from "@/lib/personalSingletons";
 
 // ---------------------------------------------------------------------------
 // Thresholds
@@ -128,8 +128,6 @@ const RELAY_STATUS_ORDER: RelayPreflightStatus[] = [
   "not-checked",
 ];
 
-const USER_REPLACEABLE_KIND_SET = new Set<number>(USER_REPLACEABLE_KINDS);
-
 function meetsWarmCoverageThreshold(
   coveredOutboxes: number,
   totalOutboxes: number,
@@ -155,7 +153,9 @@ const KIND_LABELS: Record<number, string> = {
   10002: "relay list",
   10017: "git authors list",
   10018: "git repositories list",
+  10063: "Blossom server list",
   10317: "grasp server list",
+  10318: "private Git relay list",
   10617: "pinned repositories list",
 };
 
@@ -503,7 +503,7 @@ export function useRobustReplaceableAction(): RobustReplaceableActionResult {
       if (!account?.pubkey) {
         throw new Error("Not logged in.");
       }
-      if (!USER_REPLACEABLE_KIND_SET.has(kind)) {
+      if (!isPersonalSingletonKind(kind)) {
         throw new Error(
           `Cannot use personal replaceable preflight for uncovered kind:${kind}.`,
         );
