@@ -24,6 +24,8 @@ import {
   Search,
   Lock,
   Settings2,
+  AlertTriangle,
+  RotateCcw,
 } from "lucide-react";
 import { CreateRepoDialog } from "@/components/CreateRepoDialog";
 import { Button } from "@/components/ui/button";
@@ -50,6 +52,7 @@ import { useState, useMemo } from "react";
 import type { ResolvedRepo } from "@/lib/nip34";
 import { NotificationRow } from "@/components/NotificationRow";
 import { isPrivateRepositoryCoordinate } from "@/services/privateRepositoryScope";
+import { retryPrivateGitRelayList } from "@/services/privateGitRelays";
 
 // ---------------------------------------------------------------------------
 // Greeting header
@@ -451,13 +454,12 @@ function AccessiblePrivateRepositoriesPanel({ pubkey }: { pubkey: string }) {
   const displayRepos =
     isFiltering || expanded ? filtered : filtered?.slice(0, INITIAL_VISIBLE);
   const hasMore = !isFiltering && (filtered?.length ?? 0) > INITIAL_VISIBLE;
-  const serviceCount =
-    state.pubkey === pubkey && state.status === "ready"
-      ? state.relayUrls.length
-      : 0;
+  const isCurrentAccount = state.pubkey === pubkey;
+  const serviceCount = isCurrentAccount ? state.relayUrls.length : 0;
+  const isUnavailable = isCurrentAccount && state.status === "unavailable";
   const serviceLabel = serviceCount === 1 ? "service" : "services";
 
-  if (serviceCount === 0) return null;
+  if (serviceCount === 0 && !isUnavailable) return null;
 
   return (
     <>
@@ -472,7 +474,11 @@ function AccessiblePrivateRepositoriesPanel({ pubkey }: { pubkey: string }) {
                 </span>
               </h3>
               <p className="ml-6 mt-1 text-xs text-muted-foreground">
-                Querying {serviceCount} private {serviceLabel}
+                {isUnavailable
+                  ? serviceCount > 0
+                    ? `Using ${serviceCount} last decrypted ${serviceLabel}`
+                    : "Encrypted service list unavailable"
+                  : `Querying ${serviceCount} private ${serviceLabel}`}
               </p>
             </div>
             <Button
@@ -489,6 +495,37 @@ function AccessiblePrivateRepositoriesPanel({ pubkey }: { pubkey: string }) {
           </div>
         </div>
 
+        {isUnavailable && (
+          <div
+            className="mb-3 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2.5"
+            role="alert"
+          >
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
+              <div className="min-w-0">
+                <p className="text-xs font-medium">
+                  Current private service list could not be decrypted
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {serviceCount > 0
+                    ? "Repositories from the last decrypted list remain available."
+                    : "Retry decryption to restore private repository discovery."}
+                </p>
+              </div>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="mt-2 h-7 text-xs"
+              onClick={() => retryPrivateGitRelayList(state.generation)}
+            >
+              <RotateCcw className="mr-1.5 h-3 w-3" />
+              Retry decryption
+            </Button>
+          </div>
+        )}
+
         {sorted && sorted.length > 0 && (
           <div className="relative mb-3">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
@@ -502,7 +539,9 @@ function AccessiblePrivateRepositoriesPanel({ pubkey }: { pubkey: string }) {
         )}
 
         <div>
-          {repos === undefined ? (
+          {repos === undefined &&
+          isUnavailable &&
+          serviceCount === 0 ? null : repos === undefined ? (
             <div className="space-y-1">
               {Array.from({ length: 3 }).map((_, index) => (
                 <RepoRowSkeleton key={index} />

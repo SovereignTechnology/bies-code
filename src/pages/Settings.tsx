@@ -947,26 +947,51 @@ function PrivateGitRelaysSection() {
             Checking and decrypting your private service list...
           </div>
         ) : state.status === "unavailable" ? (
-          <div
-            className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2.5"
-            role="alert"
-          >
-            <p className="text-sm font-medium">Private list unavailable</p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {state.error ??
-                "The list could not be read safely. Editing is disabled so an unknown list is never replaced with an empty one."}
-            </p>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="mt-3 h-8 text-xs"
-              onClick={retry}
+          <>
+            <div
+              className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2.5"
+              role="alert"
             >
-              <RotateCcw className="mr-1.5 h-3 w-3" />
-              Retry now
-            </Button>
-          </div>
+              <p className="text-sm font-medium">Private list unavailable</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {state.error ??
+                  "The list could not be read safely. Editing is disabled so an unknown list is never replaced with an empty one."}
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="mt-3 h-8 text-xs"
+                onClick={retry}
+              >
+                <RotateCcw className="mr-1.5 h-3 w-3" />
+                Retry now
+              </Button>
+            </div>
+            {state.relayUrls.length > 0 && (
+              <div className="space-y-2">
+                <p className="text-xs text-muted-foreground">
+                  Continuing to use the last successfully decrypted services for
+                  private repository reads. Editing stays disabled until the
+                  current list can be decrypted.
+                </p>
+                {state.relayUrls.map((relayUrl) => (
+                  <div
+                    key={relayUrl}
+                    className="flex items-center gap-2 rounded-md border border-border/50 bg-muted/20 px-3 py-2"
+                  >
+                    <Shield className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                    <span className="min-w-0 flex-1 truncate font-mono text-sm">
+                      {relayUrl}
+                    </span>
+                    <Badge variant="secondary" className="text-[10px]">
+                      last decrypted
+                    </Badge>
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
         ) : (
           <>
             <div className="space-y-2">

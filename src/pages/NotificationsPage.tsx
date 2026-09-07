@@ -31,6 +31,8 @@ import {
   Eye,
   EyeOff,
   ChevronDown,
+  AlertTriangle,
+  RotateCcw,
 } from "lucide-react";
 import {
   NotificationRow,
@@ -109,7 +111,8 @@ type NotificationDisplayEntry =
 
 export default function NotificationsPage() {
   const activeAccount = useActiveAccount();
-  const { items, unreadCount, actions, history } = useNotifications();
+  const { items, unreadCount, actions, history, sync, retrySync } =
+    useNotifications();
   const [searchParams, setSearchParams] = useSearchParams();
   const currentView = notificationViewFromParam(searchParams.get("view"));
   const groupingMode = groupingModeFromParam(searchParams.get("group"));
@@ -392,6 +395,39 @@ export default function NotificationsPage() {
           />
         </div>
       </div>
+
+      {sync?.status === "paused" && (
+        <div
+          className="mb-4 flex flex-col gap-3 rounded-xl border border-amber-500/30 bg-amber-500/5 px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
+          role="alert"
+        >
+          <div className="flex min-w-0 items-start gap-3">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+            <div>
+              <p className="text-sm font-medium">
+                Cross-device notification state is paused
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {sync.message} Read, unread, archive, and restore changes still
+                work on this device
+                {sync.pendingChanges
+                  ? " and will be synced after recovery."
+                  : "."}
+              </p>
+            </div>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-8 shrink-0 text-xs"
+            onClick={retrySync}
+          >
+            <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
+            Retry sync
+          </Button>
+        </div>
+      )}
 
       {/* Compact mobile filters */}
       <div className="mb-3 rounded-xl border border-border/60 bg-muted/20 p-2 sm:hidden">
