@@ -247,9 +247,10 @@ The common policy is:
 3. The first-account creation of kinds `0` and `10002` declares the existing
    bootstrap-identity modifier. Every later edit uses the common preflight.
 4. Kind `10002` additionally declares the relay-frontier modifier. Its snapshot
-   freezes the old mailbox event, and publication must reach the appropriate old
-   and proposed relay sets rather than silently deriving every destination from
-   whichever list wins optimistic local insertion.
+   freezes the old mailbox event rather than silently deriving every destination
+   from whichever list wins optimistic local insertion. Publication attempts the
+   retiring frontier as best-effort and requires the proposed frontier: a dead
+   relay being removed must not keep the durable outbox pending for seven days.
 5. Personal-singleton events are published to the user's outboxes and user
    index relays. Kinds `0` and `10002` are explicitly included because they are
    what other clients need to discover the user and the user's mailboxes. User

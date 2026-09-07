@@ -17,6 +17,7 @@ import { use$ } from "@/hooks/use$";
 import { useCountdown } from "@/hooks/useCountdown";
 import { useElapsed } from "@/hooks/useElapsed";
 import {
+  fixedRelayGroupUrls,
   outboxStore,
   unwrapRelayGroupId,
   type OutboxItem,
@@ -355,6 +356,18 @@ function useEventContext(
 function GroupLabel({ groupId }: { groupId: string }) {
   const store = useEventStore();
   const { groupId: targetGroupId, bestEffort } = unwrapRelayGroupId(groupId);
+
+  // Frozen relay sets currently represent the two sides of a NIP-65 edit.
+  // The retiring frontier is best-effort; the proposed frontier is required.
+  if (fixedRelayGroupUrls(targetGroupId) !== undefined) {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-secondary px-2 py-0.5 text-xs font-medium text-secondary-foreground">
+        {bestEffort
+          ? "Previous mailbox relays (best effort)"
+          : "Proposed mailbox relays"}
+      </span>
+    );
+  }
 
   // "outbox:<pubkey>" → NIP-65 write relays
   if (targetGroupId.startsWith("outbox:")) {

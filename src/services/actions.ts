@@ -1,5 +1,7 @@
 import { ActionRunner } from "applesauce-actions";
+import { getOutboxes } from "applesauce-core/helpers";
 import type { NostrEvent } from "nostr-tools";
+import { bestEffortRelayGroupId, fixedRelayGroupId } from "./outbox";
 import { eventStore, publish } from "./nostr";
 import { accounts } from "./accounts";
 
@@ -7,10 +9,23 @@ import { accounts } from "./accounts";
  * Publish function passed to the ActionRunner.
  *
  * Category publication routing lives in nostr.publish() so direct writers and
- * ActionRunner-based writers receive the same durable outbox policy.
+ * ActionRunner-based writers receive the same durable outbox policy. NIP-65
+ * edits additionally freeze their old and proposed outbox frontiers here. The
+ * old frontier is attempted as best-effort because a dead relay is commonly
+ * the reason for the edit; the proposed frontier remains required.
  */
-function runnerPublish(event: NostrEvent): Promise<void> {
-  return publish(event);
+function runnerPublish(
+  event: NostrEvent,
+  actionRelays?: string[],
+): Promise<void> {
+  if (event.kind !== 10002) return publish(event);
+
+  const oldFrontier = fixedRelayGroupId(actionRelays ?? []);
+  const frozenGroups = [
+    oldFrontier ? bestEffortRelayGroupId(oldFrontier) : undefined,
+    fixedRelayGroupId(getOutboxes(event)),
+  ].filter((group): group is string => group !== undefined);
+  return publish(event, frozenGroups);
 }
 
 /**

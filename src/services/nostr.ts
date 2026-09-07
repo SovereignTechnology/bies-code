@@ -77,6 +77,7 @@ import {
 } from "@/lib/resilientSubscription";
 import {
   bestEffortRelayGroupId,
+  fixedRelayGroupUrls,
   outboxStore,
   type RelayGroupResolver,
   unwrapRelayGroupId,
@@ -384,6 +385,7 @@ async function resolveMailboxes(pubkey: string) {
  *   - "git-index"            → git index relay (wss://index.ngit.dev)
  *   - "bootstrap-relays"     → hardcoded new-account bootstrap relays
  *   - "best-effort:<group>"  → attempted without blocking broad delivery
+ *   - "fixed-relays:<...>"   → immutable relay URLs encoded by the writer
  *
  * When the kind:10002 is not yet in the EventStore, addressLoader is used to
  * fetch it. The outbox store calls this again via reResolveRelayGroups()
@@ -392,6 +394,9 @@ async function resolveMailboxes(pubkey: string) {
  */
 const relayGroupResolver: RelayGroupResolver = async (groupId) => {
   const targetGroupId = unwrapRelayGroupId(groupId).groupId;
+  const fixedRelays = fixedRelayGroupUrls(targetGroupId);
+  if (fixedRelays !== undefined) return fixedRelays;
+
   // "outbox:<pubkey>" → NIP-65 write relays
   if (targetGroupId.startsWith("outbox:")) {
     const pubkey = targetGroupId.slice(7);

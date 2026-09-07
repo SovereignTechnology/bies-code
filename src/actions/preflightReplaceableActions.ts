@@ -5,8 +5,9 @@
  * model normally invokes the store's fallback loader, but the robust writer
  * has already established relay coverage and checked IndexedDB before calling
  * these actions. Reading again would add latency and a redundant relay REQ.
- * Relay arrays are forwarded for Action API parity; GitWorkshop's global
- * runner owns publication routing and currently ignores action relay hints.
+ * Contact relay arrays are retained for Action API parity. Mailbox actions use
+ * the relay argument to carry the frozen old outboxes into GitWorkshop's
+ * global runner, while the signed event supplies the proposed frontier.
  */
 
 import type { Action } from "applesauce-actions";
@@ -15,7 +16,6 @@ import { MailboxesFactory } from "applesauce-core/factories";
 import {
   getOutboxes,
   isMailboxesEvent,
-  relaySet,
   type ProfilePointer,
 } from "applesauce-core/helpers";
 import type { NostrEvent } from "nostr-tools";
@@ -79,7 +79,7 @@ export function AddInboxRelayFromPreflight(
     let next = factory;
     for (const url of relays) next = next.addInbox(url);
     const signed = await next.sign(signer);
-    await publish(signed, relaySet(getOutboxes(signed), oldOutboxes));
+    await publish(signed, oldOutboxes);
   };
 }
 
@@ -95,7 +95,7 @@ export function RemoveInboxRelayFromPreflight(
     let next = factory;
     for (const url of relays) next = next.removeInbox(url);
     const signed = await next.sign(signer);
-    await publish(signed, getOutboxes(signed));
+    await publish(signed, oldOutboxes);
   };
 }
 
@@ -110,7 +110,7 @@ export function AddOutboxRelayFromPreflight(
     let next = factory;
     for (const url of relays) next = next.addOutbox(url);
     const signed = await next.sign(signer);
-    await publish(signed, relaySet(getOutboxes(signed), oldOutboxes));
+    await publish(signed, oldOutboxes);
   };
 }
 
@@ -126,6 +126,6 @@ export function RemoveOutboxRelayFromPreflight(
     let next = factory;
     for (const url of relays) next = next.removeOutbox(url);
     const signed = await next.sign(signer);
-    await publish(signed, getOutboxes(signed));
+    await publish(signed, oldOutboxes);
   };
 }
