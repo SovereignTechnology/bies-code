@@ -228,7 +228,6 @@ export function useRepositorySearch(
   const privateRelays =
     !relayOverride &&
     accountPubkey &&
-    privateRelayState.status === "ready" &&
     privateRelayState.pubkey === accountPubkey
       ? privateRelayState.relayUrls
       : [];

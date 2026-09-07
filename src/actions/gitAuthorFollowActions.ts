@@ -1,10 +1,10 @@
 /**
  * Custom Applesauce actions for the NIP-51 Git authors follow list (kind:10017).
  *
- * These mirror the built-in FollowUser / UnfollowUser actions (kind:3) but
- * operate on kind:10017 instead. The pattern is identical: fetch the latest
- * replaceable event, modify its public `p` tags, sign, and publish to the
- * user's outboxes.
+ * These consume the exact warm snapshot resolved by personal-singleton
+ * preflight, modify its public `p` tags, sign, and publish. They never reopen
+ * the EventStore or its fallback loader after preflight has established
+ * presence or absence.
  *
  * Because kind:10017 is a brand-new list for most users, we do NOT throw when
  * no existing event is found — we simply build a fresh one.
@@ -12,7 +12,7 @@
 
 import type { Action } from "applesauce-actions";
 import type { ProfilePointer } from "applesauce-core/helpers";
-import { firstValueFrom, of, timeout } from "rxjs";
+import type { NostrEvent } from "nostr-tools";
 import {
   GitAuthorListFactory,
   GIT_AUTHORS_KIND,
@@ -21,17 +21,12 @@ import {
 export { GIT_AUTHORS_KIND };
 
 /** Add a pubkey to the user's NIP-51 Git authors follow list (kind:10017). */
-export function AddGitAuthor(user: string | ProfilePointer): Action {
-  return async ({ events, user: me, publish, signer }) => {
-    const [event, outboxes] = await Promise.all([
-      firstValueFrom(
-        events
-          .replaceable(GIT_AUTHORS_KIND, me.pubkey)
-          .pipe(timeout({ first: 1000, with: () => of(undefined) })),
-      ),
-      me.outboxes$.$first(1000, undefined),
-    ]);
-
+export function AddGitAuthorFromPreflight(
+  event: NostrEvent | undefined,
+  outboxes: string[],
+  user: string | ProfilePointer,
+): Action {
+  return async ({ publish, signer }) => {
     const factory = event
       ? GitAuthorListFactory.modify(event)
       : GitAuthorListFactory.create();
@@ -42,17 +37,12 @@ export function AddGitAuthor(user: string | ProfilePointer): Action {
 }
 
 /** Remove a pubkey from the user's NIP-51 Git authors follow list (kind:10017). */
-export function RemoveGitAuthor(user: string | ProfilePointer): Action {
-  return async ({ events, user: me, publish, signer }) => {
-    const [event, outboxes] = await Promise.all([
-      firstValueFrom(
-        events
-          .replaceable(GIT_AUTHORS_KIND, me.pubkey)
-          .pipe(timeout({ first: 1000, with: () => of(undefined) })),
-      ),
-      me.outboxes$.$first(1000, undefined),
-    ]);
-
+export function RemoveGitAuthorFromPreflight(
+  event: NostrEvent | undefined,
+  outboxes: string[],
+  user: string | ProfilePointer,
+): Action {
+  return async ({ publish, signer }) => {
     const factory = event
       ? GitAuthorListFactory.modify(event)
       : GitAuthorListFactory.create();

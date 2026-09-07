@@ -13,6 +13,17 @@
 
 ### Changed
 
+- Apply the warm personal-singleton preflight policy consistently to contact,
+  mailbox, Git follow, pinned-repository, GRASP, Blossom, and encrypted private
+  Git relay lists. One account-owned query now covers all category kinds;
+  writers consume its frozen snapshot without a duplicate action-time read,
+  while one coalesced deletion query supplies the additional NIP-09 evidence.
+  Personal singletons publish durably to outboxes and user indexes; established
+  user-index kinds remain required while newly routed application lists are
+  best-effort there. GRASP lists retain Git-index publication, and mailbox
+  changes preserve both old and proposed outbox frontiers. Ordinary settings
+  writes rely on durable retry and the warm subscription rather than opening a
+  post-write confirmation request.
 - Render commit lists as a condensed commit graph: one fixed-height row per
   commit with colored topology rails, hollow merge dots, branch/tag badges on
   the repo commits page, dashed stubs where history is truncated, and a

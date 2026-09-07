@@ -164,8 +164,9 @@ async function probePrivateRepository(
       : { status: "absent", relayUrls: [] };
   }
 
-  const listedRelays =
-    listStatus === "ready" ? uniqueRelayUrls(listRelayUrls) : [];
+  // A transient signer failure makes the list unsafe to edit, but the last
+  // successfully decrypted relay set remains safe for read-only discovery.
+  const listedRelays = uniqueRelayUrls(listRelayUrls);
   const listedSet = new Set(listedRelays);
   const privateHintRelays = await discoverPrivateHintRelays(
     relayHints,

@@ -75,8 +75,15 @@ import {
   resilientAdditiveSubscription,
   type AdditiveFilterChunk,
 } from "@/lib/resilientSubscription";
-import { outboxStore, type RelayGroupResolver } from "./outbox";
+import {
+  bestEffortRelayGroupId,
+  fixedRelayGroupUrls,
+  outboxStore,
+  type RelayGroupResolver,
+  unwrapRelayGroupId,
+} from "./outbox";
 import { normalizeUrl } from "@/lib/url";
+import { isPersonalSingletonKind } from "@/lib/personalSingletons";
 import { relayGroupUrls$ } from "@/models/RepositoryRelayGroup";
 import {
   buildStackCandidateFilter,
@@ -377,6 +384,8 @@ async function resolveMailboxes(pubkey: string) {
  *   - "index-relays"         → lookup/user-index relays (lookupRelays setting)
  *   - "git-index"            → git index relay (wss://index.ngit.dev)
  *   - "bootstrap-relays"     → hardcoded new-account bootstrap relays
+ *   - "best-effort:<group>"  → attempted without blocking broad delivery
+ *   - "fixed-relays:<...>"   → immutable relay URLs encoded by the writer
  *
  * When the kind:10002 is not yet in the EventStore, addressLoader is used to
  * fetch it. The outbox store calls this again via reResolveRelayGroups()
@@ -384,9 +393,13 @@ async function resolveMailboxes(pubkey: string) {
  * relays automatically.
  */
 const relayGroupResolver: RelayGroupResolver = async (groupId) => {
+  const targetGroupId = unwrapRelayGroupId(groupId).groupId;
+  const fixedRelays = fixedRelayGroupUrls(targetGroupId);
+  if (fixedRelays !== undefined) return fixedRelays;
+
   // "outbox:<pubkey>" → NIP-65 write relays
-  if (groupId.startsWith("outbox:")) {
-    const pubkey = groupId.slice(7);
+  if (targetGroupId.startsWith("outbox:")) {
+    const pubkey = targetGroupId.slice(7);
     if (!/^[0-9a-f]{64}$/.test(pubkey)) return [];
     try {
       const mailboxes = await resolveMailboxes(pubkey);
@@ -397,8 +410,8 @@ const relayGroupResolver: RelayGroupResolver = async (groupId) => {
   }
 
   // "inbox:<pubkey>" → NIP-65 read relays
-  if (groupId.startsWith("inbox:")) {
-    const pubkey = groupId.slice(6);
+  if (targetGroupId.startsWith("inbox:")) {
+    const pubkey = targetGroupId.slice(6);
     if (!/^[0-9a-f]{64}$/.test(pubkey)) return [];
     try {
       const mailboxes = await resolveMailboxes(pubkey);
@@ -414,11 +427,11 @@ const relayGroupResolver: RelayGroupResolver = async (groupId) => {
   // Directionally discovered invitation announcements never widen a publish
   // target. Any announcements arriving later are picked up when the outbox
   // re-resolves relay groups.
-  if (groupId.startsWith("30617:")) {
-    if (isPrivateRepositoryCoordinate(groupId)) {
-      return getPrivateRepositoryRelays(groupId) ?? [];
+  if (targetGroupId.startsWith("30617:")) {
+    if (isPrivateRepositoryCoordinate(targetGroupId)) {
+      return getPrivateRepositoryRelays(targetGroupId) ?? [];
     }
-    const parts = groupId.split(":");
+    const parts = targetGroupId.split(":");
     const pubkey = parts[1];
     const d = parts.slice(2).join(":");
     if (!pubkey || !d) return [];
@@ -431,10 +444,10 @@ const relayGroupResolver: RelayGroupResolver = async (groupId) => {
   }
 
   // Static settings-based groups
-  if (groupId === "fallback-relays") return fallbackRelays.getValue();
-  if (groupId === "index-relays") return lookupRelays.getValue();
-  if (groupId === "git-index") return gitIndexRelays.getValue();
-  if (groupId === "bootstrap-relays") {
+  if (targetGroupId === "fallback-relays") return fallbackRelays.getValue();
+  if (targetGroupId === "index-relays") return lookupRelays.getValue();
+  if (targetGroupId === "git-index") return gitIndexRelays.getValue();
+  if (targetGroupId === "bootstrap-relays") {
     const { ACCOUNT_BOOTSTRAP_RELAYS } = await import("@/actions/account");
     return ACCOUNT_BOOTSTRAP_RELAYS;
   }
@@ -506,6 +519,9 @@ const GIT_INDEX_KINDS = new Set([
   10317, // User GRASP server lists
 ]);
 
+/** User-index kinds whose acceptance was already required before Phase 2. */
+const REQUIRED_USER_INDEX_KINDS = new Set([0, 3, 10002, 10017, 10018, 10317]);
+
 /**
  * Publish an event to the configured relays.
  *
@@ -518,6 +534,9 @@ const GIT_INDEX_KINDS = new Set([
  * Action functions in src/actions/nip34.ts which resolve the correct relay
  * groups (user outbox + repo relays + notification inboxes) automatically.
  *
+ * Every personal singleton is also published to configured user-index relays.
+ * Existing index kinds retain required delivery; newly routed application
+ * lists are best-effort because generic index acceptance is not established.
  * Kind:30617 (repo announcements) and kind:10317 (GRASP lists) are
  * automatically also published to "git-index" — the git index relay only
  * accepts these two kinds, so only they should ever be sent there.
@@ -539,6 +558,19 @@ export async function publish(
 
   const groupIds = [`outbox:${event.pubkey}`, "fallback-relays"];
   if (extraGroupIds) groupIds.push(...extraGroupIds);
+
+  if (
+    isPersonalSingletonKind(event.kind) &&
+    !groupIds.some(
+      (groupId) => unwrapRelayGroupId(groupId).groupId === "index-relays",
+    )
+  ) {
+    groupIds.push(
+      REQUIRED_USER_INDEX_KINDS.has(event.kind)
+        ? "index-relays"
+        : bestEffortRelayGroupId("index-relays"),
+    );
+  }
 
   // Automatically include "git-index" for kinds it accepts, deduplicating
   // in case the caller already added it explicitly.

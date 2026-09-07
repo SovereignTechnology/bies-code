@@ -149,7 +149,8 @@
     },
     "patchedDependencies": {
       "applesauce-accounts@6.2.0": "patches/applesauce-accounts@6.2.0.patch",
-      "applesauce-signers@6.2.2": "patches/applesauce-signers@6.2.2.patch"
+      "applesauce-signers@6.2.2": "patches/applesauce-signers@6.2.2.patch",
+      "applesauce-core@6.2.0": "patches/applesauce-core@6.2.0.patch"
     }
   }
 }

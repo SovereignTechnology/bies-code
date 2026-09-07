@@ -11,6 +11,9 @@ patchedDependencies:
   applesauce-accounts@6.2.0:
     hash: bxsrlkrdwys5yetiqv5cn5fxxa
     path: patches/applesauce-accounts@6.2.0.patch
+  applesauce-core@6.2.0:
+    hash: nwe24476jbggrk6aoloy54zqqi
+    path: patches/applesauce-core@6.2.0.patch
   applesauce-signers@6.2.2:
     hash: ufhsn7avkq6nndfxhwr7dim2zu
     path: patches/applesauce-signers@6.2.2.patch
@@ -146,7 +149,7 @@ importers:
         version: 6.2.0(typescript@5.9.3)
       applesauce-core:
         specifier: ^6.2.0
-        version: 6.2.0(typescript@5.9.3)
+        version: 6.2.0(patch_hash=nwe24476jbggrk6aoloy54zqqi)(typescript@5.9.3)
       applesauce-loaders:
         specifier: ^6.2.0
         version: 6.2.0(typescript@5.9.3)
@@ -9010,7 +9013,7 @@ snapshots:
 
   applesauce-accounts@6.2.0(patch_hash=bxsrlkrdwys5yetiqv5cn5fxxa)(@capacitor/core@8.4.1)(typescript@5.9.3):
     dependencies:
-      applesauce-core: 6.2.0(typescript@5.9.3)
+      applesauce-core: 6.2.0(patch_hash=nwe24476jbggrk6aoloy54zqqi)(typescript@5.9.3)
       applesauce-signers: 6.2.2(patch_hash=ufhsn7avkq6nndfxhwr7dim2zu)(@capacitor/core@8.4.1)(typescript@5.9.3)
       nanoid: 5.1.16
       rxjs: 7.8.2
@@ -9024,7 +9027,7 @@ snapshots:
   applesauce-actions@6.2.0(typescript@5.9.3):
     dependencies:
       applesauce-common: 6.2.0(typescript@5.9.3)
-      applesauce-core: 6.2.0(typescript@5.9.3)
+      applesauce-core: 6.2.0(patch_hash=nwe24476jbggrk6aoloy54zqqi)(typescript@5.9.3)
       rxjs: 7.8.2
     transitivePeerDependencies:
       - supports-color
@@ -9033,7 +9036,7 @@ snapshots:
   applesauce-common@6.2.0(typescript@5.9.3):
     dependencies:
       "@scure/base": 2.2.0
-      applesauce-core: 6.2.0(typescript@5.9.3)
+      applesauce-core: 6.2.0(patch_hash=nwe24476jbggrk6aoloy54zqqi)(typescript@5.9.3)
       hash-sum: 2.0.0
       light-bolt11-decoder: 3.2.0
       nanoid: 5.1.16
@@ -9048,7 +9051,7 @@ snapshots:
       "@types/mdast": 4.0.4
       "@types/unist": 3.0.3
       applesauce-common: 6.2.0(typescript@5.9.3)
-      applesauce-core: 6.2.0(typescript@5.9.3)
+      applesauce-core: 6.2.0(patch_hash=nwe24476jbggrk6aoloy54zqqi)(typescript@5.9.3)
       mdast-util-find-and-replace: 3.0.2
       remark: 15.0.1
       remark-parse: 11.0.0
@@ -9073,7 +9076,7 @@ snapshots:
       - supports-color
       - typescript
 
-  applesauce-core@6.2.0(typescript@5.9.3):
+  applesauce-core@6.2.0(patch_hash=nwe24476jbggrk6aoloy54zqqi)(typescript@5.9.3):
     dependencies:
       debug: 4.4.3
       fast-deep-equal: 3.1.3
@@ -9107,7 +9110,7 @@ snapshots:
 
   applesauce-loaders@6.2.0(typescript@5.9.3):
     dependencies:
-      applesauce-core: 6.2.0(typescript@5.9.3)
+      applesauce-core: 6.2.0(patch_hash=nwe24476jbggrk6aoloy54zqqi)(typescript@5.9.3)
       nanoid: 5.1.16
       rxjs: 7.8.2
     transitivePeerDependencies:
@@ -9124,7 +9127,7 @@ snapshots:
       applesauce-accounts: 6.2.0(patch_hash=bxsrlkrdwys5yetiqv5cn5fxxa)(@capacitor/core@8.4.1)(typescript@5.9.3)
       applesauce-actions: 6.2.0(typescript@5.9.3)
       applesauce-content: 6.2.0(typescript@5.9.3)
-      applesauce-core: 6.2.0(typescript@5.9.3)
+      applesauce-core: 6.2.0(patch_hash=nwe24476jbggrk6aoloy54zqqi)(typescript@5.9.3)
     transitivePeerDependencies:
       - "@capacitor/core"
       - "@cashu/cashu-ts"
@@ -9146,7 +9149,7 @@ snapshots:
   applesauce-relay@6.2.1(typescript@5.9.3):
     dependencies:
       "@noble/hashes": 2.2.0
-      applesauce-core: 6.2.0(typescript@5.9.3)
+      applesauce-core: 6.2.0(patch_hash=nwe24476jbggrk6aoloy54zqqi)(typescript@5.9.3)
       nanoid: 5.1.16
       nostr-tools: 2.19.4(typescript@5.9.3)
       rxjs: 7.8.2
@@ -9172,7 +9175,7 @@ snapshots:
     dependencies:
       "@noble/secp256k1": 3.1.0
       "@scure/base": 2.2.0
-      applesauce-core: 6.2.0(typescript@5.9.3)
+      applesauce-core: 6.2.0(patch_hash=nwe24476jbggrk6aoloy54zqqi)(typescript@5.9.3)
       debug: 4.4.3
       nanoid: 5.1.16
       rxjs: 7.8.2
@@ -9187,7 +9190,7 @@ snapshots:
     dependencies:
       "@noble/hashes": 2.2.0
       applesauce-common: 6.2.0(typescript@5.9.3)
-      applesauce-core: 6.2.0(typescript@5.9.3)
+      applesauce-core: 6.2.0(patch_hash=nwe24476jbggrk6aoloy54zqqi)(typescript@5.9.3)
       rxjs: 7.8.2
     transitivePeerDependencies:
       - supports-color

@@ -9,6 +9,7 @@
  *   - "outbox:<pubkey>" → that pubkey's NIP-65 write relays
  *   - "inbox:<pubkey>"  → that pubkey's NIP-65 read relays (notification delivery)
  *   - "30617:<pubkey>:<d>" → repo relay coord
+ *   - "best-effort:<group>" → attempted without blocking broad delivery
  *   - Other strings → displayed as-is
  */
 
@@ -16,7 +17,9 @@ import { use$ } from "@/hooks/use$";
 import { useCountdown } from "@/hooks/useCountdown";
 import { useElapsed } from "@/hooks/useElapsed";
 import {
+  fixedRelayGroupUrls,
   outboxStore,
+  unwrapRelayGroupId,
   type OutboxItem,
   type OutboxRelayEntry,
   type RelayAttempt,
@@ -103,6 +106,12 @@ function kindLabel(kind: number): string {
       return "Git Authors List";
     case 10018:
       return "Git Repos List";
+    case 10063:
+      return "Blossom Server List";
+    case 10317:
+      return "GRASP Server List";
+    case 10318:
+      return "Private Git Relay List";
     case 10617:
       return "Pinned Repos List";
     case NIP78_KIND:
@@ -346,10 +355,23 @@ function useEventContext(
  */
 function GroupLabel({ groupId }: { groupId: string }) {
   const store = useEventStore();
+  const { groupId: targetGroupId, bestEffort } = unwrapRelayGroupId(groupId);
+
+  // Frozen relay sets currently represent the two sides of a NIP-65 edit.
+  // The retiring frontier is best-effort; the proposed frontier is required.
+  if (fixedRelayGroupUrls(targetGroupId) !== undefined) {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-secondary px-2 py-0.5 text-xs font-medium text-secondary-foreground">
+        {bestEffort
+          ? "Previous mailbox relays (best effort)"
+          : "Proposed mailbox relays"}
+      </span>
+    );
+  }
 
   // "outbox:<pubkey>" → NIP-65 write relays
-  if (groupId.startsWith("outbox:")) {
-    const pubkey = groupId.slice(7);
+  if (targetGroupId.startsWith("outbox:")) {
+    const pubkey = targetGroupId.slice(7);
     return (
       <span className="flex items-center gap-1.5">
         <span className="text-muted-foreground/60 text-xs">outbox:</span>
@@ -362,8 +384,8 @@ function GroupLabel({ groupId }: { groupId: string }) {
   }
 
   // "inbox:<pubkey>" → NIP-65 read relays (notification delivery)
-  if (groupId.startsWith("inbox:")) {
-    const pubkey = groupId.slice(6);
+  if (targetGroupId.startsWith("inbox:")) {
+    const pubkey = targetGroupId.slice(6);
     return (
       <span className="flex items-center gap-1.5">
         <span className="text-muted-foreground/60 text-xs">inbox:</span>
@@ -376,10 +398,10 @@ function GroupLabel({ groupId }: { groupId: string }) {
   }
 
   // Repo group: "30617:<pubkey>:<d>"
-  if (groupId.startsWith("30617:")) {
-    const parts = groupId.split(":");
+  if (targetGroupId.startsWith("30617:")) {
+    const parts = targetGroupId.split(":");
     const pubkey = parts[1] ?? "";
-    const dTag = parts[2] ?? groupId;
+    const dTag = parts[2] ?? targetGroupId;
     // Pre-resolve the name from the store so RepoBadge can skip its own lookup.
     const repoEvent = pubkey
       ? store.getReplaceable(REPO_KIND, pubkey, dTag)
@@ -389,7 +411,7 @@ function GroupLabel({ groupId }: { groupId: string }) {
     return (
       <span className="flex items-center gap-1.5">
         <span className="text-muted-foreground/60 text-xs">repo:</span>
-        <RepoBadge coord={groupId} repoName={resolvedName} />
+        <RepoBadge coord={targetGroupId} repoName={resolvedName} />
       </span>
     );
   }
@@ -401,15 +423,23 @@ function GroupLabel({ groupId }: { groupId: string }) {
     "git-index": "Git Index",
     "bootstrap-relays": "Bootstrap Relays",
   };
-  if (groupId in STATIC_LABELS) {
+  if (targetGroupId in STATIC_LABELS) {
     return (
       <span className="inline-flex items-center gap-1 rounded-full bg-secondary px-2 py-0.5 text-xs font-medium text-secondary-foreground">
-        <span>{STATIC_LABELS[groupId]}</span>
+        <span>
+          {STATIC_LABELS[targetGroupId]}
+          {bestEffort ? " (best effort)" : ""}
+        </span>
       </span>
     );
   }
 
-  return <span className="text-xs text-muted-foreground">{groupId}</span>;
+  return (
+    <span className="text-xs text-muted-foreground">
+      {targetGroupId}
+      {bestEffort ? " (best effort)" : ""}
+    </span>
+  );
 }
 
 function itemStatus(

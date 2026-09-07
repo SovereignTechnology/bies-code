@@ -15,7 +15,6 @@ import {
 } from "@/services/nostr";
 import { startUserIdentitySubscription } from "@/services/userIdentitySubscription";
 import { startPrivateGitRelaySession } from "@/services/privateGitRelays";
-import { fallbackRelays, lookupRelays } from "@/services/settings";
 import { MailboxesModel } from "applesauce-core/models";
 
 /**
@@ -99,7 +98,7 @@ let isApplyingCrossTabSync = false;
   });
 
   // Keep a persistent subscription open for the active user's replaceable
-  // events (kinds 0, 3, 10002, 10017, 10018, 10317) on the union of their
+  // personal-singleton events on the union of their
   // outbox relays and lookup/index relays.
   //
   // Strategy: whenever the active account changes OR their NIP-65 outbox relay
@@ -140,26 +139,9 @@ let isApplyingCrossTabSync = false;
           value.account.pubkey,
           value.outboxes,
         );
-        const defaultIdentityRelays = [
-          ...new Set([
-            ...fallbackRelays.getValue(),
-            ...lookupRelays.getValue(),
-          ]),
-        ];
-        const writeRelays =
-          value.outboxes.length > 0
-            ? value.outboxes
-            : fallbackRelays.getValue().length > 0
-              ? fallbackRelays.getValue()
-              : lookupRelays.getValue();
         stopPrivateGitRelays = startPrivateGitRelaySession(
           value.account,
-          // Own replaceable lists are read from NIP-65 write relays. Inbox
-          // relays receive events from other users and need not carry kind
-          // 10318; including them would turn unrelated relay health into a
-          // private-list discovery dependency.
-          writeRelays.length > 0 ? writeRelays : defaultIdentityRelays,
-          writeRelays,
+          value.outboxes,
         );
       }
     });

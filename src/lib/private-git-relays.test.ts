@@ -1,15 +1,22 @@
 import type { ISigner } from "applesauce-signers";
 import type { EventTemplate } from "nostr-tools";
-import { finalizeEvent, generateSecretKey, getPublicKey } from "nostr-tools";
+import {
+  finalizeEvent,
+  generateSecretKey,
+  getPublicKey,
+  verifiedSymbol,
+  verifyEvent,
+} from "nostr-tools";
 import { describe, expect, it } from "vitest";
 
 import {
   createPrivateGitRelayListEvent,
   decodePrivateGitRelayListEvent,
+  isStructurallyValidPrivateGitRelayListEvent,
   normalizePrivateGitRelayUrls,
   PRIVATE_GIT_RELAY_LIST_KIND,
+  privateGitRelayListTimestampFloor,
   PrivateGitRelayListDecodeError,
-  selectPrivateGitRelayList,
 } from "@/lib/private-git-relays";
 
 function testIdentity(): {
@@ -73,44 +80,41 @@ describe("GRASP-08 private relay lists", () => {
     ).toThrow(PrivateGitRelayListDecodeError);
   });
 
-  it("skips an invalid newest event but honors deletion of a valid newest list", async () => {
+  it("rejects an invalid signature from projection and timestamp flooring", async () => {
     const { pubkey, signer, sign } = testIdentity();
-    const older = sign({
+    const valid = sign({
       kind: PRIVATE_GIT_RELAY_LIST_KIND,
-      created_at: 10,
+      created_at: 1_700_000_000,
       tags: [],
-      content: JSON.stringify([["g", "wss://older.example"]]),
+      content: JSON.stringify([["g", "wss://private.example"]]),
     });
-    const malformed = sign({
-      kind: PRIVATE_GIT_RELAY_LIST_KIND,
-      created_at: 12,
-      tags: [],
-      content: "not-json",
-    });
-    const newest = sign({
-      kind: PRIVATE_GIT_RELAY_LIST_KIND,
-      created_at: 11,
-      tags: [],
-      content: JSON.stringify([["g", "wss://new.example"]]),
-    });
+    const forged = {
+      id: valid.id,
+      pubkey: valid.pubkey,
+      created_at: valid.created_at,
+      kind: valid.kind,
+      tags: valid.tags,
+      content: valid.content,
+      sig: "0".repeat(128),
+    };
+    Reflect.set(forged, verifiedSymbol, true);
 
-    await expect(
-      selectPrivateGitRelayList([older, malformed, newest], pubkey, signer),
-    ).resolves.toMatchObject({
-      event: { id: newest.id },
-      relayUrls: ["wss://new.example"],
-    });
+    // Demonstrate the cached-verification hazard that the private-list
+    // boundary must not trust.
+    expect(verifyEvent(forged)).toBe(true);
 
-    const deletion = sign({
-      kind: 5,
-      created_at: 13,
-      tags: [["e", newest.id]],
-      content: "",
-    });
+    expect(isStructurallyValidPrivateGitRelayListEvent(valid, pubkey)).toBe(
+      true,
+    );
+    expect(privateGitRelayListTimestampFloor(valid, pubkey)).toBe(
+      valid.created_at,
+    );
+    expect(isStructurallyValidPrivateGitRelayListEvent(forged, pubkey)).toBe(
+      false,
+    );
+    expect(privateGitRelayListTimestampFloor(forged, pubkey)).toBe(0);
     await expect(
-      selectPrivateGitRelayList([older, newest], pubkey, signer, {
-        deletions: [deletion],
-      }),
-    ).resolves.toBeUndefined();
+      decodePrivateGitRelayListEvent(forged, pubkey, signer),
+    ).rejects.toMatchObject({ failure: "invalid" });
   });
 });

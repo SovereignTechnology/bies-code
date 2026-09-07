@@ -53,7 +53,6 @@ import { NwcQrConnect } from "@/components/zap/NwcQrConnect";
 import { useGraspServers } from "@/hooks/useGraspServers";
 import { usePrivateGitRelays } from "@/hooks/usePrivateGitRelays";
 import { normalizePrivateGitRelayUrls } from "@/lib/private-git-relays";
-import { usePublish } from "@/hooks/usePublish";
 import {
   useRobustReplaceableAction,
   type ReplaceablePreflightSnapshot,
@@ -65,6 +64,10 @@ import {
   RemoveInboxRelayFromPreflight,
   RemoveOutboxRelayFromPreflight,
 } from "@/actions/preflightReplaceableActions";
+import {
+  GRASP_LIST_KIND,
+  ReplaceGraspListFromPreflight,
+} from "@/actions/graspListActions";
 import { runner } from "@/services/actions";
 import { cn } from "@/lib/utils";
 import {
@@ -380,13 +383,11 @@ function InboxRelaysSection() {
   );
 }
 
-const GRASP_LIST_KIND = 10317;
-
 function GraspRelaysSection() {
   const account = useAccount();
   const pubkey = account?.pubkey;
-  const { servers, isFromUserList, isLoading } = useGraspServers(pubkey);
-  const { publishEvent } = usePublish();
+  const { servers, isFromUserList, isLoading, sourceEvent } =
+    useGraspServers(pubkey);
   const { execute } = useRobustReplaceableAction();
   const { toast } = useToast();
 
@@ -396,6 +397,7 @@ function GraspRelaysSection() {
 
   // null = no draft open (showing published state)
   const [draftAddresses, setDraftAddresses] = useState<string[] | null>(null);
+  const draftBaseEventId = useRef<string | null>(null);
 
   // Sync draft when the published list changes from underneath us (e.g. first
   // load), but only if the user hasn't started editing yet.
@@ -419,11 +421,17 @@ function GraspRelaysSection() {
       ));
 
   const openDraft = useCallback(
-    (initial: string[]) => setDraftAddresses([...initial]),
-    [],
+    (initial: string[]) => {
+      draftBaseEventId.current = sourceEvent?.id ?? null;
+      setDraftAddresses([...initial]);
+    },
+    [sourceEvent?.id],
   );
 
-  const discardDraft = useCallback(() => setDraftAddresses(null), []);
+  const discardDraft = useCallback(() => {
+    draftBaseEventId.current = null;
+    setDraftAddresses(null);
+  }, []);
 
   // ---------------------------------------------------------------------------
   // Add-server input with 1.5 s debounce auto-validation
@@ -506,6 +514,9 @@ function GraspRelaysSection() {
     }
 
     // Open draft if not already open, then append
+    if (draftAddresses === null) {
+      draftBaseEventId.current = sourceEvent?.id ?? null;
+    }
     setDraftAddresses((previous) => {
       const base = previous ?? servers.map((server) => server.serviceAddress);
       return [...base, address];
@@ -513,16 +524,27 @@ function GraspRelaysSection() {
     setCustomAddress("");
     setCustomAddressError(undefined);
     setValidationState("idle");
-  }, [customAddress, activeAddresses, validationState, runValidation, servers]);
+  }, [
+    customAddress,
+    activeAddresses,
+    validationState,
+    runValidation,
+    servers,
+    draftAddresses,
+    sourceEvent?.id,
+  ]);
 
   const handleRemoveAddress = useCallback(
     (address: string) => {
+      if (draftAddresses === null) {
+        draftBaseEventId.current = sourceEvent?.id ?? null;
+      }
       setDraftAddresses((previous) => {
         const base = previous ?? servers.map((server) => server.serviceAddress);
         return base.filter((candidate) => candidate !== address);
       });
     },
-    [servers],
+    [draftAddresses, servers, sourceEvent?.id],
   );
 
   // ---------------------------------------------------------------------------
@@ -532,22 +554,22 @@ function GraspRelaysSection() {
   const [publishing, setPublishing] = useState(false);
 
   const publishGraspList = useCallback(
-    async (addresses: string[]) => {
+    async (addresses: string[], expectedEventId: string | null) => {
       if (!account) return;
       setPublishing(true);
       try {
-        await execute(GRASP_LIST_KIND, async () => {
-          const tags = addresses.map((address) => [
-            "g",
-            graspServiceAddressToRelayUrl(address),
-          ]);
-          await publishEvent({
-            kind: GRASP_LIST_KIND,
-            content: "",
-            tags,
-            created_at: Math.floor(Date.now() / 1000),
-          });
-        });
+        await execute(
+          GRASP_LIST_KIND,
+          ({ event, outboxes }) =>
+            runner.run(
+              ReplaceGraspListFromPreflight,
+              event,
+              outboxes,
+              addresses.map(graspServiceAddressToRelayUrl),
+            ),
+          { expectedEventId },
+        );
+        draftBaseEventId.current = null;
         setDraftAddresses(null); // close draft on success
       } catch (err) {
         toast({
@@ -562,16 +584,21 @@ function GraspRelaysSection() {
         setPublishing(false);
       }
     },
-    [account, publishEvent, execute, toast],
+    [account, execute, toast],
   );
 
   const handleSave = useCallback(async () => {
-    await publishGraspList(draftAddresses ?? activeAddresses);
-  }, [publishGraspList, draftAddresses, activeAddresses]);
+    await publishGraspList(
+      draftAddresses ?? activeAddresses,
+      draftAddresses === null
+        ? (sourceEvent?.id ?? null)
+        : draftBaseEventId.current,
+    );
+  }, [publishGraspList, draftAddresses, activeAddresses, sourceEvent?.id]);
 
   const handleSaveDefaults = useCallback(async () => {
-    await publishGraspList([...DEFAULT_GRASP_SERVERS]);
-  }, [publishGraspList]);
+    await publishGraspList([...DEFAULT_GRASP_SERVERS], sourceEvent?.id ?? null);
+  }, [publishGraspList, sourceEvent?.id]);
 
   // ---------------------------------------------------------------------------
   // Render helpers
@@ -820,6 +847,7 @@ function PrivateGitRelaysSection() {
   const { state, retry, save } = usePrivateGitRelays();
   const { toast } = useToast();
   const [draft, setDraft] = useState<{
+    baseEventId?: string;
     base: string[];
     next: string[];
   } | null>(null);
@@ -847,10 +875,14 @@ function PrivateGitRelaysSection() {
       setDraft((current) => {
         const base = current?.base ?? [...published];
         const next = update(current?.next ?? [...published]);
-        return { base, next: [...new Set(next)].sort() };
+        return {
+          baseEventId: current?.baseEventId ?? state.sourceEvent?.id,
+          base,
+          next: [...new Set(next)].sort(),
+        };
       });
     },
-    [published],
+    [published, state.sourceEvent?.id],
   );
 
   const add = useCallback(() => {
@@ -874,7 +906,7 @@ function PrivateGitRelaysSection() {
     if (!draft) return;
     setSaving(true);
     try {
-      await save(draft.base, draft.next);
+      await save(draft.next, draft.baseEventId);
       setDraft(null);
       toast({
         title: "Private Git service list updated",
@@ -912,7 +944,7 @@ function PrivateGitRelaysSection() {
         ) : state.status === "loading" ? (
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            Decrypting your private service list...
+            Checking and decrypting your private service list...
           </div>
         ) : state.status === "unavailable" ? (
           <div
@@ -985,7 +1017,13 @@ function PrivateGitRelaysSection() {
                       variant="outline"
                       size="sm"
                       className="mt-3 h-8 text-xs"
-                      onClick={() => setDraft({ base: [], next: [] })}
+                      onClick={() =>
+                        setDraft({
+                          baseEventId: state.sourceEvent?.id,
+                          base: [],
+                          next: [],
+                        })
+                      }
                       disabled={saving}
                     >
                       Publish encrypted empty list

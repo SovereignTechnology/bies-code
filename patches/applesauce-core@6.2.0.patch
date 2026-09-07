@@ -1,0 +1,31 @@
+diff --git a/dist/event-store/delete-manager.js b/dist/event-store/delete-manager.js
+index e247fb71d78ebbc97bf719384eccea09b1aba9bf..0f88b66e377b73b26c133c870d70f255ad2d6ab9 100644
+--- a/dist/event-store/delete-manager.js
++++ b/dist/event-store/delete-manager.js
+@@ -70,6 +70,11 @@ export class DeleteManager {
+      */
+     check(event) {
+         const author = event.pubkey;
++        const ids = this.deletedIds.get(author);
++        // Exact event pointers apply to every event kind, including replaceable
++        // and addressable events.
++        if (ids?.has(event.id))
++            return true;
+         if (isReplaceableKind(event.kind) || isAddressableKind(event.kind)) {
+             const identifiers = this.deletedIdentifiers.get(author);
+             if (!identifiers)
+@@ -82,13 +87,7 @@ export class DeleteManager {
+             // Check that the delete event timestamp is newer than the event
+             return timestamp >= event.created_at;
+         }
+-        else {
+-            const ids = this.deletedIds.get(author);
+-            if (!ids)
+-                return false;
+-            // Check if that event id was deleted by the author
+-            return ids.has(event.id);
+-        }
++        return false;
+     }
+     /**
+      * Filter out all deleted events from an array of events

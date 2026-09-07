@@ -57,6 +57,61 @@ function normalizeRelayUrls(urls: string[]): string[] {
   return [...new Set(urls.map(normalizeUrl))];
 }
 
+const FIXED_RELAY_GROUP_PREFIX = "fixed-relays:";
+const BEST_EFFORT_RELAY_GROUP_PREFIX = "best-effort:";
+
+/** Mark a relay group as attempted without making it a delivery requirement. */
+export function bestEffortRelayGroupId(groupId: string): string {
+  return `${BEST_EFFORT_RELAY_GROUP_PREFIX}${groupId}`;
+}
+
+/** Unwrap a persisted relay group while retaining its delivery semantics. */
+export function unwrapRelayGroupId(groupId: string): {
+  groupId: string;
+  bestEffort: boolean;
+} {
+  if (!groupId.startsWith(BEST_EFFORT_RELAY_GROUP_PREFIX)) {
+    return { groupId, bestEffort: false };
+  }
+  return {
+    groupId: groupId.slice(BEST_EFFORT_RELAY_GROUP_PREFIX.length),
+    bestEffort: true,
+  };
+}
+
+/**
+ * Persist an immutable relay frontier as a semantic outbox group.
+ *
+ * Dynamic groups such as `outbox:<pubkey>` deliberately follow newer relay
+ * metadata. A replaceable event that changes that metadata also needs a group
+ * whose destinations survive optimistic EventStore insertion and later page
+ * reloads, so the durable outbox can keep retrying the frozen frontier.
+ */
+export function fixedRelayGroupId(urls: string[]): string | undefined {
+  const normalized = normalizeRelayUrls(urls).sort();
+  if (normalized.length === 0) return undefined;
+  return `${FIXED_RELAY_GROUP_PREFIX}${encodeURIComponent(JSON.stringify(normalized))}`;
+}
+
+/** Decode a group created by {@link fixedRelayGroupId}. */
+export function fixedRelayGroupUrls(groupId: string): string[] | undefined {
+  if (!groupId.startsWith(FIXED_RELAY_GROUP_PREFIX)) return undefined;
+  try {
+    const value: unknown = JSON.parse(
+      decodeURIComponent(groupId.slice(FIXED_RELAY_GROUP_PREFIX.length)),
+    );
+    if (
+      !Array.isArray(value) ||
+      !value.every((url) => typeof url === "string")
+    ) {
+      return [];
+    }
+    return normalizeRelayUrls(value);
+  } catch {
+    return [];
+  }
+}
+
 /**
  * Compare two relay URLs forgiving of cosmetic differences.
  *
@@ -153,8 +208,8 @@ export interface OutboxItem {
   id: string;
   event: NostrEvent;
   /**
-   * True when every distinct relay group has at least one successful relay.
-   * A group is "covered" when ≥1 relay in that group succeeded.
+   * True when every required relay group has at least one successful relay.
+   * Best-effort groups are attempted and tracked without blocking completion.
    */
   broadlySent: boolean;
   relays: OutboxRelayEntry[];
@@ -371,6 +426,7 @@ const EXPIRE_UNSENT_AFTER_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
  *   - "outbox:<pubkey>" → that pubkey's NIP-65 write (outbox) relays
  *   - "inbox:<pubkey>"  → that pubkey's NIP-65 read (inbox) relays
  *   - "30617:<pubkey>:<d>" → resolve to that repo's relays
+ *   - "fixed-relays:<encoded>" → an immutable relay frontier
  *   - Other strings → return [] (no dynamic resolution)
  */
 export type RelayGroupResolver = (
@@ -1041,13 +1097,13 @@ export class OutboxStore {
   }
 
   /**
-   * An item is "broadly sent" when every declared relay group has at least one
-   * relay that succeeded. Unresolved groups therefore keep the item pending so
-   * reResolveRelayGroups() can retry them when relay metadata arrives.
+   * An item is "broadly sent" when every required relay group has at least one
+   * relay that succeeded. Unresolved required groups therefore keep the item
+   * pending so reResolveRelayGroups() can retry them when metadata arrives.
    *
    * When an outbox group and "fallback-relays" are both declared, they form
    * one alternative delivery target: a success in either group is sufficient.
-   * Other groups (repository relays, inboxes, indexes, etc.) remain required.
+   * Other groups remain required unless their ID has the best-effort prefix.
    */
   private computeBroadlySent(
     relays: OutboxRelayEntry[],
@@ -1072,9 +1128,11 @@ export class OutboxStore {
       return false;
     }
 
-    const requiredGroups = hasFallbackAlternative
-      ? relayGroupDefs.filter((group) => !alternativeGroups.has(group))
-      : relayGroupDefs;
+    const requiredGroups = (
+      hasFallbackAlternative
+        ? relayGroupDefs.filter((group) => !alternativeGroups.has(group))
+        : relayGroupDefs
+    ).filter((group) => !unwrapRelayGroupId(group).bestEffort);
     for (const group of requiredGroups) {
       const groupRelays = relays.filter((r) => r.groups.includes(group));
       if (!groupRelays.some((r) => r.status === "success")) return false;
