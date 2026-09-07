@@ -16,9 +16,9 @@ import { useCallback } from "react";
 import { useAction } from "@/hooks/useAction";
 import { useRobustReplaceableAction } from "@/hooks/useRobustReplaceableAction";
 import {
-  PinGitRepo,
-  UnpinGitRepo,
-  ReorderPinnedRepos,
+  PinGitRepoFromPreflight,
+  UnpinGitRepoFromPreflight,
+  ReorderPinnedReposFromPreflight,
   PINNED_REPOS_KIND,
 } from "@/actions/pinnedRepoActions";
 
@@ -34,24 +34,32 @@ export interface RobustPinnedRepoActionsResult {
 }
 
 export function useRobustPinnedRepoActions(): RobustPinnedRepoActionsResult {
-  const { run: pinRepoAction } = useAction(PinGitRepo);
-  const { run: unpinRepoAction } = useAction(UnpinGitRepo);
-  const { run: reorderAction } = useAction(ReorderPinnedRepos);
+  const { run: pinRepoAction } = useAction(PinGitRepoFromPreflight);
+  const { run: unpinRepoAction } = useAction(UnpinGitRepoFromPreflight);
+  const { run: reorderAction } = useAction(ReorderPinnedReposFromPreflight);
   const { execute, pending } = useRobustReplaceableAction();
 
   const pinRepo = useCallback(
-    (coord: string) => execute(PINNED_REPOS_KIND, () => pinRepoAction(coord)),
+    (coord: string) =>
+      execute(PINNED_REPOS_KIND, ({ event, outboxes }) =>
+        pinRepoAction(event, outboxes, coord),
+      ),
     [execute, pinRepoAction],
   );
 
   const unpinRepo = useCallback(
-    (coord: string) => execute(PINNED_REPOS_KIND, () => unpinRepoAction(coord)),
+    (coord: string) =>
+      execute(PINNED_REPOS_KIND, ({ event, outboxes }) =>
+        unpinRepoAction(event, outboxes, coord),
+      ),
     [execute, unpinRepoAction],
   );
 
   const reorderPinnedRepos = useCallback(
     (coords: string[]) =>
-      execute(PINNED_REPOS_KIND, () => reorderAction(coords)),
+      execute(PINNED_REPOS_KIND, ({ event, outboxes }) =>
+        reorderAction(event, outboxes, coords),
+      ),
     [execute, reorderAction],
   );
 

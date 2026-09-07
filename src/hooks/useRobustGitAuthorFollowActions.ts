@@ -17,8 +17,8 @@ import { useCallback } from "react";
 import { useAction } from "@/hooks/useAction";
 import { useRobustReplaceableAction } from "@/hooks/useRobustReplaceableAction";
 import {
-  AddGitAuthor,
-  RemoveGitAuthor,
+  AddGitAuthorFromPreflight,
+  RemoveGitAuthorFromPreflight,
   GIT_AUTHORS_KIND,
 } from "@/actions/gitAuthorFollowActions";
 import type { ProfilePointer } from "applesauce-core/helpers";
@@ -37,19 +37,23 @@ export interface RobustGitAuthorFollowActionsResult {
 }
 
 export function useRobustGitAuthorFollowActions(): RobustGitAuthorFollowActionsResult {
-  const { run: addAuthor } = useAction(AddGitAuthor);
-  const { run: removeAuthor } = useAction(RemoveGitAuthor);
+  const { run: addAuthor } = useAction(AddGitAuthorFromPreflight);
+  const { run: removeAuthor } = useAction(RemoveGitAuthorFromPreflight);
   const { execute, pending } = useRobustReplaceableAction();
 
   const addGitAuthor = useCallback(
     (pubkey: string | ProfilePointer) =>
-      execute(GIT_AUTHORS_KIND, () => addAuthor(pubkey)),
+      execute(GIT_AUTHORS_KIND, ({ event, outboxes }) =>
+        addAuthor(event, outboxes, pubkey),
+      ),
     [execute, addAuthor],
   );
 
   const removeGitAuthor = useCallback(
     (pubkey: string | ProfilePointer) =>
-      execute(GIT_AUTHORS_KIND, () => removeAuthor(pubkey)),
+      execute(GIT_AUTHORS_KIND, ({ event, outboxes }) =>
+        removeAuthor(event, outboxes, pubkey),
+      ),
     [execute, removeAuthor],
   );
 

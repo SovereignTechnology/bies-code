@@ -6,12 +6,12 @@
  * that they want to highlight on their profile. The order of `a` tags in the
  * event is preserved and used for display ordering.
  *
- * Because kind:10617 is brand-new, we do NOT throw when no existing event is
- * found — we simply build a fresh one.
+ * The actions consume the exact warm snapshot resolved by personal-singleton
+ * preflight and never reopen the EventStore or its fallback loader.
  */
 
 import type { Action } from "applesauce-actions";
-import { firstValueFrom, of, timeout } from "rxjs";
+import type { NostrEvent } from "nostr-tools";
 import {
   PinnedReposFactory,
   PINNED_REPOS_KIND,
@@ -25,17 +25,12 @@ export { PINNED_REPOS_KIND };
  *
  * @param coord - "30617:<pubkey>:<dtag>" coordinate string
  */
-export function PinGitRepo(coord: string): Action {
-  return async ({ events, user, publish, signer }) => {
-    const [event, outboxes] = await Promise.all([
-      firstValueFrom(
-        events
-          .replaceable(PINNED_REPOS_KIND, user.pubkey)
-          .pipe(timeout({ first: 1000, with: () => of(undefined) })),
-      ),
-      user.outboxes$.$first(1000, undefined),
-    ]);
-
+export function PinGitRepoFromPreflight(
+  event: NostrEvent | undefined,
+  outboxes: string[],
+  coord: string,
+): Action {
+  return async ({ publish, signer }) => {
     const factory = event
       ? PinnedReposFactory.modify(event)
       : PinnedReposFactory.create();
@@ -51,17 +46,12 @@ export function PinGitRepo(coord: string): Action {
  *
  * @param coord - "30617:<pubkey>:<dtag>" coordinate string
  */
-export function UnpinGitRepo(coord: string): Action {
-  return async ({ events, user, publish, signer }) => {
-    const [event, outboxes] = await Promise.all([
-      firstValueFrom(
-        events
-          .replaceable(PINNED_REPOS_KIND, user.pubkey)
-          .pipe(timeout({ first: 1000, with: () => of(undefined) })),
-      ),
-      user.outboxes$.$first(1000, undefined),
-    ]);
-
+export function UnpinGitRepoFromPreflight(
+  event: NostrEvent | undefined,
+  outboxes: string[],
+  coord: string,
+): Action {
+  return async ({ publish, signer }) => {
     const factory = event
       ? PinnedReposFactory.modify(event)
       : PinnedReposFactory.create();
@@ -77,17 +67,12 @@ export function UnpinGitRepo(coord: string): Action {
  *
  * @param coords - ordered array of "30617:<pubkey>:<dtag>" coordinate strings
  */
-export function ReorderPinnedRepos(coords: string[]): Action {
-  return async ({ events, user, publish, signer }) => {
-    const [event, outboxes] = await Promise.all([
-      firstValueFrom(
-        events
-          .replaceable(PINNED_REPOS_KIND, user.pubkey)
-          .pipe(timeout({ first: 1000, with: () => of(undefined) })),
-      ),
-      user.outboxes$.$first(1000, undefined),
-    ]);
-
+export function ReorderPinnedReposFromPreflight(
+  event: NostrEvent | undefined,
+  outboxes: string[],
+  coords: string[],
+): Action {
+  return async ({ publish, signer }) => {
     const factory = event
       ? PinnedReposFactory.modify(event)
       : PinnedReposFactory.create();
