@@ -25,6 +25,7 @@ import {
   NOTIFICATION_PAGE_LIMIT,
   type NotificationStoreEntry,
 } from "@/services/notificationStore";
+import type { NotificationSyncState } from "@/services/notificationSync";
 import {
   actionMarkAsRead,
   actionMarkAsUnread,
@@ -152,6 +153,8 @@ export function useNotifications(): {
   unreadCount: number;
   actions: NotificationActions;
   history: NotificationHistoryState;
+  sync: NotificationSyncState | undefined;
+  retrySync: () => void;
 } {
   const store = useEventStore();
   const entry = useNotificationStoreEntry();
@@ -159,6 +162,10 @@ export function useNotifications(): {
   const readState$ = entry?.readState$;
   const repoCoords$ = entry?.repoCoords$;
   const nonGitEventIds$ = entry?.nonGitEventIds$;
+  const sync = use$(
+    () => entry?.notificationSync?.state$,
+    [entry?.notificationSync],
+  );
 
   // Activate the full history fetch on mount. activateFullFetch is idempotent —
   // it creates the loader and fires the first page only once per store entry.
@@ -244,6 +251,8 @@ export function useNotifications(): {
     unreadCount: output?.unreadCount ?? 0,
     actions,
     history,
+    sync,
+    retrySync: () => entry?.notificationSync?.retry(),
   };
 }
 
