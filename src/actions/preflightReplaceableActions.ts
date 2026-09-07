@@ -5,6 +5,8 @@
  * model normally invokes the store's fallback loader, but the robust writer
  * has already established relay coverage and checked IndexedDB before calling
  * these actions. Reading again would add latency and a redundant relay REQ.
+ * Relay arrays are forwarded for Action API parity; GitWorkshop's global
+ * runner owns publication routing and currently ignores action relay hints.
  */
 
 import type { Action } from "applesauce-actions";

@@ -189,10 +189,11 @@ for the active account:
 - when that snapshot has no target event, perform a bounded exact local cache
   lookup and route any result through the EventStore before writing; this adds
   no relay request and preserves the previous cache evidence;
-- pass the resulting event and frozen outboxes directly into contact and
-  mailbox writers, avoiding Applesauce model fallback reads after confirmed
-  absence; the other Phase 1 writers already consume local absence without
-  subscribing to the loader;
+- pass the resulting event directly into contact and mailbox writers, avoiding
+  Applesauce model fallback reads after confirmed absence; relay arrays are
+  retained on those actions for API parity, but GitWorkshop's global runner
+  chooses the actual publication groups; the other Phase 1 writers already
+  consume local absence without subscribing to the loader;
 - stop treating a relay as in-flight after its five-second EOSE deadline while
   leaving the live request open for a late recovery, and report an exact status
   breakdown for the outbox and lookup groups;

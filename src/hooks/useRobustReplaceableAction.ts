@@ -42,7 +42,7 @@
  *
  * // Wrap any action that modifies a replaceable event:
  * await execute(3, async ({ event, outboxes }) => {
- *   await modifyKnownContacts(event, outboxes, pubkey);
+ *   await runAction(FollowUserFromPreflight(event, outboxes, pubkey));
  * });
  * ```
  */
