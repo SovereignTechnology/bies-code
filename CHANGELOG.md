@@ -44,6 +44,9 @@
 
 ### Fixes
 
+- Accept established NIP-46 `nbunksec` connections for CI secret sealing in
+  addition to fresh `bunker://` pairing URLs, matching ngit-ci's maintainer
+  binding flow.
 - Require personal replaceable-event writes to count only relays whose active
   identity subscription has completed its current EOSE cycle, invalidating
   that warm coverage across reconnects, foreground catch-up, relay removal,

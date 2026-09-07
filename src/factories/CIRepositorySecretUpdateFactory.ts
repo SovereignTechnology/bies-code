@@ -39,17 +39,32 @@ export function isCISecretNameReserved(name: string): boolean {
   );
 }
 
-/** Validate the NIP-46 bunker URI accepted by ngit-ci's reserved binding. */
-export function isCISecretsDecryptionBunkerUri(value: string): boolean {
-  const uri = value.trim();
-  if (!uri.startsWith("bunker://")) return false;
+const CI_NBUNKSEC_MAX_LENGTH = 1_000;
+
+/** Validate a NIP-46 connection accepted by ngit-ci's reserved binding. */
+export function isCISecretsDecryptionBunkerConnection(value: string): boolean {
+  const connection = value.trim();
 
   try {
-    const { relays } = NostrConnectSigner.parseBunkerURI(uri);
-    return relays.every((relay) => {
-      const url = new URL(relay);
-      return url.protocol === "ws:" || url.protocol === "wss:";
-    });
+    let relays: string[];
+    if (connection.startsWith("bunker://")) {
+      ({ relays } = NostrConnectSigner.parseBunkerURI(connection));
+    } else if (
+      connection.startsWith("nbunksec1") &&
+      connection.length <= CI_NBUNKSEC_MAX_LENGTH
+    ) {
+      ({ relays } = NostrConnectSigner.parseNbunksec(connection));
+    } else {
+      return false;
+    }
+
+    return (
+      relays.length > 0 &&
+      relays.every((relay) => {
+        const url = new URL(relay);
+        return url.protocol === "ws:" || url.protocol === "wss:";
+      })
+    );
   } catch {
     return false;
   }
@@ -117,10 +132,10 @@ function validateMutation({ set, remove }: CIRepositorySecretMutation): void {
     }
     if (
       name === CI_SECRETS_DECRYPTION_BUNKER_NAME &&
-      !isCISecretsDecryptionBunkerUri(value)
+      !isCISecretsDecryptionBunkerConnection(value)
     ) {
       throw new Error(
-        "The secrets decryption bunker must be a valid bunker:// URI with at least one relay.",
+        "The secrets decryption bunker must be a valid fresh bunker:// pairing URL or established nbunksec connection with at least one relay.",
       );
     }
   }
