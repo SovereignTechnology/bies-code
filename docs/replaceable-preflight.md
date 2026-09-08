@@ -513,6 +513,70 @@ compare-and-swap protocol between concurrent clients. Later warm-subscription
 events continue to reconcile cross-client updates, while the durable outbox
 reports publication delivery separately.
 
+#### Software-publication adoption decision
+
+NIP-82 software metadata is a **publisher-owned addressable** category with two
+different write semantics. Kind `32267` applications are mutable, whole-event
+replacements owned by one publisher. Kind `30063` releases are addressable but
+GitWorkshop treats each `<application-id>@<version>` coordinate as immutable:
+publishing a second event at that coordinate is a collision, not an edit. Kind
+`3063` asset metadata is regular and append-only, so it does not need its own
+replaceable preflight.
+
+For the active publisher, one page-owned lease uses a complete, unpaginated
+kind `32267` author filter plus the publisher's complete kind `5` stream. The
+same subscription runs on the normalized union of current NIP-65 outboxes,
+configured fallback relays, the current repository relays, and Zapstore. The
+kind `5` filter is deliberately author-wide: it keeps coordinate and exact-ID
+deletions covered without rebuilding the stable application query for every
+application winner. The expected volume is bounded by one publisher, and one
+combined request is preferable to one deletion subscription per application.
+
+Mailbox discovery follows the notification-state rule. A kind `10002` winner
+makes its outbox frontier known immediately; otherwise the active identity
+lease must first cover two thirds of the configured user-index relays, capped
+at three and floored at one, before absence of a mailbox list is accepted. Once
+that frontier is known, the software lease is sufficient when:
+
+1. with no configured outboxes, two thirds of the configured fallback relays,
+   capped at three and floored at one, are covered;
+2. with configured outboxes, at least one outbox is covered;
+3. if exactly one outbox is covered, two additional distribution relays must
+   be covered; repository, fallback, and Zapstore relays all contribute to that
+   backup group;
+4. once two or more outboxes are covered, three covered outboxes or half of the
+   configured outboxes is sufficient.
+
+Application creation, editing, and repository linking consume the frozen
+kind `32267` winner from this lease. A bounded exact cache lookup runs only when
+that winner is missing. Whole-event editors freeze the displayed event ID and
+abort if the cache or warm lease supplies a different winner. Writers rebuild
+from the frozen event so NIP-82 tags outside the editing surface survive. They
+never invoke an address loader or another relay query at action time.
+
+The recent release feed remains limited for page performance and cannot prove
+that an exact version is absent. While the release dialog has both an
+application and a version, it owns one additional exact, unpaginated kind
+`30063` lease on the same relay frontier. Changing the candidate coordinate
+replaces that lease and invalidates its coverage. Publishing waits for both the
+stable publisher lease and this exact lease to satisfy the same threshold,
+then performs a bounded exact cache lookup and refuses any surviving winner.
+This normally warms while the user enters release metadata or uploads assets,
+so the publish button does not need a duplicate action-time request.
+
+Application and release events keep their existing durable publication to the
+publisher's outboxes, configured fallbacks, and repository relay groups.
+Zapstore is an evidence contributor, not a required delivery group. No
+post-write echo query is added; ordinary relay acknowledgements and durable
+retry remain separate from read preflight.
+
+NIP-82 publication is a public distribution feature. A confidential repository
+route must not use its identifier to query public outboxes, fallbacks, or
+Zapstore. Existing release metadata reached through an admitted private
+repository relay may be rendered, but GitWorkshop does not offer application,
+link, or release publication controls from a confidential repository. This is
+the confidential-scope modifier, not a weaker public-relay quorum.
+
 ## Writer checklist
 
 Before adding or changing a replaceable/addressable writer, answer:
