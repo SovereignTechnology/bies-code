@@ -13,8 +13,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CastRefEventStore } from "applesauce-common/casts/cast";
 import { mapEventsToStore } from "applesauce-core";
 import type { IEventStore } from "applesauce-core/event-store";
-import type { Filter } from "applesauce-core/helpers";
-import { MailboxesModel } from "applesauce-core/models";
+import { getOutboxes, type Filter } from "applesauce-core/helpers";
 import { onlyEvents } from "applesauce-relay";
 import type { RelayGroup } from "applesauce-relay";
 import type { NostrEvent } from "nostr-tools";
@@ -311,35 +310,48 @@ export function useSoftwarePublisherApplications(
   >(() => {
     if (!pubkey) return undefined;
     return combineLatest([
-      store.model(MailboxesModel, pubkey).pipe(startWith(undefined)),
+      store.timeline([{ kinds: [10002], authors: [pubkey] } as Filter]).pipe(
+        map(() => {
+          const mailboxEvent = store.getReplaceable(10002, pubkey);
+          return mailboxEvent ? getOutboxes(mailboxEvent) : undefined;
+        }),
+        startWith(undefined),
+      ),
       fallbackRelays,
       lookupRelays,
       relayGroupUrls$(repoRelayGroup),
       userIdentityCoverage.changes$.pipe(startWith(undefined)),
     ]).pipe(
-      map(([mailboxes, configuredFallbacks, configuredLookups, repoRelays]) => {
-        const outboxes = uniqueRelayUrls(mailboxes?.outboxes ?? []);
-        const outboxSet = new Set(outboxes);
-        const fallbacks = uniqueRelayUrls(configuredFallbacks).filter(
-          (relay) => !outboxSet.has(relay),
-        );
-        const distributionRelays = uniqueRelayUrls([
-          ...fallbacks,
-          ...repoRelays,
-          ZAPSTORE_RELAY_URL,
-        ]).filter((relay) => !outboxSet.has(relay));
-        return {
-          outboxes,
-          fallbacks,
-          distributionRelays,
-          relays: uniqueRelayUrls([...outboxes, ...distributionRelays]),
-          mailboxDiscovery: assessMailboxDiscovery(
-            pubkey,
-            configuredLookups,
-            mailboxes !== undefined,
-          ),
-        };
-      }),
+      map(
+        ([
+          mailboxOutboxes,
+          configuredFallbacks,
+          configuredLookups,
+          repoRelays,
+        ]) => {
+          const outboxes = uniqueRelayUrls(mailboxOutboxes ?? []);
+          const outboxSet = new Set(outboxes);
+          const fallbacks = uniqueRelayUrls(configuredFallbacks).filter(
+            (relay) => !outboxSet.has(relay),
+          );
+          const distributionRelays = uniqueRelayUrls([
+            ...fallbacks,
+            ...repoRelays,
+            ZAPSTORE_RELAY_URL,
+          ]).filter((relay) => !outboxSet.has(relay));
+          return {
+            outboxes,
+            fallbacks,
+            distributionRelays,
+            relays: uniqueRelayUrls([...outboxes, ...distributionRelays]),
+            mailboxDiscovery: assessMailboxDiscovery(
+              pubkey,
+              configuredLookups,
+              mailboxOutboxes !== undefined,
+            ),
+          };
+        },
+      ),
       distinctUntilChanged(
         (left, right) =>
           sameStrings(left.outboxes, right.outboxes) &&
