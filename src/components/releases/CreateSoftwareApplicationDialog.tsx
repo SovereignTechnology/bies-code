@@ -28,6 +28,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { SoftwareApplicationFactory } from "@/factories/SoftwareApplicationFactory";
 import { useEventStore } from "@/hooks/useEventStore";
+import type { SoftwarePublisherPreflight } from "@/hooks/useSoftwarePublisherPreflight";
 import { useToast } from "@/hooks/useToast";
 import { publish } from "@/services/nostr";
 
@@ -39,6 +40,7 @@ interface CreateSoftwareApplicationDialogProps {
   maintainerPubkeys: string[];
   relayHint?: string;
   application?: SoftwareApplication;
+  publisherPreflight?: SoftwarePublisherPreflight;
   onPublished?: (application: SoftwareApplication) => void;
 }
 
@@ -73,6 +75,7 @@ export function CreateSoftwareApplicationDialog({
   maintainerPubkeys,
   relayHint,
   application,
+  publisherPreflight,
   onPublished,
 }: CreateSoftwareApplicationDialogProps) {
   const account = useActiveAccount();
@@ -169,33 +172,43 @@ export function CreateSoftwareApplicationDialog({
       setError("Only the application publisher can edit it.");
       return;
     }
+    if (!publisherPreflight) {
+      setError("Software publication checks are not ready yet.");
+      return;
+    }
 
     setPublishing(true);
     setError(undefined);
     try {
-      const signedApplication = await SoftwareApplicationFactory.create({
-        appId,
-        name,
-        summary,
-        description,
-        icon,
-        images: lineSeparatedValues(images),
-        website,
-        repository,
-        license,
-        topics: commaSeparatedValues(topics),
-        platforms: commaSeparatedValues(platforms),
-        repoCoordinates,
-        relayHint,
-        createdAt: Math.floor(Date.now() / 1000),
-        baseEvent: application?.event,
-      }).sign(account.signer);
-      await publish(signedApplication, repoCoordinates);
-      onPublished?.(
-        new SoftwareApplication(
-          signedApplication,
-          store as unknown as CastRefEventStore,
-        ),
+      await publisherPreflight.executeApplication(
+        appId.trim(),
+        application?.event.id ?? null,
+        async ({ event }) => {
+          const signedApplication = await SoftwareApplicationFactory.create({
+            appId,
+            name,
+            summary,
+            description,
+            icon,
+            images: lineSeparatedValues(images),
+            website,
+            repository,
+            license,
+            topics: commaSeparatedValues(topics),
+            platforms: commaSeparatedValues(platforms),
+            repoCoordinates,
+            relayHint,
+            createdAt: Math.floor(Date.now() / 1000),
+            baseEvent: event,
+          }).sign(account.signer);
+          await publish(signedApplication, repoCoordinates);
+          onPublished?.(
+            new SoftwareApplication(
+              signedApplication,
+              store as unknown as CastRefEventStore,
+            ),
+          );
+        },
       );
       toast({
         title: editing ? "Application updated" : "Application published",

@@ -1194,6 +1194,7 @@ export default function RepoReleasesPage({
     repo?.confirmedMaintainerCoordinates,
     repo?.confirmedMaintainers,
     resolved?.repoRelayGroup,
+    repo?.isPrivate,
   );
   const { poolState } = useGitPool(cloneUrls, {
     headRef: repoState?.headRef,
@@ -1227,10 +1228,14 @@ export default function RepoReleasesPage({
     [applications],
   );
   const canPublishRelease =
-    !!account && !!repo?.confirmedMaintainers.includes(account.pubkey);
+    !!account &&
+    !!repo &&
+    !repo.isPrivate &&
+    repo.confirmedMaintainers.includes(account.pubkey);
   const {
     applications: accountApplications,
     settled: accountApplicationsSettled,
+    preflight: softwarePublisherPreflight,
   } = useAccountSoftwareApplications(
     canPublishRelease ? account?.pubkey : undefined,
     resolved?.repoRelayGroup,
@@ -1441,6 +1446,7 @@ export default function RepoReleasesPage({
             repoCoordinates={repo.confirmedMaintainerCoordinates}
             maintainerPubkeys={repo.confirmedMaintainers}
             relayHint={repo.relays[0]}
+            publisherPreflight={softwarePublisherPreflight}
           />
         )}
         {repo && editingApplication && (
@@ -1454,6 +1460,7 @@ export default function RepoReleasesPage({
             maintainerPubkeys={repo.confirmedMaintainers}
             relayHint={repo.relays[0]}
             application={editingApplication}
+            publisherPreflight={softwarePublisherPreflight}
             onPublished={() => setEditingApplication(undefined)}
           />
         )}
@@ -1465,6 +1472,7 @@ export default function RepoReleasesPage({
             settled={accountApplicationsSettled}
             repoCoordinates={repo.confirmedMaintainerCoordinates}
             relayHint={repo.relays[0]}
+            publisherPreflight={softwarePublisherPreflight}
           />
         )}
       </>
@@ -1503,6 +1511,7 @@ export default function RepoReleasesPage({
             gitTagsSettled={gitTagsAvailable}
             relayHints={repo?.relays.slice(0, 1) ?? []}
             onEdit={
+              canPublishRelease &&
               selectedApplication.pubkey === account?.pubkey
                 ? () => setEditingApplication(selectedApplication)
                 : undefined
@@ -1523,6 +1532,7 @@ export default function RepoReleasesPage({
               maintainerPubkeys={repo.confirmedMaintainers}
               relayHint={repo.relays[0]}
               application={editingApplication}
+              publisherPreflight={softwarePublisherPreflight}
               onPublished={(application) => {
                 setEditingApplication(undefined);
                 navigate(
@@ -1626,6 +1636,7 @@ export default function RepoReleasesPage({
           repoCoordinates={repo.confirmedMaintainerCoordinates}
           maintainerPubkeys={repo.confirmedMaintainers}
           relayHint={repo.relays[0]}
+          publisherPreflight={softwarePublisherPreflight}
         />
       )}
 

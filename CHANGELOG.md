@@ -13,6 +13,12 @@
 
 ### Changed
 
+- Reuse one complete, page-owned publisher subscription for NIP-82 software
+  applications and publisher-authored deletions. Application creation, editing,
+  and repository linking now consume its EOSE-backed frozen winner plus a
+  bounded cache lookup instead of relying on a limited list or an action-time
+  request. Confidential repository routes query only their admitted repository
+  relays and no longer expose software publication controls.
 - Reuse each repository page's live announcement, state, and deletion query as
   the preflight for kind `30617` and `30618` replacements. Existing coordinates
   require one currently covered repository relay; mailbox and Git index relays

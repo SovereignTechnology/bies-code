@@ -28,6 +28,7 @@ import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SoftwareApplicationFactory } from "@/factories/SoftwareApplicationFactory";
+import type { SoftwarePublisherPreflight } from "@/hooks/useSoftwarePublisherPreflight";
 import { useToast } from "@/hooks/useToast";
 import { parseRepoCoordinate, REPO_KIND } from "@/lib/nip34";
 import { parseUpstreamInput } from "@/lib/repoUpstreamInput";
@@ -42,6 +43,7 @@ interface LinkSoftwareApplicationDialogProps {
   settled: boolean;
   repoCoordinates: string[];
   relayHint?: string;
+  publisherPreflight?: SoftwarePublisherPreflight;
   onLinked?: (application: SoftwareApplication) => void;
 }
 
@@ -71,6 +73,7 @@ export function LinkSoftwareApplicationDialog({
   settled,
   repoCoordinates,
   relayHint,
+  publisherPreflight,
   onLinked,
 }: LinkSoftwareApplicationDialogProps) {
   const account = useActiveAccount();
@@ -124,19 +127,34 @@ export function LinkSoftwareApplicationDialog({
       setError("This application is already linked to the repository.");
       return;
     }
+    if (!publisherPreflight) {
+      setError("Software publication checks are not ready yet.");
+      return;
+    }
 
     setPublishing(true);
     setError(undefined);
     try {
-      const updatedApplication =
-        await SoftwareApplicationFactory.linkRepositories(
-          selectedApplication.event,
-          repoCoordinates,
-          relayHint,
-          Math.floor(Date.now() / 1000),
-          replacementRepository,
-        ).sign(account.signer);
-      await publish(updatedApplication, repoCoordinates);
+      await publisherPreflight.executeApplication(
+        selectedApplication.appId,
+        selectedApplication.event.id,
+        async ({ event }) => {
+          if (!event) {
+            throw new Error(
+              "This software application is no longer available to link.",
+            );
+          }
+          const updatedApplication =
+            await SoftwareApplicationFactory.linkRepositories(
+              event,
+              repoCoordinates,
+              relayHint,
+              Math.floor(Date.now() / 1000),
+              replacementRepository,
+            ).sign(account.signer);
+          await publish(updatedApplication, repoCoordinates);
+        },
+      );
       toast({
         title: "Application linked",
         description: `${selectedApplication.name} now appears in this repository's releases.`,

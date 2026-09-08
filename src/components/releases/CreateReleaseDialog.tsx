@@ -63,6 +63,7 @@ import {
 } from "@/factories/SoftwareReleaseFactory";
 import { useBlossomUpload, type Nip94Tags } from "@/hooks/useBlossomUpload";
 import { useEventStore } from "@/hooks/useEventStore";
+import type { SoftwarePublisherPreflight } from "@/hooks/useSoftwarePublisherPreflight";
 import { useToast } from "@/hooks/useToast";
 import { addressLoader, publish } from "@/services/nostr";
 
@@ -204,6 +205,7 @@ interface CreateReleaseDialogProps {
   repoCoordinates: string[];
   maintainerPubkeys: string[];
   relayHint?: string;
+  publisherPreflight?: SoftwarePublisherPreflight;
 }
 
 let nextAssetId = 0;
@@ -783,6 +785,7 @@ export function CreateReleaseDialog({
   repoCoordinates,
   maintainerPubkeys,
   relayHint,
+  publisherPreflight,
 }: CreateReleaseDialogProps) {
   const account = useActiveAccount();
   const store = useEventStore();
@@ -1703,6 +1706,7 @@ export function CreateReleaseDialog({
           repoCoordinates={repoCoordinates}
           maintainerPubkeys={maintainerPubkeys}
           relayHint={relayHint}
+          publisherPreflight={publisherPreflight}
           onPublished={(application) => {
             setCreatedApplication(application);
             setApplicationCoordinate(application.coordinate);
@@ -1715,6 +1719,7 @@ export function CreateReleaseDialog({
           settled={accountApplicationsSettled}
           repoCoordinates={repoCoordinates}
           relayHint={relayHint}
+          publisherPreflight={publisherPreflight}
           onLinked={(application) => {
             setCreatedApplication(application);
             setApplicationCoordinate(application.coordinate);
