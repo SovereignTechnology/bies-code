@@ -192,7 +192,9 @@ across confirmed maintainers, so a merge or HEAD edit with a warm state winner
 does not need a separate absence proof for the signer's unused coordinate.
 Confidential repository writes use admitted private repository relays for both
 presence and absence and never disclose their coordinates to public mailbox
-relays.
+relays. Membership snapshots, acknowledgements, durable retry jobs, and final
+delivery are confined to that same admitted private relay set; the generic
+public outbox, fallback, and Git-index publisher is not invoked.
 
 A completely new public repository has no old repository frontier, so its
 focused collision check requires an EOSE from at least one proposed repository

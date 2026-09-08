@@ -294,15 +294,20 @@ async function settleMutationSnapshot(
 ): Promise<MutationSnapshot> {
   const deadline = Date.now() + SNAPSHOT_TIMEOUT_MS;
   const authors = new Set(mutationAuthors(repo, actorPubkey, intent));
-  const indexRelayUrls = gitIndexRelays.getValue().map(normalizeUrl);
+  const indexRelayUrls = repo.isPrivate
+    ? []
+    : gitIndexRelays.getValue().map(normalizeUrl);
   const baseRelays = new Set(
-    [
-      ...relayUrls,
-      ...repo.relays,
-      ...preflight.focusedOutboxRelays,
-      ...indexRelayUrls,
-      ...fallbackRelays.getValue(),
-    ].map(normalizeUrl),
+    (repo.isPrivate
+      ? preflight.repositoryRelays
+      : [
+          ...relayUrls,
+          ...repo.relays,
+          ...preflight.focusedOutboxRelays,
+          ...indexRelayUrls,
+          ...fallbackRelays.getValue(),
+        ]
+    ).map(normalizeUrl),
   );
   if (baseRelays.size === 0) {
     throw new RepositoryMembershipMutationRefusal(
@@ -498,17 +503,19 @@ async function settleMutationSnapshot(
       );
     }
     const finalRelays = new Set(baseRelays);
-    for (const relay of [
-      ...refreshedRepo.relays,
-      ...refreshedMailboxEvents.flatMap((event) =>
-        event.tags.flatMap(([name, url]) =>
-          name === "r" && /^wss?:\/\//.test(url ?? "")
-            ? [normalizeUrl(url)]
-            : [],
+    if (!repo.isPrivate) {
+      for (const relay of [
+        ...refreshedRepo.relays,
+        ...refreshedMailboxEvents.flatMap((event) =>
+          event.tags.flatMap(([name, url]) =>
+            name === "r" && /^wss?:\/\//.test(url ?? "")
+              ? [normalizeUrl(url)]
+              : [],
+          ),
         ),
-      ),
-    ]) {
-      finalRelays.add(normalizeUrl(relay));
+      ]) {
+        finalRelays.add(normalizeUrl(relay));
+      }
     }
     return {
       repo: refreshedRepo,
@@ -735,13 +742,15 @@ export function useRepositoryMembershipMutation({
         // Extension point: a future compare-and-rebase protocol would re-read
         // the warm winner here. This phase deliberately freezes one coherent
         // snapshot rather than issuing a second full relay request.
-        const confirmationRelayUrls = [
-          ...new Set(
-            [...proposal.expectedRelayUrls, ...snapshot.indexRelayUrls].map(
-              normalizeUrl,
-            ),
-          ),
-        ];
+        const confirmationRelayUrls = snapshot.repo.isPrivate
+          ? snapshot.relayUrls
+          : [
+              ...new Set(
+                [...proposal.expectedRelayUrls, ...snapshot.indexRelayUrls].map(
+                  normalizeUrl,
+                ),
+              ),
+            ];
         if (confirmationRelayUrls.length === 0) {
           throw new RepositoryMembershipMutationRefusal(
             "incomplete_relay_view",
@@ -757,15 +766,17 @@ export function useRepositoryMembershipMutation({
             `The post-change acknowledgement set introduced relays outside the settled safety snapshot (${unsnapshottedConfirmationRelays.join(", ")}). GitWorkshop does not yet support making this transition.`,
           );
         }
-        const deliveryRelayUrls = [
-          ...new Set(
-            [
-              ...snapshot.relayUrls,
-              ...proposal.expectedRelayUrls,
-              ...snapshot.indexRelayUrls,
-            ].map(normalizeUrl),
-          ),
-        ];
+        const deliveryRelayUrls = snapshot.repo.isPrivate
+          ? snapshot.relayUrls
+          : [
+              ...new Set(
+                [
+                  ...snapshot.relayUrls,
+                  ...proposal.expectedRelayUrls,
+                  ...snapshot.indexRelayUrls,
+                ].map(normalizeUrl),
+              ),
+            ];
         const signedEvent = await account.signer.signEvent(proposal.template);
         const now = Date.now();
         saveMaintainerAcceptanceJob({
@@ -793,18 +804,20 @@ export function useRepositoryMembershipMutation({
           updatedAt: now,
         });
 
-        try {
-          await publish(
-            signedEvent,
-            [repoCoordinate(account.pubkey, snapshot.repo.dTag)],
-            { optimistic: false },
-          );
-        } catch (error) {
-          updateMaintainerAcceptanceJob(operationKey, {
-            relayErrors: {
-              outbox: error instanceof Error ? error.message : String(error),
-            },
-          });
+        if (!snapshot.repo.isPrivate) {
+          try {
+            await publish(
+              signedEvent,
+              [repoCoordinate(account.pubkey, snapshot.repo.dTag)],
+              { optimistic: false },
+            );
+          } catch (error) {
+            updateMaintainerAcceptanceJob(operationKey, {
+              relayErrors: {
+                outbox: error instanceof Error ? error.message : String(error),
+              },
+            });
+          }
         }
 
         const publicationDeadline = Date.now() + PUBLICATION_TIMEOUT_MS;

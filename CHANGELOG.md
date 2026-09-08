@@ -26,8 +26,9 @@
   `purgatory:` response proves staging; a plain successful `OK`, including from
   Pyramid as of September 8, 2026, may mean the state is already visible.
   Confidential repositories obtain the same proof only from their admitted
-  private repository relays and never disclose their coordinates to public
-  enrichment relays. Stable coordinate filters no longer restart when an event
+  private repository relays and confine membership snapshots and delivery to
+  that frontier rather than public enrichment or publication relays. Stable
+  coordinate filters no longer restart when an event
   arrives; exact deletion pointers use one coalesced repository lease whose
   additions pause across the relay-acceptance-to-Git-push window. Public
   creation retries persist the original signed announcement, state, and
