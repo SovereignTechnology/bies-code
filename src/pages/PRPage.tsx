@@ -1890,8 +1890,9 @@ export default function PRPage() {
                 )}
 
                 {/* Merge panel — shown for PRs and patches on git-backed repos, for maintainers */}
-                {pr && repo && showMergePanel && (
+                {pr && repo && resolved && showMergePanel && (
                   <MergePanel
+                    resolved={resolved}
                     pr={pr}
                     repo={repo}
                     patchChain={

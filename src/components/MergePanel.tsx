@@ -109,12 +109,16 @@ import {
 } from "@/lib/grasp";
 import type { InferredPRParent } from "@/lib/inferredPRParents";
 import { requestRelaySnapshot, type RelaySnapshot } from "@/lib/relaySnapshot";
+import type { ResolvedRepository } from "@/hooks/useResolvedRepository";
+import { useRepositoryReplaceablePreflight } from "@/hooks/useRepositoryReplaceablePreflight";
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
 interface MergePanelProps {
+  /** Page-owned repository relay groups and replaceable coverage lease. */
+  resolved: ResolvedRepository;
   /** The resolved PR (patch-type or pr-type) */
   pr: ResolvedPR;
   /** The resolved repository */
@@ -258,6 +262,7 @@ const STEP_LABELS: Record<MergeStep, string> = {
 // ---------------------------------------------------------------------------
 
 export function MergePanel({
+  resolved,
   pr,
   repo,
   patchChain,
@@ -279,6 +284,7 @@ export function MergePanel({
   const account = useActiveAccount();
   const profile = useMyProfile();
   const { toast } = useToast();
+  const replaceablePreflight = useRepositoryReplaceablePreflight(resolved);
 
   // The PR/patch author's display name — used for the `PR-Author:` trailer in
   // the merge commit message (resolved by useMergeAnalysis).
@@ -470,7 +476,7 @@ export function MergePanel({
    * toast.
    */
   const createMergeTransports = useCallback(
-    (accountPubkey: string) => {
+    (accountPubkey: string, preflightStateEvent: NostrEvent | undefined) => {
       let pushSummary: PushDeliverySummary | null = null;
 
       const transports: GraspMergeTransports = {
@@ -489,7 +495,7 @@ export function MergePanel({
           // delivery summary keeps updating after the merge completes.
           await gitPool.pushRefUpdate(objects, refUpdate, {
             targetCloneUrls: repo.graspCloneUrls,
-            currentStateEvent,
+            currentStateEvent: preflightStateEvent,
             onUpdate: (summary) => {
               pushSummary = summary;
               setPushDelivery(summary);
@@ -528,7 +534,6 @@ export function MergePanel({
       graspRelayUrls,
       repo.graspCloneUrls,
       repo.confirmedMemberCoordinates,
-      currentStateEvent,
       pr.pubkey,
       onSuccessfulPush,
     ],
@@ -648,11 +653,20 @@ export function MergePanel({
     beginMerge();
 
     try {
+      const stateSnapshot = await replaceablePreflight.execute(
+        {
+          kind: REPO_STATE_KIND,
+          actorPubkey: account.pubkey,
+          expectedEventId: currentStateEvent?.id ?? null,
+        },
+        async (snapshot) => snapshot,
+      );
       const committer = buildCommitterNow();
       if (!committer) return;
 
       const { transports, getPushSummary } = createMergeTransports(
         account.pubkey,
+        stateSnapshot.winner,
       );
       const issueScanObjects = await resolveIssueScanObjects();
 
@@ -666,7 +680,7 @@ export function MergePanel({
         defaultBranchName,
         defaultBranchHead,
         updateHead: targetIsDefaultBranch,
-        currentStateEvent,
+        currentStateEvent: stateSnapshot.winner,
         repoCoords: pr.repoCoords,
         rootEventId: pr.rootEvent.id,
         rootAuthorPubkey: pr.pubkey,
@@ -709,6 +723,7 @@ export function MergePanel({
     buildCommitterNow,
     createMergeTransports,
     resolveIssueScanObjects,
+    replaceablePreflight,
     failMerge,
     toast,
   ]);
@@ -728,8 +743,17 @@ export function MergePanel({
     beginMerge();
 
     try {
+      const stateSnapshot = await replaceablePreflight.execute(
+        {
+          kind: REPO_STATE_KIND,
+          actorPubkey: account.pubkey,
+          expectedEventId: currentStateEvent?.id ?? null,
+        },
+        async (snapshot) => snapshot,
+      );
       const { transports, getPushSummary } = createMergeTransports(
         account.pubkey,
+        stateSnapshot.winner,
       );
       const issueScanObjects = await resolveIssueScanObjects();
 
@@ -742,7 +766,7 @@ export function MergePanel({
         defaultBranchName,
         defaultBranchHead,
         updateHead: targetIsDefaultBranch,
-        currentStateEvent,
+        currentStateEvent: stateSnapshot.winner,
         repoCoords: pr.repoCoords,
         rootEventId: pr.rootEvent.id,
         rootAuthorPubkey: pr.pubkey,
@@ -777,6 +801,7 @@ export function MergePanel({
     beginMerge,
     createMergeTransports,
     resolveIssueScanObjects,
+    replaceablePreflight,
     failMerge,
     toast,
   ]);
@@ -797,8 +822,17 @@ export function MergePanel({
     beginMerge();
 
     try {
+      const stateSnapshot = await replaceablePreflight.execute(
+        {
+          kind: REPO_STATE_KIND,
+          actorPubkey: account.pubkey,
+          expectedEventId: currentStateEvent?.id ?? null,
+        },
+        async (snapshot) => snapshot,
+      );
       const { transports, getPushSummary } = createMergeTransports(
         account.pubkey,
+        stateSnapshot.winner,
       );
       const issueScanObjects = await resolveIssueScanObjects();
 
@@ -813,7 +847,7 @@ export function MergePanel({
         defaultBranchName,
         defaultBranchHead,
         updateHead: targetIsDefaultBranch,
-        currentStateEvent,
+        currentStateEvent: stateSnapshot.winner,
         repoCoords: pr.repoCoords,
         rootEventId: pr.rootEvent.id,
         rootAuthorPubkey: pr.pubkey,
@@ -865,6 +899,7 @@ export function MergePanel({
     beginMerge,
     createMergeTransports,
     resolveIssueScanObjects,
+    replaceablePreflight,
     failMerge,
     toast,
   ]);
