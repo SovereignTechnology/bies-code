@@ -389,8 +389,11 @@ export function useRepositoryReplaceablePreflight(
           };
         },
         assess: (current): PreflightCoverageAssessment => ({
+          // A deletion can remove the frozen candidate while this lease is
+          // settling. Return to the outer winner loop so it can reassess the
+          // coordinate instead of waiting out the deadline on a stale ID.
           met:
-            current.candidateIncluded &&
+            !current.candidateIncluded ||
             current.repositoryRelays.some((relay) =>
               current.coverage.isCovered(relay),
             ),
