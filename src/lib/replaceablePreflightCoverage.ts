@@ -7,8 +7,8 @@
 
 import type { IEventStore } from "applesauce-core/event-store";
 import { getOutboxes, type Filter } from "applesauce-core/helpers";
-import { firstValueFrom, race, timer, type Observable } from "rxjs";
-import { map, startWith, take } from "rxjs/operators";
+import { firstValueFrom, NEVER, race, timer, type Observable } from "rxjs";
+import { concatWith, map, startWith, take } from "rxjs/operators";
 import type {
   RelayCoveragePhase,
   RelayCoverageState,
@@ -26,8 +26,11 @@ export interface PreflightCoverageAssessment {
 
 export interface WaitForCoverageDecisionOptions<T> {
   timeoutMs: number;
+  /** Must return synchronously or enforce its own bounded async work. */
   getSnapshot(): T | Promise<T>;
+  /** Must be cheap and side-effect-free. */
   assess(snapshot: T): PreflightCoverageAssessment;
+  /** May complete; completion alone is not a coverage decision. */
   changes(snapshot: T): Observable<unknown>;
   error(assessment: PreflightCoverageAssessment): Error;
 }
@@ -256,7 +259,10 @@ export async function waitForCoverageDecision<T>(
     }
 
     await firstValueFrom(
-      race(options.changes(snapshot).pipe(take(1)), timer(remaining)),
+      race(
+        options.changes(snapshot).pipe(take(1), concatWith(NEVER)),
+        timer(remaining),
+      ),
     );
   }
 }
