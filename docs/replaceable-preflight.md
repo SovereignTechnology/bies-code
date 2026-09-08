@@ -163,6 +163,12 @@ the subscription's reactive relay frontier. Repository pages consume the
 events from the EventStore and the lifecycle coverage from this owner instead
 of opening another action-time request for those filters.
 
+For a confidential repository, the same owner begins only after private
+discovery admits the repository relay set, and it queries only those private
+repository relays. It must not add public Git index, fallback, or maintainer
+mailbox relays: lifecycle reuse is not permission to disclose a private
+coordinate.
+
 For an existing author coordinate, one currently covered repository relay is
 sufficient to write. Git index relays and maintainer mailbox relays remain
 valuable evidence contributors and publication targets, but they do not vote

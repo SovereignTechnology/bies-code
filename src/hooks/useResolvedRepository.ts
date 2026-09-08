@@ -371,7 +371,7 @@ export function useResolvedRepository(
 
   use$(() => {
     if (
-      privateProbeStatus !== "absent" ||
+      (privateProbeStatus !== "absent" && privateProbeStatus !== "found") ||
       !pubkey ||
       !dTag ||
       !repoRelayGroup ||
@@ -379,15 +379,19 @@ export function useResolvedRepository(
     )
       return undefined;
     const repoRelayUrls$ = relayGroupUrls$(repoRelayGroup);
-    const enrichmentRelays$ = combineLatest([
-      repoRelayUrls$,
-      extraRelays$,
-    ]).pipe(
-      map(([base, extra]) => [...new Set([...base, ...extra])]),
-      distinctUntilChanged(
-        (a, b) => a.length === b.length && a.every((v, i) => v === b[i]),
-      ),
-    );
+    // Private repository coordinates must never leak to public maintainer
+    // mailbox or index relays. Their admitted private repository relays own the
+    // same lifecycle proof by themselves. Public repositories retain mailbox
+    // enrichment, but only the base repository relays vote in preflight.
+    const enrichmentRelays$ =
+      privateProbeStatus === "found"
+        ? repoRelayUrls$
+        : combineLatest([repoRelayUrls$, extraRelays$]).pipe(
+            map(([base, extra]) => [...new Set([...base, ...extra])]),
+            distinctUntilChanged(
+              (a, b) => a.length === b.length && a.every((v, i) => v === b[i]),
+            ),
+          );
     const filters: Filter[] = [
       { kinds: [REPO_KIND], "#d": [dTag] } as Filter,
       ...(repo?.confirmedMaintainers.length
