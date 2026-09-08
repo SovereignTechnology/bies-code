@@ -988,6 +988,30 @@ describe("replicated role history and exits", () => {
 });
 
 describe("conservative repository membership mutations", () => {
+  it("materializes a sole legacy owner directly as the untimed lead", () => {
+    const ownerEvent = legacyAnnouncement(owner, [owner]);
+    const sole = resolveChain([ownerEvent], owner, repoId)!;
+
+    expect(sole.leadResolution.source).toBe("none");
+
+    const proposal = prepareRepositoryMembershipMutation({
+      repo: sole,
+      actorPubkey: owner,
+      intent: { type: "add", targetPubkey: invitee },
+      announcements: [ownerEvent],
+      stateEvents: [],
+      createdAt: 10,
+    });
+
+    expect(proposal.template.tags).toContainEqual(["M", owner]);
+    expect(proposal.template.tags).toContainEqual(["m", invitee, "10"]);
+    expect(
+      proposal.template.tags.filter(
+        ([role, subject]) => role === "m" && subject === owner,
+      ),
+    ).toEqual([]);
+  });
+
   it("preflights add, accept, remove, and leave as one-person effects", () => {
     const sole = resolveChain([announcement(owner, [])], owner, repoId)!;
     const add = prepareRepositoryMembershipMutation({

@@ -460,6 +460,15 @@ function RepoSettingsForm({
   }, [selectedAnnouncement, repo.selectedMaintainer]);
   const isMultiMaintainer = repo.confirmedMaintainers.length > 1;
   const leadMaintainer = repo.leadResolution.leadMaintainer;
+  const canInviteMaintainer =
+    leadMaintainer === repo.selectedMaintainer ||
+    (repo.leadResolution.source === "none" &&
+      repo.confirmedMaintainers.length === 1 &&
+      repo.confirmedMaintainers[0] === repo.selectedMaintainer &&
+      currentMaintainers.length === 0 &&
+      !selectedAnnouncement?.tags.some(([name]) =>
+        ["M", "m", "o"].includes(name),
+      ));
   const maintainerListers = useMemo(
     () =>
       computeMaintainerListers(
@@ -1672,7 +1681,7 @@ function RepoSettingsForm({
             </Alert>
 
             <div className="space-y-4 rounded-lg border border-border/60 bg-muted/10 p-4">
-              {leadMaintainer === repo.selectedMaintainer ? (
+              {canInviteMaintainer ? (
                 <div className="space-y-2">
                   <Label htmlFor="membership-target">
                     Invite one maintainer

@@ -324,7 +324,7 @@ function generateRoleTags(
   lead: string | undefined,
   createdAt: number,
 ): string[][] {
-  const prior = materializedRoleRecords(event, undefined, true);
+  const prior = materializedRoleRecords(event, lead, true);
   const preservedInvalidSelfDeferTags = event.tags
     .filter((tag) => parseInvalidSelfDeferRoleRecord(event.pubkey, tag))
     .map((tag) => [...tag]);
@@ -707,6 +707,20 @@ function assertExpectedEffect(
     }
   }
 
+  const actorAnnouncement = before.confirmedAnnouncements.find(
+    ({ pubkey }) => pubkey === actorPubkey,
+  );
+  const materializesSoleLegacyLead =
+    intent.type === "add" &&
+    before.leadResolution.source === "none" &&
+    before.confirmedMaintainers.length === 1 &&
+    before.confirmedMaintainers[0] === actorPubkey &&
+    before.maintainerEdges.length === 0 &&
+    before.invitedMaintainers.length === 0 &&
+    !actorAnnouncement?.tags.some(([name]) => ["M", "m", "o"].includes(name)) &&
+    after?.leadResolution.leadMaintainer === actorPubkey &&
+    after.leadResolution.source === "explicit";
+
   const maintainerInvitationsMatch = setEqual(
     after.invitedMaintainers,
     expectedInvitations,
@@ -733,7 +747,9 @@ function assertExpectedEffect(
   if (
     !setEqual(after.confirmedMaintainers, expectedMaintainers) ||
     !setEqual(after.confirmedModerators, expectedModerators) ||
-    after.leadResolution.leadMaintainer !== before.leadResolution.leadMaintainer
+    (after.leadResolution.leadMaintainer !==
+      before.leadResolution.leadMaintainer &&
+      !materializesSoleLegacyLead)
   ) {
     refuse(
       "membership_side_effect",

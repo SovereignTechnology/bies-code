@@ -84,6 +84,14 @@
 
 ### Fixes
 
+- Let a repository's lone confirmed owner send the first maintainer invitation
+  even when an empty or self-only legacy `maintainers` tag leaves lead
+  resolution at `none`. Guarded mutations now classify every preserved legacy
+  relationship against the destination lead before generating history, so an
+  existing relationship materialized as `M` retains its unknown start whether
+  the lead is the publisher or another maintainer. Explicit lead selection,
+  lead transfer, follow-lead, and indexed leadless roster changes remain
+  unsupported in the browser.
 - Keep passive NIP-44 decryption requests single-flight until the external
   signer responds, stop foreground resume from duplicating them, and require an
   explicit retry after private-service decryption fails. A declined or timed-out
