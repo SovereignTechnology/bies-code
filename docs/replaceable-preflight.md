@@ -363,16 +363,20 @@ Once this threshold is warm for the current two-filter lease, writers consume
 the EventStore winners and decrypted projection without an action-time relay
 request. A missing envelope may create a fresh random derived key only after the
 envelope-only lease proves absence at the same threshold and a bounded exact
-IndexedDB read has also found no cached envelope. Both exact coordinates are
-hydrated from IndexedDB when their owner starts, with cached events routed
-through the EventStore; the envelope is checked locally once more immediately
-before bootstrap. These reads restore the useful local evidence from the old
-address loader without issuing a relay request. The resulting state coordinate
-is a fresh unique address under that random key, but the combined warm lease is
-still established before its first state write. Both encrypted events publish
-to the same outbox and fallback frontier so the read evidence and durable
-destinations agree. Publishing encrypted content to those relays still reveals
-event existence, timing, and approximate size; it does not reveal the plaintext.
+cache read has also found no cached envelope. Both exact notification
+coordinates are hydrated from the cache when their owner starts, with cached
+events routed through the EventStore. Once per owner revision, its first
+bootstrap attempt checks the envelope and kind `10002` mailbox coordinates
+again so a previously observed outbox frontier also tightens the decision.
+These reads restore the useful local evidence from the old address loader
+without querying the configured relay frontier. The cache backend is normally
+IndexedDB, but development installations may provide it through the optional
+local relay at `ws://localhost:4869`. The resulting state coordinate is a fresh
+unique address under that random key, but the combined warm lease is still
+established before its first state write. Both encrypted events publish to the
+same outbox and fallback frontier so the read evidence and durable destinations
+agree. Publishing encrypted content to those relays still reveals event
+existence, timing, and approximate size; it does not reveal the plaintext.
 
 Read/archive actions remain immediate while coverage or decryption is pending.
 The store records their updater functions as local deltas, decrypts the current
@@ -387,14 +391,18 @@ retry and describes the failure as paused cross-device state sync, because
 notification delivery and the local read/archive controls still work. Retry
 reuses the current warm owner for decrypt and publish failures, but replaces an
 owner whose coverage can no longer reach quorum so terminal or silent relay
-checks receive a fresh generation.
+checks receive a fresh generation. A pause caused specifically by unavailable
+mailbox-discovery coverage belongs to the separate personal-singleton identity
+owner; restarting that owner from this service is deliberately deferred until
+identity-owner recovery can be exposed as a shared operation for every personal
+writer.
 
 This adoption removes the older address-loader relay reads and overlapping
-NIP-78 subscriptions while retaining bounded cache-only hydration. It does not
-add NIP-09 deletion discovery, a post-write echo request, or a compare-and-swap
-protocol between concurrent clients. Later warm-subscription events continue
-to reconcile cross-client updates, while the durable outbox reports publication
-delivery separately.
+NIP-78 subscriptions while retaining bounded cache-backend hydration. It does
+not add NIP-09 deletion discovery, a post-write echo request, or a
+compare-and-swap protocol between concurrent clients. Later warm-subscription
+events continue to reconcile cross-client updates, while the durable outbox
+reports publication delivery separately.
 
 ## Writer checklist
 

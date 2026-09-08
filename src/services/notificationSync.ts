@@ -179,6 +179,10 @@ function envelopeFilter(pubkey: string): Filter {
   } as Filter;
 }
 
+function mailboxFilter(pubkey: string): Filter {
+  return { kinds: [10002], authors: [pubkey] } as Filter;
+}
+
 function stateFilter(notificationPubkey: string): Filter {
   return {
     kinds: [NIP78_KIND],
@@ -804,17 +808,21 @@ export function startNotificationSync(
         return;
       }
 
-      // Bootstrap is destructive if an older envelope exists only in the
-      // local cache. Re-check that exact coordinate immediately before key
-      // creation; this is bounded IndexedDB evidence, never a relay request.
+      // Bootstrap is destructive if an older envelope or mailbox frontier
+      // exists only in the local cache. Re-check both once per owner revision
+      // before its first key-creation attempt. This does not query the
+      // configured relay frontier.
       if (bootstrapCacheCheckedRevision !== revision) {
-        await hydrateCachedNotificationEvents([envelopeFilter(pubkey)]);
+        await hydrateCachedNotificationEvents([
+          envelopeFilter(pubkey),
+          mailboxFilter(pubkey),
+        ]);
         if (stopped || revision !== ownerRevision) return;
         bootstrapCacheCheckedRevision = revision;
-        if (currentEvent(envelopeFilter(pubkey))?.id !== envelope?.id) {
-          requestReconcile();
-          return;
-        }
+        // Let EventStore model emissions update the mailbox frontier and then
+        // reassess coverage even when the cache contained no newer envelope.
+        requestReconcile();
+        return;
       }
       try {
         resolvedSigner = await resolveNotificationSigner(
