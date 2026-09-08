@@ -902,7 +902,6 @@ function RepoLayoutResolved({
             repo={repo}
             accountPubkey={account?.pubkey}
             basePath={basePath}
-            announcementsSettled={announcementsSettled}
             stateSettled={repoRelayEose}
             relayUrls={[
               ...new Set([
@@ -1074,8 +1073,6 @@ function MaintainerInvitationSafetyBanner({
     useRepositoryMembershipMutation({
       resolved,
       repo,
-      announcementsSettled,
-      stateSettled,
       relayUrls,
       repoState,
     });
@@ -1370,7 +1367,6 @@ function RepositoryHealthNotice({
   repo,
   accountPubkey,
   basePath,
-  announcementsSettled,
   stateSettled,
   relayUrls,
   repoState,
@@ -1379,7 +1375,6 @@ function RepositoryHealthNotice({
   repo: ResolvedRepo;
   accountPubkey?: string;
   basePath: string;
-  announcementsSettled: boolean;
   stateSettled: boolean;
   relayUrls: string[];
   repoState?: RepositoryState | null;
@@ -1425,8 +1420,6 @@ function RepositoryHealthNotice({
   const mutation = useRepositoryMembershipMutation({
     resolved,
     repo,
-    announcementsSettled,
-    stateSettled,
     relayUrls,
     repoState,
   });

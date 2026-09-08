@@ -34,7 +34,12 @@ import { RepositoryModel } from "@/models/RepositoryModel";
 import { RepositoryRelayGroup } from "@/models/RepositoryRelayGroup";
 import type { Filter } from "applesauce-core/helpers";
 import { BehaviorSubject, combineLatest, defer, Observable, of } from "rxjs";
-import { distinctUntilChanged, map, switchMap } from "rxjs/operators";
+import {
+  debounceTime,
+  distinctUntilChanged,
+  map,
+  switchMap,
+} from "rxjs/operators";
 import { normalizeUrl } from "@/lib/url";
 import {
   usePrivateRepositoryProbe,
@@ -64,6 +69,38 @@ export interface ResolvedRepository {
   extraRelaysForMaintainerMailboxCoverage: RelayGroupType;
   /** Lifecycle evidence owned by the shared announcement/state subscription. */
   replaceableCoverage: RelaySubscriptionCoverage;
+  /** Exact-ID deletion evidence for the current announcement/state candidates. */
+  replaceableDeletionCoverage: RelaySubscriptionCoverage;
+  /** Candidate IDs covered by replaceableDeletionCoverage. */
+  replaceableDeletionCandidateIds: readonly string[];
+  /** Prevents dynamic deletion evidence from opening a REQ during GRASP writes. */
+  replaceableWriteWindow: RepositoryReplaceableWriteWindow;
+}
+
+export interface RepositoryReplaceableWriteWindow {
+  readonly changes$: Observable<number>;
+  isHeld(): boolean;
+  hold(): () => void;
+}
+
+function createRepositoryReplaceableWriteWindow(): RepositoryReplaceableWriteWindow {
+  const changes$ = new BehaviorSubject(0);
+  let holds = 0;
+  return {
+    changes$,
+    isHeld: () => holds > 0,
+    hold: () => {
+      holds += 1;
+      changes$.next(changes$.value + 1);
+      let released = false;
+      return () => {
+        if (released) return;
+        released = true;
+        holds = Math.max(0, holds - 1);
+        changes$.next(changes$.value + 1);
+      };
+    },
+  };
 }
 
 /** Full result from useResolvedRepository, including search state for the
@@ -336,10 +373,11 @@ export function useResolvedRepository(
     [key],
   );
 
-  // One page-owned replaceable subscription covers both repository categories
-  // and their current coordinate/exact deletion evidence. A changed authority
-  // or candidate set creates a complete filter revision; relay growth remains
-  // reactive and does not disturb unchanged relays.
+  // One page-owned logical scope has two leases over the same relay frontier.
+  // The base lease stays live across ordinary event arrivals. Exact-ID NIP-09
+  // evidence is isolated in a coalesced lease because those filters are
+  // candidate-dependent and must not restart the stable announcement/state
+  // query every time a new winner arrives.
   const maintainerKey = repo?.confirmedMaintainers.join(",") ?? "";
   const deletionAuthors = repo
     ? [
@@ -350,7 +388,7 @@ export function useResolvedRepository(
         ]),
       ].sort()
     : [];
-  const deletionCandidateIds = repo
+  const currentDeletionCandidateIds = repo
     ? [
         ...new Set([
           ...repo.discoveredAnnouncements.map(({ id }) => id),
@@ -359,14 +397,62 @@ export function useResolvedRepository(
         ]),
       ].sort()
     : [];
-  const deletionRevision = `${deletionAuthors.join(",")}:${deletionCandidateIds.join(",")}`;
+  const deletionAuthorsKey = deletionAuthors.join(",");
+  const replaceableWriteWindow = useMemo(
+    () => createRepositoryReplaceableWriteWindow(),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [key],
+  );
+  const writeWindowRevision = use$(
+    () => replaceableWriteWindow.changes$,
+    [replaceableWriteWindow],
+  );
+  const deletionCandidateInput$ = useMemo(
+    () => new BehaviorSubject<string[]>([]),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [key],
+  );
+  const currentDeletionCandidateKey = currentDeletionCandidateIds.join(",");
+  useEffect(() => {
+    if (!replaceableWriteWindow.isHeld()) {
+      deletionCandidateInput$.next(currentDeletionCandidateIds);
+    }
+    // The key captures content equality; the array itself is recreated while
+    // repository models project the same candidate set.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    currentDeletionCandidateKey,
+    deletionCandidateInput$,
+    replaceableWriteWindow,
+    writeWindowRevision,
+  ]);
+  const deletionCandidateIds =
+    use$(
+      () =>
+        deletionCandidateInput$.pipe(
+          debounceTime(1_000),
+          distinctUntilChanged(
+            (a, b) => a.length === b.length && a.every((v, i) => v === b[i]),
+          ),
+        ),
+      [deletionCandidateInput$],
+    ) ?? [];
+  const deletionCandidateKey = deletionCandidateIds.join(",");
   const replaceableCoverage = useMemo(
     () =>
       createRelaySubscriptionCoverage({
         settlementTimeoutMs: REPOSITORY_COVERAGE_SETTLEMENT_TIMEOUT_MS,
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [key, maintainerKey, deletionRevision, privateProbeStatus],
+    [key, maintainerKey, deletionAuthorsKey, privateProbeStatus],
+  );
+  const replaceableDeletionCoverage = useMemo(
+    () =>
+      createRelaySubscriptionCoverage({
+        settlementTimeoutMs: REPOSITORY_COVERAGE_SETTLEMENT_TIMEOUT_MS,
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [key, deletionAuthorsKey, deletionCandidateKey, privateProbeStatus],
   );
 
   use$(() => {
@@ -415,15 +501,6 @@ export function useResolvedRepository(
             } as Filter,
           ]
         : []),
-      ...(repo && deletionCandidateIds.length > 0
-        ? [
-            {
-              kinds: [5],
-              authors: deletionAuthors,
-              "#e": deletionCandidateIds,
-            } as Filter,
-          ]
-        : []),
     ];
     const source = resilientSubscription(pool, enrichmentRelays$, filters, {
       settle: false,
@@ -441,12 +518,71 @@ export function useResolvedRepository(
   }, [
     key,
     maintainerKey,
-    deletionRevision,
+    deletionAuthorsKey,
     store,
     repoRelayGroup,
     extraRelays$,
     privateProbeStatus,
     replaceableCoverage,
+  ]);
+
+  // Exact event-pointer deletions are one batched REQ per relay for the whole
+  // repository, never one subscription per kind or writer. The candidate set
+  // is frozen while a GRASP state transition is between relay acceptance and
+  // Git push, so a newly visible state cannot trigger a hidden read there.
+  use$(() => {
+    if (
+      (privateProbeStatus !== "absent" && privateProbeStatus !== "found") ||
+      !repoRelayGroup ||
+      !extraRelays$ ||
+      deletionAuthors.length === 0 ||
+      deletionCandidateIds.length === 0
+    )
+      return undefined;
+    const repoRelayUrls$ = relayGroupUrls$(repoRelayGroup);
+    const enrichmentRelays$ =
+      privateProbeStatus === "found"
+        ? repoRelayUrls$
+        : combineLatest([repoRelayUrls$, extraRelays$]).pipe(
+            map(([base, extra]) => [...new Set([...base, ...extra])]),
+            distinctUntilChanged(
+              (a, b) => a.length === b.length && a.every((v, i) => v === b[i]),
+            ),
+          );
+    const source = resilientSubscription(
+      pool,
+      enrichmentRelays$,
+      [
+        {
+          kinds: [5],
+          authors: deletionAuthors,
+          "#e": deletionCandidateIds,
+        } as Filter,
+      ],
+      {
+        settle: false,
+        retryCount: Infinity,
+        onRelayLifecycle: (event) =>
+          replaceableDeletionCoverage.onLifecycle(event),
+      },
+    ).pipe(onlyEvents(), mapEventsToStore(store));
+
+    return new Observable((subscriber) => {
+      const subscription = source.subscribe(subscriber);
+      return () => {
+        replaceableDeletionCoverage.stop();
+        subscription.unsubscribe();
+      };
+    });
+  }, [
+    key,
+    deletionAuthorsKey,
+    deletionCandidateKey,
+    store,
+    repoRelayGroup,
+    extraRelays$,
+    privateProbeStatus,
+    replaceableDeletionCoverage,
   ]);
 
   // Layer 3: once known, add the repository's declared relays to the reactive
@@ -630,6 +766,9 @@ export function useResolvedRepository(
           repoRelayGroup,
           extraRelaysForMaintainerMailboxCoverage,
           replaceableCoverage,
+          replaceableDeletionCoverage,
+          replaceableDeletionCandidateIds: deletionCandidateIds,
+          replaceableWriteWindow,
         }
       : undefined;
 

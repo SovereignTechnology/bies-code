@@ -155,13 +155,15 @@ pagination until the lifecycle can represent completion of the whole scope.
 
 ## Repository-scoped adoption decision
 
-Repository announcements and state share one page-owned subscription. Its
-stable revision contains the identifier-wide kind `30617` filter and the kind
-`30618` filter for the currently confirmed maintainer set. A change to that
-authority set starts a new complete revision; relay-list changes are handled by
-the subscription's reactive relay frontier. Repository pages consume the
-events from the EventStore and the lifecycle coverage from this owner instead
-of opening another action-time request for those filters.
+Repository announcements and state share one page-owned logical scope. Its
+stable lease contains the identifier-wide kind `30617` filter, the kind `30618`
+filter for the currently confirmed maintainer set, and coordinate-addressed
+kind `5` deletions. A second repository-wide lease batches exact event-ID
+deletion filters for the current announcement and state candidates. It is not
+one subscription per kind or writer. A change to the authority set starts a new
+stable revision; relay-list changes are handled by the reactive relay frontier.
+Repository pages consume events from the EventStore and lifecycle coverage from
+these leases instead of repeating their filters at action time.
 
 For a confidential repository, the same owner begins only after private
 discovery admits the repository relay set, and it queries only those private
@@ -177,20 +179,41 @@ repository must not become uneditable because one of them is flaky. The
 repository relay voters are frozen before signing so a relay-frontier edit is
 judged against the old frontier.
 
-An absent author coordinate is different. Before creating it, the action must
-also establish absence on at least one of the author's current NIP-65 outbox
-relays. A completely new repository has no old repository frontier, so its
-focused collision check requires an EOSE from at least one proposed repository
-relay and at least one current author outbox relay. This is genuinely new
-evidence, not a repeat of a warm repository query. Confidential repository
-creation keeps its existing private-service-only collision check so the
-identifier is not disclosed to public mailbox relays.
+Private repositories vote with their admitted private relay group, not every
+relay named in an announcement. A malformed public announcement with no relay
+list may use an admitted route relay hint as a repair frontier; the writer shows
+that degraded basis to the user so the settings screen remains capable of
+adding an explicit repository relay.
 
-Signed kind `5` requests are a modifier on the repository snapshot. The owner
-includes coordinate pointers and the exact IDs of the current announcement and
-state candidates in the same request. A changed candidate set starts a new
-complete filter revision, so action-time writers consume warm deletion evidence
-without opening another request.
+An absent public author coordinate is different when the write will create that
+coordinate. Before creating it, the action must also establish absence on at
+least one of the author's current NIP-65 outbox relays. Kind `30618` is selected
+across confirmed maintainers, so a merge or HEAD edit with a warm state winner
+does not need a separate absence proof for the signer's unused coordinate.
+Confidential repository writes use admitted private repository relays for both
+presence and absence and never disclose their coordinates to public mailbox
+relays.
+
+A completely new public repository has no old repository frontier, so its
+focused collision check requires an EOSE from at least one proposed repository
+relay and at least one current author outbox relay. The query covers both
+coordinates and their coordinate deletion pointers. A signer-owned
+announcement with the same clone and relay frontiers but no state is an
+incomplete, resumable creation rather than a collision. Confidential repository
+creation keeps its existing private-service-only collision check.
+
+An in-session public-creation retry retains the original signed state, commit
+hash, clone frontier, and packfile. It re-publishes that same state to the GRASP
+relays before pushing the same Git objects, re-arming expired purgatory without
+creating a state/commit mismatch. Session identity is checked before either
+side effect.
+
+Signed kind `5` requests are a modifier on the repository snapshot. Stable
+coordinate pointers stay in the base lease. Candidate-dependent exact `e`
+pointers are coalesced for one second into the shared exact-deletion lease; only
+that lease is replaced when the candidate set changes. Preflight requires its
+EOSE-backed evidence for the winner it freezes. This avoids restarting the
+announcement/state query on ordinary event arrivals.
 
 The writer freezes the relevant EventStore winner after those checks and
 compares it with the event the editor or operation was based on. A changed
@@ -218,6 +241,12 @@ before the Git objects exist. A non-purgatory relay may return it, but that does
 not strengthen the transition. Therefore repository preflight must never
 insert a post-signing echo request between steps 2 and 3.
 
+While steps 2 and 3 are in progress, the page freezes additions to its dynamic
+exact-deletion lease. A state that becomes visible immediately on a
+non-purgatory server therefore cannot trigger a hidden background REQ in that
+window. Once the Git transition finishes, pending candidate IDs are batched and
+warmed normally.
+
 ### Maintainer invitation example
 
 Adding a maintainer is a **repository authority graph** action with the
@@ -228,9 +257,11 @@ Adding a maintainer is a **repository authority graph** action with the
    same owner without becoming required voters.
 2. Let selecting a prospective maintainer remain immediate.
 3. At invitation time, consume the repository owner's accumulated evidence.
-4. If the candidate coordinate remains absent, discover that user's NIP-65
-   mailboxes and run one focused kind `30617`/`30618` plus deletion query on
-   their outboxes.
+4. If the prospective candidate's coordinates remain absent, discover that
+   user's NIP-65 mailboxes and run one focused kind `30617`/`30618` plus
+   deletion query on their outboxes. If the acting maintainer's own kind
+   `30617` coordinate is absent, the common writer separately checks that one
+   coordinate on the acting maintainer's outbox.
 5. Reuse that focused evidence inside the authority snapshot; do not repeat it.
 
 An already discovered candidate announcement needs no mailbox EOSE. If the

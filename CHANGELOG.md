@@ -27,7 +27,12 @@
   Pyramid as of September 8, 2026, may mean the state is already visible.
   Confidential repositories obtain the same proof only from their admitted
   private repository relays and never disclose their coordinates to public
-  enrichment relays.
+  enrichment relays. Stable coordinate filters no longer restart when an event
+  arrives; exact deletion pointers use one coalesced repository lease whose
+  additions pause across the relay-acceptance-to-Git-push window. Public
+  creation retries reuse the original signed state and packfile and re-arm
+  purgatory before pushing, while a matching announcement without state is
+  treated as a resumable attempt.
 - Keep one account-owned warm subscription for the encrypted notification-key
   envelope and derived read/archive state. Cross-device writes now wait for
   current EOSE-backed coverage and decryption without an action-time relay

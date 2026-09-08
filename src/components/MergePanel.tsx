@@ -111,7 +111,10 @@ import {
 import type { InferredPRParent } from "@/lib/inferredPRParents";
 import { requestRelaySnapshot, type RelaySnapshot } from "@/lib/relaySnapshot";
 import type { ResolvedRepository } from "@/hooks/useResolvedRepository";
-import { useRepositoryReplaceablePreflight } from "@/hooks/useRepositoryReplaceablePreflight";
+import {
+  useRepositoryReplaceablePreflight,
+  type RepositoryReplaceableSnapshot,
+} from "@/hooks/useRepositoryReplaceablePreflight";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -640,70 +643,78 @@ export function MergePanel({
     }
   }, [account, detectedMergeCommit, publishMergedStatus, failMerge, toast]);
 
+  const runRepositoryStateTransition = useCallback(
+    async <T,>(
+      action: (snapshot: RepositoryReplaceableSnapshot) => Promise<T>,
+    ): Promise<T> => {
+      if (!account) throw new Error("Sign in before merging.");
+      return replaceablePreflight.execute(
+        {
+          kind: REPO_STATE_KIND,
+          actorPubkey: account.pubkey,
+          expectedEventId: currentStateEvent?.id ?? null,
+          holdWriteWindow: true,
+        },
+        action,
+      );
+    },
+    [account, currentStateEvent, replaceablePreflight],
+  );
+
   // ── Merge orchestration (patch-type merge strategy) ─────────────────────
 
   const handleMerge = useCallback(async () => {
-    if (
-      !account ||
-      !mergeability.buildResult ||
-      !defaultBranchHead ||
-      !gitPool
-    ) {
+    const buildResult = mergeability.buildResult;
+    if (!account || !buildResult || !defaultBranchHead || !gitPool) {
       return;
     }
 
     beginMerge();
 
     try {
-      const stateSnapshot = await replaceablePreflight.execute(
-        {
-          kind: REPO_STATE_KIND,
-          actorPubkey: account.pubkey,
-          expectedEventId: currentStateEvent?.id ?? null,
-        },
-        async (snapshot) => snapshot,
-      );
-      const committer = buildCommitterNow();
-      if (!committer) return;
+      await runRepositoryStateTransition(async (stateSnapshot) => {
+        const committer = buildCommitterNow();
+        if (!committer) return;
 
-      const { transports, getPushSummary } = createMergeTransports(
-        account.pubkey,
-        stateSnapshot.winner,
-      );
-      const issueScanObjects = await resolveIssueScanObjects();
+        const { transports, getPushSummary } = createMergeTransports(
+          account.pubkey,
+          stateSnapshot.winner,
+        );
+        const issueScanObjects = await resolveIssueScanObjects();
 
-      const { mergeCommit, issueStatuses } = await performMerge({
-        signer: account.signer,
-        signerPubkey: account.pubkey,
-        chainObjects: mergeability.buildResult.objects,
-        finalTreeHash: mergeability.buildResult.finalTreeHash,
-        tipCommitHash: mergeability.buildResult.tipCommitHash,
-        dTag: repo.dTag,
-        defaultBranchName,
-        defaultBranchHead,
-        updateHead: targetIsDefaultBranch,
-        currentStateEvent: stateSnapshot.winner,
-        repoCoords: pr.repoCoords,
-        rootEventId: pr.rootEvent.id,
-        rootAuthorPubkey: pr.pubkey,
-        issueScanObjects,
-        issueAutoResolve,
-        subject: pr.currentSubject || pr.originalSubject,
-        prNevent: buildPRNevent(pr.rootEvent.id, pr.pubkey, repo.relays),
-        rootAuthorName,
-        // Cover note takes precedence over the PR body in the merge commit
-        // message (recorded under different headings — see buildMergeCommitMessage).
-        coverNote: pr.coverNote?.content || undefined,
-        prDescription: pr.body || undefined,
-        committer,
-        patchEventIds,
-        ...transports,
-      });
+        const { mergeCommit, issueStatuses } = await performMerge({
+          signer: account.signer,
+          signerPubkey: account.pubkey,
+          chainObjects: buildResult.objects,
+          finalTreeHash: buildResult.finalTreeHash,
+          tipCommitHash: buildResult.tipCommitHash,
+          dTag: repo.dTag,
+          defaultBranchName,
+          defaultBranchHead,
+          updateHead: targetIsDefaultBranch,
+          currentStateEvent: stateSnapshot.winner,
+          repoCoords: pr.repoCoords,
+          rootEventId: pr.rootEvent.id,
+          rootAuthorPubkey: pr.pubkey,
+          issueScanObjects,
+          issueAutoResolve,
+          subject: pr.currentSubject || pr.originalSubject,
+          prNevent: buildPRNevent(pr.rootEvent.id, pr.pubkey, repo.relays),
+          rootAuthorName,
+          // Cover note takes precedence over the PR body in the merge commit
+          // message (recorded under different headings — see buildMergeCommitMessage).
+          coverNote: pr.coverNote?.content || undefined,
+          prDescription: pr.body || undefined,
+          committer,
+          patchEventIds,
+          ...transports,
+        });
 
-      const summary = getPushSummary();
-      toast({
-        title: "Patch merged",
-        description: `Merge commit ${mergeCommit.hash.slice(0, 8)} pushed to ${defaultBranchName}.${summary ? ` ${summarizePushDelivery(summary)}` : ""}${formatResolvedIssuesSuffix(issueStatuses.length)}`,
+        const summary = getPushSummary();
+        toast({
+          title: "Patch merged",
+          description: `Merge commit ${mergeCommit.hash.slice(0, 8)} pushed to ${defaultBranchName}.${summary ? ` ${summarizePushDelivery(summary)}` : ""}${formatResolvedIssuesSuffix(issueStatuses.length)}`,
+        });
       });
     } catch (err) {
       failMerge(err, "Merge failed", "Merge failed unexpectedly");
@@ -712,7 +723,6 @@ export function MergePanel({
     account,
     mergeability.buildResult,
     defaultBranchHead,
-    currentStateEvent,
     defaultBranchName,
     targetIsDefaultBranch,
     gitPool,
@@ -725,7 +735,7 @@ export function MergePanel({
     buildCommitterNow,
     createMergeTransports,
     resolveIssueScanObjects,
-    replaceablePreflight,
+    runRepositoryStateTransition,
     failMerge,
     toast,
   ]);
@@ -733,56 +743,46 @@ export function MergePanel({
   // ── Apply-to-tip orchestration ────────────────────────────────────────────
 
   const handleApplyToTip = useCallback(async () => {
-    if (
-      !account ||
-      !mergeability.applyResult ||
-      !defaultBranchHead ||
-      !gitPool
-    ) {
+    const applyResult = mergeability.applyResult;
+    if (!account || !applyResult || !defaultBranchHead || !gitPool) {
       return;
     }
 
     beginMerge();
 
     try {
-      const stateSnapshot = await replaceablePreflight.execute(
-        {
-          kind: REPO_STATE_KIND,
-          actorPubkey: account.pubkey,
-          expectedEventId: currentStateEvent?.id ?? null,
-        },
-        async (snapshot) => snapshot,
-      );
-      const { transports, getPushSummary } = createMergeTransports(
-        account.pubkey,
-        stateSnapshot.winner,
-      );
-      const issueScanObjects = await resolveIssueScanObjects();
+      await runRepositoryStateTransition(async (stateSnapshot) => {
+        const { transports, getPushSummary } = createMergeTransports(
+          account.pubkey,
+          stateSnapshot.winner,
+        );
+        const issueScanObjects = await resolveIssueScanObjects();
 
-      const { newTipCommitHash, issueStatuses } = await performApplyToTip({
-        signer: account.signer,
-        signerPubkey: account.pubkey,
-        objects: mergeability.applyResult.objects,
-        newTipCommitHash: mergeability.applyResult.newTipCommitHash,
-        dTag: repo.dTag,
-        defaultBranchName,
-        defaultBranchHead,
-        updateHead: targetIsDefaultBranch,
-        currentStateEvent: stateSnapshot.winner,
-        repoCoords: pr.repoCoords,
-        rootEventId: pr.rootEvent.id,
-        rootAuthorPubkey: pr.pubkey,
-        issueScanObjects,
-        issueAutoResolve,
-        patchEventIds,
-        ...transports,
-      });
+        const { newTipCommitHash, issueStatuses } = await performApplyToTip({
+          signer: account.signer,
+          signerPubkey: account.pubkey,
+          objects: applyResult.objects,
+          newTipCommitHash: applyResult.newTipCommitHash,
+          dTag: repo.dTag,
+          defaultBranchName,
+          defaultBranchHead,
+          updateHead: targetIsDefaultBranch,
+          currentStateEvent: stateSnapshot.winner,
+          repoCoords: pr.repoCoords,
+          rootEventId: pr.rootEvent.id,
+          rootAuthorPubkey: pr.pubkey,
+          issueScanObjects,
+          issueAutoResolve,
+          patchEventIds,
+          ...transports,
+        });
 
-      const summary = getPushSummary();
-      const patchCount = patchChain?.length ?? 0;
-      toast({
-        title: "Patch applied",
-        description: `${patchCount} commit${patchCount !== 1 ? "s" : ""} applied to ${defaultBranchName} (tip: ${newTipCommitHash.slice(0, 8)}).${summary ? ` ${summarizePushDelivery(summary)}` : ""}${formatResolvedIssuesSuffix(issueStatuses.length)}`,
+        const summary = getPushSummary();
+        const patchCount = patchChain?.length ?? 0;
+        toast({
+          title: "Patch applied",
+          description: `${patchCount} commit${patchCount !== 1 ? "s" : ""} applied to ${defaultBranchName} (tip: ${newTipCommitHash.slice(0, 8)}).${summary ? ` ${summarizePushDelivery(summary)}` : ""}${formatResolvedIssuesSuffix(issueStatuses.length)}`,
+        });
       });
     } catch (err) {
       failMerge(err, "Apply failed", "Apply failed unexpectedly");
@@ -791,7 +791,6 @@ export function MergePanel({
     account,
     mergeability.applyResult,
     defaultBranchHead,
-    currentStateEvent,
     defaultBranchName,
     targetIsDefaultBranch,
     gitPool,
@@ -803,7 +802,7 @@ export function MergePanel({
     beginMerge,
     createMergeTransports,
     resolveIssueScanObjects,
-    replaceablePreflight,
+    runRepositoryStateTransition,
     failMerge,
     toast,
   ]);
@@ -811,12 +810,14 @@ export function MergePanel({
   // ── PR merge orchestration ────────────────────────────────────────────────
 
   const handlePRMerge = useCallback(async () => {
+    const mergeResult = prMergeability.result;
+    const tipCommitId = pr.tip.commitId;
     if (
       !account ||
-      !prMergeability.result ||
+      !mergeResult ||
       !defaultBranchHead ||
       !gitPool ||
-      !pr.tip.commitId
+      !tipCommitId
     ) {
       return;
     }
@@ -824,63 +825,57 @@ export function MergePanel({
     beginMerge();
 
     try {
-      const stateSnapshot = await replaceablePreflight.execute(
-        {
-          kind: REPO_STATE_KIND,
-          actorPubkey: account.pubkey,
-          expectedEventId: currentStateEvent?.id ?? null,
-        },
-        async (snapshot) => snapshot,
-      );
-      const { transports, getPushSummary } = createMergeTransports(
-        account.pubkey,
-        stateSnapshot.winner,
-      );
-      const issueScanObjects = await resolveIssueScanObjects();
+      await runRepositoryStateTransition(async (stateSnapshot) => {
+        const { transports, getPushSummary } = createMergeTransports(
+          account.pubkey,
+          stateSnapshot.winner,
+        );
+        const issueScanObjects = await resolveIssueScanObjects();
 
-      const { mergeCommit, issueStatuses } = await performPRMerge({
-        signer: account.signer,
-        signerPubkey: account.pubkey,
-        mergeCommitObj: prMergeability.result.mergeCommitObj,
-        prTipCommitHash: pr.tip.commitId,
-        mergeBase: prMergeability.result.mergeBase,
-        extraObjects: prMergeability.result.extraObjects,
-        dTag: repo.dTag,
-        defaultBranchName,
-        defaultBranchHead,
-        updateHead: targetIsDefaultBranch,
-        currentStateEvent: stateSnapshot.winner,
-        repoCoords: pr.repoCoords,
-        rootEventId: pr.rootEvent.id,
-        rootAuthorPubkey: pr.pubkey,
-        issueScanObjects,
-        issueAutoResolve,
-        fetchBranchObjects: (tipCommitHash, stopAtCommitHash) => {
-          // Use the branch pack prefetched while the page was idle when it
-          // matches the exact range being pushed; otherwise fetch live.
-          const pf = prefetched?.branchObjects;
-          if (
-            pf &&
-            pf.tipCommitId === tipCommitHash &&
-            pf.stopAtCommitId === stopAtCommitHash &&
-            pf.objects
-          ) {
-            return Promise.resolve(pf.objects);
-          }
-          return fetchPRBranchObjectsWithTimeout(
-            gitPool,
-            tipCommitHash,
-            stopAtCommitHash,
-            effectiveCloneUrls,
-          );
-        },
-        ...transports,
-      });
+        const { mergeCommit, issueStatuses } = await performPRMerge({
+          signer: account.signer,
+          signerPubkey: account.pubkey,
+          mergeCommitObj: mergeResult.mergeCommitObj,
+          prTipCommitHash: tipCommitId,
+          mergeBase: mergeResult.mergeBase,
+          extraObjects: mergeResult.extraObjects,
+          dTag: repo.dTag,
+          defaultBranchName,
+          defaultBranchHead,
+          updateHead: targetIsDefaultBranch,
+          currentStateEvent: stateSnapshot.winner,
+          repoCoords: pr.repoCoords,
+          rootEventId: pr.rootEvent.id,
+          rootAuthorPubkey: pr.pubkey,
+          issueScanObjects,
+          issueAutoResolve,
+          fetchBranchObjects: (tipCommitHash, stopAtCommitHash) => {
+            // Use the branch pack prefetched while the page was idle when it
+            // matches the exact range being pushed; otherwise fetch live.
+            const pf = prefetched?.branchObjects;
+            if (
+              pf &&
+              pf.tipCommitId === tipCommitHash &&
+              pf.stopAtCommitId === stopAtCommitHash &&
+              pf.objects
+            ) {
+              return Promise.resolve(pf.objects);
+            }
+            return fetchPRBranchObjectsWithTimeout(
+              gitPool,
+              tipCommitHash,
+              stopAtCommitHash,
+              effectiveCloneUrls,
+            );
+          },
+          ...transports,
+        });
 
-      const summary = getPushSummary();
-      toast({
-        title: "PR merged",
-        description: `Merge commit ${mergeCommit.hash.slice(0, 8)} pushed to ${defaultBranchName}.${summary ? ` ${summarizePushDelivery(summary)}` : ""}${formatResolvedIssuesSuffix(issueStatuses.length)}`,
+        const summary = getPushSummary();
+        toast({
+          title: "PR merged",
+          description: `Merge commit ${mergeCommit.hash.slice(0, 8)} pushed to ${defaultBranchName}.${summary ? ` ${summarizePushDelivery(summary)}` : ""}${formatResolvedIssuesSuffix(issueStatuses.length)}`,
+        });
       });
     } catch (err) {
       failMerge(err, "Merge failed", "Merge failed unexpectedly");
@@ -889,7 +884,6 @@ export function MergePanel({
     account,
     prMergeability.result,
     defaultBranchHead,
-    currentStateEvent,
     defaultBranchName,
     targetIsDefaultBranch,
     gitPool,
@@ -901,7 +895,7 @@ export function MergePanel({
     beginMerge,
     createMergeTransports,
     resolveIssueScanObjects,
-    replaceablePreflight,
+    runRepositoryStateTransition,
     failMerge,
     toast,
   ]);

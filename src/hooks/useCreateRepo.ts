@@ -43,7 +43,7 @@ import { resilientRequest } from "@/lib/resilientSubscription";
 import { onlyEvents } from "applesauce-relay";
 import { firstValueFrom, timeout, toArray } from "rxjs";
 import { repoCoordinate } from "@/lib/nip34";
-import { assertNewPublicRepositoryCoordinatesAbsent } from "@/hooks/useRepositoryReplaceablePreflight";
+import { assertNewPublicRepositoryCoordinatesAvailable } from "@/hooks/useRepositoryReplaceablePreflight";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -105,6 +105,9 @@ interface PublicCreateRetry {
   pubkey: string;
   identifier: string;
   commitHash: string;
+  cloneUrls: string[];
+  relayUrls: string[];
+  packfile: Uint8Array;
   state: NostrEvent;
 }
 
@@ -160,9 +163,10 @@ export function useCreateRepo() {
         const relayUrls = input.graspServers.map((server) => server.wsUrl);
         setState({ step: "checking-relays" });
         if (!input.private) {
-          await assertNewPublicRepositoryCoordinatesAbsent(
+          await assertNewPublicRepositoryCoordinatesAvailable(
             pubkey,
             input.identifier,
+            cloneUrls,
             relayUrls,
           );
         }
@@ -296,6 +300,9 @@ export function useCreateRepo() {
             pubkey,
             identifier: input.identifier,
             commitHash,
+            cloneUrls,
+            relayUrls,
+            packfile,
             state: signedState,
           };
         }
@@ -344,8 +351,10 @@ export function useCreateRepo() {
 
         await publishToGraspRelays(signedState, graspRelayUrls, abort.signal);
 
-        if (input.private) markPrivateRelayEvent(signedState);
-        eventStore.add(signedState);
+        if (input.private) {
+          markPrivateRelayEvent(signedState);
+          eventStore.add(signedState);
+        }
 
         const publishedAt = Date.now();
 
@@ -483,7 +492,7 @@ export function useCreateRepo() {
    */
   const retryPush = useCallback(
     async (input: CreateRepoFormInput, commitHash: string) => {
-      if (!npub || !account || !pubkey) {
+      if (!account || !pubkey) {
         setState((prev) => ({
           ...prev,
           step: "error",
@@ -582,41 +591,53 @@ export function useCreateRepo() {
           });
           return;
         }
-        setState((prev) => ({ ...prev, step: "pushing", error: undefined }));
-
-        // Rebuild the packfile for retry
-        const authorName =
-          profile?.displayName ?? profile?.name ?? npub.slice(0, 16);
-
-        const result = await createInitialCommit({
-          repoName: input.name,
-          description: input.description || undefined,
-          authorName,
-          npub,
-        });
-
-        // Percent-encode the identifier per GRASP-01 §Git Smart HTTP path spec
-        const encodedIdentifier = encodeURIComponent(input.identifier);
-        const cloneUrls = input.graspServers.map((server) =>
-          graspRepositoryCloneUrl(
-            server.serviceAddress,
-            npub,
-            encodedIdentifier,
-          ),
+        const transaction = publicRetryRef.current;
+        if (
+          !transaction ||
+          transaction.pubkey !== pubkey ||
+          transaction.identifier !== input.identifier ||
+          transaction.commitHash !== commitHash
+        ) {
+          throw new Error(
+            "The repository creation session changed; start creation again",
+          );
+        }
+        // Re-arm a purgatory-capable server whose earlier staging window may
+        // have expired. A non-purgatory server simply acknowledges the same
+        // already-visible event again.
+        setState((prev) => ({
+          ...prev,
+          step: "publishing-state",
+          error: undefined,
+        }));
+        await publishToGraspRelays(
+          transaction.state,
+          transaction.relayUrls,
+          abort.signal,
         );
+        setState((prev) => ({
+          ...prev,
+          step: "pushing",
+          publishedAt: Date.now(),
+        }));
 
         const refUpdates: RefUpdate[] = [
           {
             oldHash: ZERO_HASH,
-            newHash: commitHash,
+            newHash: transaction.commitHash,
             refName: "refs/heads/main",
           },
         ];
 
         // Push to all Grasp servers in parallel
         const pushResults = await Promise.allSettled(
-          cloneUrls.map((url) =>
-            pushToGitServer(url, refUpdates, result.packfile, abort.signal),
+          transaction.cloneUrls.map((url) =>
+            pushToGitServer(
+              url,
+              refUpdates,
+              transaction.packfile,
+              abort.signal,
+            ),
           ),
         );
 
@@ -625,7 +646,7 @@ export function useCreateRepo() {
 
         for (let i = 0; i < pushResults.length; i++) {
           const pr = pushResults[i];
-          const url = cloneUrls[i];
+          const url = transaction.cloneUrls[i];
           if (pr.status === "rejected") {
             errors.push(
               `${url}: ${pr.reason instanceof Error ? pr.reason.message : String(pr.reason)}`,
@@ -658,30 +679,19 @@ export function useCreateRepo() {
           );
         }
 
-        const transaction = publicRetryRef.current;
-        if (
-          !transaction ||
-          transaction.pubkey !== pubkey ||
-          transaction.identifier !== input.identifier ||
-          transaction.commitHash !== commitHash
-        ) {
-          throw new Error(
-            "The repository creation session changed; start creation again",
-          );
-        }
         await outboxStore.publish(transaction.state, [
           `outbox:${pubkey}`,
-          repoCoordinate(pubkey, input.identifier),
+          repoCoordinate(pubkey, transaction.identifier),
           "fallback-relays",
         ]);
 
-        const primaryCloneUrl = cloneUrls[0];
+        const primaryCloneUrl = transaction.cloneUrls[0];
 
         setState({
           step: "done",
           cloneUrl: primaryCloneUrl,
-          commitHash,
-          identifier: input.identifier,
+          commitHash: transaction.commitHash,
+          identifier: transaction.identifier,
         });
       } catch (err) {
         if (abort.signal.aborted) return;
@@ -690,7 +700,7 @@ export function useCreateRepo() {
         setState((prev) => ({ ...prev, step: "error", error: message }));
       }
     },
-    [account, npub, profile, pubkey],
+    [account, pubkey],
   );
 
   return {

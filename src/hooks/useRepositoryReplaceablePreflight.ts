@@ -1,15 +1,31 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { getOutboxes } from "applesauce-core/helpers";
 import type { Filter } from "applesauce-core/helpers";
 import { onlyEvents } from "applesauce-relay";
 import type { NostrEvent } from "nostr-tools";
-import { firstValueFrom, race, Subscription, timer } from "rxjs";
-import { filter, startWith, take } from "rxjs/operators";
+import {
+  BehaviorSubject,
+  firstValueFrom,
+  merge,
+  race,
+  Subscription,
+  timer,
+} from "rxjs";
+import { skip, take } from "rxjs/operators";
 
 import { useEventStore } from "@/hooks/useEventStore";
+import { useToast } from "@/hooks/useToast";
 import type { ResolvedRepository } from "@/hooks/useResolvedRepository";
 import { REPOSITORY_COVERAGE_SETTLEMENT_TIMEOUT_MS } from "@/hooks/useResolvedRepository";
-import { REPO_KIND, REPO_STATE_KIND } from "@/lib/nip34";
+import { isValidRepositoryState } from "@/casts/RepositoryState";
+import { isValidRepository } from "@/casts/Repository";
+import {
+  getRepoCloneUrls,
+  getRepoRelays,
+  repoCoordinate,
+  REPO_KIND,
+  REPO_STATE_KIND,
+} from "@/lib/nip34";
 import { normalizeUrl } from "@/lib/url";
 import { cacheRequest } from "@/services/cache";
 import { eventStore, pool } from "@/services/nostr";
@@ -34,6 +50,19 @@ export interface RepositoryReplaceablePreflightOptions {
   actorPubkey: string;
   /** Event the editor/operation was based on; null records known absence. */
   expectedEventId: string | null;
+  /** Hold dynamic deletion additions until a GRASP state/Git transition ends. */
+  holdWriteWindow?: boolean;
+}
+
+function repositoryRelayVoters(resolved: ResolvedRepository): string[] {
+  const declaredRelays = [...new Set(resolved.repo.relays.map(normalizeUrl))];
+  return resolved.repo.isPrivate || declaredRelays.length === 0
+    ? [
+        ...new Set(
+          resolved.repoRelayGroup.relays.map(({ url }) => normalizeUrl(url)),
+        ),
+      ]
+    : declaredRelays;
 }
 
 function pickWinner(events: NostrEvent[]): NostrEvent | undefined {
@@ -56,16 +85,19 @@ function repositoryWinner(
   authorityPubkeys: string[],
 ): NostrEvent | undefined {
   if (kind === REPO_KIND) {
-    return eventStore.getReplaceable(REPO_KIND, actorPubkey, dTag);
+    const event = eventStore.getReplaceable(REPO_KIND, actorPubkey, dTag);
+    return event && isValidRepository(event) ? event : undefined;
   }
   return pickWinner(
-    eventStore.getByFilters([
-      {
-        kinds: [REPO_STATE_KIND],
-        authors: authorityPubkeys,
-        "#d": [dTag],
-      } as Filter,
-    ]),
+    eventStore
+      .getByFilters([
+        {
+          kinds: [REPO_STATE_KIND],
+          authors: authorityPubkeys,
+          "#d": [dTag],
+        } as Filter,
+      ])
+      .filter(isValidRepositoryState),
   );
 }
 
@@ -184,24 +216,75 @@ async function confirmFocusedAbsence(
   });
 }
 
-/** Focused preflight for a completely new public repository. */
-export async function assertNewPublicRepositoryCoordinatesAbsent(
+function sameStringSet(first: string[], second: string[]): boolean {
+  const a = [...new Set(first)].sort();
+  const b = [...new Set(second)].sort();
+  return a.length === b.length && a.every((value, index) => value === b[index]);
+}
+
+function resumablePublicAnnouncement(
   pubkey: string,
   dTag: string,
+  proposedCloneUrls: string[],
+  proposedRepositoryRelays: string[],
+): NostrEvent | undefined {
+  const announcement = eventStore.getReplaceable(REPO_KIND, pubkey, dTag);
+  if (!announcement) return undefined;
+  const cloneUrlsMatch = sameStringSet(
+    getRepoCloneUrls(announcement),
+    proposedCloneUrls,
+  );
+  const relaysMatch = sameStringSet(
+    getRepoRelays(announcement).map(normalizeUrl),
+    proposedRepositoryRelays.map(normalizeUrl),
+  );
+  return cloneUrlsMatch && relaysMatch ? announcement : undefined;
+}
+
+function assertPublicCreationCanProceed(
+  pubkey: string,
+  dTag: string,
+  proposedCloneUrls: string[],
+  proposedRepositoryRelays: string[],
+): void {
+  if (eventStore.getReplaceable(REPO_STATE_KIND, pubkey, dTag)) {
+    throw new Error(
+      "This repository identifier already has published state. Choose another identifier.",
+    );
+  }
+  const announcement = eventStore.getReplaceable(REPO_KIND, pubkey, dTag);
+  if (
+    announcement &&
+    !resumablePublicAnnouncement(
+      pubkey,
+      dTag,
+      proposedCloneUrls,
+      proposedRepositoryRelays,
+    )
+  ) {
+    throw new Error(
+      "This repository identifier already belongs to a different repository frontier. Choose another identifier.",
+    );
+  }
+}
+
+/** Focused preflight for a new or resumable public repository creation. */
+export async function assertNewPublicRepositoryCoordinatesAvailable(
+  pubkey: string,
+  dTag: string,
+  proposedCloneUrls: string[],
   proposedRepositoryRelays: string[],
 ): Promise<void> {
   await Promise.all([
     hydrateCachedCoordinate(REPO_KIND, pubkey, dTag),
     hydrateCachedCoordinate(REPO_STATE_KIND, pubkey, dTag),
   ]);
-  if (
-    eventStore.getReplaceable(REPO_KIND, pubkey, dTag) ||
-    eventStore.getReplaceable(REPO_STATE_KIND, pubkey, dTag)
-  ) {
-    throw new Error(
-      "This repository identifier already exists for your account. Choose another identifier.",
-    );
-  }
+  assertPublicCreationCanProceed(
+    pubkey,
+    dTag,
+    proposedCloneUrls,
+    proposedRepositoryRelays,
+  );
 
   const outboxes = mailboxOutboxes(pubkey);
   await confirmFocusedAbsence(
@@ -210,6 +293,14 @@ export async function assertNewPublicRepositoryCoordinatesAbsent(
         kinds: [REPO_KIND, REPO_STATE_KIND],
         authors: [pubkey],
         "#d": [dTag],
+      } as Filter,
+      {
+        kinds: [5],
+        authors: [pubkey],
+        "#a": [
+          repoCoordinate(pubkey, dTag),
+          `${REPO_STATE_KIND}:${pubkey}:${dTag}`,
+        ],
       } as Filter,
     ],
     [
@@ -221,138 +312,242 @@ export async function assertNewPublicRepositoryCoordinatesAbsent(
     ],
   );
 
-  if (
-    eventStore.getReplaceable(REPO_KIND, pubkey, dTag) ||
-    eventStore.getReplaceable(REPO_STATE_KIND, pubkey, dTag)
-  ) {
-    throw new Error(
-      "This repository identifier already exists for your account. Choose another identifier.",
-    );
-  }
+  assertPublicCreationCanProceed(
+    pubkey,
+    dTag,
+    proposedCloneUrls,
+    proposedRepositoryRelays,
+  );
 }
 
 export function useRepositoryReplaceablePreflight(
   resolved: ResolvedRepository | undefined,
 ) {
   const store = useEventStore();
-  const [pending, setPending] = useState(false);
+  const { toast } = useToast();
+  const resolvedRef = useRef(resolved);
+  resolvedRef.current = resolved;
+  const resolvedRevision$ = useMemo(() => new BehaviorSubject(0), []);
+  const deletionCandidateRevision =
+    resolved?.replaceableDeletionCandidateIds?.join(",") ?? "";
+  useEffect(() => {
+    resolvedRevision$.next(resolvedRevision$.value + 1);
+  }, [
+    resolved?.replaceableCoverage,
+    resolved?.replaceableDeletionCoverage,
+    deletionCandidateRevision,
+    resolvedRevision$,
+  ]);
+  useEffect(() => () => resolvedRevision$.complete(), [resolvedRevision$]);
 
-  const waitForRepositoryCoverage = useCallback(async () => {
-    if (!resolved) throw new Error("Repository preflight is not ready.");
-    const repositoryRelays = [
-      ...new Set(resolved.repo.relays.map(normalizeUrl)),
-    ];
-    if (repositoryRelays.length === 0) {
-      throw new Error(
-        "This repository does not declare a relay that can confirm its current state.",
-      );
-    }
-    const coverage = resolved.replaceableCoverage;
-    const covered = () =>
-      repositoryRelays.some((relay) => coverage.isCovered(relay));
-    const canStillSettle = () =>
-      repositoryRelays.some((relay) => {
-        const phase = coverage.get(relay)?.phase;
-        return phase === "initial" || phase === "catching-up";
-      });
+  const waitForRepositoryCoverage = useCallback(
+    async (
+      deadline: number,
+      candidateId?: string,
+    ): Promise<{
+      resolved: ResolvedRepository;
+      repositoryRelays: string[];
+    }> => {
+      for (;;) {
+        const current = resolvedRef.current;
+        if (!current) throw new Error("Repository preflight is not ready.");
+        const repositoryRelays = repositoryRelayVoters(current);
+        if (repositoryRelays.length === 0) {
+          throw new Error(
+            "No admitted repository relay or route hint can confirm the current repository state.",
+          );
+        }
+        const coverage = candidateId
+          ? current.replaceableDeletionCoverage
+          : current.replaceableCoverage;
+        const candidateIncluded =
+          candidateId === undefined ||
+          current.replaceableDeletionCandidateIds.includes(candidateId);
+        const covered =
+          candidateIncluded &&
+          repositoryRelays.some((relay) => coverage.isCovered(relay));
+        if (covered) return { resolved: current, repositoryRelays };
 
-    if (!covered() && canStillSettle()) {
-      await firstValueFrom(
-        race(
-          coverage.changes$.pipe(
-            startWith(undefined),
-            filter(() => covered() || !canStillSettle()),
-            take(1),
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) {
+          const counts = new Map<string, number>();
+          for (const relay of repositoryRelays) {
+            const phase = coverage.get(relay)?.phase ?? "not-checked";
+            counts.set(phase, (counts.get(phase) ?? 0) + 1);
+          }
+          const summary = [...counts]
+            .map(([phase, count]) => `${count} ${phase}`)
+            .join(", ");
+          throw new Error(
+            `No repository relay has current ${candidateId ? "exact-deletion" : "announcement and state"} coverage (${summary}). Please check the repository relays and try again.`,
+          );
+        }
+
+        const canStillSettle =
+          !candidateIncluded ||
+          repositoryRelays.some((relay) => {
+            const phase = coverage.get(relay)?.phase;
+            return (
+              phase === undefined ||
+              phase === "initial" ||
+              phase === "catching-up" ||
+              phase === "stopped"
+            );
+          });
+        if (!canStillSettle) {
+          const counts = new Map<string, number>();
+          for (const relay of repositoryRelays) {
+            const phase = coverage.get(relay)?.phase ?? "not-checked";
+            counts.set(phase, (counts.get(phase) ?? 0) + 1);
+          }
+          const summary = [...counts]
+            .map(([phase, count]) => `${count} ${phase}`)
+            .join(", ");
+          throw new Error(
+            `No repository relay has current ${candidateId ? "exact-deletion" : "announcement and state"} coverage (${summary}). Please check the repository relays and try again.`,
+          );
+        }
+
+        await firstValueFrom(
+          race(
+            merge(coverage.changes$, resolvedRevision$.pipe(skip(1))).pipe(
+              take(1),
+            ),
+            timer(remaining),
           ),
-          timer(REPOSITORY_COVERAGE_SETTLEMENT_TIMEOUT_MS),
-        ),
-      );
-    }
-    if (!covered()) {
-      const counts = new Map<string, number>();
-      for (const relay of repositoryRelays) {
-        const phase = coverage.get(relay)?.phase ?? "not-checked";
-        counts.set(phase, (counts.get(phase) ?? 0) + 1);
+        );
       }
-      const summary = [...counts]
-        .map(([phase, count]) => `${count} ${phase}`)
-        .join(", ");
-      throw new Error(
-        `No repository relay has current announcement and state coverage (${summary}). Please check the repository relays and try again.`,
-      );
-    }
-    return repositoryRelays;
-  }, [resolved]);
+    },
+    [resolvedRevision$],
+  );
 
   const execute = useCallback(
     async <T>(
       options: RepositoryReplaceablePreflightOptions,
       action: (snapshot: RepositoryReplaceableSnapshot) => Promise<T>,
     ): Promise<T> => {
-      setPending(true);
+      const initial = resolvedRef.current;
+      if (!initial) throw new Error("Repository preflight is not ready.");
+      if (initial.replaceableWriteWindow.isHeld()) {
+        throw new Error(
+          "Another repository state transition is still in progress. Please wait for it to finish.",
+        );
+      }
+      let deadline = Date.now() + REPOSITORY_COVERAGE_SETTLEMENT_TIMEOUT_MS;
+      let scope = await waitForRepositoryCoverage(deadline);
+      if (
+        !scope.resolved.repo.isPrivate &&
+        scope.resolved.repo.relays.length === 0
+      ) {
+        toast({
+          title: "Repository has no declared relay",
+          description:
+            "This safety check is using an admitted route relay hint. Add a repository relay in settings so future writes have an explicit evidence frontier.",
+        });
+      }
+      await hydrateCachedCoordinate(
+        options.kind,
+        options.actorPubkey,
+        scope.resolved.repo.dTag,
+      );
+
+      let actorEvent = store.getReplaceable(
+        options.kind,
+        options.actorPubkey,
+        scope.resolved.repo.dTag,
+      );
+      let winner = repositoryWinner(
+        options.kind,
+        options.actorPubkey,
+        scope.resolved.repo.dTag,
+        scope.resolved.repo.confirmedMaintainers,
+      );
+      let focusedOutboxRelays: string[] = [];
+      const needsFocusedActorAbsence =
+        !actorEvent &&
+        !scope.resolved.repo.isPrivate &&
+        !(options.kind === REPO_STATE_KIND && winner);
+      if (needsFocusedActorAbsence) {
+        focusedOutboxRelays = mailboxOutboxes(options.actorPubkey);
+        await confirmFocusedAbsence(
+          [
+            {
+              kinds: [options.kind],
+              authors: [options.actorPubkey],
+              "#d": [scope.resolved.repo.dTag],
+            } as Filter,
+          ],
+          [
+            {
+              name: "current NIP-65 outbox relays",
+              relays: focusedOutboxRelays,
+            },
+          ],
+        );
+        actorEvent = store.getReplaceable(
+          options.kind,
+          options.actorPubkey,
+          scope.resolved.repo.dTag,
+        );
+        winner = repositoryWinner(
+          options.kind,
+          options.actorPubkey,
+          scope.resolved.repo.dTag,
+          scope.resolved.repo.confirmedMaintainers,
+        );
+        deadline = Date.now() + REPOSITORY_COVERAGE_SETTLEMENT_TIMEOUT_MS;
+      }
+
+      for (;;) {
+        scope = await waitForRepositoryCoverage(deadline);
+        actorEvent = store.getReplaceable(
+          options.kind,
+          options.actorPubkey,
+          scope.resolved.repo.dTag,
+        );
+        winner = repositoryWinner(
+          options.kind,
+          options.actorPubkey,
+          scope.resolved.repo.dTag,
+          scope.resolved.repo.confirmedMaintainers,
+        );
+        if (!winner) break;
+        const candidateId = winner.id;
+        scope = await waitForRepositoryCoverage(deadline, candidateId);
+        const checkedWinner = repositoryWinner(
+          options.kind,
+          options.actorPubkey,
+          scope.resolved.repo.dTag,
+          scope.resolved.repo.confirmedMaintainers,
+        );
+        if (checkedWinner?.id === candidateId) {
+          winner = checkedWinner;
+          break;
+        }
+      }
+
+      if ((winner?.id ?? null) !== options.expectedEventId) {
+        throw new Error(
+          "The repository announcement or state changed after this operation began. Review the latest value and try again.",
+        );
+      }
+
+      const releaseWriteWindow = options.holdWriteWindow
+        ? scope.resolved.replaceableWriteWindow.hold()
+        : undefined;
       try {
-        if (!resolved) throw new Error("Repository preflight is not ready.");
-        const repositoryRelays = await waitForRepositoryCoverage();
-        await hydrateCachedCoordinate(
-          options.kind,
-          options.actorPubkey,
-          resolved.repo.dTag,
-        );
-
-        let actorEvent = store.getReplaceable(
-          options.kind,
-          options.actorPubkey,
-          resolved.repo.dTag,
-        );
-        let focusedOutboxRelays: string[] = [];
-        if (!actorEvent) {
-          focusedOutboxRelays = mailboxOutboxes(options.actorPubkey);
-          await confirmFocusedAbsence(
-            [
-              {
-                kinds: [options.kind],
-                authors: [options.actorPubkey],
-                "#d": [resolved.repo.dTag],
-              } as Filter,
-            ],
-            [
-              {
-                name: "current NIP-65 outbox relays",
-                relays: focusedOutboxRelays,
-              },
-            ],
-          );
-          actorEvent = store.getReplaceable(
-            options.kind,
-            options.actorPubkey,
-            resolved.repo.dTag,
-          );
-        }
-
-        const winner = repositoryWinner(
-          options.kind,
-          options.actorPubkey,
-          resolved.repo.dTag,
-          resolved.repo.confirmedMaintainers,
-        );
-        if ((winner?.id ?? null) !== options.expectedEventId) {
-          throw new Error(
-            "The repository announcement or state changed after this operation began. Review the latest value and try again.",
-          );
-        }
-
         return await action({
           actorEvent,
           winner,
-          repositoryRelays,
+          repositoryRelays: scope.repositoryRelays,
           focusedOutboxRelays,
         });
       } finally {
-        setPending(false);
+        releaseWriteWindow?.();
       }
     },
-    [resolved, store, waitForRepositoryCoverage],
+    [store, toast, waitForRepositoryCoverage],
   );
 
-  return { execute, pending };
+  return { execute };
 }

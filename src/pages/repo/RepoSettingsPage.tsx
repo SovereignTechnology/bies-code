@@ -371,8 +371,6 @@ function RepoSettingsForm({
   const membershipMutation = useRepositoryMembershipMutation({
     resolved,
     repo,
-    announcementsSettled,
-    stateSettled,
     relayUrls,
     repoState,
   });

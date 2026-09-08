@@ -60,8 +60,6 @@ export interface RepositoryMembershipMutationFailure {
 interface UseRepositoryMembershipMutationOptions {
   resolved: ResolvedRepository;
   repo: ResolvedRepo;
-  announcementsSettled: boolean;
-  stateSettled: boolean;
   relayUrls: string[];
   repoState?: RepositoryState | null;
 }
@@ -291,6 +289,7 @@ async function settleMutationSnapshot(
   preflight: {
     absentAuthors: string[];
     focusedOutboxRelays: string[];
+    repositoryRelays: string[];
   },
 ): Promise<MutationSnapshot> {
   const deadline = Date.now() + SNAPSHOT_TIMEOUT_MS;
@@ -347,10 +346,36 @@ async function settleMutationSnapshot(
         !checkedAbsentAuthors.has(author),
     );
 
-    // An existing announcement is already covered by the page owner on the
-    // repository relays. Only an absent author coordinate introduces a new
-    // scope: discover that author's outbox and require one focused EOSE there.
+    // An existing announcement is already covered by the page owner. Public
+    // absent authors introduce an outbox scope; private absent authors are
+    // checked only on the already-admitted private repository frontier.
     if (absentAuthors.length > 0) {
+      if (repo.isPrivate) {
+        const focused = await requiredRelayRead(
+          preflight.repositoryRelays,
+          [
+            {
+              kinds: [REPO_KIND, REPO_STATE_KIND],
+              authors: absentAuthors,
+              "#d": [repo.dTag],
+            } as Filter,
+            {
+              kinds: [5],
+              authors: absentAuthors,
+              "#a": absentAuthors.flatMap((author) => [
+                `${REPO_KIND}:${author}:${repo.dTag}`,
+                `${REPO_STATE_KIND}:${author}:${repo.dTag}`,
+              ]),
+            } as Filter,
+          ],
+          deadline,
+          "Private repository coordinate lookup",
+          1,
+        );
+        focused.events.forEach((event) => eventStore.add(event));
+        absentAuthors.forEach((author) => checkedAbsentAuthors.add(author));
+        continue;
+      }
       const mailboxEvents = await discoverMutationMailboxes(
         absentAuthors,
         deadline,
@@ -681,6 +706,7 @@ export function useRepositoryMembershipMutation({
               ? []
               : [account.pubkey],
             focusedOutboxRelays: repositoryPreflight.focusedOutboxRelays,
+            repositoryRelays: repositoryPreflight.repositoryRelays,
           },
         );
         if (
