@@ -44,10 +44,6 @@ export default function RepoCommitsPage() {
   // Pool must come before explorer since pool is passed to explorer.
   const { pool, poolState } = useGitPool(cloneUrls, {
     private: repo?.isPrivate,
-    headRef: repoState?.headRef,
-    knownHeadCommit: repoState?.headCommitId,
-    stateRefs: repoState?.refs,
-    stateCreatedAt: repoState ? repoState.event.created_at : undefined,
   });
 
   const pulling =

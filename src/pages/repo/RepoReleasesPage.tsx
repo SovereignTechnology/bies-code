@@ -1170,7 +1170,7 @@ export default function RepoReleasesPage({
   eventId?: string;
   view: "releases" | "applications";
 }) {
-  const { basePath, cloneUrls, resolved, repoState } = useRepoContext();
+  const { basePath, cloneUrls, resolved } = useRepoContext();
   const account = useActiveAccount();
   const location = useLocation();
   const navigate = useNavigate();
@@ -1195,12 +1195,7 @@ export default function RepoReleasesPage({
     resolved?.repoRelayGroup,
     repo?.isPrivate,
   );
-  const { poolState } = useGitPool(cloneUrls, {
-    headRef: repoState?.headRef,
-    knownHeadCommit: repoState?.headCommitId,
-    stateRefs: repoState?.refs,
-    stateCreatedAt: repoState?.event.created_at,
-  });
+  const { poolState } = useGitPool(cloneUrls);
 
   const gitTags = useMemo(
     () =>

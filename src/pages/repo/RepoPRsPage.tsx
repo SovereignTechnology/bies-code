@@ -66,10 +66,6 @@ export default function RepoPRsPage() {
   const repoOwnerProfile = useProfile(pubkey);
   const { pool: gitPool, poolState: gitPoolState } = useGitPool(cloneUrls, {
     private: repo?.isPrivate,
-    headRef: repoState?.headRef,
-    knownHeadCommit: repoState?.headCommitId,
-    stateRefs: repoState?.refs,
-    stateCreatedAt: repoState ? repoState.event.created_at : undefined,
   });
   const inferredParents = useInferredPRParents(
     repo?.confirmedMemberCoordinates,

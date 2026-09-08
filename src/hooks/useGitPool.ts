@@ -11,13 +11,12 @@
  *
  * State event integration:
  *   Pass knownHeadCommit + stateRefs + stateCreatedAt from the Nostr state
- *   event (kind:30618). The hook builds a BehaviorSubject internally and
- *   pushes updates into it whenever those values change — the pool reacts
- *   to the observable and schedules re-fetches as needed.
+ *   event (kind:30618). Authoritative inputs replace retained pool state when
+ *   the data changes; seed inputs initialize only pools without an owner.
+ *   Component cleanup never changes repository truth.
  */
 
 import { useState, useEffect, useRef, useMemo } from "react";
-import { BehaviorSubject } from "rxjs";
 import { getOrCreatePool } from "@/lib/git-grasp-pool";
 import type {
   GitGraspPool,
@@ -56,6 +55,10 @@ export interface UseGitPoolOptions {
   stateRefs?: RepoStateRef[];
   /** created_at of the state event (seconds). */
   stateCreatedAt?: number;
+  /** True once an absent state event is confirmed rather than still loading. */
+  stateSettled?: boolean;
+  /** Seed snapshots cannot replace state supplied by an authoritative owner. */
+  stateEventRole?: "authoritative" | "seed";
   /**
    * Keep retrying an empty Git endpoint while GRASP provisions this repo.
    * Intended for newly published repository announcements.
@@ -122,6 +125,19 @@ interface VerifiedPrivateGitAccess {
   error?: string;
 }
 
+function applyStateEvent(
+  pool: GitGraspPool,
+  stateEvent: StateEventInput,
+  role: "authoritative" | "seed",
+): void {
+  if (stateEvent === undefined) return;
+  if (role === "seed") {
+    if (stateEvent) pool.seedStateEvent(stateEvent);
+    return;
+  }
+  pool.setAuthoritativeStateEvent(stateEvent);
+}
+
 /**
  * Subscribe to a GitGraspPool for the given clone URLs.
  *
@@ -137,6 +153,8 @@ export function useGitPool(
     headRef,
     stateRefs,
     stateCreatedAt,
+    stateSettled,
+    stateEventRole = "authoritative",
     expectRepositoryProvisioning,
   } = options;
   const account = useAccount();
@@ -282,13 +300,12 @@ export function useGitPool(
         .join(",")
     : "";
 
-  // Build the StateEvent value from options.
-  // undefined = still loading (no head commit yet)
-  // null = confirmed no state event (not used here — callers just omit options)
+  // Build the StateEvent value from options. An absent event becomes null only
+  // when the authoritative caller confirms its query has settled.
   const currentStateEvent = useMemo<StateEventInput>(() => {
-    if (!knownHeadCommit) return undefined;
+    if (!knownHeadCommit) return stateSettled ? null : undefined;
     const refs = stateRefs ?? [];
-    if (refs.length === 0) return undefined;
+    if (refs.length === 0) return stateSettled ? null : undefined;
     return {
       headRef,
       headCommitId: knownHeadCommit,
@@ -296,20 +313,7 @@ export function useGitPool(
       createdAt: stateCreatedAt ?? 0,
     } satisfies StateEvent;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [knownHeadCommit, headRef, refsKey, stateCreatedAt]);
-
-  // The BehaviorSubject lives for the lifetime of the subscription (tied to
-  // urlsKey). We push new state event values into it whenever they change.
-  const stateSubjectRef = useRef<BehaviorSubject<StateEventInput> | null>(null);
-
-  // Push state event updates synchronously (before effects run) so the pool
-  // sees the latest value as soon as it changes.
-  const stateEventKey = `${headRef ?? ""}|${knownHeadCommit ?? ""}|${refsKey}|${stateCreatedAt ?? ""}`;
-  const prevStateEventKey = useRef<string>("");
-  if (stateEventKey !== prevStateEventKey.current) {
-    prevStateEventKey.current = stateEventKey;
-    stateSubjectRef.current?.next(currentStateEvent);
-  }
+  }, [knownHeadCommit, headRef, refsKey, stateCreatedAt, stateSettled]);
 
   const [poolSnapshot, setPoolSnapshot] = useState<KeyedPoolState>(() => ({
     key: urlsKey,
@@ -329,22 +333,17 @@ export function useGitPool(
         key: urlsKey,
         state: makeInitialState(false, privateAccessError ?? null),
       });
-      stateSubjectRef.current = null;
       poolRef.current = null;
       poolKeyRef.current = null;
       return;
     }
 
-    // Fresh subject seeded with the current state event value.
-    const subject = new BehaviorSubject<StateEventInput>(currentStateEvent);
-    stateSubjectRef.current = subject;
-
     const pool = getOrCreatePool({
       cloneUrls: effectiveCloneUrls,
-      stateEvent$: subject.asObservable(),
       expectRepositoryProvisioning,
       authorizationProvider,
     });
+    applyStateEvent(pool, currentStateEvent, stateEventRole);
     poolRef.current = pool;
     poolKeyRef.current = urlsKey;
 
@@ -363,9 +362,6 @@ export function useGitPool(
       ) {
         pool.dispose();
       }
-      stateSubjectRef.current = null;
-      // Don't complete the subject — the pool may still be alive for other
-      // subscribers. Just drop our reference.
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [urlsKey, expectRepositoryProvisioning]);
@@ -378,6 +374,11 @@ export function useGitPool(
           privateAccessError ?? null,
         );
   const pool = poolKeyRef.current === urlsKey ? poolRef.current : null;
+
+  useEffect(() => {
+    if (!pool) return;
+    applyStateEvent(pool, currentStateEvent, stateEventRole);
+  }, [pool, currentStateEvent, stateEventRole]);
 
   return { poolState, pool, privateAccessError };
 }

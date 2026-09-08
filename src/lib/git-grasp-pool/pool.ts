@@ -16,7 +16,7 @@
  * - Integrate with Nostr state events (backoff re-fetch, warning computation)
  */
 
-import { BehaviorSubject, Subscription } from "rxjs";
+import { BehaviorSubject } from "rxjs";
 import type { Observable } from "rxjs";
 import type {
   PoolState,
@@ -30,6 +30,7 @@ import type {
   ViewSource,
   RefDiscrepancy,
   UrlRefStatus,
+  StateEvent,
   StateEventInput,
   Commit,
   Tree,
@@ -46,7 +47,11 @@ import {
   isNonHttpUrl,
 } from "./git-http";
 import { UrlStateManager, UrlTracker } from "./url-state";
-import { PROVISIONING_BACKOFF_MAX_MS, StateEventManager } from "./state-event";
+import {
+  PROVISIONING_BACKOFF_MAX_MS,
+  StateEventManager,
+  stateEventInputsEqual,
+} from "./state-event";
 import {
   pushRefUpdateToGraspServers,
   type PushDeliverySummary,
@@ -497,9 +502,10 @@ export class GitGraspPool {
   private abort: AbortController | null = null;
   private fetching = false;
   private fetchedOnce = false;
+  private disposed = false;
 
-  // --- State event subscription ---
-  private stateEventSub: Subscription | null = null;
+  // --- State event ownership ---
+  private hasAuthoritativeState = false;
 
   // --- Winner tracking ---
   private winnerUrl: string | null = null;
@@ -541,23 +547,35 @@ export class GitGraspPool {
 
     // Add initial URLs
     this.urlManager.addUrls(options.cloneUrls);
-
-    // Subscribe to state event observable if provided
-    if (options.stateEvent$) this.setStateEventSource(options.stateEvent$);
   }
 
   /**
-   * Attach or replace the repository state event source for this pool.
+   * Apply the current authoritative repository state.
    *
-   * Pools are shared by clone URL, so the first consumer to create a pool may
-   * not have repo-state context. Later consumers can provide it here without
-   * forcing a separate pool for the same git server.
+   * `null` is an explicit, settled clear. Concrete events may move forward or
+   * backward because maintainer changes and deletion requests can invalidate a
+   * newer event. Loading and consumer cleanup never call this method.
    */
-  setStateEventSource(stateEvent$: Observable<StateEventInput>): void {
-    this.stateEventSub?.unsubscribe();
-    this.stateEventSub = stateEvent$.subscribe((stateEvent) => {
-      this.onStateEventChange(stateEvent);
-    });
+  setAuthoritativeStateEvent(stateEvent: StateEvent | null): void {
+    if (this.disposed) return;
+    this.hasAuthoritativeState = true;
+    if (stateEventInputsEqual(this.stateManager.currentState, stateEvent))
+      return;
+    this.onStateEventChange(stateEvent);
+  }
+
+  /**
+   * Seed a pool before its authoritative repository-state owner is available.
+   *
+   * Acceptance monitoring uses this to recover newly provisioned repositories.
+   * Seeds can advance other seeds but never outvote a live authoritative owner,
+   * so a frozen job snapshot cannot pin revoked state.
+   */
+  seedStateEvent(stateEvent: StateEvent): void {
+    if (this.disposed || this.hasAuthoritativeState) return;
+    const current = this.stateManager.currentState;
+    if (current && current.createdAt >= stateEvent.createdAt) return;
+    this.onStateEventChange(stateEvent);
   }
 
   /**
@@ -3025,11 +3043,11 @@ export class GitGraspPool {
    * Called automatically after the eviction grace period, or manually.
    */
   dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
     this.abort?.abort();
     this.http.dispose();
     this.stateManager.cancelBackoff();
-    this.stateEventSub?.unsubscribe();
-    this.stateEventSub = null;
     if (this.evictTimer !== null) {
       clearTimeout(this.evictTimer);
       this.evictTimer = null;
@@ -3040,7 +3058,7 @@ export class GitGraspPool {
 
   /** Whether this pool has been disposed */
   get isDisposed(): boolean {
-    return this.state$.closed;
+    return this.disposed;
   }
 
   /** Current React/imperative subscribers, used for private-session disposal. */
