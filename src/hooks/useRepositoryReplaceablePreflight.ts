@@ -337,6 +337,7 @@ export function useRepositoryReplaceablePreflight(
   const store = useEventStore();
   const { toast } = useToast();
   const resolvedRef = useRef(resolved);
+  const noDeclaredRelayNoticeShown = useRef(false);
   resolvedRef.current = resolved;
   const resolvedRevision$ = useMemo(() => new BehaviorSubject(0), []);
   const deletionCandidateRevision =
@@ -448,8 +449,10 @@ export function useRepositoryReplaceablePreflight(
       let scope = await waitForRepositoryCoverage(deadline);
       if (
         !scope.resolved.repo.isPrivate &&
-        scope.resolved.repo.relays.length === 0
+        scope.resolved.repo.relays.length === 0 &&
+        !noDeclaredRelayNoticeShown.current
       ) {
+        noDeclaredRelayNoticeShown.current = true;
         toast({
           title: "Repository has no declared relay",
           description:
