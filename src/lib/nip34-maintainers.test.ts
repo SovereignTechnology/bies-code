@@ -16,6 +16,7 @@ import {
   hasUnsupportedAcceptanceRoleHistory,
   prepareRepositoryMembershipMutation,
   RepositoryMembershipMutationRefusal,
+  signRepositoryMembershipMutation,
 } from "@/lib/repositoryMembershipMutation";
 
 const owner = "a".repeat(64);
@@ -988,6 +989,59 @@ describe("replicated role history and exits", () => {
 });
 
 describe("conservative repository membership mutations", () => {
+  it.each([
+    "nos2x: denied",
+    "User rejected the request",
+    "Signing cancelled by user",
+  ])(
+    "reports a signer decision without blaming relay coverage: %s",
+    async (message) => {
+      const signer = {
+        signEvent: async () => {
+          throw new Error(message);
+        },
+      };
+
+      await expect(
+        signRepositoryMembershipMutation(signer, {
+          kind: 30617,
+          content: "",
+          created_at: 10,
+          tags: [],
+        }),
+      ).rejects.toEqual(
+        expect.objectContaining<Partial<RepositoryMembershipMutationRefusal>>({
+          code: "signing_rejected",
+          message:
+            "Your signer declined this maintainer change. No repository update was published.",
+        }),
+      );
+    },
+  );
+
+  it("reports other signing failures without calling the transition unsupported", async () => {
+    const signer = {
+      signEvent: async () => {
+        throw new Error("Signer connection lost");
+      },
+    };
+
+    await expect(
+      signRepositoryMembershipMutation(signer, {
+        kind: 30617,
+        content: "",
+        created_at: 10,
+        tags: [],
+      }),
+    ).rejects.toEqual(
+      expect.objectContaining<Partial<RepositoryMembershipMutationRefusal>>({
+        code: "signing_failed",
+        message:
+          "The signer could not sign this maintainer change (Signer connection lost). No repository update was published.",
+      }),
+    );
+  });
+
   it("materializes a sole legacy owner directly as the untimed lead", () => {
     const ownerEvent = legacyAnnouncement(owner, [owner]);
     const sole = resolveChain([ownerEvent], owner, repoId)!;

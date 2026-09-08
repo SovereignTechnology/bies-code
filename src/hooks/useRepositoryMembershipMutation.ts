@@ -23,6 +23,7 @@ import {
   prepareRepositoryMembershipMutation,
   REPOSITORY_MEMBERSHIP_MUTATIONS_ENABLED,
   RepositoryMembershipMutationRefusal,
+  signRepositoryMembershipMutation,
   verifyRepositoryMembershipMutationResult,
   type RepositoryMembershipMutationIntent,
   type RepositoryMembershipMutationRefusalCode,
@@ -777,7 +778,10 @@ export function useRepositoryMembershipMutation({
                 ].map(normalizeUrl),
               ),
             ];
-        const signedEvent = await account.signer.signEvent(proposal.template);
+        const signedEvent = await signRepositoryMembershipMutation(
+          account.signer,
+          proposal.template,
+        );
         const now = Date.now();
         saveMaintainerAcceptanceJob({
           key: operationKey,

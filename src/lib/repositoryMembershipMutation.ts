@@ -31,6 +31,8 @@ export type RepositoryMembershipMutationRefusalCode =
   | "history_conflict"
   | "missing_private_relay_hint"
   | "incomplete_relay_view"
+  | "signing_rejected"
+  | "signing_failed"
   | "concurrent_change"
   | "unavailable_git_object"
   | "publication_pending"
@@ -57,6 +59,40 @@ export class RepositoryMembershipMutationRefusal extends Error {
   ) {
     super(message);
     this.name = "RepositoryMembershipMutationRefusal";
+  }
+}
+
+interface RepositoryMembershipSigner {
+  signEvent(template: EventTemplate): Promise<NostrEvent>;
+}
+
+const SIGNER_REJECTION_PATTERN =
+  /\b(?:denied|declined|rejected|cancelled|canceled|aborted)\b/i;
+
+/** Keep signer decisions distinct from relay and topology refusals. */
+export async function signRepositoryMembershipMutation(
+  signer: RepositoryMembershipSigner,
+  template: EventTemplate,
+): Promise<NostrEvent> {
+  try {
+    return await signer.signEvent(template);
+  } catch (error) {
+    const detail =
+      error instanceof Error
+        ? error.message.trim()
+        : typeof error === "string"
+          ? error.trim()
+          : "";
+    if (SIGNER_REJECTION_PATTERN.test(detail)) {
+      throw new RepositoryMembershipMutationRefusal(
+        "signing_rejected",
+        "Your signer declined this maintainer change. No repository update was published.",
+      );
+    }
+    throw new RepositoryMembershipMutationRefusal(
+      "signing_failed",
+      `The signer could not sign this maintainer change${detail ? ` (${detail})` : ""}. No repository update was published.`,
+    );
   }
 }
 

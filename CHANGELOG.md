@@ -84,6 +84,9 @@
 
 ### Fixes
 
+- Report a declined maintainer-change signature as a signer decision and state
+  that no repository update was published, instead of mislabelling it as an
+  incomplete relay view for an unsupported transition.
 - Let a repository's lone confirmed owner send the first maintainer invitation
   even when an empty or self-only legacy `maintainers` tag leaves lead
   resolution at `none`. Guarded mutations now classify every preserved legacy
