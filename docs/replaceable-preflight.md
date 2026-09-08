@@ -94,7 +94,7 @@ sufficient, and retain every applicable safety property.
 
 Warm coverage is owned by the subscription that produced it. It is not inferred
 globally from EventStore contents or from a relay connection. For a stable
-filter, a relay can have one of these phases:
+filter, a relay can have one of these states:
 
 - `initial`: the current request cycle has not returned a real EOSE;
 - `covered`: the current cycle returned EOSE and remains continuously owned;
@@ -142,7 +142,7 @@ without issuing a duplicate action-time request. A focused read is appropriate
 only when the action introduces required evidence outside that scope; it must
 name the uncovered evidence rather than re-querying covered relays defensively.
 
-Dynamic additive filters are not covered by the first implementation. Correct
+Stable-filter coverage does not extend to dynamic additive filters. Correct
 coverage for them requires per-filter-revision or per-chunk generations,
 including additions during initial settlement and consolidation after
 reconnect. Until that complexity is justified, their writers use bounded,
@@ -153,7 +153,7 @@ EOSE for their first page does not establish confirmed absence, so lifecycle
 coverage must not be combined with `limit`, automatic pagination, or manual
 pagination until the lifecycle can represent completion of the whole scope.
 
-## Repository-scoped adoption decision
+## Repository authority and state
 
 Repository announcements and state share one page-owned logical scope. Its
 stable lease contains the identifier-wide kind `30617` filter, the kind `30618`
@@ -251,7 +251,7 @@ While steps 2 and 3 are in progress, the page freezes its authority revision
 and additions to its dynamic exact-deletion lease. A state that becomes visible
 immediately on a non-purgatory server therefore cannot trigger a hidden
 background REQ in that window. Once the Git transition finishes, pending
-authority and candidate changes are adopted and warmed normally.
+authority and candidate changes are applied and warmed normally.
 
 ### Maintainer invitation example
 
@@ -276,64 +276,13 @@ new scope and must settle before absence is used in the authority transition.
 Starting steps 3 and 4 speculatively when a user is selected remains a possible
 latency optimization. It needs an owned candidate-coverage lease so the action
 can distinguish a completed absence check from an in-flight prefetch; this
-phase deliberately keeps the one focused request inside the bounded action.
+policy keeps the one focused request inside the bounded action.
 
-## Adoption
+## Personal singletons
 
-### Phase 1: stable-filter proof
-
-The first implementation is deliberately limited to personal singleton events
-for the active account:
-
-- expose cycle-valid per-relay coverage from the existing persistent identity
-  subscription;
-- require relays counted by `useRobustReplaceableAction` to have current
-  subscription coverage, not merely an open and healthy connection;
-- wait up to the five-second warm-coverage deadline when connected identity
-  queries are still capable of reaching the threshold, and wake as soon as
-  their coverage changes rather than requiring a second user action;
-- retain its existing outbox/lookup sufficiency policy and use the covered
-  identity subscription directly, without a duplicate action-time request;
-- when that snapshot has no target event, perform a bounded exact local cache
-  lookup and route any result through the EventStore before writing; this adds
-  no relay request and preserves the previous cache evidence;
-- pass the resulting event directly into contact and mailbox writers, avoiding
-  Applesauce model fallback reads after confirmed absence; relay arrays are
-  retained on contact actions for API parity, while mailbox actions use them to
-  freeze their old relay frontier; GitWorkshop's global runner chooses ordinary
-  publication groups and interprets the mailbox frontier explicitly; the other
-  Phase 1 writers already consume local absence without subscribing to the
-  loader;
-- stop treating a relay as in-flight after its five-second EOSE deadline while
-  leaving the live request open for a late recovery, and report an exact status
-  breakdown for the outbox and lookup groups;
-- verify initial EOSE, reconnect, foreground gap fill, relay membership changes,
-  stale generations, and teardown with focused tests.
-
-This phase does not introduce a global filter registry, change repository
-preflight, define universal relay thresholds, query fallback relays, or add a
-relay-details popover. The network decision waits at most five seconds for the
-already-running identity coverage to settle; only the absence path may then add
-up to one second for the local cache lookup.
-
-### Phase 2: category adoption
-
-Audit every remaining replaceable/addressable writer, assign its category and
-modifiers, and record its relay voters, evidence contributors, deletion scope,
-and sufficiency rule. Reuse the stable-filter coverage mechanism where its
-semantics fit; do not conceal focused reads or additive-filter complexity behind
-an inaccurate common abstraction.
-
-Once a category is adopted, its central subscription owner and preflight helper
-should reference this document. Exceptional call sites should name the category
-and modifier in a short comment. When a new category or exception is required,
-update this document in the same change.
-
-#### Personal-singleton adoption decision
-
-Phase 2 starts by applying one policy to every active-account personal
-singleton. This section records both the decision and its current implementation
-so differences between later categories remain visible and reviewable.
+This policy applies to every active-account personal singleton. Its relay
+threshold remains distinct from the other categories below even when they reuse
+the same lifecycle and settlement mechanics.
 
 The category contains kinds `0`, `3`, `10002`, `10017`, `10018`, `10063`,
 `10317`, `10318`, and `10617`. A kind does not leave the category merely because
@@ -347,12 +296,12 @@ The common policy is:
 1. One account-owned subscription covers all of these singleton kinds for the
    active author on the same normalized union of NIP-65 outboxes and configured
    user-index/lookup relays. Writers must not create a per-kind subscription.
-2. Preserve the Phase 1 sufficiency rule. At least one outbox must answer. A
-   single answered outbox also needs two answered lookup relays; with multiple
-   answered outboxes, three or half of the declared outboxes is sufficient.
+2. At least one outbox must answer. A single answered outbox also needs two
+   answered lookup relays; with multiple answered outboxes, three or half of
+   the declared outboxes is sufficient.
    Lookup relays contribute backup evidence but do not make an unknown mailbox
    set safe by themselves.
-3. The first-account creation of kinds `0` and `10002` declares the existing
+3. The first-account creation of kinds `0` and `10002` declares the
    bootstrap-identity modifier. Every later edit uses the common preflight.
 4. Kind `10002` additionally declares the relay-frontier modifier. Its snapshot
    freezes the old mailbox event rather than silently deriving every destination
@@ -362,47 +311,46 @@ The common policy is:
 5. Personal-singleton events are published to the user's outboxes and user
    index relays. Kinds `0` and `10002` are explicitly included because they are
    what other clients need to discover the user and the user's mailboxes. User
-   index delivery remains required for the previously routed kinds `0`, `3`,
-   `10002`, `10017`, `10018`, and `10317`; delivery of the newly routed
-   application lists `10063`, `10318`, and `10617` is best-effort because
+   index delivery is required for kinds `0`, `3`, `10002`, `10017`, `10018`,
+   and `10317`; delivery of `10063`, `10318`, and `10617` is best-effort because
    generic user-index acceptance of those kinds is not established. Kind
-   `10317` also retains required Git-index publication. Encryption does not
-   give kind `10318` a different read-preflight rule; its decryption and
-   private-repository effects remain downstream concerns.
-6. A missing warm winner triggers the existing bounded local-cache hydration.
+   `10317` also requires Git-index publication. Encryption does not give kind
+   `10318` a different read-preflight rule; its decryption and private-repository
+   effects remain downstream concerns.
+6. A missing warm winner triggers bounded local-cache hydration.
    It does not trigger another relay request for the singleton filter.
 
 NIP-09 deletion evidence applies to kinds `10017`, `10018`, `10063`, `10317`,
 `10318`, and `10617`. It is deliberately not added for the foundational kinds
-`0`, `3`, and `10002` in this phase. Coordinate deletion filters can be declared
-up front. Exact `e`-pointer filters depend on candidate IDs, so one account-owned
-batcher should accumulate pointers across all personal singleton kinds for a
-deliberately generous coalescing window and issue one shared focused deletion
-request per relay/batch. It must not open one subscription per kind or per
-writer. An action reached before that evidence settles may wait within the
-existing bounded preflight deadline. The action-time wait budgets the
-one-second coalescing window before the relay's full five-second coverage
-settlement window, so a rapid second edit does not lose relay response time.
-This is new, uncovered evidence under step 6 of the execution pattern, not
-permission to repeat the covered singleton query.
+`0`, `3`, and `10002` in this category. Coordinate deletion filters can be
+declared up front. Exact `e`-pointer filters depend on candidate IDs, so one
+account-owned batcher should accumulate pointers across all personal singleton
+kinds for a deliberately generous coalescing window and issue one shared focused
+deletion request per relay/batch. It must not open one subscription per kind or
+per writer. An action reached before that evidence settles may wait within the
+bounded preflight deadline. The action-time wait budgets the one-second
+coalescing window before the relay's full five-second coverage settlement
+window, so a rapid second edit does not lose relay response time. This is
+uncovered evidence under step 6 of the execution pattern, not permission to
+repeat the covered singleton query.
 
 Long-lived editors that replace a complete list declare the **full-replacement
 draft** modifier. They freeze the displayed event ID when editing begins and
 must abort if preflight resolves a different winner, including one recovered
-from the local cache. Kind `10317` and `10318` editors currently use this guard.
-It prevents a locally detectable stale draft from replacing data the user never
-saw without adding relay work or a rebase protocol.
+from the local cache. Full-replacement editors, including kinds `10317` and
+`10318`, must use this guard. It prevents a locally detectable stale draft from
+replacing data the user never saw without adding relay work or a rebase
+protocol.
 
 Concurrent cross-client edits can still land after preflight freezes the winner
 and before its replacement is published. Adding compare-and-rebase retries
-would introduce a second transaction protocol for a rare race, so this phase
-records but does not implement it. The shared signing path should contain a
-short extension-point comment identifying where a future winner-stability check
-and rebase would run. Revisit it only with evidence that the remaining race
-occurs often enough to justify that complexity.
+would introduce a second transaction protocol for a rare race and is excluded.
+The shared signing path must identify where a future winner-stability check and
+rebase would run. Add that protocol only with evidence that the remaining race
+occurs often enough to justify its complexity.
 
-Ordinary personal-singleton writes do not require a post-write relay echo in
-this phase. They retain the durable outbox retry/status behavior, while the warm
+Ordinary personal-singleton writes do not require a post-write relay echo under
+this policy. They retain the durable outbox retry/status behavior, while the warm
 subscription naturally receives later relay updates. A writer must never open a
 fresh post-write REQ for an event already covered by that subscription. If a
 future category needs stronger confirmation, consume a relay `OK` or expose
@@ -416,18 +364,15 @@ acceptance and may mean the state is already visible. Those receipt and
 broadcast guarantees belong to the repository transition; they are not a
 reason to impose echo confirmation on profile and list settings.
 
-The implementation is intentionally split into independently reviewable
-commits: the shared kind scope, batched deletion evidence, publication routing,
-mailbox relay-frontier handling, public list writers, and encrypted private-list
-projection. Current writers for kinds `3`, `10002`, `10017`, `10018`, `10317`,
-`10318`, and `10617` consume the common preflight snapshot. Kind `10063` has no
-editor, and current kind `0` creation is the documented bootstrap path. The
-kind `10318` projection decrypts the winner supplied by the shared identity
-subscription and does not own another network request. It does not project an
-absent list until every preferred outbox has settled; accounts without outboxes
-use the same rule over the warm lookup-relay set.
+Writers for kinds `3`, `10002`, `10017`, `10018`, `10317`, `10318`, and `10617`
+must consume the common preflight snapshot. Kind `10063` remains in this
+category even without an editor, and first-account kind `0` creation uses the
+bootstrap path. A kind `10318` projection must decrypt the winner supplied by
+the shared identity subscription rather than own another network request. It
+must not project an absent list until every preferred outbox has settled;
+accounts without outboxes use the same rule over the warm lookup-relay set.
 
-#### Notification-state adoption decision
+## Notification state
 
 Notification read/archive state is **convergent application state** with the
 **confidential scope**, **derived signer**, and **high-frequency merge**
@@ -509,14 +454,14 @@ coverage lease. It lists the actual outbox and fallback relay lifecycle facts,
 or the user-index relay facts when mailbox discovery is the blocker, without
 changing which group votes for this category.
 
-This adoption removes the older address-loader relay reads and overlapping
-NIP-78 subscriptions while retaining bounded cache-backend hydration. It does
-not add NIP-09 deletion discovery, a post-write echo request, or a
-compare-and-swap protocol between concurrent clients. Later warm-subscription
-events continue to reconcile cross-client updates, while the durable outbox
-reports publication delivery separately.
+The notification owner must not add address-loader relay reads or overlapping
+NIP-78 subscriptions. Bounded cache-backend hydration is allowed. NIP-09
+deletion discovery, a post-write echo request, and a compare-and-swap protocol
+between concurrent clients are excluded. Warm-subscription events reconcile
+cross-client updates, while the durable outbox reports publication delivery
+separately.
 
-#### Software-publication adoption decision
+## Software publication
 
 NIP-82 software metadata is a **publisher-owned addressable** category with two
 different write semantics. Kind `32267` applications are mutable, whole-event
@@ -580,12 +525,12 @@ repository relay may be rendered, but GitWorkshop does not offer application,
 link, or release publication controls from a confidential repository. This is
 the confidential-scope modifier, not a weaker public-relay quorum.
 
-#### Phase 2 closure audit
+## Writer inventory
 
-As of September 8, 2026, every active replaceable or addressable writer owned
-by the GitWorkshop browser application has an adoption decision. This table is
-the writer inventory; adding a writer or making one of the read-only rows
-writable requires updating it in the same change.
+This is the authoritative inventory of replaceable and addressable writers
+owned by the GitWorkshop browser application. Adding a writer or making one of
+the read-only rows writable requires updating this table and its category
+policy in the same change.
 
 | Writer family                         | Kinds                                                                           | Classification and coverage                                                                                                                                                          |
 | ------------------------------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -598,7 +543,7 @@ writable requires updating it in the same change.
 | Repository secret updates             | `29846`                                                                         | Ephemeral encrypted mutation; recipient advertisement freshness and relay acceptance are its safeguards.                                                                             |
 | CI advertisements and progress        | `19843`, `19844`, `19845`, `39842`, `39844`                                     | Read-only in GitWorkshop. External CI services own these replaceable/addressable writers and their consistency policy.                                                               |
 
-The closure audit also checks the read path immediately surrounding each
+The inventory also covers the read path immediately surrounding each
 writer. Warm preflight code must read an in-memory EventStore timeline or
 winner directly; it must not instantiate an Applesauce model whose configured
 fallback loader can silently repeat the owned query. Bounded `cacheRequest`
@@ -612,6 +557,11 @@ status formatting are shared mechanisms. Category quorum functions remain
 local policy: similar arithmetic in two categories does not make their relay
 groups interchangeable. New shared helpers must accept the category decision
 as data or a callback rather than embedding a universal threshold.
+
+Central subscription owners and preflight helpers must reference this document.
+Exceptional call sites must name their category and modifier in a short comment.
+A new category or exception requires a corresponding guardrail here in the same
+change.
 
 ## Writer checklist
 
