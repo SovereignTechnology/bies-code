@@ -121,6 +121,11 @@ import {
 import { useResolvedUpstreamNip05 } from "@/hooks/useResolvedUpstreamNip05";
 import { useRepositoryMembershipMutation } from "@/hooks/useRepositoryMembershipMutation";
 import RepoAdvancedRepairPage from "./RepoAdvancedRepairPage";
+import {
+  useRepositoryReplaceablePreflight,
+  type RepositoryReplaceableSnapshot,
+} from "@/hooks/useRepositoryReplaceablePreflight";
+import type { ResolvedRepository } from "@/hooks/useResolvedRepository";
 
 // ---------------------------------------------------------------------------
 // Known tag names — tags that the settings form explicitly manages.
@@ -317,6 +322,7 @@ export default function RepoSettingsPage() {
   return (
     <RepoSettingsForm
       key={editableRepo.selectedMaintainer}
+      resolved={resolved}
       repo={editableRepo}
       basePath={basePath}
       repoState={repoState}
@@ -339,6 +345,7 @@ export default function RepoSettingsPage() {
 // ---------------------------------------------------------------------------
 
 interface RepoSettingsFormProps {
+  resolved: ResolvedRepository;
   repo: ResolvedRepo;
   basePath: string;
   repoState?: RepositoryState | null;
@@ -349,6 +356,7 @@ interface RepoSettingsFormProps {
 }
 
 function RepoSettingsForm({
+  resolved,
   repo,
   basePath,
   repoState,
@@ -359,6 +367,7 @@ function RepoSettingsForm({
 }: RepoSettingsFormProps) {
   const account = useActiveAccount();
   const navigate = useNavigate();
+  const replaceablePreflight = useRepositoryReplaceablePreflight(resolved);
   const membershipMutation = useRepositoryMembershipMutation({
     repo,
     announcementsSettled,
@@ -1187,6 +1196,28 @@ function RepoSettingsForm({
 
     try {
       const repoCoord = `${REPO_KIND}:${repo.selectedMaintainer}:${repo.dTag}`;
+      const announcementSnapshot: RepositoryReplaceableSnapshot | undefined =
+        announcementFieldsChanged
+          ? await replaceablePreflight.execute(
+              {
+                kind: REPO_KIND,
+                actorPubkey: account.pubkey,
+                expectedEventId: selectedAnnouncement.id,
+              },
+              async (snapshot) => snapshot,
+            )
+          : undefined;
+      const stateSnapshot: RepositoryReplaceableSnapshot | undefined =
+        defaultBranchChanged
+          ? await replaceablePreflight.execute(
+              {
+                kind: REPO_STATE_KIND,
+                actorPubkey: account.pubkey,
+                expectedEventId: repoState?.event.id ?? null,
+              },
+              async (snapshot) => snapshot,
+            )
+          : undefined;
 
       if (announcementFieldsChanged) {
         const npub = nip19.npubEncode(account.pubkey);
@@ -1207,7 +1238,10 @@ function RepoSettingsForm({
         const template: EventTemplate = {
           kind: REPO_KIND,
           content: "",
-          created_at: Math.floor(Date.now() / 1000),
+          created_at: Math.max(
+            Math.floor(Date.now() / 1000),
+            (announcementSnapshot?.actorEvent?.created_at ?? 0) + 1,
+          ),
           tags: [
             ["d", repo.dTag],
             ["name", name.trim()],
@@ -1240,21 +1274,25 @@ function RepoSettingsForm({
         await publish(signedEvent, [repoCoord, "git-index"]);
       }
 
-      if (defaultBranchChanged && repoState) {
+      if (defaultBranchChanged && stateSnapshot?.winner) {
+        const currentStateEvent = stateSnapshot.winner;
         const newHeadValue = `ref: refs/heads/${selectedBranch}`;
-        const hasHead = repoState.event.tags.some(
+        const hasHead = currentStateEvent.tags.some(
           ([tagName]) => tagName === "HEAD",
         );
         const tags = hasHead
-          ? repoState.event.tags.map((tag) =>
+          ? currentStateEvent.tags.map((tag) =>
               tag[0] === "HEAD" ? ["HEAD", newHeadValue] : tag,
             )
-          : [...repoState.event.tags, ["HEAD", newHeadValue]];
+          : [...currentStateEvent.tags, ["HEAD", newHeadValue]];
 
         const template: EventTemplate = {
           kind: REPO_STATE_KIND,
-          content: repoState.event.content,
-          created_at: Math.floor(Date.now() / 1000),
+          content: currentStateEvent.content,
+          created_at: Math.max(
+            Math.floor(Date.now() / 1000),
+            currentStateEvent.created_at + 1,
+          ),
           tags,
         };
 
@@ -1293,6 +1331,7 @@ function RepoSettingsForm({
     selectedBranch,
     basePath,
     navigate,
+    replaceablePreflight,
   ]);
 
   // ---------------------------------------------------------------------------

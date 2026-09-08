@@ -72,6 +72,9 @@ import { RepositoryMembershipMutationRefusal } from "@/lib/repositoryMembershipM
 import { cn } from "@/lib/utils";
 import { publish } from "@/services/nostr";
 import { useRepoContext } from "./RepoContext";
+import { useRepositoryReplaceablePreflight } from "@/hooks/useRepositoryReplaceablePreflight";
+import type { ResolvedRepository } from "@/hooks/useResolvedRepository";
+import { REPO_KIND } from "@/lib/nip34";
 
 const HEX_PUBKEY = /^[0-9a-f]{64}$/;
 const MEMBERSHIP_TAG_NAMES = new Set(["M", "m", "o", "maintainers"]);
@@ -172,6 +175,7 @@ export default function RepoAdvancedRepairPage() {
             )}
             <AdvancedRepairEditor
               key={ownAnnouncement.id}
+              resolved={resolved}
               repo={repo}
               announcement={ownAnnouncement}
               onPublished={setPublishedEventId}
@@ -274,15 +278,18 @@ function PubkeyDelta({
 }
 
 function AdvancedRepairEditor({
+  resolved,
   repo,
   announcement,
   onPublished,
 }: {
+  resolved: ResolvedRepository;
   repo: ResolvedRepo;
   announcement: NostrEvent;
   onPublished: (eventId: string) => void;
 }) {
   const account = useActiveAccount();
+  const replaceablePreflight = useRepositoryReplaceablePreflight(resolved);
   const nextRowKey = useRef(0);
   const [rows, setRows] = useState<RoleTagRow[]>(() =>
     repositoryAnnouncementRoleTags(announcement).map((tag) => ({
@@ -405,20 +412,37 @@ function AdvancedRepairEditor({
     setPublishing(true);
     setPublishError(undefined);
     try {
-      // Rebuild with a fresh timestamp so created_at reflects signing time
-      // while staying strictly greater than the current announcement's.
-      const fresh = buildAdvancedRepairReplacement({
-        announcement,
-        roleTags: editedTags,
-        repository: repo,
-        createdAt: Math.floor(Date.now() / 1000),
-      });
-      const signedEvent = await account.signer.signEvent(fresh.template);
-      await publish(signedEvent, [
-        repoCoordinate(repo.selectedMaintainer, repo.dTag),
-        "git-index",
-      ]);
-      onPublished(signedEvent.id);
+      await replaceablePreflight.execute(
+        {
+          kind: REPO_KIND,
+          actorPubkey: account.pubkey,
+          expectedEventId: announcement.id,
+        },
+        async ({ actorEvent }) => {
+          if (!actorEvent) {
+            throw new Error(
+              "Your repository announcement is no longer available.",
+            );
+          }
+          // Rebuild from the exact preflighted winner with a timestamp that
+          // cannot lose to that addressable event.
+          const fresh = buildAdvancedRepairReplacement({
+            announcement: actorEvent,
+            roleTags: editedTags,
+            repository: repo,
+            createdAt: Math.max(
+              Math.floor(Date.now() / 1000),
+              actorEvent.created_at + 1,
+            ),
+          });
+          const signedEvent = await account.signer.signEvent(fresh.template);
+          await publish(signedEvent, [
+            repoCoordinate(repo.selectedMaintainer, repo.dTag),
+            "git-index",
+          ]);
+          onPublished(signedEvent.id);
+        },
+      );
     } catch (error) {
       setPublishError(
         error instanceof Error
