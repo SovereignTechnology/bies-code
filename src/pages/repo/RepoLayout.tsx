@@ -370,6 +370,7 @@ function RepoLayoutResolved({
     repo?.dTag,
     repo?.confirmedMaintainers,
     repoRelayGroup,
+    resolved?.replaceableCoverage,
   );
 
   // Count open issues for the tab badge

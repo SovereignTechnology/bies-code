@@ -24,7 +24,7 @@ import {
 } from "@/lib/resilientSubscription";
 import { announcementSnapshot } from "@/lib/announcementSnapshot";
 import type { RelayQuerySettlement } from "@/lib/relayQuerySettlement";
-import { REPO_KIND, type ResolvedRepo } from "@/lib/nip34";
+import { REPO_KIND, REPO_STATE_KIND, type ResolvedRepo } from "@/lib/nip34";
 import {
   gitIndexRelays,
   fallbackRelays,
@@ -33,8 +33,7 @@ import {
 import { RepositoryModel } from "@/models/RepositoryModel";
 import { RepositoryRelayGroup } from "@/models/RepositoryRelayGroup";
 import type { Filter } from "applesauce-core/helpers";
-import type { Observable } from "rxjs";
-import { BehaviorSubject, combineLatest, defer, of } from "rxjs";
+import { BehaviorSubject, combineLatest, defer, Observable, of } from "rxjs";
 import { distinctUntilChanged, map, switchMap } from "rxjs/operators";
 import { normalizeUrl } from "@/lib/url";
 import {
@@ -42,9 +41,15 @@ import {
   type PrivateRepositoryProbeState,
 } from "@/hooks/usePrivateRepositoryProbe";
 import { markPrivateRepositoryCoordinate } from "@/services/privateRepositoryScope";
+import {
+  createRelaySubscriptionCoverage,
+  type RelaySubscriptionCoverage,
+} from "@/lib/relaySubscriptionCoverage";
+import { relayGroupUrls$ } from "@/models/RepositoryRelayGroup";
 
 /** Max healthy mailbox relays to take per maintainer when querying NIP-65 relays. */
 const MAX_MAILBOX_RELAYS_PER_USER = 3;
+export const REPOSITORY_COVERAGE_SETTLEMENT_TIMEOUT_MS = 5_000;
 
 export interface ResolvedRepository {
   repo: ResolvedRepo;
@@ -57,6 +62,8 @@ export interface ResolvedRepository {
    *  When outbox curation mode is enabled, subscribe to this group IN ADDITION
    *  to repoRelayGroup — do not swap one for the other. */
   extraRelaysForMaintainerMailboxCoverage: RelayGroupType;
+  /** Lifecycle evidence owned by the shared announcement/state subscription. */
+  replaceableCoverage: RelaySubscriptionCoverage;
 }
 
 /** Full result from useResolvedRepository, including search state for the
@@ -318,14 +325,20 @@ export function useResolvedRepository(
     [key],
   );
 
-  // Live identifier-only announcement subscription over every enrichment
-  // relay (relay hints + repo-declared relays via repoRelayGroup, plus the
-  // maintainer-mailbox delta relays). The filter carries no `authors`, so
-  // newly discovered maintainers never change it — relay growth is purely
-  // additive via the reactive relay-list overload, and this subscription is
-  // keyed on repository identity alone. Trust is never derived from the
-  // fetch: authority comes exclusively from reciprocal resolution rooted at
-  // the route pubkey (AGENTS.md §Repository authorization model carve-out).
+  // One page-owned replaceable subscription covers both repository categories:
+  // identifier-wide announcements and state authored by the current confirmed
+  // maintainers. A changed authority set creates a complete filter revision;
+  // relay growth remains reactive and does not disturb unchanged relays.
+  const maintainerKey = repo?.confirmedMaintainers.join(",") ?? "";
+  const replaceableCoverage = useMemo(
+    () =>
+      createRelaySubscriptionCoverage({
+        settlementTimeoutMs: REPOSITORY_COVERAGE_SETTLEMENT_TIMEOUT_MS,
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [key, maintainerKey, privateProbeStatus],
+  );
+
   use$(() => {
     if (
       privateProbeStatus !== "absent" ||
@@ -335,13 +348,7 @@ export function useResolvedRepository(
       !extraRelays$
     )
       return undefined;
-    const repoRelayUrls$ = (
-      store.model(
-        RepositoryRelayGroup,
-        pubkey,
-        dTag,
-      ) as unknown as Observable<RelayGroupType>
-    ).pipe(map((g) => g.relays.map((r) => r.url)));
+    const repoRelayUrls$ = relayGroupUrls$(repoRelayGroup);
     const enrichmentRelays$ = combineLatest([
       repoRelayUrls$,
       extraRelays$,
@@ -351,10 +358,40 @@ export function useResolvedRepository(
         (a, b) => a.length === b.length && a.every((v, i) => v === b[i]),
       ),
     );
-    return resilientSubscription(pool, enrichmentRelays$, [
+    const filters: Filter[] = [
       { kinds: [REPO_KIND], "#d": [dTag] } as Filter,
-    ]).pipe(onlyEvents(), mapEventsToStore(store));
-  }, [key, store, repoRelayGroup, extraRelays$, privateProbeStatus]);
+      ...(repo?.confirmedMaintainers.length
+        ? [
+            {
+              kinds: [REPO_STATE_KIND],
+              authors: repo.confirmedMaintainers,
+              "#d": [dTag],
+            } as Filter,
+          ]
+        : []),
+    ];
+    const source = resilientSubscription(pool, enrichmentRelays$, filters, {
+      settle: false,
+      retryCount: Infinity,
+      onRelayLifecycle: (event) => replaceableCoverage.onLifecycle(event),
+    }).pipe(onlyEvents(), mapEventsToStore(store));
+
+    return new Observable((subscriber) => {
+      const subscription = source.subscribe(subscriber);
+      return () => {
+        replaceableCoverage.stop();
+        subscription.unsubscribe();
+      };
+    });
+  }, [
+    key,
+    maintainerKey,
+    store,
+    repoRelayGroup,
+    extraRelays$,
+    privateProbeStatus,
+    replaceableCoverage,
+  ]);
 
   // Layer 3: once we know the repo's own relay list, add any relays not yet
   // in repoRelayGroup. Also subscribes to maintainer announcements on those relays.
@@ -603,7 +640,12 @@ export function useResolvedRepository(
 
   const resolved: ResolvedRepository | undefined =
     repo && repoRelayGroup && extraRelaysForMaintainerMailboxCoverage
-      ? { repo, repoRelayGroup, extraRelaysForMaintainerMailboxCoverage }
+      ? {
+          repo,
+          repoRelayGroup,
+          extraRelaysForMaintainerMailboxCoverage,
+          replaceableCoverage,
+        }
       : undefined;
 
   return {
