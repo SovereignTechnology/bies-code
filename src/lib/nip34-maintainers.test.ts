@@ -1012,6 +1012,47 @@ describe("conservative repository membership mutations", () => {
     ).toEqual([]);
   });
 
+  it("keeps an existing non-self legacy lead relationship untimed", () => {
+    const leadEvent = announcement(owner, [
+      ["M", owner],
+      ["m", invitee],
+      ["maintainers", owner, invitee],
+    ]);
+    const legacyFollower = legacyAnnouncement(invitee, [owner], 2);
+    const followerView = resolveChain(
+      [leadEvent, legacyFollower],
+      invitee,
+      repoId,
+    )!;
+
+    expect(followerView.leadResolution).toEqual({
+      leadMaintainer: owner,
+      source: "legacy_inferred",
+      path: [invitee, owner],
+    });
+
+    const proposal = prepareRepositoryMembershipMutation({
+      repo: followerView,
+      actorPubkey: invitee,
+      intent: { type: "leave" },
+      announcements: [leadEvent, legacyFollower],
+      stateEvents: [],
+      createdAt: 10,
+    });
+
+    expect(
+      proposal.template.tags.filter(
+        ([role, subject]) => role === "M" && subject === owner,
+      ),
+    ).toEqual([["M", owner]]);
+    expect(
+      proposal.template.tags.filter(
+        ([role, subject]) => role === "m" && subject === owner,
+      ),
+    ).toEqual([]);
+    expect(proposal.template.tags).toContainEqual(["m", invitee, "0", "10"]);
+  });
+
   it("preflights add, accept, remove, and leave as one-person effects", () => {
     const sole = resolveChain([announcement(owner, [])], owner, repoId)!;
     const add = prepareRepositoryMembershipMutation({

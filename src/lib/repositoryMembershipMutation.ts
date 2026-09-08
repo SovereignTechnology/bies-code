@@ -301,16 +301,22 @@ function restartRecord(
   ];
 }
 
+/**
+ * Classify role-free legacy relationships against the destination lead before
+ * transition history is generated. An existing legacy listing that becomes
+ * `M` is a wire-format migration with an unknown start, not an `m` to `M`
+ * promotion at the replacement timestamp.
+ */
 function materializedRoleRecords(
   event: NostrEvent,
-  currentLead: string | undefined,
+  destinationLead: string | undefined,
   allowInvalidSelfDefer = false,
 ): RepositoryRoleRecord[] {
   const parsed = validateRoleHistory(event, allowInvalidSelfDefer);
   if (parsed.length > 0) return parsed;
   return getRepoMaintainers(event).map((subject) => ({
     author: event.pubkey,
-    role: subject === currentLead ? "M" : "m",
+    role: subject === destinationLead ? "M" : "m",
     subject,
     boundaries: [],
     active: true,
