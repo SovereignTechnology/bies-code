@@ -2,6 +2,56 @@
 
 ## [Unreleased]
 
+### Release overview
+
+GitWorkshop v4 brings substantial improvements to git collaboration over
+Nostr, private repository access, CI, software releases, and code browsing. It
+aligns with ngit v3 across the protocols and workflows they share. These
+highlights are not exhaustive; the detailed entries below record many more
+features, compatibility changes, and fixes.
+
+- **Nostr CI:** Discover and control coordinators with standing service
+  requests, stops, and manual triggers; manage encrypted repository secrets;
+  inspect workflow, job, provider, artifact, output, and trust provenance; and
+  surface NIP-5A pull-request previews.
+- **Private repositories and Buzz interoperability:** Discover, browse, and
+  collaborate on GRASP-08 private repositories using an encrypted service list
+  and scoped Nostr and Git authentication. Basic Buzz support brings private
+  Buzz repositories into the same discovery, code-browsing, and pull-request
+  viewing interface.
+- **Maintainers and repository authority:** Introduce an explicit lead,
+  role history, and non-maintainer moderators, with clearer invitations,
+  handovers, departures, roster changes, and historical authorization. These
+  substantial improvements are backwards compatible for existing repositories
+  and confirmed maintainer relationships. The one narrow breaking change is
+  that an invited maintainer has no Git-state authority until they accept. That
+  pending-invitation boundary is the SemVer reason for the v4 major version
+  bump.
+- **Pull requests and collaboration:** Add non-default target branches,
+  inferred pull-request stacks, repository comparisons, condensed commit
+  graphs, issue-resolution provenance, and safer browser merge flows.
+- **Software releases:** Publish and browse NIP-82 applications, releases, and
+  assets with Blossom uploads, Zapstore linking, compatibility metadata, and
+  repository-aware permalinks.
+
+#### Additional GitWorkshop highlights
+
+- **Browser experience:** Reduce relay and Git work through settled,
+  progressively enriched queries and on-demand object loading while expanding
+  mobile collaboration, notification, diff, and review interfaces.
+- **Richer Git browsing:** Follow repository, pull-request, patch, and push
+  history through condensed commit graphs, collapse merged-in histories, and
+  compare branches, tags, or commits with progressively loaded file diffs.
+- **Faster large repositories:** Reuse shared repository and CI subscriptions,
+  grow relay queries incrementally as new sources are discovered, and parse
+  packfiles in bounded chunks so large pull requests do not freeze the browser.
+- **Mobile collaboration:** Add swipeable file diffs and notification actions,
+  compact relay settings, clearer loading states, and layouts that keep review
+  and editing controls usable on phone-sized screens.
+- **Notifications and discovery:** Group activity by person with bulk read and
+  archive controls, improve repository and participant search, and optionally
+  resolve `.bit`, `d/`, and `id/` Namecoin identifiers.
+
 ### Added
 
 - Add a signer-reviewed advanced-repair danger zone that rewrites the raw
