@@ -33,6 +33,7 @@ export type RepositoryMembershipMutationRefusalCode =
   | "incomplete_relay_view"
   | "signing_rejected"
   | "signing_failed"
+  | "unexpected_failure"
   | "concurrent_change"
   | "unavailable_git_object"
   | "publication_pending"
@@ -96,6 +97,23 @@ export async function signRepositoryMembershipMutation(
   }
 }
 
+/** Preserve known refusals and classify only genuinely unexpected failures. */
+export function normalizeRepositoryMembershipMutationFailure(
+  error: unknown,
+): RepositoryMembershipMutationRefusal {
+  if (error instanceof RepositoryMembershipMutationRefusal) return error;
+  const detail =
+    error instanceof Error
+      ? error.message.trim()
+      : typeof error === "string"
+        ? error.trim()
+        : "";
+  return new RepositoryMembershipMutationRefusal(
+    "unexpected_failure",
+    `The maintainer change stopped unexpectedly${detail ? ` (${detail})` : ""}. Review the current repository state and pending delivery status before retrying.`,
+  );
+}
+
 export interface RepositoryMembershipMutationProposal {
   actorPubkey: string;
   intent: RepositoryMembershipMutationIntent;
@@ -129,10 +147,7 @@ function refuse(
   code: RepositoryMembershipMutationRefusalCode,
   message: string,
 ): never {
-  throw new RepositoryMembershipMutationRefusal(
-    code,
-    `${message} GitWorkshop does not yet support making this transition.`,
-  );
+  throw new RepositoryMembershipMutationRefusal(code, message);
 }
 
 function setEqual(left: Iterable<string>, right: Iterable<string>): boolean {

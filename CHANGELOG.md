@@ -84,6 +84,10 @@
 
 ### Fixes
 
+- Replace the blanket “GitWorkshop does not yet support making this
+  transition” suffix on maintainer changes with cause-specific recovery text,
+  and classify unexpected failures separately instead of calling them relay
+  coverage errors.
 - Report a declined maintainer-change signature as a signer decision and state
   that no repository update was published, instead of mislabelling it as an
   incomplete relay view for an unsupported transition.

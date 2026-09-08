@@ -14,6 +14,7 @@ import {
 } from "@/lib/nip34-maintainer-model";
 import {
   hasUnsupportedAcceptanceRoleHistory,
+  normalizeRepositoryMembershipMutationFailure,
   prepareRepositoryMembershipMutation,
   RepositoryMembershipMutationRefusal,
   signRepositoryMembershipMutation,
@@ -989,6 +990,59 @@ describe("replicated role history and exits", () => {
 });
 
 describe("conservative repository membership mutations", () => {
+  it("does not call an ordinary protocol refusal unsupported", () => {
+    const ownerEvent = announcement(owner, [
+      ["M", owner, "10"],
+      ["m", invitee, "10"],
+      ["maintainers", owner, invitee],
+    ]);
+    const invited = resolveChain([ownerEvent], owner, repoId)!;
+    let failure: unknown;
+
+    try {
+      prepareRepositoryMembershipMutation({
+        repo: invited,
+        actorPubkey: owner,
+        intent: { type: "add", targetPubkey: invitee },
+        announcements: [ownerEvent],
+        stateEvents: [],
+        createdAt: 20,
+      });
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toEqual(
+      expect.objectContaining<Partial<RepositoryMembershipMutationRefusal>>({
+        code: "membership_side_effect",
+        message: `Target ${invitee} is already confirmed or invited.`,
+      }),
+    );
+  });
+
+  it("classifies unexpected failures without blaming relay coverage", () => {
+    const failure = normalizeRepositoryMembershipMutationFailure(
+      new Error("Unexpected worker failure"),
+    );
+
+    expect(failure).toEqual(
+      expect.objectContaining<Partial<RepositoryMembershipMutationRefusal>>({
+        code: "unexpected_failure",
+        message:
+          "The maintainer change stopped unexpectedly (Unexpected worker failure). Review the current repository state and pending delivery status before retrying.",
+      }),
+    );
+  });
+
+  it("preserves an already classified membership refusal", () => {
+    const refusal = new RepositoryMembershipMutationRefusal(
+      "history_conflict",
+      "Resolve the signed history conflict first.",
+    );
+
+    expect(normalizeRepositoryMembershipMutationFailure(refusal)).toBe(refusal);
+  });
+
   it.each([
     "nos2x: denied",
     "User rejected the request",

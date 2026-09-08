@@ -23,6 +23,7 @@ import {
   prepareRepositoryMembershipMutation,
   REPOSITORY_MEMBERSHIP_MUTATIONS_ENABLED,
   RepositoryMembershipMutationRefusal,
+  normalizeRepositoryMembershipMutationFailure,
   signRepositoryMembershipMutation,
   verifyRepositoryMembershipMutationResult,
   type RepositoryMembershipMutationIntent,
@@ -161,7 +162,7 @@ function requiredRelayRead(
         undefined,
         new RepositoryMembershipMutationRefusal(
           "incomplete_relay_view",
-          `${message} GitWorkshop does not yet support making this transition.`,
+          `${message} Check the affected relay connections and try again. No repository update was published.`,
         ),
       );
     resources.timerId = setTimeout(
@@ -250,7 +251,7 @@ async function discoverMutationMailboxes(
   if (remaining <= 0) {
     throw new RepositoryMembershipMutationRefusal(
       "incomplete_relay_view",
-      "Mailbox lookup exhausted its bounded deadline. GitWorkshop does not yet support making this transition.",
+      "Mailbox lookup exhausted its bounded deadline. Check the affected users' relay connections and try again. No repository update was published.",
     );
   }
 
@@ -273,7 +274,7 @@ async function discoverMutationMailboxes(
   } catch (error) {
     throw new RepositoryMembershipMutationRefusal(
       "incomplete_relay_view",
-      `The affected mailbox relay lists did not settle (${error instanceof Error ? error.message : String(error)}). GitWorkshop does not yet support making this transition.`,
+      `The affected mailbox relay lists did not settle (${error instanceof Error ? error.message : String(error)}). Check the affected users' relay connections and try again. No repository update was published.`,
     );
   }
 
@@ -313,7 +314,7 @@ async function settleMutationSnapshot(
   if (baseRelays.size === 0) {
     throw new RepositoryMembershipMutationRefusal(
       "incomplete_relay_view",
-      "No repository, mailbox, Git index, or fallback relay is available. GitWorkshop does not yet support making this transition.",
+      "No repository, mailbox, Git index, or fallback relay is available. Configure an applicable relay before retrying. No repository update was published.",
     );
   }
   // The shared repository gate already settled a focused outbox query when it
@@ -325,13 +326,13 @@ async function settleMutationSnapshot(
     if (authors.size > MAX_SNAPSHOT_AUTHORS) {
       throw new RepositoryMembershipMutationRefusal(
         "incomplete_relay_view",
-        `The affected closure exceeds ${MAX_SNAPSHOT_AUTHORS} authors. GitWorkshop does not yet support making this transition.`,
+        `The affected membership graph exceeds the browser safety limit of ${MAX_SNAPSHOT_AUTHORS} authors. No repository update was published.`,
       );
     }
     if (baseRelays.size > MAX_SNAPSHOT_RELAYS) {
       throw new RepositoryMembershipMutationRefusal(
         "incomplete_relay_view",
-        `The delivery set exceeds ${MAX_SNAPSHOT_RELAYS} relays. GitWorkshop does not yet support making this transition.`,
+        `The delivery set exceeds the browser safety limit of ${MAX_SNAPSHOT_RELAYS} relays. Reduce the announced relay set before retrying. No repository update was published.`,
       );
     }
 
@@ -397,7 +398,7 @@ async function settleMutationSnapshot(
         if (outboxes.length === 0) {
           throw new RepositoryMembershipMutationRefusal(
             "incomplete_relay_view",
-            `No NIP-65 outbox relay is available to confirm the absent repository announcement for ${author}. GitWorkshop does not yet support making this transition.`,
+            `No NIP-65 outbox relay is available to confirm the absent repository announcement for ${author}. Ask that user to publish a mailbox relay list, then retry. No repository update was published.`,
           );
         }
         const focused = await requiredRelayRead(
@@ -500,7 +501,7 @@ async function settleMutationSnapshot(
     if (!refreshedRepo) {
       throw new RepositoryMembershipMutationRefusal(
         "concurrent_change",
-        `The selected component ${repo.selectedCoordinate} no longer resolves. GitWorkshop does not yet support making this transition.`,
+        `The selected component ${repo.selectedCoordinate} changed and no longer resolves. Reload repository settings and review the latest membership before retrying. No repository update was published.`,
       );
     }
     const finalRelays = new Set(baseRelays);
@@ -538,7 +539,7 @@ async function ensureStateObjectsAvailable(
   if (cloneUrls.length === 0) {
     throw new RepositoryMembershipMutationRefusal(
       "unavailable_git_object",
-      `Repository state ${repoState.event.id} has refs but no clone URL can supply them. GitWorkshop does not yet support making this transition.`,
+      `Repository state ${repoState.event.id} has refs but no announced clone URL can supply them. Add or repair a clone URL before retrying. No repository update was published.`,
     );
   }
   const gitPool = getOrCreatePool({ cloneUrls });
@@ -559,7 +560,7 @@ async function ensureStateObjectsAvailable(
   } catch (error) {
     throw new RepositoryMembershipMutationRefusal(
       "unavailable_git_object",
-      `Repository state objects could not be fetched (${error instanceof Error ? error.message : String(error)}). GitWorkshop does not yet support making this transition.`,
+      `Repository state objects could not be fetched (${error instanceof Error ? error.message : String(error)}). Ensure an announced Git server has every signed state commit, then retry. No repository update was published.`,
     );
   } finally {
     clearTimeout(deadline);
@@ -669,7 +670,7 @@ export function useRepositoryMembershipMutation({
       if (!account) {
         throw new RepositoryMembershipMutationRefusal(
           "membership_side_effect",
-          "Sign in before changing repository membership. GitWorkshop does not yet support making this transition.",
+          "Sign in before changing repository membership.",
         );
       }
       setPendingIntent(intent);
@@ -723,7 +724,7 @@ export function useRepositoryMembershipMutation({
         ) {
           throw new RepositoryMembershipMutationRefusal(
             "concurrent_change",
-            "The authoritative repository state changed after the page settled. GitWorkshop does not yet support making this transition.",
+            "The authoritative repository state changed after the page settled. Reload repository settings and review the current state before retrying. No repository update was published.",
           );
         }
         const proposal = prepareRepositoryMembershipMutation({
@@ -755,7 +756,7 @@ export function useRepositoryMembershipMutation({
         if (confirmationRelayUrls.length === 0) {
           throw new RepositoryMembershipMutationRefusal(
             "incomplete_relay_view",
-            "No post-change repository or configured Git index relay is available to acknowledge the replacement. GitWorkshop does not yet support making this transition.",
+            "No repository or configured Git index relay is available to acknowledge the replacement. Configure an acknowledgement relay before retrying. No repository update was published.",
           );
         }
         const unsnapshottedConfirmationRelays = confirmationRelayUrls.filter(
@@ -764,7 +765,7 @@ export function useRepositoryMembershipMutation({
         if (unsnapshottedConfirmationRelays.length > 0) {
           throw new RepositoryMembershipMutationRefusal(
             "incomplete_relay_view",
-            `The post-change acknowledgement set introduced relays outside the settled safety snapshot (${unsnapshottedConfirmationRelays.join(", ")}). GitWorkshop does not yet support making this transition.`,
+            `The acknowledgement relay set changed while this action was being prepared (${unsnapshottedConfirmationRelays.join(", ")}). Reload and retry after the relay view settles. No repository update was published.`,
           );
         }
         const deliveryRelayUrls = snapshot.repo.isPrivate
@@ -892,13 +893,7 @@ export function useRepositoryMembershipMutation({
         });
         return refetchedEvent;
       } catch (error) {
-        const refusal =
-          error instanceof RepositoryMembershipMutationRefusal
-            ? error
-            : new RepositoryMembershipMutationRefusal(
-                "incomplete_relay_view",
-                `${error instanceof Error ? error.message : String(error)} GitWorkshop does not yet support making this transition.`,
-              );
+        const refusal = normalizeRepositoryMembershipMutationFailure(error);
         setFailure({ code: refusal.code, message: refusal.message });
         throw refusal;
       } finally {
