@@ -318,6 +318,92 @@ subscription and does not own another network request. It does not project an
 absent list until every preferred outbox has settled; accounts without outboxes
 use the same rule over the warm lookup-relay set.
 
+#### Notification-state adoption decision
+
+Notification read/archive state is **convergent application state** with the
+**confidential scope**, **derived signer**, and **high-frequency merge**
+modifiers. It is represented by two kind `30078` addressable events that form
+one logical state:
+
+- `git-notifications-nsec`, authored by the active account, contains the
+  encrypted notification-state private key;
+- `git-notifications-state`, authored by that derived key, contains the
+  encrypted read/archive state.
+
+The account-owned notification store is the sole network owner for both
+coordinates. It keeps one request open on the union of the user's NIP-65
+outboxes and the configured fallback relays. The request uses two exact filters,
+not the cross-product of both authors and both identifiers. When the derived
+pubkey is already cached, both filters start together. Otherwise the owner first
+warms the envelope filter, decrypts the winning envelope, then replaces that
+lease with a new lease covering both exact filters. Replacing the filter
+invalidates all prior coverage until the new request receives EOSE.
+
+The relay rule follows the personal-state precedent but counts fallback relays
+instead of user-index relays, because generic indexes commonly reject kind
+`30078` while fallback relays are actual publication destinations:
+
+1. The outbox frontier is not considered known merely because the mailbox
+   model currently has no value. A real kind `10002` winner establishes it
+   immediately; otherwise the personal-singleton identity owner must first
+   cover two thirds of the configured user-index relays, capped at three and
+   floored at one, to establish covered mailbox absence.
+2. With configured outboxes, at least one outbox must be covered. While exactly
+   one outbox is covered, regardless of the total configured, two covered
+   fallback relays are also required. Once two or more outboxes are covered,
+   three covered outboxes or half of the configured outboxes is sufficient.
+3. With covered mailbox absence and therefore no configured outboxes, two
+   thirds of the fallback set, capped at three relays and floored at one, must
+   be covered.
+4. `initial` and `catching-up` relays may be awaited within the existing bounded
+   settlement deadline. Failed, disconnected, rate-limited, and
+   `not-responding` relays do not block indefinitely.
+
+Once this threshold is warm for the current two-filter lease, writers consume
+the EventStore winners and decrypted projection without an action-time relay
+request. A missing envelope may create a fresh random derived key only after the
+envelope-only lease proves absence at the same threshold and a bounded exact
+cache read has also found no cached envelope. Both exact notification
+coordinates are hydrated from the cache when their owner starts, with cached
+events routed through the EventStore. Once per owner revision, its first
+bootstrap attempt checks the envelope and kind `10002` mailbox coordinates
+again so a previously observed outbox frontier also tightens the decision.
+These reads restore the useful local evidence from the old address loader
+without querying the configured relay frontier. The cache backend is normally
+IndexedDB, but development installations may provide it through the optional
+local relay at `ws://localhost:4869`. The resulting state coordinate is a fresh
+unique address under that random key, but the combined warm lease is still
+established before its first state write. Both encrypted events publish to the
+same outbox and fallback frontier so the read evidence and durable destinations
+agree. Publishing encrypted content to those relays still reveals event
+existence, timing, and approximate size; it does not reveal the plaintext.
+
+Read/archive actions remain immediate while coverage or decryption is pending.
+The store records their updater functions as local deltas, decrypts the current
+remote winner, and replays those deltas over it before signing. It must not
+publish a stale whole-state snapshot merely because local UI state changed
+first. Several rapid actions are debounced into one write. A new remote winner
+replaces the accepted base state, after which still-pending local deltas are
+replayed; this preserves remote reversals such as marking an item unread or
+restoring it. A failed current-envelope or current-state decrypt is not retried
+passively on every store or lifecycle emission. The UI exposes an explicit
+retry and describes the failure as paused cross-device state sync, because
+notification delivery and the local read/archive controls still work. Retry
+reuses the current warm owner for decrypt and publish failures, but replaces an
+owner whose coverage can no longer reach quorum so terminal or silent relay
+checks receive a fresh generation. A pause caused specifically by unavailable
+mailbox-discovery coverage belongs to the separate personal-singleton identity
+owner; restarting that owner from this service is deliberately deferred until
+identity-owner recovery can be exposed as a shared operation for every personal
+writer.
+
+This adoption removes the older address-loader relay reads and overlapping
+NIP-78 subscriptions while retaining bounded cache-backend hydration. It does
+not add NIP-09 deletion discovery, a post-write echo request, or a
+compare-and-swap protocol between concurrent clients. Later warm-subscription
+events continue to reconcile cross-client updates, while the durable outbox
+reports publication delivery separately.
+
 ## Writer checklist
 
 Before adding or changing a replaceable/addressable writer, answer:

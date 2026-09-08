@@ -6,7 +6,7 @@
  */
 
 import { useState, useMemo, useCallback, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useActiveAccount } from "applesauce-react/hooks";
 import {
   Check,
@@ -197,7 +197,8 @@ export function CreateRepoDialog({ isOpen, onClose }: CreateRepoDialogProps) {
   } = useGraspServers(pubkey);
 
   const { state, execute, retryPush, reset } = useCreateRepo();
-  const { state: privateRelayState } = usePrivateGitRelays();
+  const { state: privateRelayState, retry: retryPrivateRelays } =
+    usePrivateGitRelays();
   const { execute: executePersonalSingleton } = useRobustReplaceableAction();
 
   // Form state
@@ -564,10 +565,44 @@ export function CreateRepoDialog({ isOpen, onClose }: CreateRepoDialogProps) {
                   <>
                     {privateRepository ? (
                       privateRelayState.status !== "ready" ? (
-                        <p className="text-sm text-amber-600 dark:text-amber-400">
-                          Your encrypted Private Git services list is
-                          unavailable.
-                        </p>
+                        <div
+                          className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2.5"
+                          role="alert"
+                        >
+                          <p className="text-sm font-medium text-amber-700 dark:text-amber-300">
+                            Private services unavailable
+                          </p>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            {privateRelayState.error ??
+                              "GitWorkshop could not safely decrypt your Private Git services list."}
+                          </p>
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="h-8 text-xs"
+                              onClick={retryPrivateRelays}
+                            >
+                              Retry decryption
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              className="h-8 text-xs"
+                              asChild
+                            >
+                              <Link to="/settings#private-git-services">
+                                Open settings
+                              </Link>
+                            </Button>
+                          </div>
+                          <p className="mt-2 text-xs text-muted-foreground">
+                            Only private repository creation is blocked. Switch
+                            off Private repository to create publicly.
+                          </p>
+                        </div>
                       ) : privateServers.length === 0 ? (
                         <p className="text-sm text-muted-foreground">
                           Add a GRASP-08 service in Settings before creating a

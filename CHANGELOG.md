@@ -13,6 +13,14 @@
 
 ### Changed
 
+- Keep one account-owned warm subscription for the encrypted notification-key
+  envelope and derived read/archive state. Cross-device writes now wait for
+  current EOSE-backed coverage and decryption without an action-time relay
+  request, while immediate local actions are replayed as deltas over the remote
+  winner. Mailbox absence plus cached mailbox and envelope evidence must also be
+  established before a new derived key can be created, and an explicit coverage
+  retry replaces a warm owner that can no longer reach quorum. Both encrypted
+  events use the same outbox/fallback frontier.
 - Apply the warm personal-singleton preflight policy consistently to contact,
   mailbox, Git follow, pinned-repository, GRASP, Blossom, and encrypted private
   Git relay lists. One account-owned query now covers all category kinds;
