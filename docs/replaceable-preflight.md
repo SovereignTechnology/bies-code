@@ -180,12 +180,11 @@ evidence, not a repeat of a warm repository query. Confidential repository
 creation keeps its existing private-service-only collision check so the
 identifier is not disclosed to public mailbox relays.
 
-Signed kind `5` requests are a modifier on the repository snapshot. The stable
-announcement/state filters cannot express exact-event deletion pointers
-without changing whenever a winner changes. Writers therefore use one bounded,
-batched deletion query over the frozen repository relay voters and require one
-EOSE. This query contains coordinate pointers and the exact IDs already being
-replaced; it does not repeat the announcement or state filters.
+Signed kind `5` requests are a modifier on the repository snapshot. The owner
+includes coordinate pointers and the exact IDs of the current announcement and
+state candidates in the same request. A changed candidate set starts a new
+complete filter revision, so action-time writers consume warm deletion evidence
+without opening another request.
 
 The writer freezes the relevant EventStore winner after those checks and
 compares it with the event the editor or operation was based on. A changed

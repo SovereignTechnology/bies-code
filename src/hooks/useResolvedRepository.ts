@@ -258,6 +258,17 @@ export function useResolvedRepository(
     ) as unknown as Observable<ResolvedRepo | undefined>;
   }, [key, store, privateProbeStatus]);
   const repo = privateProbeStatus === "found" ? privateProbe?.repo : publicRepo;
+  const stateCandidates = use$(() => {
+    if (!repo || !dTag || repo.confirmedMaintainers.length === 0)
+      return undefined;
+    return store.timeline([
+      {
+        kinds: [REPO_STATE_KIND],
+        authors: repo.confirmedMaintainers,
+        "#d": [dTag],
+      } as Filter,
+    ]);
+  }, [dTag, repo?.confirmedMaintainers.join(","), store]);
   const privateCoordinateKey = repo?.isPrivate
     ? repo.confirmedMemberCoordinates.join(",")
     : "";
@@ -325,18 +336,37 @@ export function useResolvedRepository(
     [key],
   );
 
-  // One page-owned replaceable subscription covers both repository categories:
-  // identifier-wide announcements and state authored by the current confirmed
-  // maintainers. A changed authority set creates a complete filter revision;
-  // relay growth remains reactive and does not disturb unchanged relays.
+  // One page-owned replaceable subscription covers both repository categories
+  // and their current coordinate/exact deletion evidence. A changed authority
+  // or candidate set creates a complete filter revision; relay growth remains
+  // reactive and does not disturb unchanged relays.
   const maintainerKey = repo?.confirmedMaintainers.join(",") ?? "";
+  const deletionAuthors = repo
+    ? [
+        ...new Set([
+          ...repo.discoveryPubkeys,
+          ...repo.historyPubkeys,
+          ...repo.confirmedMaintainers,
+        ]),
+      ].sort()
+    : [];
+  const deletionCandidateIds = repo
+    ? [
+        ...new Set([
+          ...repo.discoveredAnnouncements.map(({ id }) => id),
+          ...repo.historicalAnnouncements.map(({ id }) => id),
+          ...(stateCandidates ?? []).map(({ id }) => id),
+        ]),
+      ].sort()
+    : [];
+  const deletionRevision = `${deletionAuthors.join(",")}:${deletionCandidateIds.join(",")}`;
   const replaceableCoverage = useMemo(
     () =>
       createRelaySubscriptionCoverage({
         settlementTimeoutMs: REPOSITORY_COVERAGE_SETTLEMENT_TIMEOUT_MS,
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [key, maintainerKey, privateProbeStatus],
+    [key, maintainerKey, deletionRevision, privateProbeStatus],
   );
 
   use$(() => {
@@ -369,6 +399,27 @@ export function useResolvedRepository(
             } as Filter,
           ]
         : []),
+      ...(repo && deletionAuthors.length > 0
+        ? [
+            {
+              kinds: [5],
+              authors: deletionAuthors,
+              "#a": deletionAuthors.flatMap((author) => [
+                `${REPO_KIND}:${author}:${dTag}`,
+                `${REPO_STATE_KIND}:${author}:${dTag}`,
+              ]),
+            } as Filter,
+          ]
+        : []),
+      ...(repo && deletionCandidateIds.length > 0
+        ? [
+            {
+              kinds: [5],
+              authors: deletionAuthors,
+              "#e": deletionCandidateIds,
+            } as Filter,
+          ]
+        : []),
     ];
     const source = resilientSubscription(pool, enrichmentRelays$, filters, {
       settle: false,
@@ -386,6 +437,7 @@ export function useResolvedRepository(
   }, [
     key,
     maintainerKey,
+    deletionRevision,
     store,
     repoRelayGroup,
     extraRelays$,
@@ -393,8 +445,9 @@ export function useResolvedRepository(
     replaceableCoverage,
   ]);
 
-  // Layer 3: once we know the repo's own relay list, add any relays not yet
-  // in repoRelayGroup. Also subscribes to maintainer announcements on those relays.
+  // Layer 3: once known, add the repository's declared relays to the reactive
+  // group. The shared replaceable owner above opens its full filter revision
+  // on each joining relay.
   const repoRelayKey = repo?.relays.join(",") ?? "";
   const discoveryKey = repo?.discoveryPubkeys.join(",") ?? "";
   // If a relay was previously added to extraRelaysForMaintainerMailboxCoverage
@@ -425,49 +478,7 @@ export function useResolvedRepository(
       }
     }
 
-    // Derive a reactive relay list from the repoRelayGroup model observable.
-    // RepositoryRelayGroup emits the same group instance every time a relay is
-    // added, so we map it to a URL array and deduplicate with distinctUntilChanged.
-    const repoRelayGroup$ = (
-      store.model(
-        RepositoryRelayGroup,
-        pubkey!,
-        dTag,
-      ) as unknown as Observable<RelayGroupType>
-    ).pipe(
-      map((g) => g.relays.map((r) => r.url)),
-      distinctUntilChanged(
-        (a, b) => a.length === b.length && a.every((v, i) => v === b[i]),
-      ),
-    );
-
-    // Subscribe to deletion requests targeting the discovered announcements
-    // on the repo's relays so revocations arrive in real time. Announcements
-    // themselves are covered by the identifier-only enrichment subscription
-    // above; these author-derived clauses keep their current shape.
-    const announcementIds = repo.discoveredAnnouncements.map(({ id }) => id);
-    const filter: Filter[] = [
-      {
-        kinds: [5],
-        authors: repo.discoveryPubkeys,
-        "#a": repo.discoveryPubkeys.map(
-          (author) => `${REPO_KIND}:${author}:${dTag}`,
-        ),
-      } as Filter,
-      ...(announcementIds.length > 0
-        ? [
-            {
-              kinds: [5],
-              authors: repo.discoveryPubkeys,
-              "#e": announcementIds,
-            } as Filter,
-          ]
-        : []),
-    ];
-    return resilientSubscription(pool, repoRelayGroup$, filter).pipe(
-      onlyEvents(),
-      mapEventsToStore(store),
-    );
+    return of(null);
   }, [
     dTag,
     repoRelayKey,
@@ -480,9 +491,8 @@ export function useResolvedRepository(
   ]);
 
   // Layer 4: resolve maintainer outbox + inbox relays. Only relays not already
-  // in repoRelayGroup are added to extraRelaysForMaintainerMailboxCoverage.
-  // combineLatest fires when either direction resolves, so we don't wait for
-  // both before adding the first batch.
+  // in repoRelayGroup are added to the enrichment frontier. They receive the
+  // same query but never become repository preflight voters.
   use$(() => {
     if (
       privateProbeStatus !== "absent" ||
@@ -523,36 +533,7 @@ export function useResolvedRepository(
         );
         extraRelays$.next(urls);
 
-        if (urls.length === 0) return of(null);
-
-        // Subscribe to deletion requests on the extra mailbox relays so
-        // revocations arrive in real time. Announcements on these relays are
-        // covered by the identifier-only enrichment subscription above.
-        const announcementIds = repo.discoveredAnnouncements.map(
-          ({ id }) => id,
-        );
-        const filter: Filter[] = [
-          {
-            kinds: [5],
-            authors: repo.discoveryPubkeys,
-            "#a": repo.discoveryPubkeys.map(
-              (author) => `${REPO_KIND}:${author}:${dTag}`,
-            ),
-          } as Filter,
-          ...(announcementIds.length > 0
-            ? [
-                {
-                  kinds: [5],
-                  authors: repo.discoveryPubkeys,
-                  "#e": announcementIds,
-                } as Filter,
-              ]
-            : []),
-        ];
-        return resilientSubscription(pool, extraRelays$, filter).pipe(
-          onlyEvents(),
-          mapEventsToStore(store),
-        );
+        return of(null);
       }),
     ) as unknown as Observable<null>;
   }, [
