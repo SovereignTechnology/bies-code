@@ -453,6 +453,11 @@ export function useSoftwarePublisherApplications(
         appId,
       );
       if ((event?.id ?? null) !== expectedEventId) {
+        if (expectedEventId === null && event) {
+          throw new Error(
+            "This account already has a software application with that ID.",
+          );
+        }
         throw new Error(
           "This software application changed after you began editing. Review the latest version and try again.",
         );
