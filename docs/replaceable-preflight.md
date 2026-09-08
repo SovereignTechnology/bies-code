@@ -62,8 +62,8 @@ exception without creating a bespoke preflight design.
 | ---------------------------- | ----------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
 | Personal singleton           | Profile, NIP-65 mailboxes, follows, Git author/repository lists, GRASP list, Blossom list | Active user's outboxes and configured lookup relays                                           | Establish the owner's latest event before replacing it                                |
 | Publisher-owned addressable  | Software application and release events                                                   | Publisher outboxes and relevant distribution relays                                           | Establish the author's current coordinate before replacing it                         |
-| Repository authority graph   | Kind `30617` announcements                                                                | Identifier-wide discovery on repository and Git index relays, enriched by maintainer outboxes | Resolve authority only from reciprocally confirmed announcements                      |
-| Repository operational state | Kind `30618` state                                                                        | Confirmed maintainers on repository relays                                                    | Establish the latest valid state across the frozen authority set                      |
+| Repository authority graph   | Kind `30617` announcements                                                                | One identifier-wide owner on repository relays, enriched by Git index and maintainer outboxes | Resolve authority only from reciprocally confirmed announcements                      |
+| Repository operational state | Kind `30618` state                                                                        | The same repository owner, filtered to confirmed maintainers on repository relays             | Establish the latest valid state across the frozen authority set                      |
 | Convergent application state | Notification envelopes and similar mergeable state                                        | Active account session                                                                        | Reconcile or merge; do not put a fresh network round-trip before every frequent write |
 
 Regular, append-only, and ephemeral events are outside this policy unless a
@@ -153,13 +153,65 @@ EOSE for their first page does not establish confirmed absence, so lifecycle
 coverage must not be combined with `limit`, automatic pagination, or manual
 pagination until the lifecycle can represent completion of the whole scope.
 
-## Maintainer invitation example
+## Repository-scoped adoption decision
+
+Repository announcements and state share one page-owned subscription. Its
+stable revision contains the identifier-wide kind `30617` filter and the kind
+`30618` filter for the currently confirmed maintainer set. A change to that
+authority set starts a new complete revision; relay-list changes are handled by
+the subscription's reactive relay frontier. Repository pages consume the
+events from the EventStore and the lifecycle coverage from this owner instead
+of opening another action-time request for those filters.
+
+For an existing author coordinate, one currently covered repository relay is
+sufficient to write. Git index relays and maintainer mailbox relays remain
+valuable evidence contributors and publication targets, but they do not vote
+on repository preflight: they are not required to answer promptly, and a
+repository must not become uneditable because one of them is flaky. The
+repository relay voters are frozen before signing so a relay-frontier edit is
+judged against the old frontier.
+
+An absent author coordinate is different. Before creating it, the action must
+also establish absence on at least one of the author's current NIP-65 outbox
+relays. A completely new repository has no old repository frontier, so its
+focused collision check requires an EOSE from at least one proposed repository
+relay and at least one current author outbox relay. This is genuinely new
+evidence, not a repeat of a warm repository query. Confidential repository
+creation keeps its existing private-service-only collision check so the
+identifier is not disclosed to public mailbox relays.
+
+Signed kind `5` requests are a modifier on the repository snapshot. The stable
+announcement/state filters cannot express exact-event deletion pointers
+without changing whenever a winner changes. Writers therefore use one bounded,
+batched deletion query over the frozen repository relay voters and require one
+EOSE. This query contains coordinate pointers and the exact IDs already being
+replaced; it does not repeat the announcement or state filters.
+
+The writer freezes the relevant EventStore winner after those checks and
+compares it with the event the editor or operation was based on. A changed
+winner aborts before signing. This does not attempt a compare-and-swap protocol
+for a relay event that lands after the freeze.
+
+Purgatory-backed kind `30618` writes retain their special transition order:
+
+1. run the read preflight before signing;
+2. publish the signed state to the GRASP repository relays and require at least
+   one relay `OK` so the state is staged in purgatory;
+3. push the dependent Git objects;
+4. broadcast the state through the durable outbox path.
+
+A purgatory relay is not required to return the state from a new query before
+the Git objects exist. Therefore repository preflight must never insert a
+post-signing echo request between steps 2 and 3.
+
+### Maintainer invitation example
 
 Adding a maintainer is a **repository authority graph** action with the
 **external-subject discovery** modifier. The intended eventual flow is:
 
 1. Keep the repository's identifier-wide kind `30617` discovery warm on its
-   repository relays and the configured Git index relays.
+   repository relays, while Git index and maintainer mailbox relays enrich the
+   same owner without becoming required voters.
 2. Let selecting a prospective maintainer remain immediate.
 3. On selection, begin non-blocking discovery of that user's NIP-65 mailboxes.
 4. If outboxes are found, warm a focused kind `30617` query for that author and
@@ -168,7 +220,9 @@ Adding a maintainer is a **repository authority graph** action with the
 5. At invitation time, consume the accumulated evidence and wait or request
    only for missing coverage.
 
-The current Phase 1 work does not implement this flow.
+An already discovered candidate announcement needs no mailbox EOSE. If the
+candidate coordinate is absent from the repository snapshot, its outbox is the
+new scope and must settle before absence is used in the authority transition.
 
 ## Adoption
 
