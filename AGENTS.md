@@ -67,6 +67,14 @@ Android builds and the branding-regeneration script are documented in `docs/andr
 
 Update `CHANGELOG.md` for significant changes only; keep its `Unreleased` section current and NEVER remove it during release so it remains as a placeholder.
 
+## Releases
+
+For every stable release, the `stable` branch and matching `v<version>` tag
+MUST both point to the same approved release commit and MUST both be pushed to
+`origin`. Release candidates and other prereleases do not advance `stable`
+unless the user explicitly requests it. Never create or push the release tag
+before the user has reviewed the release commit.
+
 ## Pre-commit and Test Scripts
 
 The git pre-commit hook runs `pnpm pre-commit` (or `npm run pre-commit` when pnpm is unavailable or the local pnpm shim is broken), which runs `tsc --noEmit`, `eslint`, `prettier --write .` (auto-formats and re-stages), `vitest run`, and `vite build`. `pnpm test` / `npm test` is the same pipeline but with `prettier --check` (CI-style, no writes).

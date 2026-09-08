@@ -2,23 +2,35 @@
 
 ## [Unreleased]
 
+### Fixes
+
+### Features
+
+### Changes
+
+## [4.0.0]
+
 ### Release overview
 
-GitWorkshop v4 brings substantial improvements to git collaboration over
-Nostr, private repository access, CI, software releases, and code browsing. It
-aligns with ngit v3 across the protocols and workflows they share. These
-highlights are not exhaustive; the detailed entries below record many more
-features, compatibility changes, and fixes.
+GitWorkshop v4 is its biggest release yet. It brings CI, private repositories,
+software releases, and a much richer code-review experience together in the
+browser. Released in tandem with ngit v3, ngit-grasp v3, and the new ngit-ci
+0.1, it carries the coordinated launch into a responsive interface while the
+project's identity and policy stay with its maintainers. These are the changes
+that define the release. [Read the full launch
+story](https://ngit.dev/v3) to see how all four releases fit together; the
+detailed entries below record every feature, compatibility change, and fix.
 
-- **Nostr CI:** Discover and control coordinators with standing service
-  requests, stops, and manual triggers; manage encrypted repository secrets;
-  inspect workflow, job, provider, artifact, output, and trust provenance; and
-  surface NIP-5A pull-request previews.
-- **Private repositories and Buzz interoperability:** Discover, browse, and
-  collaborate on GRASP-08 private repositories using an encrypted service list
-  and scoped Nostr and Git authentication. Basic Buzz support brings private
-  Buzz repositories into the same discovery, code-browsing, and pull-request
-  viewing interface.
+- **CI is here:** Follow a run from a maintainer's request to a signed result
+  whose provenance anyone can inspect. Discover and control maintainer-selected
+  coordinators, manage encrypted repository secrets, inspect every workflow,
+  job, provider, artifact, and output, and open NIP-5A pull-request previews.
+- **Private repositories without surrendering identity:** Private repositories
+  become a practical browser workflow without turning the project into an
+  account owned by its server. Discover, browse, and collaborate on GRASP-08
+  repositories using an encrypted service list and scoped Nostr and Git
+  authentication. Basic Buzz support brings Buzz repositories into the same
+  discovery, code-browsing, and pull-request viewing interface.
 - **Maintainers and repository authority:** Introduce an explicit lead,
   role history, and non-maintainer moderators, with clearer invitations,
   handovers, departures, roster changes, and historical authorization. These
@@ -27,12 +39,14 @@ features, compatibility changes, and fixes.
   that an invited maintainer has no Git-state authority until they accept. That
   pending-invitation boundary is the SemVer reason for the v4 major version
   bump.
-- **Pull requests and collaboration:** Add non-default target branches,
-  inferred pull-request stacks, repository comparisons, condensed commit
-  graphs, issue-resolution provenance, and safer browser merge flows.
-- **Software releases:** Publish and browse NIP-82 applications, releases, and
-  assets with Blossom uploads, Zapstore linking, compatibility metadata, and
-  repository-aware permalinks.
+- **Pull requests built for serious review:** Target non-default branches,
+  understand inferred pull-request stacks, compare repositories and refs,
+  follow condensed commit graphs, trace issue-resolution provenance, and merge
+  with stronger browser safety checks.
+- **Software releases without the platform:** Think GitHub Releases without
+  GitHub, made resilient through Blossom replication. Publish and browse signed
+  NIP-82 applications, releases, and assets with Zapstore linking,
+  compatibility metadata, and repository-aware permalinks.
 
 #### Additional GitWorkshop highlights
 
