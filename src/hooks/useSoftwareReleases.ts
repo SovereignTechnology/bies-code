@@ -30,6 +30,11 @@ import {
 import { use$ } from "@/hooks/use$";
 import { useEventStore } from "@/hooks/useEventStore";
 import {
+  ZAPSTORE_RELAY_URL,
+  useSoftwarePublisherApplications,
+  type AccountSoftwareApplications,
+} from "@/hooks/useSoftwarePublisherPreflight";
+import {
   resilientRequest,
   resilientSubscription,
 } from "@/lib/resilientSubscription";
@@ -38,7 +43,7 @@ import { relayGroupUrls$ } from "@/models/RepositoryRelayGroup";
 import { cacheRequest } from "@/services/cache";
 import { addressLoader, pool } from "@/services/nostr";
 
-export const ZAPSTORE_RELAY_URL = "wss://relay.zapstore.dev";
+export { ZAPSTORE_RELAY_URL };
 const RELEASE_DISCOVERY_LIMIT = 30;
 const ASSET_FILTER_CHUNK_SIZE = 100;
 
@@ -46,15 +51,9 @@ export interface RepoSoftwareReleases {
   applications: SoftwareApplication[];
   releases: SoftwareRelease[];
   assetsById: Map<string, SoftwareAsset>;
-  releaseRelays: string[];
   applicationsSettled: boolean;
   releasesSettled: boolean;
   assetsSettled: boolean;
-}
-
-export interface AccountSoftwareApplications {
-  applications: SoftwareApplication[];
-  settled: boolean;
 }
 
 export interface RepoReleaseSummary {
@@ -269,64 +268,7 @@ export function useAccountSoftwareApplications(
   pubkey: string | undefined,
   repoRelayGroup: RelayGroup | undefined,
 ): AccountSoftwareApplications {
-  const store = useEventStore();
-  const castStore = store as unknown as CastRefEventStore;
-  const repoRelays =
-    use$(() => relayGroupUrls$(repoRelayGroup), [repoRelayGroup]) ?? [];
-  const repoRelayKey = repoRelays.join(",");
-
-  const mailboxSettled =
-    use$(() => {
-      if (!pubkey) return of(true);
-      return addressLoader({ kind: 10002, pubkey }).pipe(
-        ignoreElements(),
-        endWith(true),
-        catchError(() => of(true)),
-        startWith(false),
-      );
-    }, [pubkey]) ?? false;
-
-  const outboxRelays =
-    use$(() => {
-      if (!pubkey) return of([]);
-      return store
-        .mailboxes(pubkey)
-        .pipe(map((mailboxes) => uniqueRelayUrls(mailboxes?.outboxes ?? [])));
-    }, [pubkey, store]) ?? [];
-  const relays = uniqueRelayUrls([
-    ...repoRelays,
-    ...outboxRelays,
-    ZAPSTORE_RELAY_URL,
-  ]);
-  const relayKey = relays.join(",");
-  const applicationFilter: Filter = {
-    kinds: [SOFTWARE_APPLICATION_KIND],
-    authors: pubkey ? [pubkey] : [],
-    limit: 200,
-  } as Filter;
-
-  const settled =
-    use$(() => {
-      if (!pubkey) return of(true);
-      if (!mailboxSettled) return of(false);
-      return loadIntoStoreUntilSettled(relays, [applicationFilter], store);
-    }, [pubkey, mailboxSettled, repoRelayKey, relayKey, store]) ?? false;
-
-  const applications =
-    use$(() => {
-      if (!pubkey) return of([]);
-      return store
-        .timeline([applicationFilter])
-        .pipe(
-          map((events) =>
-            castApplications(events, castStore).sort((left, right) =>
-              left.name.localeCompare(right.name),
-            ),
-          ),
-        );
-    }, [pubkey, store]) ?? [];
-
-  return { applications, settled };
+  return useSoftwarePublisherApplications(pubkey, repoRelayGroup);
 }
 
 /**
@@ -342,6 +284,7 @@ export function useSoftwareReleases(
   repoCoords: string[] | undefined,
   maintainerPubkeys: string[] | undefined,
   repoRelayGroup: RelayGroup | undefined,
+  privateRepository = false,
 ): RepoSoftwareReleases {
   const store = useEventStore();
   const castStore = store as unknown as CastRefEventStore;
@@ -389,6 +332,7 @@ export function useSoftwareReleases(
   // only on the publisher's outbox could be replaced accidentally.
   const applicationMailboxesSettled =
     use$(() => {
+      if (privateRepository) return of(true);
       if (appAuthors.length === 0) return of(applicationsSettled);
       return combineLatest(
         appAuthors.map((pubkey) =>
@@ -400,10 +344,11 @@ export function useSoftwareReleases(
           ),
         ),
       ).pipe(map((settled) => settled.every(Boolean)));
-    }, [appAuthorsKey, applicationsSettled]) ?? false;
+    }, [appAuthorsKey, applicationsSettled, privateRepository]) ?? false;
 
   const applicationOutboxRelays =
     use$(() => {
+      if (privateRepository) return of([]);
       if (appAuthors.length === 0) return of([]);
       return combineLatest(
         appAuthors.map((pubkey) =>
@@ -416,12 +361,12 @@ export function useSoftwareReleases(
           ),
         ),
       );
-    }, [appAuthorsKey, store]) ?? [];
-  const releaseRelays = uniqueRelayUrls([
-    ...repoRelays,
-    ...applicationOutboxRelays,
-    ZAPSTORE_RELAY_URL,
-  ]);
+    }, [appAuthorsKey, privateRepository, store]) ?? [];
+  const releaseRelays = uniqueRelayUrls(
+    privateRepository
+      ? repoRelays
+      : [...repoRelays, ...applicationOutboxRelays, ZAPSTORE_RELAY_URL],
+  );
   const releaseRelayKey = releaseRelays.join(",");
 
   // Keep a useful recent history while bounding release and asset metadata
@@ -480,12 +425,18 @@ export function useSoftwareReleases(
       assetPublishers.set(id, publishers);
     }
   }
-  const assetRelays = uniqueRelayUrls([
-    ...releaseRelays,
-    ...releases.flatMap((release) =>
-      release.assets.flatMap(({ relayHint }) => (relayHint ? [relayHint] : [])),
-    ),
-  ]);
+  const assetRelays = uniqueRelayUrls(
+    privateRepository
+      ? releaseRelays
+      : [
+          ...releaseRelays,
+          ...releases.flatMap((release) =>
+            release.assets.flatMap(({ relayHint }) =>
+              relayHint ? [relayHint] : [],
+            ),
+          ),
+        ],
+  );
   const assetRelayKey = assetRelays.join(",");
   const assetFilters: Filter[] = [];
   for (
@@ -522,7 +473,6 @@ export function useSoftwareReleases(
     applications,
     releases,
     assetsById,
-    releaseRelays,
     applicationsSettled,
     releasesSettled,
     assetsSettled,

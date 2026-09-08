@@ -1128,7 +1128,7 @@ function SoftwareApplicationsIndex({
                         event={application.event}
                         className="shrink-0"
                         onEdit={
-                          application.pubkey === account?.pubkey
+                          canPublish && application.pubkey === account?.pubkey
                             ? () => onEdit(application)
                             : undefined
                         }
@@ -1186,7 +1186,6 @@ export default function RepoReleasesPage({
     applications,
     releases,
     assetsById,
-    releaseRelays,
     applicationsSettled,
     releasesSettled,
     assetsSettled,
@@ -1194,6 +1193,7 @@ export default function RepoReleasesPage({
     repo?.confirmedMaintainerCoordinates,
     repo?.confirmedMaintainers,
     resolved?.repoRelayGroup,
+    repo?.isPrivate,
   );
   const { poolState } = useGitPool(cloneUrls, {
     headRef: repoState?.headRef,
@@ -1227,19 +1227,23 @@ export default function RepoReleasesPage({
     [applications],
   );
   const canPublishRelease =
-    !!account && !!repo?.confirmedMaintainers.includes(account.pubkey);
+    !!account &&
+    !!repo &&
+    !repo.isPrivate &&
+    repo.confirmedMaintainers.includes(account.pubkey);
   const {
     applications: accountApplications,
     settled: accountApplicationsSettled,
+    preflight: softwarePublisherPreflight,
   } = useAccountSoftwareApplications(
     canPublishRelease ? account?.pubkey : undefined,
     resolved?.repoRelayGroup,
   );
-  const releaseDiscoverySettled =
-    applicationsSettled && releasesSettled && !poolState.loading;
-  // Discovery can briefly become unsettled when live filters or Git refs
-  // refresh. Once opened, keep the dialog mounted so its draft is not reset.
-  const releaseFormReady = releaseDiscoverySettled || createReleaseOpen;
+  // The bounded recent-release feed is display-only. The publisher lease and
+  // exact candidate lease own write safety, so a flaky discovery-only relay
+  // must not hide the release form.
+  const releaseFormReady =
+    (accountApplicationsSettled && !poolState.loading) || createReleaseOpen;
 
   const latestMainReleaseIds = useMemo(() => {
     const seen = new Set<string>();
@@ -1410,7 +1414,7 @@ export default function RepoReleasesPage({
   }, [location.hash, renderedReleases.length]);
 
   if (view === "applications" && !eventId) {
-    if (loadingApplications || loadingReleases) {
+    if (loadingApplications) {
       return (
         <div className="container max-w-screen-xl px-4 py-6 md:px-8">
           <ReleasePageSkeleton />
@@ -1441,6 +1445,7 @@ export default function RepoReleasesPage({
             repoCoordinates={repo.confirmedMaintainerCoordinates}
             maintainerPubkeys={repo.confirmedMaintainers}
             relayHint={repo.relays[0]}
+            publisherPreflight={softwarePublisherPreflight}
           />
         )}
         {repo && editingApplication && (
@@ -1454,6 +1459,7 @@ export default function RepoReleasesPage({
             maintainerPubkeys={repo.confirmedMaintainers}
             relayHint={repo.relays[0]}
             application={editingApplication}
+            publisherPreflight={softwarePublisherPreflight}
             onPublished={() => setEditingApplication(undefined)}
           />
         )}
@@ -1465,6 +1471,7 @@ export default function RepoReleasesPage({
             settled={accountApplicationsSettled}
             repoCoordinates={repo.confirmedMaintainerCoordinates}
             relayHint={repo.relays[0]}
+            publisherPreflight={softwarePublisherPreflight}
           />
         )}
       </>
@@ -1503,6 +1510,7 @@ export default function RepoReleasesPage({
             gitTagsSettled={gitTagsAvailable}
             relayHints={repo?.relays.slice(0, 1) ?? []}
             onEdit={
+              canPublishRelease &&
               selectedApplication.pubkey === account?.pubkey
                 ? () => setEditingApplication(selectedApplication)
                 : undefined
@@ -1523,6 +1531,7 @@ export default function RepoReleasesPage({
               maintainerPubkeys={repo.confirmedMaintainers}
               relayHint={repo.relays[0]}
               application={editingApplication}
+              publisherPreflight={softwarePublisherPreflight}
               onPublished={(application) => {
                 setEditingApplication(undefined);
                 navigate(
@@ -1621,11 +1630,11 @@ export default function RepoReleasesPage({
           accountApplications={accountApplications}
           accountApplicationsSettled={accountApplicationsSettled}
           existingReleases={releases}
-          releaseRelays={releaseRelays}
           gitTags={gitTags}
           repoCoordinates={repo.confirmedMaintainerCoordinates}
           maintainerPubkeys={repo.confirmedMaintainers}
           relayHint={repo.relays[0]}
+          publisherPreflight={softwarePublisherPreflight}
         />
       )}
 
