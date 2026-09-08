@@ -15,8 +15,9 @@
  *
  * The repository stays on its canonical route while the form resolves an
  * account-rooted view for the signed-in maintainer's own announcement.
- * Membership changes are one-at-a-time relationship intents guarded by the
- * role-aware mutation preflight; the old complete-roster editor never renders.
+ * Lead-authored roster changes are staged with the other settings and saved as
+ * one guarded replacement; acceptance, leave, and repair remain explicit
+ * relationship actions.
  */
 
 import {
@@ -377,8 +378,8 @@ function RepoSettingsForm({
   const [membershipTargetInput, setMembershipTargetInput] = useState("");
   const [membershipTargetError, setMembershipTargetError] = useState<string>();
   const [membershipSuccess, setMembershipSuccess] = useState<string>();
-  // Kept in source for migration archaeology; the complete-roster editor must
-  // never render now that membership writes are relationship intents.
+  // Kept in source for migration archaeology; lead selection and arbitrary
+  // topology rewriting remain outside the staged roster editor.
   const showLegacyRosterEditor = false;
 
   // Find the selected maintainer's own announcement
@@ -460,7 +461,7 @@ function RepoSettingsForm({
   }, [selectedAnnouncement, repo.selectedMaintainer]);
   const isMultiMaintainer = repo.confirmedMaintainers.length > 1;
   const leadMaintainer = repo.leadResolution.leadMaintainer;
-  const canInviteMaintainer =
+  const canEditMaintainerRoster =
     leadMaintainer === repo.selectedMaintainer ||
     (repo.leadResolution.source === "none" &&
       repo.confirmedMaintainers.length === 1 &&
@@ -562,6 +563,32 @@ function RepoSettingsForm({
   const [maintainerInputError, setMaintainerInputError] = useState<
     string | undefined
   >();
+  const maintainerAdditions = useMemo(
+    () =>
+      editedMaintainers.filter(
+        (pubkey) => !currentMaintainers.includes(pubkey),
+      ),
+    [currentMaintainers, editedMaintainers],
+  );
+  const maintainerRemovals = useMemo(
+    () =>
+      currentMaintainers.filter(
+        (pubkey) => !editedMaintainers.includes(pubkey),
+      ),
+    [currentMaintainers, editedMaintainers],
+  );
+  const maintainerRosterChanged =
+    maintainerAdditions.length > 0 || maintainerRemovals.length > 0;
+  const maintainerRosterSummary = [
+    maintainerAdditions.length > 0
+      ? `${maintainerAdditions.length} invitation${maintainerAdditions.length === 1 ? "" : "s"}`
+      : undefined,
+    maintainerRemovals.length > 0
+      ? `${maintainerRemovals.length} removal${maintainerRemovals.length === 1 ? "" : "s"}`
+      : undefined,
+  ]
+    .filter((summary): summary is string => !!summary)
+    .join(" and ");
 
   // Grasp server selection
   const [selectedAddresses, setSelectedAddresses] = useState<string[]>(
@@ -1107,24 +1134,12 @@ function RepoSettingsForm({
   );
 
   const runMembershipIntent = useCallback(
-    async (
-      intent:
-        | { type: "add"; targetPubkey: string }
-        | { type: "remove"; targetPubkey: string }
-        | { type: "leave" },
-    ) => {
+    async (intent: { type: "leave" }) => {
       setMembershipTargetError(undefined);
       setMembershipSuccess(undefined);
       try {
         await membershipMutation.mutate(intent);
-        setMembershipSuccess(
-          intent.type === "add"
-            ? `Invitation published for ${nip19.npubEncode(intent.targetPubkey)}`
-            : intent.type === "remove"
-              ? `Relationship removed for ${nip19.npubEncode(intent.targetPubkey)}`
-              : "Leave announcement published",
-        );
-        if (intent.type === "add") setMembershipTargetInput("");
+        setMembershipSuccess("Leave announcement published");
       } catch {
         // The mutation hook exposes a stable refusal category and explanation.
       }
@@ -1142,8 +1157,41 @@ function RepoSettingsForm({
       setMembershipTargetError("You cannot invite yourself");
       return;
     }
-    void runMembershipIntent({ type: "add", targetPubkey });
-  }, [membershipTargetInput, repo.selectedMaintainer, runMembershipIntent]);
+    if (editedMaintainers.includes(targetPubkey)) {
+      setMembershipTargetError("Already in the roster");
+      return;
+    }
+    setEditedMaintainers((current) => [...current, targetPubkey]);
+    setMembershipTargetInput("");
+    setMembershipTargetError(undefined);
+    setMembershipSuccess(undefined);
+    membershipMutation.clearFailure();
+  }, [
+    editedMaintainers,
+    membershipMutation,
+    membershipTargetInput,
+    repo.selectedMaintainer,
+  ]);
+
+  const handleRestoreMaintainer = useCallback(
+    (pubkey: string) => {
+      setEditedMaintainers((current) =>
+        current.includes(pubkey) ? current : [...current, pubkey],
+      );
+      setMembershipSuccess(undefined);
+      membershipMutation.clearFailure();
+    },
+    [membershipMutation],
+  );
+
+  const handleStageMaintainerRemoval = useCallback(
+    (pubkey: string) => {
+      handleRemoveMaintainer(pubkey);
+      setMembershipSuccess(undefined);
+      membershipMutation.clearFailure();
+    },
+    [handleRemoveMaintainer, membershipMutation],
+  );
 
   const handleSelectMembershipTarget = useCallback(
     (pubkey: string) => {
@@ -1161,6 +1209,55 @@ function RepoSettingsForm({
   const hasInfrastructure =
     selectedAddresses.length > 0 ||
     (otherRelays.length > 0 && otherGitServers.length > 0);
+
+  const editedAnnouncementFields = useMemo(() => {
+    const npub = nip19.npubEncode(repo.selectedMaintainer);
+    const encodedId = encodeURIComponent(repo.dTag);
+    const graspCloneUrls = selectedAddresses.map((address) =>
+      graspRepositoryCloneUrl(address, npub, encodedId),
+    );
+    const allCloneUrls = [...graspCloneUrls, ...otherGitServers];
+    const graspRelayUrls = selectedAddresses.map((address) =>
+      graspServiceAddressToRelayUrl(address),
+    );
+    const allRelayUrls = [...graspRelayUrls, ...otherRelays];
+
+    return {
+      content: "",
+      tags: [
+        ["d", repo.dTag],
+        ["name", name.trim()],
+        ["description", description.trim()],
+        ...(allCloneUrls.length > 0
+          ? [["clone", ...allCloneUrls] as string[]]
+          : []),
+        ...(allRelayUrls.length > 0
+          ? [["relays", ...allRelayUrls] as string[]]
+          : []),
+        ["alt", `git repository: ${name.trim()}`],
+        ...(eucHash.trim() ? [["r", eucHash.trim(), "euc"] as string[]] : []),
+        ...preservedMembershipTags,
+        ...webUrls.map((url) => ["web", url] as string[]),
+        ...topics.map((topic) => ["t", topic] as string[]),
+        ...repoUpstreamsToTags(effectiveUpstreams),
+        ...unknownTags.filter((tag) => tag.length > 0 && tag[0]),
+      ],
+    };
+  }, [
+    description,
+    effectiveUpstreams,
+    eucHash,
+    name,
+    otherGitServers,
+    otherRelays,
+    preservedMembershipTags,
+    repo.dTag,
+    repo.selectedMaintainer,
+    selectedAddresses,
+    topics,
+    unknownTags,
+    webUrls,
+  ]);
 
   const announcementFieldsChanged =
     name.trim() !==
@@ -1185,12 +1282,21 @@ function RepoSettingsForm({
     userHasSelectedBranch &&
     selectedBranch.length > 0 &&
     selectedBranch !== currentHeadBranch;
-  const hasChanges = announcementFieldsChanged || defaultBranchChanged;
+  const hasChanges =
+    announcementFieldsChanged ||
+    defaultBranchChanged ||
+    maintainerRosterChanged;
   const canSave =
-    name.trim().length > 0 &&
-    hasInfrastructure &&
     hasChanges &&
+    (!announcementFieldsChanged ||
+      (name.trim().length > 0 && hasInfrastructure)) &&
     (!defaultBranchChanged || !!repoState) &&
+    (!maintainerRosterChanged ||
+      (canEditMaintainerRoster &&
+        membershipMutation.enabled &&
+        !membershipMutation.pendingIntent &&
+        announcementsSettled &&
+        stateSettled)) &&
     !hasInvalidSubordinateForkInput &&
     !isResolvingUpstreamNip05 &&
     !isSaving;
@@ -1205,7 +1311,7 @@ function RepoSettingsForm({
     try {
       const repoCoord = `${REPO_KIND}:${repo.selectedMaintainer}:${repo.dTag}`;
       const announcementSnapshot: RepositoryReplaceableSnapshot | undefined =
-        announcementFieldsChanged
+        announcementFieldsChanged && !maintainerRosterChanged
           ? await replaceablePreflight.execute(
               {
                 kind: REPO_KIND,
@@ -1227,53 +1333,28 @@ function RepoSettingsForm({
             )
           : undefined;
 
-      if (announcementFieldsChanged) {
-        const npub = nip19.npubEncode(account.pubkey);
-        const encodedId = encodeURIComponent(repo.dTag);
-
-        // Build clone URLs: Grasp URLs + other git servers
-        const graspCloneUrls = selectedAddresses.map((address) =>
-          graspRepositoryCloneUrl(address, npub, encodedId),
+      if (maintainerRosterChanged) {
+        await membershipMutation.mutate(
+          {
+            type: "update-roster",
+            addPubkeys: maintainerAdditions,
+            removePubkeys: maintainerRemovals,
+          },
+          {
+            expectedAnnouncementId: selectedAnnouncement.id,
+            announcementFields: announcementFieldsChanged
+              ? editedAnnouncementFields
+              : undefined,
+          },
         );
-        const allCloneUrls = [...graspCloneUrls, ...otherGitServers];
-
-        // Build relay URLs: Grasp relay WSS + other relays
-        const graspRelayUrls = selectedAddresses.map((address) =>
-          graspServiceAddressToRelayUrl(address),
-        );
-        const allRelayUrls = [...graspRelayUrls, ...otherRelays];
-
+      } else if (announcementFieldsChanged) {
         const template: EventTemplate = {
           kind: REPO_KIND,
-          content: "",
           created_at: Math.max(
             Math.floor(Date.now() / 1000),
             (announcementSnapshot?.actorEvent?.created_at ?? 0) + 1,
           ),
-          tags: [
-            ["d", repo.dTag],
-            ["name", name.trim()],
-            ["description", description.trim()],
-            ...(allCloneUrls.length > 0
-              ? [["clone", ...allCloneUrls] as string[]]
-              : []),
-            ...(allRelayUrls.length > 0
-              ? [["relays", ...allRelayUrls] as string[]]
-              : []),
-            ["alt", `git repository: ${name.trim()}`],
-            ...(eucHash.trim()
-              ? [["r", eucHash.trim(), "euc"] as string[]]
-              : []),
-            // Membership is not editable through this metadata form. Preserve indexed roles,
-            // history boundaries, and the legacy compatibility projection
-            // exactly during every metadata-only edit.
-            ...preservedMembershipTags,
-            ...webUrls.map((u) => ["web", u] as string[]),
-            ...topics.map((t) => ["t", t] as string[]),
-            ...repoUpstreamsToTags(effectiveUpstreams),
-            // Preserve unknown/custom tags verbatim
-            ...unknownTags.filter((tag) => tag.length > 0 && tag[0]),
-          ],
+          ...editedAnnouncementFields,
         };
 
         const signedEvent = await account.signer.signEvent(template);
@@ -1322,24 +1403,18 @@ function RepoSettingsForm({
     account,
     selectedAnnouncement,
     announcementFieldsChanged,
+    maintainerRosterChanged,
+    maintainerAdditions,
+    maintainerRemovals,
     defaultBranchChanged,
     repo,
     repoState,
-    selectedAddresses,
-    otherGitServers,
-    otherRelays,
-    name,
-    description,
-    webUrls,
-    topics,
-    effectiveUpstreams,
-    preservedMembershipTags,
-    eucHash,
-    unknownTags,
+    editedAnnouncementFields,
     selectedBranch,
     basePath,
     navigate,
     replaceablePreflight,
+    membershipMutation,
   ]);
 
   // ---------------------------------------------------------------------------
@@ -1666,14 +1741,14 @@ function RepoSettingsForm({
               <Users className="h-4 w-4 text-sky-600 dark:text-sky-400" />
               <AlertTitle>
                 {membershipMutation.enabled
-                  ? "One relationship at a time"
+                  ? "Edit the roster, then save"
                   : membershipMutation.deliveryBlocked
                     ? "Membership delivery in progress"
                     : "Membership changes temporarily unavailable"}
               </AlertTitle>
               <AlertDescription className="text-muted-foreground">
                 {membershipMutation.enabled
-                  ? "Each operation refreshes the affected announcements and state, simulates the exact graph effect, rechecks predecessors before signing, and verifies the observed replacement. Unsupported topology, history, identity, and state cases publish nothing."
+                  ? "Add invitations and mark direct relationships for removal, then save them together. GitWorkshop checks the resulting repository before signing and verifies the published update."
                   : membershipMutation.deliveryBlocked
                     ? "A signed replacement is queued or completing background delivery. Further membership changes stay disabled until it settles; repository metadata remains editable."
                     : "The browser writer is paused while complete relay, history, Git-object, and publication checks are upgraded. Repository metadata remains editable."}
@@ -1681,11 +1756,9 @@ function RepoSettingsForm({
             </Alert>
 
             <div className="space-y-4 rounded-lg border border-border/60 bg-muted/10 p-4">
-              {canInviteMaintainer ? (
+              {canEditMaintainerRoster ? (
                 <div className="space-y-2">
-                  <Label htmlFor="membership-target">
-                    Invite one maintainer
-                  </Label>
+                  <Label htmlFor="membership-target">Add maintainers</Label>
                   <div className="flex flex-col gap-2 sm:flex-row">
                     <MaintainerUserInput
                       id="membership-target"
@@ -1709,25 +1782,52 @@ function RepoSettingsForm({
                     <Button
                       type="button"
                       onClick={handleSafeAddMaintainer}
+                      aria-label="Stage maintainer invitation"
                       disabled={
                         !membershipMutation.enabled ||
-                        !!membershipMutation.pendingIntent ||
-                        !announcementsSettled ||
-                        !stateSettled
+                        !!membershipMutation.pendingIntent
                       }
                     >
-                      {membershipMutation.pendingIntent?.type === "add" ? (
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      ) : (
-                        <Plus className="mr-2 h-4 w-4" />
-                      )}
-                      Invite
+                      <Plus className="mr-2 h-4 w-4" />
+                      Add
                     </Button>
                   </div>
                   {membershipTargetError && (
                     <p className="text-xs text-destructive">
                       {membershipTargetError}
                     </p>
+                  )}
+                  {maintainerAdditions.length > 0 && (
+                    <div className="space-y-1.5 pt-1">
+                      {maintainerAdditions.map((pubkey) => (
+                        <div
+                          key={pubkey}
+                          className="flex items-center gap-2 rounded-md border border-emerald-500/30 bg-emerald-500/5 px-3 py-2"
+                        >
+                          <UserLink
+                            pubkey={pubkey}
+                            avatarSize="xs"
+                            nameClassName="text-sm"
+                            className="min-w-0 flex-1"
+                          />
+                          <Badge
+                            variant="outline"
+                            className="border-emerald-500/30 text-emerald-700 dark:text-emerald-300"
+                          >
+                            will invite
+                          </Badge>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleStageMaintainerRemoval(pubkey)}
+                            aria-label={`Remove staged maintainer ${pubkey}`}
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
                   )}
                 </div>
               ) : (
@@ -1738,58 +1838,89 @@ function RepoSettingsForm({
                 </p>
               )}
 
-              {leadMaintainer === repo.selectedMaintainer &&
+              {canEditMaintainerRoster &&
                 repo.maintainerEdges.some(
                   ({ from }) => from === repo.selectedMaintainer,
                 ) && (
                   <div className="space-y-2 border-t border-border/50 pt-3">
-                    <Label>Remove one direct relationship</Label>
+                    <Label>Direct relationships</Label>
                     {repo.maintainerEdges
                       .filter(
                         ({ from, to }) =>
                           from === repo.selectedMaintainer &&
                           to !== repo.selectedMaintainer,
                       )
-                      .map(({ to }) => (
-                        <div
-                          key={to}
-                          className="flex items-center gap-2 rounded-md border border-border/50 bg-background/60 px-3 py-2"
-                        >
-                          <UserLink
-                            pubkey={to}
-                            avatarSize="xs"
-                            nameClassName="text-sm"
-                            className="min-w-0 flex-1"
-                          />
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            disabled={
-                              !membershipMutation.enabled ||
-                              !!membershipMutation.pendingIntent
-                            }
-                            onClick={() =>
-                              void runMembershipIntent({
-                                type: "remove",
-                                targetPubkey: to,
-                              })
-                            }
-                          >
-                            {membershipMutation.pendingIntent?.type ===
-                              "remove" &&
-                            membershipMutation.pendingIntent.targetPubkey ===
-                              to ? (
-                              <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
-                            ) : (
-                              <X className="mr-2 h-3.5 w-3.5" />
+                      .map(({ to }) => {
+                        const willRemove = maintainerRemovals.includes(to);
+                        return (
+                          <div
+                            key={to}
+                            className={cn(
+                              "flex items-center gap-2 rounded-md border px-3 py-2",
+                              willRemove
+                                ? "border-amber-500/30 bg-amber-500/5"
+                                : "border-border/50 bg-background/60",
                             )}
-                            Remove
-                          </Button>
-                        </div>
-                      ))}
+                          >
+                            <UserLink
+                              pubkey={to}
+                              avatarSize="xs"
+                              nameClassName="text-sm"
+                              className={cn(
+                                "min-w-0 flex-1",
+                                willRemove && "opacity-60",
+                              )}
+                            />
+                            {willRemove && (
+                              <Badge
+                                variant="outline"
+                                className="border-amber-500/30 text-amber-700 dark:text-amber-300"
+                              >
+                                will remove
+                              </Badge>
+                            )}
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              disabled={
+                                !membershipMutation.enabled ||
+                                !!membershipMutation.pendingIntent
+                              }
+                              onClick={() =>
+                                willRemove
+                                  ? handleRestoreMaintainer(to)
+                                  : handleStageMaintainerRemoval(to)
+                              }
+                              aria-label={
+                                willRemove
+                                  ? `Keep relationship ${to}`
+                                  : `Remove relationship ${to}`
+                              }
+                            >
+                              {willRemove ? (
+                                "Undo"
+                              ) : (
+                                <>
+                                  <X className="mr-2 h-3.5 w-3.5" />
+                                  Remove
+                                </>
+                              )}
+                            </Button>
+                          </div>
+                        );
+                      })}
                   </div>
                 )}
+
+              {maintainerRosterChanged && (
+                <p
+                  role="status"
+                  className="rounded-md border border-sky-500/30 bg-sky-500/5 px-3 py-2 text-xs text-sky-700 dark:text-sky-300"
+                >
+                  Save changes will publish {maintainerRosterSummary} together.
+                </p>
+              )}
 
               {leadMaintainer && leadMaintainer !== repo.selectedMaintainer && (
                 <div className="flex flex-col gap-3 border-t border-border/50 pt-3 sm:flex-row sm:items-center sm:justify-between">

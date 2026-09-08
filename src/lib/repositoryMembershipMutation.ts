@@ -44,6 +44,11 @@ export const REPOSITORY_MEMBERSHIP_MUTATIONS_ENABLED = true;
 
 export type RepositoryMembershipMutationIntent =
   | { type: "add"; targetPubkey: string }
+  | {
+      type: "update-roster";
+      addPubkeys: string[];
+      removePubkeys: string[];
+    }
   | { type: "accept" }
   | { type: "remove"; targetPubkey: string }
   | { type: "leave" }
@@ -136,6 +141,7 @@ interface PrepareRepositoryMembershipMutationOptions {
   intent: RepositoryMembershipMutationIntent;
   announcements: NostrEvent[];
   stateEvents: NostrEvent[];
+  announcementFields?: Pick<EventTemplate, "content" | "tags">;
   graspServers?: GraspServer[];
   createdAt?: number;
 }
@@ -163,6 +169,18 @@ function sorted(values: Iterable<string>): string[] {
   return [...new Set(values)].sort();
 }
 
+function rosterChanges(
+  intent: RepositoryMembershipMutationIntent,
+): { addPubkeys: string[]; removePubkeys: string[] } | undefined {
+  if (intent.type === "add") {
+    return { addPubkeys: [intent.targetPubkey], removePubkeys: [] };
+  }
+  if (intent.type === "remove") {
+    return { addPubkeys: [], removePubkeys: [intent.targetPubkey] };
+  }
+  return intent.type === "update-roster" ? intent : undefined;
+}
+
 function activeRoleKeys(
   event: NostrEvent,
   currentLead: string | undefined,
@@ -185,11 +203,20 @@ function assertExpectedAuthoredRoleDelta(
   const expected = new Set(
     beforeAnnouncement ? activeRoleKeys(beforeAnnouncement, lead) : [],
   );
-  if (intent.type === "add") {
-    expected.delete(roleKey("m", actorPubkey));
-    expected.delete(roleKey("M", actorPubkey));
-    expected.add(roleKey("M", actorPubkey));
-    expected.add(roleKey("m", intent.targetPubkey));
+  const roster = rosterChanges(intent);
+  if (roster) {
+    if (roster.addPubkeys.length > 0) {
+      expected.delete(roleKey("m", actorPubkey));
+      expected.delete(roleKey("M", actorPubkey));
+      expected.add(roleKey("M", actorPubkey));
+    }
+    for (const pubkey of roster.removePubkeys) {
+      expected.delete(roleKey("M", pubkey));
+      expected.delete(roleKey("m", pubkey));
+    }
+    for (const pubkey of roster.addPubkeys) {
+      expected.add(roleKey("m", pubkey));
+    }
   } else if (intent.type === "accept") {
     if (!lead) {
       refuse(
@@ -199,9 +226,6 @@ function assertExpectedAuthoredRoleDelta(
     }
     expected.add(roleKey("M", lead));
     expected.add(roleKey("m", actorPubkey));
-  } else if (intent.type === "remove") {
-    expected.delete(roleKey("M", intent.targetPubkey));
-    expected.delete(roleKey("m", intent.targetPubkey));
   } else if (intent.type === "repair-self-defer") {
     if (intent.repair.action === "continue") {
       expected.add(roleKey(intent.role, actorPubkey));
@@ -746,15 +770,18 @@ function assertExpectedEffect(
   const expectedInvitations = new Set(before.invitedMaintainers);
   const expectedModerators = new Set(before.confirmedModerators);
   const expectedModeratorInvitations = new Set(before.invitedModerators);
-  if (intent.type === "add") expectedInvitations.add(intent.targetPubkey);
+  const roster = rosterChanges(intent);
+  for (const pubkey of roster?.addPubkeys ?? []) {
+    expectedInvitations.add(pubkey);
+  }
+  for (const pubkey of roster?.removePubkeys ?? []) {
+    expectedMaintainers.delete(pubkey);
+    expectedInvitations.delete(pubkey);
+  }
   if (intent.type === "accept") {
     expectedMaintainers.add(actorPubkey);
     expectedModerators.delete(actorPubkey);
     expectedInvitations.delete(actorPubkey);
-  }
-  if (intent.type === "remove") {
-    expectedMaintainers.delete(intent.targetPubkey);
-    expectedInvitations.delete(intent.targetPubkey);
   }
   if (intent.type === "leave") {
     if (before.confirmedMaintainers.includes(actorPubkey)) {
@@ -768,7 +795,7 @@ function assertExpectedEffect(
     ({ pubkey }) => pubkey === actorPubkey,
   );
   const materializesSoleLegacyLead =
-    intent.type === "add" &&
+    !!roster?.addPubkeys.length &&
     before.leadResolution.source === "none" &&
     before.confirmedMaintainers.length === 1 &&
     before.confirmedMaintainers[0] === actorPubkey &&
@@ -846,6 +873,7 @@ export function prepareRepositoryMembershipMutation({
   intent,
   announcements,
   stateEvents,
+  announcementFields,
   graspServers = [],
   createdAt = Math.floor(Date.now() / 1000),
 }: PrepareRepositoryMembershipMutationOptions): RepositoryMembershipMutationProposal {
@@ -897,11 +925,10 @@ export function prepareRepositoryMembershipMutation({
   }
   const announcementsByAuthor = latestByAuthor(announcements);
   const actorAnnouncement = announcementsByAuthor.get(actorPubkey);
-  const targetPubkey =
-    intent.type === "add" || intent.type === "remove"
-      ? intent.targetPubkey
-      : actorPubkey;
-  const targetAnnouncement = announcementsByAuthor.get(targetPubkey);
+  const roster = rosterChanges(intent);
+  const targetPubkeys = roster
+    ? sorted([...roster.addPubkeys, ...roster.removePubkeys])
+    : [actorPubkey];
   const lead = repo.leadResolution.leadMaintainer;
   const actorIsMaintainer = repo.confirmedMaintainers.includes(actorPubkey);
   const actorIsModerator = repo.confirmedModerators.includes(actorPubkey);
@@ -938,59 +965,125 @@ export function prepareRepositoryMembershipMutation({
     );
   }
 
-  if (
-    (intent.type === "add" ||
-      intent.type === "accept" ||
-      (intent.type === "repair-self-defer" &&
-        intent.repair.action === "continue")) &&
-    stateEvents.some((event) => event.pubkey === targetPubkey)
-  ) {
-    refuse(
-      "unsupported_existing_state",
-      `Target ${targetPubkey} already authored repository state that requires full before-and-after reconciliation.`,
-    );
-  }
-
-  ensureIdentityCompatible(repo, targetAnnouncement);
-  if (targetAnnouncement) {
-    const targetRepo = resolveChain(announcements, targetPubkey, repo.dTag);
-    if (
-      targetRepo?.confirmedMaintainers.includes(targetPubkey) &&
-      targetRepo.componentId !== repo.componentId
-    ) {
+  const stateImportTargets =
+    roster?.addPubkeys ??
+    (intent.type === "accept" ||
+    (intent.type === "repair-self-defer" && intent.repair.action === "continue")
+      ? [actorPubkey]
+      : []);
+  for (const targetPubkey of stateImportTargets) {
+    if (stateEvents.some((event) => event.pubkey === targetPubkey)) {
       refuse(
-        "unsupported_component_join",
-        `The target ${targetPubkey} already roots another active ${repo.dTag} component.`,
+        "unsupported_existing_state",
+        `Target ${targetPubkey} already authored repository state that requires full before-and-after reconciliation.`,
       );
     }
   }
 
+  for (const targetPubkey of targetPubkeys) {
+    const targetAnnouncement = announcementsByAuthor.get(targetPubkey);
+    ensureIdentityCompatible(repo, targetAnnouncement);
+    if (targetAnnouncement) {
+      const targetRepo = resolveChain(announcements, targetPubkey, repo.dTag);
+      if (
+        targetRepo?.confirmedMaintainers.includes(targetPubkey) &&
+        targetRepo.componentId !== repo.componentId
+      ) {
+        refuse(
+          "unsupported_component_join",
+          `The target ${targetPubkey} already roots another active ${repo.dTag} component.`,
+        );
+      }
+    }
+  }
+
+  if (announcementFields && !roster) {
+    refuse(
+      "membership_side_effect",
+      "Announcement fields can only be combined with a roster update.",
+    );
+  }
+
   let template: EventTemplate;
-  if (intent.type === "add") {
+  if (roster) {
     if (!actorIsMaintainer || !actorAnnouncement) {
       refuse(
         "membership_side_effect",
         `Actor ${actorPubkey} is not a current maintainer.`,
       );
     }
-    if (lead && lead !== actorPubkey) {
-      refuse(
-        "unsupported_lead_transition",
-        `Only resolved lead ${lead} may add a relationship in this topology.`,
-      );
+    if (roster.addPubkeys.length === 0 && roster.removePubkeys.length === 0) {
+      refuse("membership_side_effect", "The roster update has no changes.");
     }
     if (
-      repo.confirmedMaintainers.includes(intent.targetPubkey) ||
-      repo.invitedMaintainers.includes(intent.targetPubkey)
+      roster.addPubkeys.length !== new Set(roster.addPubkeys).size ||
+      roster.removePubkeys.length !== new Set(roster.removePubkeys).size
     ) {
       refuse(
         "membership_side_effect",
-        `Target ${intent.targetPubkey} is already confirmed or invited.`,
+        "The roster update contains a duplicate target.",
       );
     }
+    const removed = new Set(roster.removePubkeys);
+    const overlap = roster.addPubkeys.find((pubkey) => removed.has(pubkey));
+    if (overlap) {
+      refuse(
+        "membership_side_effect",
+        `Target ${overlap} cannot be added and removed in the same roster update.`,
+      );
+    }
+    if ([...roster.addPubkeys, ...roster.removePubkeys].includes(actorPubkey)) {
+      refuse(
+        "membership_side_effect",
+        "The lead cannot add or remove their own relationship through a roster update.",
+      );
+    }
+    if (lead && lead !== actorPubkey) {
+      refuse(
+        "unsupported_lead_transition",
+        `Only resolved lead ${lead} may update the roster in this topology.`,
+      );
+    }
+    if (roster.removePubkeys.length > 0 && lead !== actorPubkey) {
+      refuse(
+        "unsupported_lead_transition",
+        `Only resolved lead ${lead ?? "(none)"} may remove roster relationships in this topology.`,
+      );
+    }
+    for (const targetPubkey of roster.addPubkeys) {
+      if (
+        repo.confirmedMaintainers.includes(targetPubkey) ||
+        repo.invitedMaintainers.includes(targetPubkey)
+      ) {
+        refuse(
+          "membership_side_effect",
+          `Target ${targetPubkey} is already confirmed or invited.`,
+        );
+      }
+    }
+    for (const targetPubkey of roster.removePubkeys) {
+      if (
+        !repo.maintainerEdges.some(
+          ({ from, to }) => from === actorPubkey && to === targetPubkey,
+        )
+      ) {
+        refuse(
+          "membership_side_effect",
+          `Announcement ${actorPubkey} does not directly assign ${targetPubkey}.`,
+        );
+      }
+      if (stateEvents.some((event) => event.pubkey === targetPubkey)) {
+        refuse(
+          "state_conflict",
+          `Removing ${targetPubkey} would change the authoritative state candidate set.`,
+        );
+      }
+    }
     const desired = [
-      ...getRepoMaintainers(actorAnnouncement),
-      intent.targetPubkey,
+      ...getRepoMaintainers(actorAnnouncement).filter(
+        (pubkey) => !removed.has(pubkey),
+      ),
+      ...roster.addPubkeys,
     ];
     const roleTags = generateRoleTags(
       actorAnnouncement,
@@ -998,7 +1091,19 @@ export function prepareRepositoryMembershipMutation({
       actorPubkey,
       createdAt,
     );
-    template = withMembershipTags(actorAnnouncement, roleTags, createdAt);
+    const announcementSource = announcementFields
+      ? { ...actorAnnouncement, ...announcementFields }
+      : actorAnnouncement;
+    if (announcementFields) {
+      const dTags = announcementFields.tags.filter(([name]) => name === "d");
+      if (dTags.length !== 1 || dTags[0][1] !== repo.dTag) {
+        refuse(
+          "identity_conflict",
+          `The edited announcement must retain repository identifier ${repo.dTag}.`,
+        );
+      }
+    }
+    template = withMembershipTags(announcementSource, roleTags, createdAt);
   } else if (intent.type === "accept") {
     if (!repo.invitedMaintainers.includes(actorPubkey)) {
       refuse(
@@ -1071,43 +1176,6 @@ export function prepareRepositoryMembershipMutation({
       );
     }
     template = repairSelfDeferTemplate(actorAnnouncement, intent, createdAt);
-  } else if (intent.type === "remove") {
-    if (!actorIsMaintainer || !actorAnnouncement) {
-      refuse(
-        "membership_side_effect",
-        `Actor ${actorPubkey} is not a current maintainer.`,
-      );
-    }
-    if (lead !== actorPubkey) {
-      refuse(
-        "unsupported_lead_transition",
-        `Only resolved lead ${lead ?? "(none)"} may remove a relationship in this topology.`,
-      );
-    }
-    if (
-      !repo.maintainerEdges.some(
-        ({ from, to }) => from === actorPubkey && to === intent.targetPubkey,
-      )
-    ) {
-      refuse(
-        "membership_side_effect",
-        `Announcement ${actorPubkey} does not directly assign ${intent.targetPubkey}.`,
-      );
-    }
-    if (stateEvents.some((event) => event.pubkey === intent.targetPubkey)) {
-      refuse(
-        "state_conflict",
-        `Removing ${intent.targetPubkey} would change the authoritative state candidate set.`,
-      );
-    }
-    const desired = getRepoMaintainers(actorAnnouncement).filter(
-      (pubkey) => pubkey !== intent.targetPubkey,
-    );
-    template = withMembershipTags(
-      actorAnnouncement,
-      generateRoleTags(actorAnnouncement, desired, actorPubkey, createdAt),
-      createdAt,
-    );
   } else {
     if ((!actorIsMaintainer && !actorIsModerator) || !actorAnnouncement) {
       refuse(
@@ -1181,15 +1249,16 @@ export function prepareRepositoryMembershipMutation({
     repo.selectedMaintainer,
     repo.dTag,
   );
-  if (
-    intent.type === "add" &&
-    !repo.confirmedMaintainers.includes(intent.targetPubkey) &&
-    after?.confirmedMaintainers.includes(intent.targetPubkey)
-  ) {
-    refuse(
-      "unsupported_immediate_confirmation",
-      `Adding ${intent.targetPubkey} would confirm their standing acknowledgement immediately and requires full confirmation preflight.`,
-    );
+  for (const targetPubkey of roster?.addPubkeys ?? []) {
+    if (
+      !repo.confirmedMaintainers.includes(targetPubkey) &&
+      after?.confirmedMaintainers.includes(targetPubkey)
+    ) {
+      refuse(
+        "unsupported_immediate_confirmation",
+        `Adding ${targetPubkey} would confirm their standing acknowledgement immediately and requires full confirmation preflight.`,
+      );
+    }
   }
   assertExpectedAuthoredRoleDelta(
     actorAnnouncement,
