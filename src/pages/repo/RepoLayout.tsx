@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, Navigate, useParams, useLocation } from "react-router-dom";
 import { useActiveAccount } from "applesauce-react/hooks";
-import { useResolvedRepository } from "@/hooks/useResolvedRepository";
+import {
+  useResolvedRepository,
+  type ResolvedRepository,
+} from "@/hooks/useResolvedRepository";
 import RepoIssuesPage from "./RepoIssuesPage";
 import RepoPRsPage from "./RepoPRsPage";
 import RepoCodePage from "./RepoCodePage";
@@ -370,6 +373,7 @@ function RepoLayoutResolved({
     repo?.dTag,
     repo?.confirmedMaintainers,
     repoRelayGroup,
+    resolved?.replaceableCoverage,
   );
 
   // Count open issues for the tab badge
@@ -894,10 +898,10 @@ function RepoLayoutResolved({
 
         {repo && announcementsSettled && repo.repositoryHealth.length > 0 && (
           <RepositoryHealthNotice
+            resolved={resolved}
             repo={repo}
             accountPubkey={account?.pubkey}
             basePath={basePath}
-            announcementsSettled={announcementsSettled}
             stateSettled={repoRelayEose}
             relayUrls={[
               ...new Set([
@@ -920,6 +924,7 @@ function RepoLayoutResolved({
 
         {repo && !isPrivate && account?.pubkey && (
           <MaintainerInvitationSafetyBanner
+            resolved={resolved}
             repo={repo}
             accountPubkey={account.pubkey}
             announcementsSettled={announcementsSettled}
@@ -1048,6 +1053,7 @@ function RepoLayoutResolved({
 }
 
 function MaintainerInvitationSafetyBanner({
+  resolved,
   repo,
   accountPubkey,
   announcementsSettled,
@@ -1055,6 +1061,7 @@ function MaintainerInvitationSafetyBanner({
   relayUrls,
   repoState,
 }: {
+  resolved: ResolvedRepository;
   repo: ResolvedRepo;
   accountPubkey: string;
   announcementsSettled: boolean;
@@ -1064,9 +1071,8 @@ function MaintainerInvitationSafetyBanner({
 }) {
   const { enabled, deliveryBlocked, mutate, pendingIntent, failure } =
     useRepositoryMembershipMutation({
+      resolved,
       repo,
-      announcementsSettled,
-      stateSettled,
       relayUrls,
       repoState,
     });
@@ -1357,18 +1363,18 @@ function dateTimeLocalValue(timestamp: number): string {
 }
 
 function RepositoryHealthNotice({
+  resolved,
   repo,
   accountPubkey,
   basePath,
-  announcementsSettled,
   stateSettled,
   relayUrls,
   repoState,
 }: {
+  resolved: ResolvedRepository;
   repo: ResolvedRepo;
   accountPubkey?: string;
   basePath: string;
-  announcementsSettled: boolean;
   stateSettled: boolean;
   relayUrls: string[];
   repoState?: RepositoryState | null;
@@ -1412,9 +1418,8 @@ function RepositoryHealthNotice({
   const superseded = ownSelfDefer?.selfDefer?.superseded ?? false;
   const proposedEnd = ownSelfDefer?.selfDefer?.proposedEnd;
   const mutation = useRepositoryMembershipMutation({
+    resolved,
     repo,
-    announcementsSettled,
-    stateSettled,
     relayUrls,
     repoState,
   });

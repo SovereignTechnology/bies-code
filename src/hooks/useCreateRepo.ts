@@ -2,10 +2,12 @@
  * useCreateRepo — orchestration hook for the repo creation flow.
  *
  * Coordinates the full sequence:
- *   1. Build git objects (blob → tree → commit → packfile)
- *   2. Sign kind:30617 (announcement) and kind:30618 (state) events
- *   3. Publish events to the Grasp relay (purgatory) + outbox/index relays
- *   4. Push the packfile to the Grasp git HTTP endpoint
+ *   1. Confirm the new coordinates are absent on their required frontiers
+ *   2. Build git objects (blob → tree → commit → packfile)
+ *   3. Sign kind:30617 (announcement) and kind:30618 (state) events
+ *   4. Obtain pre-push event acceptance from the Grasp relay + publish the
+ *      announcement to outbox/index relays
+ *   5. Push the packfile to the Grasp git HTTP endpoint
  *
  * Exposes step-by-step progress state for the UI.
  */
@@ -41,6 +43,14 @@ import { resilientRequest } from "@/lib/resilientSubscription";
 import { onlyEvents } from "applesauce-relay";
 import { firstValueFrom, timeout, toArray } from "rxjs";
 import { repoCoordinate } from "@/lib/nip34";
+import { assertNewPublicRepositoryCoordinatesAvailable } from "@/hooks/useRepositoryReplaceablePreflight";
+import { normalizeUrl } from "@/lib/url";
+import {
+  clearPublicRepositoryCreationTransaction,
+  getPublicRepositoryCreationTransaction,
+  savePublicRepositoryCreationTransaction,
+  type PublicRepositoryCreationTransaction,
+} from "@/services/publicRepositoryCreation";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -49,6 +59,7 @@ import { repoCoordinate } from "@/lib/nip34";
 /** Progress step for the UI. */
 export type CreateRepoStep =
   | "idle"
+  | "checking-relays"
   | "building-commit"
   | "signing-events"
   | "publishing-announcement"
@@ -61,7 +72,7 @@ export type CreateRepoStep =
 export interface CreateRepoState {
   step: CreateRepoStep;
   error?: string;
-  /** Timestamp (ms) when events were published — for purgatory countdown */
+  /** Timestamp (ms) when the repository events received pre-push acceptance. */
   publishedAt?: number;
   /** The Grasp clone URL on success */
   cloneUrl?: string;
@@ -110,11 +121,13 @@ export function useCreateRepo() {
   const [state, setState] = useState<CreateRepoState>({ step: "idle" });
   const abortRef = useRef<AbortController | null>(null);
   const privateRetryRef = useRef<PrivateCreateRetry>();
+  const publicRetryRef = useRef<PublicRepositoryCreationTransaction>();
 
   const reset = useCallback(() => {
     abortRef.current?.abort();
     abortRef.current = null;
     privateRetryRef.current = undefined;
+    publicRetryRef.current = undefined;
     setState({ step: "idle" });
   }, []);
 
@@ -132,6 +145,79 @@ export function useCreateRepo() {
         if (input.private && input.graspServers.length !== 1) {
           throw new Error("Select exactly one private GRASP-08 service");
         }
+
+        // Resolve the proposed frontier before any signing or Git work. A
+        // public repository has no warm page owner yet, so its collision
+        // check is the one legitimate focused announcement/state request.
+        const encodedIdentifier = encodeURIComponent(input.identifier);
+        const cloneUrls = input.graspServers.map((server) =>
+          graspRepositoryCloneUrl(
+            server.serviceAddress,
+            npub,
+            encodedIdentifier,
+          ),
+        );
+        const relayUrls = input.graspServers.map((server) => server.wsUrl);
+        setState({ step: "checking-relays" });
+        const retainedPublicTransaction = !input.private
+          ? getPublicRepositoryCreationTransaction(pubkey, input.identifier)
+          : undefined;
+        const resumablePublicTransaction =
+          retainedPublicTransaction &&
+          sameStringSet(retainedPublicTransaction.cloneUrls, cloneUrls) &&
+          sameStringSet(
+            retainedPublicTransaction.relayUrls.map(normalizeUrl),
+            relayUrls.map(normalizeUrl),
+          )
+            ? retainedPublicTransaction
+            : undefined;
+        if (!input.private) {
+          await assertNewPublicRepositoryCoordinatesAvailable(
+            pubkey,
+            input.identifier,
+            cloneUrls,
+            relayUrls,
+            resumablePublicTransaction
+              ? {
+                  announcementId: resumablePublicTransaction.announcement.id,
+                  stateId: resumablePublicTransaction.state.id,
+                }
+              : undefined,
+          );
+        }
+        if (abort.signal.aborted) return;
+
+        // A retained transaction is only a recovery token. The focused check
+        // above must first rediscover either no collision or its exact signed
+        // state before a reload is allowed to resume side effects.
+        if (resumablePublicTransaction) {
+          publicRetryRef.current = resumablePublicTransaction;
+          const publishedAt = await completePublicCreationTransaction(
+            resumablePublicTransaction,
+            abort.signal,
+            (step, acceptedAt) =>
+              setState({
+                step,
+                publishedAt: acceptedAt,
+                commitHash: resumablePublicTransaction.commitHash,
+                identifier: resumablePublicTransaction.identifier,
+              }),
+          );
+          clearPublicRepositoryCreationTransaction(
+            pubkey,
+            input.identifier,
+            resumablePublicTransaction.state.id,
+          );
+          setState({
+            step: "done",
+            cloneUrl: resumablePublicTransaction.cloneUrls[0],
+            commitHash: resumablePublicTransaction.commitHash,
+            identifier: resumablePublicTransaction.identifier,
+            publishedAt,
+          });
+          return;
+        }
+
         // ── Step 1: Build git objects ──────────────────────────────────
         setState({ step: "building-commit" });
 
@@ -149,18 +235,6 @@ export function useCreateRepo() {
 
         // ── Step 2: Sign Nostr events ─────────────────────────────────
         setState({ step: "signing-events" });
-
-        // Build clone URLs and relay URLs for all selected Grasp servers
-        // Percent-encode the identifier per GRASP-01 §Git Smart HTTP path spec
-        const encodedIdentifier = encodeURIComponent(input.identifier);
-        const cloneUrls = input.graspServers.map((server) =>
-          graspRepositoryCloneUrl(
-            server.serviceAddress,
-            npub,
-            encodedIdentifier,
-          ),
-        );
-        const relayUrls = input.graspServers.map((s) => s.wsUrl);
 
         const privateList = privateGitRelayList$.getValue();
         if (
@@ -267,6 +341,44 @@ export function useCreateRepo() {
             announcement: signedAnnouncement,
             state: signedState,
           };
+        } else {
+          const transaction: PublicRepositoryCreationTransaction = {
+            pubkey,
+            identifier: input.identifier,
+            commitHash,
+            cloneUrls,
+            relayUrls,
+            packfile,
+            announcement: signedAnnouncement,
+            state: signedState,
+            createdAt: Date.now(),
+          };
+          publicRetryRef.current = transaction;
+          savePublicRepositoryCreationTransaction(transaction);
+          const publishedAt = await completePublicCreationTransaction(
+            transaction,
+            abort.signal,
+            (step, acceptedAt) =>
+              setState({
+                step,
+                publishedAt: acceptedAt,
+                commitHash,
+                identifier: input.identifier,
+              }),
+          );
+          clearPublicRepositoryCreationTransaction(
+            pubkey,
+            input.identifier,
+            signedState.id,
+          );
+          setState({
+            step: "done",
+            cloneUrl: cloneUrls[0],
+            commitHash,
+            identifier: input.identifier,
+            publishedAt,
+          });
+          return;
         }
 
         // ── Step 3: Publish announcement ──────────────────────────────
@@ -281,8 +393,8 @@ export function useCreateRepo() {
             : {}),
         });
 
-        // Publish to Grasp relays directly and await their response
-        // so we know the events are in purgatory before pushing.
+        // Publish to Grasp relays directly and await pre-push acceptance.
+        // A purgatory response means staging; a plain OK may already be public.
         const graspRelayUrls = input.graspServers.map((s) => s.wsUrl);
 
         await publishToGraspRelays(
@@ -294,6 +406,7 @@ export function useCreateRepo() {
         if (!input.private) {
           // Public repositories remain discoverable through the normal index.
           await outboxStore.publish(signedAnnouncement, [
+            `outbox:${pubkey}`,
             "git-index",
             "fallback-relays",
           ]);
@@ -312,8 +425,10 @@ export function useCreateRepo() {
 
         await publishToGraspRelays(signedState, graspRelayUrls, abort.signal);
 
-        if (input.private) markPrivateRelayEvent(signedState);
-        eventStore.add(signedState);
+        if (input.private) {
+          markPrivateRelayEvent(signedState);
+          eventStore.add(signedState);
+        }
 
         const publishedAt = Date.now();
 
@@ -335,8 +450,9 @@ export function useCreateRepo() {
           },
         ];
 
-        // Push to every Grasp server in parallel. Each server has its
-        // own purgatory state event, so each needs the git data.
+        // Push to every Grasp server in parallel. Each server that accepted the
+        // state needs the corresponding Git data whether it staged or
+        // immediately broadcast that event.
         const pushResults = await Promise.allSettled(
           cloneUrls.map((url) =>
             pushToGitServer(
@@ -401,6 +517,18 @@ export function useCreateRepo() {
           );
         }
 
+        if (!input.private) {
+          // Purgatory-capable GRASP relays may withhold the state from reads;
+          // other implementations may already expose it. Broadcast only after
+          // Git data exists, never by querying for an echo between relay
+          // acknowledgement and the push.
+          await outboxStore.publish(signedState, [
+            `outbox:${pubkey}`,
+            repoCoordinate(pubkey, input.identifier),
+            "fallback-relays",
+          ]);
+        }
+
         // Use the first clone URL as the canonical one for display
         const primaryCloneUrl = cloneUrls[0];
         if (input.private) {
@@ -433,11 +561,12 @@ export function useCreateRepo() {
 
   /**
    * Retry just the push step. Only valid when the previous attempt failed
-   * at the push step (events are already in purgatory).
+   * after the events received pre-push relay acceptance. They may be staged in
+   * purgatory or already visible, depending on the GRASP implementation.
    */
   const retryPush = useCallback(
     async (input: CreateRepoFormInput, commitHash: string) => {
-      if (!npub || !account || !pubkey) {
+      if (!account || !pubkey) {
         setState((prev) => ({
           ...prev,
           step: "error",
@@ -536,89 +665,40 @@ export function useCreateRepo() {
           });
           return;
         }
-        setState((prev) => ({ ...prev, step: "pushing", error: undefined }));
-
-        // Rebuild the packfile for retry
-        const authorName =
-          profile?.displayName ?? profile?.name ?? npub.slice(0, 16);
-
-        const result = await createInitialCommit({
-          repoName: input.name,
-          description: input.description || undefined,
-          authorName,
-          npub,
-        });
-
-        // Percent-encode the identifier per GRASP-01 §Git Smart HTTP path spec
-        const encodedIdentifier = encodeURIComponent(input.identifier);
-        const cloneUrls = input.graspServers.map((server) =>
-          graspRepositoryCloneUrl(
-            server.serviceAddress,
-            npub,
-            encodedIdentifier,
-          ),
-        );
-
-        const refUpdates: RefUpdate[] = [
-          {
-            oldHash: ZERO_HASH,
-            newHash: commitHash,
-            refName: "refs/heads/main",
-          },
-        ];
-
-        // Push to all Grasp servers in parallel
-        const pushResults = await Promise.allSettled(
-          cloneUrls.map((url) =>
-            pushToGitServer(url, refUpdates, result.packfile, abort.signal),
-          ),
-        );
-
-        let anySuccess = false;
-        const errors: string[] = [];
-
-        for (let i = 0; i < pushResults.length; i++) {
-          const pr = pushResults[i];
-          const url = cloneUrls[i];
-          if (pr.status === "rejected") {
-            errors.push(
-              `${url}: ${pr.reason instanceof Error ? pr.reason.message : String(pr.reason)}`,
-            );
-            continue;
-          }
-          if (!pr.value.unpackOk) {
-            errors.push(
-              `${url}: ${
-                pr.value.serverError
-                  ? `server rejected push: ${pr.value.serverError}`
-                  : `unpack failed${pr.value.unpackStatus ? `: ${pr.value.unpackStatus}` : ""}`
-              }`,
-            );
-            continue;
-          }
-          const failedRefs = pr.value.refResults.filter((r) => !r.ok);
-          if (failedRefs.length > 0) {
-            errors.push(
-              `${url}: ${failedRefs.map((r) => r.reason ?? "unknown").join(", ")}`,
-            );
-            continue;
-          }
-          anySuccess = true;
-        }
-
-        if (!anySuccess) {
+        const transaction = publicRetryRef.current;
+        if (
+          !transaction ||
+          transaction.pubkey !== pubkey ||
+          transaction.identifier !== input.identifier ||
+          transaction.commitHash !== commitHash
+        ) {
           throw new Error(
-            `Git push failed on all servers:\n${errors.join("\n")}`,
+            "The repository creation session changed; start creation again",
           );
         }
-
-        const primaryCloneUrl = cloneUrls[0];
+        const publishedAt = await completePublicCreationTransaction(
+          transaction,
+          abort.signal,
+          (step, acceptedAt) =>
+            setState({
+              step,
+              publishedAt: acceptedAt,
+              commitHash: transaction.commitHash,
+              identifier: transaction.identifier,
+            }),
+        );
+        clearPublicRepositoryCreationTransaction(
+          transaction.pubkey,
+          transaction.identifier,
+          transaction.state.id,
+        );
 
         setState({
           step: "done",
-          cloneUrl: primaryCloneUrl,
-          commitHash,
-          identifier: input.identifier,
+          cloneUrl: transaction.cloneUrls[0],
+          commitHash: transaction.commitHash,
+          identifier: transaction.identifier,
+          publishedAt,
         });
       } catch (err) {
         if (abort.signal.aborted) return;
@@ -627,7 +707,7 @@ export function useCreateRepo() {
         setState((prev) => ({ ...prev, step: "error", error: message }));
       }
     },
-    [account, npub, profile, pubkey],
+    [account, pubkey],
   );
 
   return {
@@ -641,6 +721,94 @@ export function useCreateRepo() {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+function sameStringSet(first: string[], second: string[]): boolean {
+  const a = [...new Set(first)].sort();
+  const b = [...new Set(second)].sort();
+  return a.length === b.length && a.every((value, index) => value === b[index]);
+}
+
+async function completePublicCreationTransaction(
+  transaction: PublicRepositoryCreationTransaction,
+  signal: AbortSignal,
+  onProgress: (step: CreateRepoStep, publishedAt?: number) => void,
+): Promise<number> {
+  // Re-arm both signed events. A purgatory server may have expired either one;
+  // a non-purgatory server simply acknowledges its visible copies again.
+  onProgress("publishing-announcement");
+  await publishToGraspRelays(
+    transaction.announcement,
+    transaction.relayUrls,
+    signal,
+  );
+  if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+  await outboxStore.publish(transaction.announcement, [
+    `outbox:${transaction.pubkey}`,
+    "git-index",
+    "fallback-relays",
+  ]);
+  eventStore.add(transaction.announcement);
+
+  onProgress("publishing-state");
+  await publishToGraspRelays(transaction.state, transaction.relayUrls, signal);
+  if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+  const publishedAt = Date.now();
+  onProgress("pushing", publishedAt);
+
+  const refUpdates: RefUpdate[] = [
+    {
+      oldHash: ZERO_HASH,
+      newHash: transaction.commitHash,
+      refName: "refs/heads/main",
+    },
+  ];
+  const pushResults = await Promise.allSettled(
+    transaction.cloneUrls.map((url) =>
+      pushToGitServer(url, refUpdates, transaction.packfile, signal),
+    ),
+  );
+
+  const errors: string[] = [];
+  let anySuccess = false;
+  for (let i = 0; i < pushResults.length; i++) {
+    const result = pushResults[i];
+    const url = transaction.cloneUrls[i];
+    if (result.status === "rejected") {
+      errors.push(
+        `${url}: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`,
+      );
+      continue;
+    }
+    if (!result.value.unpackOk) {
+      errors.push(
+        `${url}: ${
+          result.value.serverError
+            ? `server rejected push: ${result.value.serverError}`
+            : `unpack failed${result.value.unpackStatus ? `: ${result.value.unpackStatus}` : ""}`
+        }`,
+      );
+      continue;
+    }
+    const failedRefs = result.value.refResults.filter(({ ok }) => !ok);
+    if (failedRefs.length > 0) {
+      errors.push(
+        `${url}: ${failedRefs.map(({ reason }) => reason ?? "unknown").join(", ")}`,
+      );
+      continue;
+    }
+    anySuccess = true;
+  }
+  if (!anySuccess) {
+    throw new Error(`Git push failed on all servers:\n${errors.join("\n")}`);
+  }
+
+  await outboxStore.publish(transaction.state, [
+    `outbox:${transaction.pubkey}`,
+    repoCoordinate(transaction.pubkey, transaction.identifier),
+    "fallback-relays",
+  ]);
+  return publishedAt;
+}
 
 /**
  * Publish an event to Grasp relays and await at least one successful response.

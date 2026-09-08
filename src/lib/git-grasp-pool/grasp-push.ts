@@ -645,7 +645,8 @@ export async function pushRefUpdateToGraspServers(
   if (cloneUrls.length === 0) {
     throw new Error(
       "Push failed: no Grasp servers to push to. " +
-        "The state event will expire from purgatory in 30 minutes.",
+        "A purgatory-capable relay may eventually discard the staged state; " +
+        "a relay without purgatory may already be broadcasting it.",
     );
   }
 

@@ -62,8 +62,8 @@ exception without creating a bespoke preflight design.
 | ---------------------------- | ----------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
 | Personal singleton           | Profile, NIP-65 mailboxes, follows, Git author/repository lists, GRASP list, Blossom list | Active user's outboxes and configured lookup relays                                           | Establish the owner's latest event before replacing it                                |
 | Publisher-owned addressable  | Software application and release events                                                   | Publisher outboxes and relevant distribution relays                                           | Establish the author's current coordinate before replacing it                         |
-| Repository authority graph   | Kind `30617` announcements                                                                | Identifier-wide discovery on repository and Git index relays, enriched by maintainer outboxes | Resolve authority only from reciprocally confirmed announcements                      |
-| Repository operational state | Kind `30618` state                                                                        | Confirmed maintainers on repository relays                                                    | Establish the latest valid state across the frozen authority set                      |
+| Repository authority graph   | Kind `30617` announcements                                                                | One identifier-wide owner on repository relays, enriched by Git index and maintainer outboxes | Resolve authority only from reciprocally confirmed announcements                      |
+| Repository operational state | Kind `30618` state                                                                        | The same repository owner, filtered to confirmed maintainers on repository relays             | Establish the latest valid state across the frozen authority set                      |
 | Convergent application state | Notification envelopes and similar mergeable state                                        | Active account session                                                                        | Reconcile or merge; do not put a fresh network round-trip before every frequent write |
 
 Regular, append-only, and ephemeral events are outside this policy unless a
@@ -153,22 +153,130 @@ EOSE for their first page does not establish confirmed absence, so lifecycle
 coverage must not be combined with `limit`, automatic pagination, or manual
 pagination until the lifecycle can represent completion of the whole scope.
 
-## Maintainer invitation example
+## Repository-scoped adoption decision
+
+Repository announcements and state share one page-owned logical scope. Its
+stable lease contains the identifier-wide kind `30617` filter, the kind `30618`
+filter for the currently confirmed maintainer set, and coordinate-addressed
+kind `5` deletions. A second repository-wide lease batches exact event-ID
+deletion filters for the current announcement and state candidates. It is not
+one subscription per kind or writer. A change to the authority set starts a new
+stable revision; relay-list changes are handled by the reactive relay frontier.
+Repository pages consume events from the EventStore and lifecycle coverage from
+these leases instead of repeating their filters at action time.
+
+For a confidential repository, the same owner begins only after private
+discovery admits the repository relay set, and it queries only those private
+repository relays. It must not add public Git index, fallback, or maintainer
+mailbox relays: lifecycle reuse is not permission to disclose a private
+coordinate.
+
+For an existing author coordinate, one currently covered repository relay is
+sufficient to write. Git index relays and maintainer mailbox relays remain
+valuable evidence contributors and publication targets, but they do not vote
+on repository preflight: they are not required to answer promptly, and a
+repository must not become uneditable because one of them is flaky. The
+repository relay voters are frozen before signing so a relay-frontier edit is
+judged against the old frontier.
+
+Private repositories vote with their admitted private relay group, not every
+relay named in an announcement. A malformed public announcement with no relay
+list may use an admitted route relay hint as a repair frontier; the writer shows
+that degraded basis to the user so the settings screen remains capable of
+adding an explicit repository relay.
+
+An absent public author coordinate is different when the write will create that
+coordinate. Before creating it, the action must also establish absence on at
+least one of the author's current NIP-65 outbox relays. Kind `30618` is selected
+across confirmed maintainers, so a merge or HEAD edit with a warm state winner
+does not need a separate absence proof for the signer's unused coordinate.
+Confidential repository writes use admitted private repository relays for both
+presence and absence and never disclose their coordinates to public mailbox
+relays. Membership snapshots, acknowledgements, durable retry jobs, and final
+delivery are confined to that same admitted private relay set; the generic
+public outbox, fallback, and Git-index publisher is not invoked.
+
+A completely new public repository has no old repository frontier, so its
+focused collision check requires an EOSE from at least one proposed repository
+relay and at least one current author outbox relay. The query covers both
+coordinates and their coordinate deletion pointers. A signer-owned
+announcement with the same clone and relay frontiers but no state is an
+incomplete, resumable creation rather than a collision. Confidential repository
+creation keeps its existing private-service-only collision check.
+
+A public-creation retry retains the original signed announcement and state,
+commit hash, clone and relay frontiers, and packfile for seven days in local
+browser storage. A later attempt for the same coordinate may use that record
+only after the focused collision check finds either no competing event or the
+exact retained state. It re-publishes the same announcement and state to the
+GRASP relays before pushing the same Git objects, re-arming expired purgatory
+without creating a state/commit mismatch. Account identity is checked before
+either side effect, and successful Git plus durable state delivery removes the
+record.
+
+Signed kind `5` requests are a modifier on the repository snapshot. Stable
+coordinate pointers stay in the base lease. Candidate-dependent exact `e`
+pointers are coalesced for one second into the shared exact-deletion lease; only
+that lease is replaced when the candidate set changes. Preflight requires its
+EOSE-backed evidence for the winner it freezes. This avoids restarting the
+announcement/state query on ordinary event arrivals.
+
+The writer freezes the relevant EventStore winner after those checks and
+compares it with the event the editor or operation was based on. A changed
+winner aborts before signing. This does not attempt a compare-and-swap protocol
+for a relay event that lands after the freeze.
+
+GRASP kind `30618` writes retain their special transition order:
+
+1. run the read preflight before signing;
+2. publish the signed state to the GRASP repository relays and require at least
+   one relay `OK` as pre-push acceptance;
+3. push the dependent Git objects;
+4. broadcast the state through the durable outbox path.
+
+A `purgatory:` acknowledgement means the server staged the state until its Git
+objects arrive. A plain successful `OK` is weaker: a GRASP implementation
+without purgatory may broadcast the state immediately. As of September 8,
+2026, Pyramid implements GRASP without purgatory and therefore has the latter
+behavior. If the subsequent Git push fails, a purgatory-capable server can
+expire its staged state, while a non-purgatory server may leave the accepted
+state visible and require the Git push to be recovered.
+
+A purgatory relay is not required to return the staged state from a new query
+before the Git objects exist. A non-purgatory relay may return it, but that does
+not strengthen the transition. Therefore repository preflight must never
+insert a post-signing echo request between steps 2 and 3.
+
+While steps 2 and 3 are in progress, the page freezes its authority revision
+and additions to its dynamic exact-deletion lease. A state that becomes visible
+immediately on a non-purgatory server therefore cannot trigger a hidden
+background REQ in that window. Once the Git transition finishes, pending
+authority and candidate changes are adopted and warmed normally.
+
+### Maintainer invitation example
 
 Adding a maintainer is a **repository authority graph** action with the
-**external-subject discovery** modifier. The intended eventual flow is:
+**external-subject discovery** modifier. The category flow is:
 
 1. Keep the repository's identifier-wide kind `30617` discovery warm on its
-   repository relays and the configured Git index relays.
+   repository relays, while Git index and maintainer mailbox relays enrich the
+   same owner without becoming required voters.
 2. Let selecting a prospective maintainer remain immediate.
-3. On selection, begin non-blocking discovery of that user's NIP-65 mailboxes.
-4. If outboxes are found, warm a focused kind `30617` query for that author and
-   repository identifier, including the deletion evidence needed by authority
-   resolution.
-5. At invitation time, consume the accumulated evidence and wait or request
-   only for missing coverage.
+3. At invitation time, consume the repository owner's accumulated evidence.
+4. If the prospective candidate's coordinates remain absent, discover that
+   user's NIP-65 mailboxes and run one focused kind `30617`/`30618` plus
+   deletion query on their outboxes. If the acting maintainer's own kind
+   `30617` coordinate is absent, the common writer separately checks that one
+   coordinate on the acting maintainer's outbox.
+5. Reuse that focused evidence inside the authority snapshot; do not repeat it.
 
-The current Phase 1 work does not implement this flow.
+An already discovered candidate announcement needs no mailbox EOSE. If the
+candidate coordinate is absent from the repository snapshot, its outbox is the
+new scope and must settle before absence is used in the authority transition.
+Starting steps 3 and 4 speculatively when a user is selected remains a possible
+latency optimization. It needs an owned candidate-coverage lease so the action
+can distinguish a completed absence check from an in-flight prefetch; this
+phase deliberately keeps the one focused request inside the bounded action.
 
 ## Adoption
 
@@ -300,12 +408,13 @@ fresh post-write REQ for an event already covered by that subscription. If a
 future category needs stronger confirmation, consume a relay `OK` or expose
 event-receipt provenance from the existing live subscription instead.
 
-Purgatory-backed repository transitions are not personal-singleton writes. They
-need confirmation that the staged state reached the required repository relay
-before dependent Git data is pushed, followed by the category's post-Git
-broadcast check. Those receipt and broadcast guarantees belong to the
-repository transition; they are not a reason to impose echo confirmation on
-profile and list settings.
+GRASP repository transitions are not personal-singleton writes. They need
+pre-push acceptance from a required repository relay before dependent Git data
+is pushed, followed by the category's post-Git broadcast check. A standard
+`purgatory:` response proves staging; a plain successful `OK` proves only
+acceptance and may mean the state is already visible. Those receipt and
+broadcast guarantees belong to the repository transition; they are not a
+reason to impose echo confirmation on profile and list settings.
 
 The implementation is intentionally split into independently reviewable
 commits: the shared kind scope, batched deletion evidence, publication routing,

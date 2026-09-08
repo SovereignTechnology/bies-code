@@ -71,6 +71,7 @@ interface CreateRepoDialogProps {
 // ---------------------------------------------------------------------------
 
 const STEPS: { key: CreateRepoStep; label: string }[] = [
+  { key: "checking-relays", label: "Checking repository identifier" },
   { key: "building-commit", label: "Building initial commit" },
   { key: "signing-events", label: "Signing events" },
   {
@@ -117,37 +118,15 @@ function StepIcon({
 }
 
 // ---------------------------------------------------------------------------
-// Purgatory countdown
+// Accepted-event retry guidance
 // ---------------------------------------------------------------------------
 
-function PurgatoryCountdown({ publishedAt }: { publishedAt: number }) {
-  const [now, setNow] = useState(Date.now());
-
-  useEffect(() => {
-    const interval = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(interval);
-  }, []);
-
-  const expiresAt = publishedAt + 30 * 60 * 1000; // 30 minutes
-  const remaining = Math.max(0, Math.floor((expiresAt - now) / 1000));
-  const minutes = Math.floor(remaining / 60);
-  const seconds = remaining % 60;
-
-  if (remaining <= 0) {
-    return (
-      <p className="text-sm text-red-500">
-        Purgatory window has expired. Events may have been discarded.
-      </p>
-    );
-  }
-
+function AcceptedEventsRetryNotice() {
   return (
     <p className="text-sm text-muted-foreground">
-      Events are in purgatory. You have{" "}
-      <span className="font-mono font-medium text-foreground">
-        {minutes}:{seconds.toString().padStart(2, "0")}
-      </span>{" "}
-      to retry before they expire.
+      The repository events were accepted before the Git push. Retry promptly: a
+      purgatory-capable server may eventually discard staged events, while a
+      server without purgatory may already be broadcasting them.
     </p>
   );
 }
@@ -722,9 +701,7 @@ export function CreateRepoDialog({ isOpen, onClose }: CreateRepoDialogProps) {
                   </div>
                 </div>
 
-                {state.publishedAt && (
-                  <PurgatoryCountdown publishedAt={state.publishedAt} />
-                )}
+                {state.publishedAt && <AcceptedEventsRetryNotice />}
 
                 <div className="flex justify-end gap-2">
                   <Button variant="outline" onClick={handleClose}>

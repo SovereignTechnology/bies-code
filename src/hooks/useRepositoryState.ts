@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect } from "react";
 import { use$ } from "./use$";
 import { useEventStore } from "./useEventStore";
 import { REPO_STATE_KIND } from "@/lib/nip34";
@@ -6,17 +6,15 @@ import {
   RepositoryState,
   isValidRepositoryState,
 } from "@/casts/RepositoryState";
-import { loadRepoStateFromRelays } from "@/lib/repoStateLoader";
-import { pool } from "@/services/nostr";
 import type { CastRefEventStore } from "applesauce-common/casts/cast";
 import type { Filter } from "applesauce-core/helpers";
 import { getSeenRelays } from "applesauce-core/helpers";
 import type { Observable } from "rxjs";
-import { BehaviorSubject } from "rxjs";
 import { map } from "rxjs/operators";
 import type { RelayGroup } from "applesauce-relay";
 import type { NostrEvent } from "nostr-tools";
 import { relayGroupUrls$ } from "@/models/RepositoryRelayGroup";
+import type { RelaySubscriptionCoverage } from "@/lib/relaySubscriptionCoverage";
 
 /**
  * Pick the winning state event from a list of candidates.
@@ -36,8 +34,9 @@ function pickWinningStateEvent(
 }
 
 /**
- * Fetch and reactively subscribe to the winning kind:30618 repository state
- * event for a repository, while also tracking the per-relay state registry.
+ * Reactively select the winning kind:30618 repository state event loaded by
+ * the page-owned repository replaceable subscription, while also tracking the
+ * per-relay state registry.
  *
  * The "winner" is the state event with the latest `created_at` among all
  * maintainers, with the event ID as a tiebreaker (lexicographically lower
@@ -51,15 +50,10 @@ function pickWinningStateEvent(
  * Returns a tuple of:
  *   - The winning `RepositoryState` cast, `null` when none exists, or
  *     `undefined` while the initial Nostr query is still in flight.
- *   - `repoRelayEose`: `true` once all relays in the group have settled
- *     (debounced by 200ms after the last relay responds), `false` while
- *     pending. Always `true` when `repoRelayGroup` is undefined. The latch is
- *     monotonic per repository identity: relays joining the group and
- *     maintainers confirming later grow the live query (one REQ on the new
- *     relay / one delta REQ per relay) without resetting it. Only a genuine
- *     repository change (different dTag or relay-group instance) re-arms it.
- *     Action-time authorization must not rely on it alone — the membership
- *     mutation preflight performs its own strict re-settle.
+ *   - `repoRelayEose`: `true` once every current repository relay has either
+ *     covered the shared filter revision or reached a terminal/settlement
+ *     phase. It returns to false for a reconnect, catch-up, new relay, or
+ *     changed authority revision.
  *   - `relayStateMap`: `Map<relayUrl, NostrEvent>` — the best state event
  *     seen from each relay, derived reactively from the EventStore via
  *     getSeenRelays(). Callers can use this to determine whether a Grasp
@@ -71,11 +65,13 @@ function pickWinningStateEvent(
  * @param dTag           - The repository d-tag identifier
  * @param confirmedMaintainers - Current reciprocal maintainer authority set
  * @param repoRelayGroup - The relay group to query (from useResolvedRepository)
+ * @param coverage       - The page-owned announcement/state lifecycle evidence
  */
 export function useRepositoryState(
   dTag: string | undefined,
   confirmedMaintainers: string[] | undefined,
   repoRelayGroup: RelayGroup | undefined,
+  coverage: RelaySubscriptionCoverage | undefined,
 ): [
   RepositoryState | null | undefined,
   boolean,
@@ -86,72 +82,47 @@ export function useRepositoryState(
   const castStore = store as unknown as CastRefEventStore;
 
   const maintainerKey = confirmedMaintainers?.join(",") ?? "";
-  const hasMaintainers =
-    !!confirmedMaintainers && confirmedMaintainers.length > 0;
-
-  // Reactive maintainer feed anchored on the repository identity: the relay
-  // group instance is model-cached per (pubkey, dTag), so the subject — and
-  // the subscription below — survive maintainer growth and are recreated
-  // only when the repository itself changes.
-  const maintainers$ = useMemo(
-    () => new BehaviorSubject<string[]>(confirmedMaintainers ?? []),
-    // Intentionally NOT keyed on the maintainer list — it is fed in below.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [dTag, repoRelayGroup],
-  );
-  useEffect(() => {
-    if (confirmedMaintainers && confirmedMaintainers.length > 0)
-      maintainers$.next(confirmedMaintainers);
-    // Content-keyed dep: pushes happen only when the maintainer set changes;
-    // the additive loader treats an unchanged set as a strict no-op.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [maintainers$, maintainerKey]);
-
-  // Single subscription: drives EventStore writes AND the EOSE latch.
-  // loadRepoStateFromRelays emits NostrEvent | "EOSE". Events are written
-  // into the store inside the loader; "EOSE" flips the latch here.
-  // Starts true when there are no relays to wait for.
+  // The shared subscription owns network IO. This hook projects its lifecycle
+  // into the legacy all-relays-settled signal used by repository read UIs.
   const [repoRelayEose, setRepoRelayEose] = useState<boolean>(
     () => repoRelayGroup === undefined,
   );
 
   useEffect(() => {
-    // No repository identity, no maintainers, or no relay group — nothing to
-    // fetch, already settled.
-    if (!dTag || !hasMaintainers || !repoRelayGroup) {
+    if (!dTag || !confirmedMaintainers?.length || !repoRelayGroup) {
       setRepoRelayEose(true);
       return;
     }
 
-    // Reset to loading for this query.
-    setRepoRelayEose(false);
-
-    const sub = loadRepoStateFromRelays(
-      pool,
-      relayGroupUrls$(repoRelayGroup),
-      dTag,
-      maintainers$,
-      store,
-    ).subscribe({
-      next: (msg) => {
-        if (msg === "EOSE") setRepoRelayEose(true);
-        // Events are already written into the store by the loader.
-        // store.timeline() below reacts to them automatically.
-      },
-      error: () => {
-        // Settle on error so the UI doesn't wait forever.
+    let relayUrls: string[] = [];
+    const update = () => {
+      if (relayUrls.length === 0) {
         setRepoRelayEose(true);
-      },
+        return;
+      }
+      setRepoRelayEose(
+        relayUrls.every((relay) => {
+          const phase = coverage?.get(relay)?.phase;
+          return (
+            phase !== undefined &&
+            phase !== "initial" &&
+            phase !== "catching-up"
+          );
+        }),
+      );
+    };
+    const relaySub = relayGroupUrls$(repoRelayGroup).subscribe((next) => {
+      relayUrls = next;
+      update();
     });
+    const coverageSub = coverage?.changes$.subscribe(update);
+    update();
 
-    return () => sub.unsubscribe();
-    // Keyed on repository identity only. Relay additions flow through
-    // relayGroupUrls$ (one full REQ on the joining relay); maintainer growth
-    // flows through maintainers$ (one delta REQ per relay). Neither tears
-    // down the query or resets the repoRelayEose latch. The relay group
-    // instance is model-cached per (pubkey, dTag), so a genuine repository
-    // change still fully restarts the query and re-arms the latch.
-  }, [dTag, hasMaintainers, repoRelayGroup, maintainers$, store]);
+    return () => {
+      relaySub.unsubscribe();
+      coverageSub?.unsubscribe();
+    };
+  }, [dTag, maintainerKey, repoRelayGroup, coverage, confirmedMaintainers]);
 
   const storeFilter: Filter = {
     kinds: [REPO_STATE_KIND],
