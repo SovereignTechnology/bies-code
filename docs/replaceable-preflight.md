@@ -577,6 +577,39 @@ repository relay may be rendered, but GitWorkshop does not offer application,
 link, or release publication controls from a confidential repository. This is
 the confidential-scope modifier, not a weaker public-relay quorum.
 
+#### Phase 2 closure audit
+
+As of September 8, 2026, every active replaceable or addressable writer owned
+by the GitWorkshop browser application has an adoption decision. This table is
+the writer inventory; adding a writer or making one of the read-only rows
+writable requires updating it in the same change.
+
+| Writer family                         | Kinds                                                                           | Classification and coverage                                                                                                                                                          |
+| ------------------------------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Account identity and lists            | `0`, `3`, `10002`, `10017`, `10018`, `10063`, `10317`, `10318`, `10617`         | Personal singleton; one account-owned identity lease plus the shared deletion lease where required. Initial account creation of `0` and `10002` is the bootstrap-identity exception. |
+| Notification sync                     | Two `30078` coordinates                                                         | Convergent application state; one account-owned encrypted envelope/state owner.                                                                                                      |
+| Repository metadata and state         | `30617`, `30618`                                                                | Repository authority graph and repository operational state; one page-owned repository evidence scope plus focused evidence only for genuinely new author coordinates.               |
+| Software applications and releases    | `32267`, `30063`                                                                | Publisher-owned addressable; one publisher lease plus one debounced exact release-candidate lease.                                                                                   |
+| Software assets                       | `3063`                                                                          | Regular append-only event; no replaceable preflight.                                                                                                                                 |
+| Collaboration and repository controls | `5`, `7`, `1111`, `1621`, `1624`, `1630`-`1633`, `1985`, `9840`, `9843`, `9844` | Regular events. They may need authorization and delivery checks, but cannot overwrite an earlier event by NIP-01 replacement.                                                        |
+| Repository secret updates             | `29846`                                                                         | Ephemeral encrypted mutation; recipient advertisement freshness and relay acceptance are its safeguards.                                                                             |
+| CI advertisements and progress        | `19843`, `19844`, `19845`, `39842`, `39844`                                     | Read-only in GitWorkshop. External CI services own these replaceable/addressable writers and their consistency policy.                                                               |
+
+The closure audit also checks the read path immediately surrounding each
+writer. Warm preflight code must read an in-memory EventStore timeline or
+winner directly; it must not instantiate an Applesauce model whose configured
+fallback loader can silently repeat the owned query. Bounded `cacheRequest`
+hydration is allowed because it does not query the configured relay frontier.
+Display feeds and publication-time relay-group resolution are not preflight,
+but their requests must remain documented and must not be mistaken for absence
+evidence.
+
+Coverage lifecycle, settlement waiting, mailbox-absence discovery, and relay
+status formatting are shared mechanisms. Category quorum functions remain
+local policy: similar arithmetic in two categories does not make their relay
+groups interchangeable. New shared helpers must accept the category decision
+as data or a callback rather than embedding a universal threshold.
+
 ## Writer checklist
 
 Before adding or changing a replaceable/addressable writer, answer:
