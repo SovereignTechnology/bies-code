@@ -100,6 +100,15 @@ fi
 
 ## Nostr Protocol Integration
 
+### Maintainer Protocol
+
+The cross-project implementation guide is maintained in the repository
+`nostr://danconwaydev.com/relay.ngit.dev/ngit-docs` at
+`docs/protocol/nip-34/maintainers/ai-implementers.md`. It is published as the
+[maintainer protocol for AI implementers](https://ngit.dev/protocol/nip-34/maintainers/ai-implementers).
+Check it when changing maintainer-role parsing, graph resolution, authority, or
+repository membership workflows.
+
 ### Choosing kinds, designing tags, content vs. tags
 
 1. **Always review existing NIPs first.** Use the NIP index tool, then read candidate NIPs in detail. Find the closest existing solution.

@@ -12,10 +12,14 @@
 
 Use these sources in precedence order:
 
-1. [`ngit` maintainer model](../../ngit/docs/architecture/maintainer-model.md)
-2. [NIP-34](../../nips/34.md)
+1. [Maintainer protocol for AI implementers](https://ngit.dev/protocol/nip-34/maintainers/ai-implementers)
+2. [NIP-34 specification](https://ngit.dev/protocol/nip-34/specification)
 3. Current `ngit` v3 and `ngit-grasp` v3 behavior and fixtures
 4. [`ngit` follow-up actions](../../ngit/docs/architecture/maintainer-model-follow-up-actions.md)
+
+The implementation guide's source is maintained in
+`nostr://danconwaydev.com/relay.ngit.dev/ngit-docs` at
+`docs/protocol/nip-34/maintainers/ai-implementers.md`.
 
 Where executable behavior differs from the authoritative model, clarify the
 model or NIP first and then align both clients. Do not silently make

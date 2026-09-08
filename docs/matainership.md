@@ -3,10 +3,13 @@
 **Audience:** Client developers implementing NIP-34 repository discovery,
 authorization, and presentation.
 
-The authoritative protocol model is
-[`ngit/docs/architecture/maintainer-model.md`](../../ngit/docs/architecture/maintainer-model.md),
-with the concise wire format in [`nips/34.md`](../../nips/34.md). This document
-records how GitWorkshop consumes that model.
+The cross-project behavior is defined by the
+[maintainer protocol for AI implementers](https://ngit.dev/protocol/nip-34/maintainers/ai-implementers),
+maintained in `nostr://danconwaydev.com/relay.ngit.dev/ngit-docs` at
+`docs/protocol/nip-34/maintainers/ai-implementers.md`. The concise wire format
+is in the published
+[NIP-34 specification](https://ngit.dev/protocol/nip-34/specification). This
+document describes GitWorkshop's implementation of that model.
 
 ## Repository identity
 
