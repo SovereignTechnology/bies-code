@@ -9,7 +9,10 @@ import type { IEventStore } from "applesauce-core/event-store";
 import { getOutboxes, type Filter } from "applesauce-core/helpers";
 import { firstValueFrom, race, timer, type Observable } from "rxjs";
 import { map, startWith, take } from "rxjs/operators";
-import type { RelaySubscriptionCoverage } from "@/lib/relaySubscriptionCoverage";
+import type {
+  RelayCoverageState,
+  RelaySubscriptionCoverage,
+} from "@/lib/relaySubscriptionCoverage";
 import { normalizeUrl } from "@/lib/url";
 
 export type MailboxDiscovery = "known" | "checking" | "unavailable";
@@ -26,6 +29,101 @@ export interface WaitForCoverageDecisionOptions<T> {
   assess(snapshot: T): PreflightCoverageAssessment;
   changes(snapshot: T): Observable<unknown>;
   error(assessment: PreflightCoverageAssessment): Error;
+}
+
+export type RelayPreflightStatus =
+  | "ready"
+  | "checking"
+  | "not-responding"
+  | "rate-limited"
+  | "disconnected"
+  | "authentication-required"
+  | "request-rejected"
+  | "recovering"
+  | "unavailable"
+  | "not-checked";
+
+export interface RelayTransportFacts {
+  connected: boolean;
+  healthy: boolean;
+  rateLimitCooldownMs: number;
+}
+
+const RELAY_STATUS_LABELS: Record<RelayPreflightStatus, string> = {
+  ready: "ready",
+  checking: "checking",
+  "not-responding": "not responding",
+  "rate-limited": "rate-limited",
+  disconnected: "disconnected",
+  "authentication-required": "requiring authentication",
+  "request-rejected": "rejecting the request",
+  recovering: "recovering",
+  unavailable: "unavailable",
+  "not-checked": "not checked",
+};
+
+const RELAY_STATUS_ORDER: RelayPreflightStatus[] = [
+  "ready",
+  "checking",
+  "not-responding",
+  "rate-limited",
+  "disconnected",
+  "authentication-required",
+  "request-rejected",
+  "recovering",
+  "unavailable",
+  "not-checked",
+];
+
+/** Combine one owner's lifecycle state with its transport health. */
+export function classifyRelayPreflightStatus(
+  state: RelayCoverageState | undefined,
+  transport: RelayTransportFacts,
+): RelayPreflightStatus {
+  if (!transport.connected) return "disconnected";
+  if (state?.phase === "covered") {
+    return transport.healthy ? "ready" : "unavailable";
+  }
+  if (state?.reason === "rate-limited" || transport.rateLimitCooldownMs > 0) {
+    return "rate-limited";
+  }
+  if (state?.phase === "unavailable") {
+    switch (state.reason) {
+      case "auth":
+        return "authentication-required";
+      case "permanent":
+        return "request-rejected";
+      case "transport":
+      case "closed":
+      case "error":
+        return "recovering";
+      default:
+        return "unavailable";
+    }
+  }
+  if (!transport.healthy) return "unavailable";
+  if (state?.phase === "initial" || state?.phase === "catching-up") {
+    return "checking";
+  }
+  if (state?.phase === "not-responding") return "not-responding";
+  return "not-checked";
+}
+
+/** Format a group summary while retaining one stable status ordering. */
+export function formatRelayPreflightGroup(
+  name: string,
+  statuses: readonly RelayPreflightStatus[],
+): string {
+  if (statuses.length === 0) return `${name}: none configured.`;
+  const counts = new Map<RelayPreflightStatus, number>();
+  for (const status of statuses) {
+    counts.set(status, (counts.get(status) ?? 0) + 1);
+  }
+  const details = RELAY_STATUS_ORDER.flatMap((status) => {
+    const count = counts.get(status) ?? 0;
+    return count > 0 ? [`${count} ${RELAY_STATUS_LABELS[status]}`] : [];
+  });
+  return `${name}: ${details.join(", ")}.`;
 }
 
 /** True while a current owner can still complete its initial or catch-up REQ. */

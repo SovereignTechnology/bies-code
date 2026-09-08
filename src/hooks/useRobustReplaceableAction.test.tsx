@@ -42,7 +42,7 @@ vi.mock("@/hooks/useEventStore", () => ({
 }));
 
 vi.mock("@/hooks/use$", () => ({
-  use$: () => ({ outboxes: [mocks.outbox] }),
+  use$: () => [mocks.outbox],
 }));
 
 vi.mock("@/services/nostr", () => ({

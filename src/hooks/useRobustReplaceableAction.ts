@@ -48,14 +48,11 @@
  */
 
 import { useCallback, useState } from "react";
-import { firstValueFrom, race, timer } from "rxjs";
-import { filter, startWith, take } from "rxjs/operators";
 import type { NostrEvent } from "nostr-tools";
 import { useActiveAccount } from "applesauce-react/hooks";
 import { useEventStore } from "@/hooks/useEventStore";
 import { use$ } from "@/hooks/use$";
 import { normalizeURL } from "applesauce-core/helpers";
-import { MailboxesModel } from "applesauce-core/models";
 import { liveness, pool } from "@/services/nostr";
 import { lookupRelays } from "@/services/settings";
 import { cacheRequest } from "@/services/cache";
@@ -71,6 +68,14 @@ import {
   personalSingletonNeedsDeletionEvidence,
 } from "@/lib/personalSingletons";
 import type { RelaySubscriptionCoverage } from "@/lib/relaySubscriptionCoverage";
+import {
+  classifyRelayPreflightStatus,
+  formatRelayPreflightGroup,
+  mailboxOutboxesObservable,
+  waitForCoverageDecision,
+  type PreflightCoverageAssessment,
+  type RelayPreflightStatus,
+} from "@/lib/replaceablePreflightCoverage";
 import { userPersonalDeletionCoverage } from "@/services/userPersonalDeletionCoverage";
 
 // ---------------------------------------------------------------------------
@@ -100,44 +105,6 @@ const MIN_OUTBOX_ABSOLUTE = 3;
 
 /** Maximum local IndexedDB wait when the EventStore has no target event. */
 const CACHE_HYDRATION_TIMEOUT_MS = 1_000;
-
-type RelayPreflightStatus =
-  | "ready"
-  | "checking"
-  | "not-responding"
-  | "rate-limited"
-  | "disconnected"
-  | "authentication-required"
-  | "request-rejected"
-  | "recovering"
-  | "unavailable"
-  | "not-checked";
-
-const RELAY_STATUS_LABELS: Record<RelayPreflightStatus, string> = {
-  ready: "ready",
-  checking: "checking",
-  "not-responding": "not responding",
-  "rate-limited": "rate-limited",
-  disconnected: "disconnected",
-  "authentication-required": "requiring authentication",
-  "request-rejected": "rejecting the request",
-  recovering: "recovering",
-  unavailable: "unavailable",
-  "not-checked": "not checked",
-};
-
-const RELAY_STATUS_ORDER: RelayPreflightStatus[] = [
-  "ready",
-  "checking",
-  "not-responding",
-  "rate-limited",
-  "disconnected",
-  "authentication-required",
-  "request-rejected",
-  "recovering",
-  "unavailable",
-  "not-checked",
-];
 
 function meetsWarmCoverageThreshold(
   coveredOutboxes: number,
@@ -214,9 +181,11 @@ export function useRobustReplaceableAction(): RobustReplaceableActionResult {
 
   // Reactively subscribe to the user's outbox relays so we always have the
   // latest list when the action fires.
-  const mailboxes = use$(
+  const mailboxOutboxes = use$(
     () =>
-      account?.pubkey ? store.model(MailboxesModel, account.pubkey) : undefined,
+      account?.pubkey
+        ? mailboxOutboxesObservable(store, account.pubkey)
+        : undefined,
     [account?.pubkey, store],
   );
 
@@ -224,16 +193,14 @@ export function useRobustReplaceableAction(): RobustReplaceableActionResult {
     outboxes: string[];
     lookup: string[];
   } => {
-    const outboxes = [
-      ...new Set((mailboxes?.outboxes ?? []).map(normalizeUrl)),
-    ];
+    const outboxes = mailboxOutboxes ?? [];
     const outboxSet = new Set(outboxes);
     // Lookup relays that are not already in the outbox set
     const lookup = [
       ...new Set(lookupRelays.getValue().map(normalizeUrl)),
     ].filter((relay) => !outboxSet.has(relay));
     return { outboxes, lookup };
-  }, [mailboxes]);
+  }, [mailboxOutboxes]);
 
   /** Project lifecycle and transport facts into one user-facing relay state. */
   const classifyRelay = useCallback(
@@ -252,39 +219,13 @@ export function useRobustReplaceableAction(): RobustReplaceableActionResult {
         return "unavailable";
       }
 
-      if (pool.relays.get(transportUrl)?.connected !== true) {
-        return "disconnected";
-      }
+      const connected = pool.relays.get(transportUrl)?.connected === true;
       const transportHealthy = liveness.filter([transportUrl]).length > 0;
-      if (state?.phase === "covered") {
-        return transportHealthy ? "ready" : "unavailable";
-      }
-      if (
-        state?.reason === "rate-limited" ||
-        getRateLimitCooldownRemaining(normalized) > 0
-      ) {
-        return "rate-limited";
-      }
-      if (state?.phase === "unavailable") {
-        switch (state.reason) {
-          case "auth":
-            return "authentication-required";
-          case "permanent":
-            return "request-rejected";
-          case "transport":
-          case "closed":
-          case "error":
-            return "recovering";
-          default:
-            return "unavailable";
-        }
-      }
-      if (!transportHealthy) return "unavailable";
-      if (state?.phase === "initial" || state?.phase === "catching-up") {
-        return "checking";
-      }
-      if (state?.phase === "not-responding") return "not-responding";
-      return "not-checked";
+      return classifyRelayPreflightStatus(state, {
+        connected,
+        healthy: transportHealthy,
+        rateLimitCooldownMs: getRateLimitCooldownRemaining(normalized),
+      });
     },
     [],
   );
@@ -293,22 +234,6 @@ export function useRobustReplaceableAction(): RobustReplaceableActionResult {
     (relays: string[], coverage: RelaySubscriptionCoverage | undefined) =>
       relays.map((relay) => classifyRelay(relay, coverage)),
     [classifyRelay],
-  );
-
-  const formatRelayGroup = useCallback(
-    (name: string, statuses: RelayPreflightStatus[]): string => {
-      if (statuses.length === 0) return `${name}: none configured.`;
-      const counts = new Map<RelayPreflightStatus, number>();
-      statuses.forEach((status) =>
-        counts.set(status, (counts.get(status) ?? 0) + 1),
-      );
-      const details = RELAY_STATUS_ORDER.flatMap((status) => {
-        const count = counts.get(status) ?? 0;
-        return count > 0 ? [`${count} ${RELAY_STATUS_LABELS[status]}`] : [];
-      });
-      return `${name}: ${details.join(", ")}.`;
-    },
-    [],
   );
 
   const getCoverageCounts = useCallback(
@@ -329,10 +254,10 @@ export function useRobustReplaceableAction(): RobustReplaceableActionResult {
         ).length,
         inFlightLookup: lookupStatuses.filter((status) => status === "checking")
           .length,
-        summary: `${formatRelayGroup("Outbox relays", outboxStatuses)} ${formatRelayGroup("Lookup relays", lookupStatuses)}`,
+        summary: `${formatRelayPreflightGroup("Outbox relays", outboxStatuses)} ${formatRelayPreflightGroup("Lookup relays", lookupStatuses)}`,
       };
     },
-    [formatRelayGroup, getRelayStatuses],
+    [getRelayStatuses],
   );
 
   /**
@@ -464,50 +389,42 @@ export function useRobustReplaceableAction(): RobustReplaceableActionResult {
       const startedWithCoverageLease = account?.pubkey
         ? userIdentityCoverage.get(account.pubkey) !== undefined
         : false;
-      try {
-        assertWarmCoverage(outboxes, lookup, kind, currentCoverage());
-        return;
-      } catch (initialError) {
-        if (!canWarmCoverageStillSucceed(outboxes, lookup, currentCoverage())) {
-          throw initialError;
-        }
-      }
-
-      const decisionReady = () => {
-        // accounts.ts releases the old same-account owner immediately before
-        // activating its successor. Preserve the pending decision across that
-        // synchronous hand-off instead of treating the empty instant as final.
-        if (
-          startedWithCoverageLease &&
-          account?.pubkey &&
-          userIdentityCoverage.get(account.pubkey) === undefined
-        ) {
-          return false;
-        }
-        try {
-          assertWarmCoverage(outboxes, lookup, kind, currentCoverage());
-          return true;
-        } catch {
-          return !canWarmCoverageStillSucceed(
-            outboxes,
-            lookup,
-            currentCoverage(),
-          );
-        }
-      };
-
-      await firstValueFrom(
-        race(
-          userIdentityCoverage.changes$.pipe(
-            startWith(undefined),
-            filter(decisionReady),
-            take(1),
-          ),
-          timer(USER_IDENTITY_COVERAGE_SETTLEMENT_TIMEOUT_MS),
-        ),
-      );
-
-      assertWarmCoverage(outboxes, lookup, kind, currentCoverage());
+      await waitForCoverageDecision({
+        timeoutMs: USER_IDENTITY_COVERAGE_SETTLEMENT_TIMEOUT_MS,
+        getSnapshot: currentCoverage,
+        assess: (coverage): PreflightCoverageAssessment => {
+          // accounts.ts releases the old same-account owner immediately before
+          // activating its successor. Preserve the pending decision across
+          // that synchronous hand-off instead of treating it as final.
+          if (
+            startedWithCoverageLease &&
+            account?.pubkey &&
+            userIdentityCoverage.get(account.pubkey) === undefined
+          ) {
+            return {
+              met: false,
+              possible: true,
+              summary:
+                "Relay coverage is moving to the replacement identity owner.",
+            };
+          }
+          try {
+            assertWarmCoverage(outboxes, lookup, kind, coverage);
+            return { met: true, possible: true, summary: "ready" };
+          } catch (error) {
+            return {
+              met: false,
+              possible: canWarmCoverageStillSucceed(outboxes, lookup, coverage),
+              summary:
+                error instanceof Error
+                  ? error.message
+                  : "Relay coverage is not ready.",
+            };
+          }
+        },
+        changes: () => userIdentityCoverage.changes$,
+        error: (assessment) => new Error(assessment.summary),
+      });
     },
     [account?.pubkey, assertWarmCoverage, canWarmCoverageStillSucceed],
   );
@@ -540,44 +457,46 @@ export function useRobustReplaceableAction(): RobustReplaceableActionResult {
         }
         return undefined;
       };
-      const decisionReady = () => {
-        const lease = matchingLease();
-        if (!lease) return false;
-        try {
-          assertWarmCoverage(
-            outboxes,
-            lookup,
-            kind,
-            lease.coverage,
-            "deletion",
-          );
-          return true;
-        } catch {
-          return !canWarmCoverageStillSucceed(outboxes, lookup, lease.coverage);
-        }
-      };
-
-      if (!decisionReady()) {
-        await firstValueFrom(
-          race(
-            userPersonalDeletionCoverage.changes$.pipe(
-              startWith(undefined),
-              filter(decisionReady),
-              take(1),
-            ),
-            timer(PERSONAL_DELETION_COVERAGE_WAIT_TIMEOUT_MS),
-          ),
-        );
-      }
-
-      const lease = matchingLease();
-      if (!lease) {
-        throw new Error(
-          `Deletion checks for your ${kindLabel(kind)} did not settle in time. ` +
-            "Please try again shortly.",
-        );
-      }
-      assertWarmCoverage(outboxes, lookup, kind, lease.coverage, "deletion");
+      await waitForCoverageDecision({
+        timeoutMs: PERSONAL_DELETION_COVERAGE_WAIT_TIMEOUT_MS,
+        getSnapshot: matchingLease,
+        assess: (lease): PreflightCoverageAssessment => {
+          if (!lease) {
+            return {
+              met: false,
+              possible: true,
+              summary:
+                `Deletion checks for your ${kindLabel(kind)} did not settle in time. ` +
+                "Please try again shortly.",
+            };
+          }
+          try {
+            assertWarmCoverage(
+              outboxes,
+              lookup,
+              kind,
+              lease.coverage,
+              "deletion",
+            );
+            return { met: true, possible: true, summary: "ready" };
+          } catch (error) {
+            return {
+              met: false,
+              possible: canWarmCoverageStillSucceed(
+                outboxes,
+                lookup,
+                lease.coverage,
+              ),
+              summary:
+                error instanceof Error
+                  ? error.message
+                  : "Deletion-query coverage is not ready.",
+            };
+          }
+        },
+        changes: () => userPersonalDeletionCoverage.changes$,
+        error: (assessment) => new Error(assessment.summary),
+      });
     },
     [account?.pubkey, assertWarmCoverage, canWarmCoverageStillSucceed, store],
   );
