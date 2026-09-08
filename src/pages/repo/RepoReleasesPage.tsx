@@ -1128,7 +1128,7 @@ function SoftwareApplicationsIndex({
                         event={application.event}
                         className="shrink-0"
                         onEdit={
-                          application.pubkey === account?.pubkey
+                          canPublish && application.pubkey === account?.pubkey
                             ? () => onEdit(application)
                             : undefined
                         }
