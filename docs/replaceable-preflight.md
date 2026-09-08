@@ -245,11 +245,11 @@ before the Git objects exist. A non-purgatory relay may return it, but that does
 not strengthen the transition. Therefore repository preflight must never
 insert a post-signing echo request between steps 2 and 3.
 
-While steps 2 and 3 are in progress, the page freezes additions to its dynamic
-exact-deletion lease. A state that becomes visible immediately on a
-non-purgatory server therefore cannot trigger a hidden background REQ in that
-window. Once the Git transition finishes, pending candidate IDs are batched and
-warmed normally.
+While steps 2 and 3 are in progress, the page freezes its authority revision
+and additions to its dynamic exact-deletion lease. A state that becomes visible
+immediately on a non-purgatory server therefore cannot trigger a hidden
+background REQ in that window. Once the Git transition finishes, pending
+authority and candidate changes are adopted and warmed normally.
 
 ### Maintainer invitation example
 

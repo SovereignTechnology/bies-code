@@ -378,8 +378,8 @@ export function useResolvedRepository(
   // evidence is isolated in a coalesced lease because those filters are
   // candidate-dependent and must not restart the stable announcement/state
   // query every time a new winner arrives.
-  const maintainerKey = repo?.confirmedMaintainers.join(",") ?? "";
-  const deletionAuthors = repo
+  const currentMaintainers = repo?.confirmedMaintainers ?? [];
+  const currentDeletionAuthors = repo
     ? [
         ...new Set([
           ...repo.discoveryPubkeys,
@@ -397,7 +397,6 @@ export function useResolvedRepository(
         ]),
       ].sort()
     : [];
-  const deletionAuthorsKey = deletionAuthors.join(",");
   const replaceableWriteWindow = useMemo(
     () => createRepositoryReplaceableWriteWindow(),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -407,6 +406,40 @@ export function useResolvedRepository(
     () => replaceableWriteWindow.changes$,
     [replaceableWriteWindow],
   );
+  const authorityInput$ = useMemo(
+    () =>
+      new BehaviorSubject({
+        maintainers: [] as string[],
+        deletionAuthors: [] as string[],
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [key],
+  );
+  const currentMaintainerKey = currentMaintainers.join(",");
+  const currentDeletionAuthorsKey = currentDeletionAuthors.join(",");
+  useEffect(() => {
+    if (!replaceableWriteWindow.isHeld()) {
+      authorityInput$.next({
+        maintainers: currentMaintainers,
+        deletionAuthors: currentDeletionAuthors,
+      });
+    }
+    // The keys capture content equality while repository resolution recreates
+    // the arrays. A held GRASP transition adopts pending authority on release.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    currentMaintainerKey,
+    currentDeletionAuthorsKey,
+    authorityInput$,
+    replaceableWriteWindow,
+    writeWindowRevision,
+  ]);
+  const coverageAuthority =
+    use$(() => authorityInput$, [authorityInput$]) ?? authorityInput$.value;
+  const coverageMaintainers = coverageAuthority.maintainers;
+  const deletionAuthors = coverageAuthority.deletionAuthors;
+  const maintainerKey = coverageMaintainers.join(",");
+  const deletionAuthorsKey = deletionAuthors.join(",");
   const deletionCandidateInput$ = useMemo(
     () => new BehaviorSubject<string[]>([]),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -480,16 +513,16 @@ export function useResolvedRepository(
           );
     const filters: Filter[] = [
       { kinds: [REPO_KIND], "#d": [dTag] } as Filter,
-      ...(repo?.confirmedMaintainers.length
+      ...(coverageMaintainers.length
         ? [
             {
               kinds: [REPO_STATE_KIND],
-              authors: repo.confirmedMaintainers,
+              authors: coverageMaintainers,
               "#d": [dTag],
             } as Filter,
           ]
         : []),
-      ...(repo && deletionAuthors.length > 0
+      ...(deletionAuthors.length > 0
         ? [
             {
               kinds: [5],
