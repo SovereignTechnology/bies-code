@@ -5,7 +5,8 @@
  *   1. Confirm the new coordinates are absent on their required frontiers
  *   2. Build git objects (blob → tree → commit → packfile)
  *   3. Sign kind:30617 (announcement) and kind:30618 (state) events
- *   4. Publish events to the Grasp relay (purgatory) + outbox/index relays
+ *   4. Obtain pre-push event acceptance from the Grasp relay + publish the
+ *      announcement to outbox/index relays
  *   5. Push the packfile to the Grasp git HTTP endpoint
  *
  * Exposes step-by-step progress state for the UI.
@@ -64,7 +65,7 @@ export type CreateRepoStep =
 export interface CreateRepoState {
   step: CreateRepoStep;
   error?: string;
-  /** Timestamp (ms) when events were published — for purgatory countdown */
+  /** Timestamp (ms) when the repository events received pre-push acceptance. */
   publishedAt?: number;
   /** The Grasp clone URL on success */
   cloneUrl?: string;
@@ -311,8 +312,8 @@ export function useCreateRepo() {
             : {}),
         });
 
-        // Publish to Grasp relays directly and await their response
-        // so we know the events are in purgatory before pushing.
+        // Publish to Grasp relays directly and await pre-push acceptance.
+        // A purgatory response means staging; a plain OK may already be public.
         const graspRelayUrls = input.graspServers.map((s) => s.wsUrl);
 
         await publishToGraspRelays(
@@ -366,8 +367,9 @@ export function useCreateRepo() {
           },
         ];
 
-        // Push to every Grasp server in parallel. Each server has its
-        // own purgatory state event, so each needs the git data.
+        // Push to every Grasp server in parallel. Each server that accepted the
+        // state needs the corresponding Git data whether it staged or
+        // immediately broadcast that event.
         const pushResults = await Promise.allSettled(
           cloneUrls.map((url) =>
             pushToGitServer(
@@ -433,9 +435,10 @@ export function useCreateRepo() {
         }
 
         if (!input.private) {
-          // GRASP may withhold the state from reads while it is in purgatory.
-          // Broadcast only after Git data exists, never by querying for an
-          // echo between relay acknowledgement and the push.
+          // Purgatory-capable GRASP relays may withhold the state from reads;
+          // other implementations may already expose it. Broadcast only after
+          // Git data exists, never by querying for an echo between relay
+          // acknowledgement and the push.
           await outboxStore.publish(signedState, [
             `outbox:${pubkey}`,
             repoCoordinate(pubkey, input.identifier),
@@ -475,7 +478,8 @@ export function useCreateRepo() {
 
   /**
    * Retry just the push step. Only valid when the previous attempt failed
-   * at the push step (events are already in purgatory).
+   * after the events received pre-push relay acceptance. They may be staged in
+   * purgatory or already visible, depending on the GRASP implementation.
    */
   const retryPush = useCallback(
     async (input: CreateRepoFormInput, commitHash: string) => {

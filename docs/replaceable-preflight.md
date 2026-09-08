@@ -197,17 +197,26 @@ compares it with the event the editor or operation was based on. A changed
 winner aborts before signing. This does not attempt a compare-and-swap protocol
 for a relay event that lands after the freeze.
 
-Purgatory-backed kind `30618` writes retain their special transition order:
+GRASP kind `30618` writes retain their special transition order:
 
 1. run the read preflight before signing;
 2. publish the signed state to the GRASP repository relays and require at least
-   one relay `OK` so the state is staged in purgatory;
+   one relay `OK` as pre-push acceptance;
 3. push the dependent Git objects;
 4. broadcast the state through the durable outbox path.
 
-A purgatory relay is not required to return the state from a new query before
-the Git objects exist. Therefore repository preflight must never insert a
-post-signing echo request between steps 2 and 3.
+A `purgatory:` acknowledgement means the server staged the state until its Git
+objects arrive. A plain successful `OK` is weaker: a GRASP implementation
+without purgatory may broadcast the state immediately. As of September 8,
+2026, Pyramid implements GRASP without purgatory and therefore has the latter
+behavior. If the subsequent Git push fails, a purgatory-capable server can
+expire its staged state, while a non-purgatory server may leave the accepted
+state visible and require the Git push to be recovered.
+
+A purgatory relay is not required to return the staged state from a new query
+before the Git objects exist. A non-purgatory relay may return it, but that does
+not strengthen the transition. Therefore repository preflight must never
+insert a post-signing echo request between steps 2 and 3.
 
 ### Maintainer invitation example
 
@@ -362,12 +371,13 @@ fresh post-write REQ for an event already covered by that subscription. If a
 future category needs stronger confirmation, consume a relay `OK` or expose
 event-receipt provenance from the existing live subscription instead.
 
-Purgatory-backed repository transitions are not personal-singleton writes. They
-need confirmation that the staged state reached the required repository relay
-before dependent Git data is pushed, followed by the category's post-Git
-broadcast check. Those receipt and broadcast guarantees belong to the
-repository transition; they are not a reason to impose echo confirmation on
-profile and list settings.
+GRASP repository transitions are not personal-singleton writes. They need
+pre-push acceptance from a required repository relay before dependent Git data
+is pushed, followed by the category's post-Git broadcast check. A standard
+`purgatory:` response proves staging; a plain successful `OK` proves only
+acceptance and may mean the state is already visible. Those receipt and
+broadcast guarantees belong to the repository transition; they are not a
+reason to impose echo confirmation on profile and list settings.
 
 The implementation is intentionally split into independently reviewable
 commits: the shared kind scope, batched deletion evidence, publication routing,

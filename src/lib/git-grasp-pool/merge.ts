@@ -7,16 +7,18 @@
  * `src/lib/perform-pr-merge.ts`):
  *
  *   1. Prepare the objects + new branch tip (strategy-specific, see below).
- *   2. Sign + publish the kind:30618 state to the Grasp relays ONLY
- *      (purgatory authorization).
+ *   2. Sign + publish the kind:30618 state to the Grasp relays ONLY for
+ *      pre-push acceptance. Purgatory-capable servers stage it; other GRASP
+ *      implementations may broadcast it immediately.
  *   3. Push the packfile to the Grasp git server(s).
  *   4. Sign + publish the kind:1631 merged status event broadly, then
  *      auto-resolve issues referenced by commit-message keywords in the
  *      landed commits (ngit parity — see `@/lib/issue-auto-resolve`).
  *   5. Broadcast the kind:30618 state event to the remaining relays.
  *
- * If the push (step 3) fails, the state event expires from purgatory after
- * ~30 minutes — no rollback needed.
+ * If the push (step 3) fails, purgatory-capable servers expire the staged state
+ * after their retention window. A server without purgatory may already have
+ * made the state visible, so the Git push still needs recovery.
  *
  * Three strategies share the sequence, differing only in step 1:
  *
@@ -144,7 +146,9 @@ export interface GraspMergeContext {
 export interface GraspMergeTransports {
   /**
    * Publish the signed kind:30618 state event to the Grasp relays ONLY and
-   * resolve once at least one accepted it (purgatory). Throw on total failure.
+   * resolve once at least one accepted it before the Git push. A successful
+   * response does not by itself prove that the server implements purgatory.
+   * Throw on total failure.
    */
   publishStateToGrasp: (state: NostrEvent) => Promise<void>;
   /**
@@ -391,9 +395,9 @@ async function publishIssueResolutions(
 }
 
 /**
- * Run the shared purgatory → push → status → broadcast sequence for a new
- * branch tip. Strategy-specific object preparation (step 1) happens in the
- * callers; this function is identical for all of them.
+ * Run the shared pre-push acceptance → push → status → broadcast sequence for
+ * a new branch tip. Strategy-specific object preparation (step 1) happens in
+ * the callers; this function is identical for all of them.
  */
 async function runMergeSequence(
   params: GraspMergeContext & GraspMergeTransports,
@@ -412,11 +416,11 @@ async function runMergeSequence(
   // Safety guard: the new tip MUST descend from the current branch tip (i.e.
   // advancing the branch to it is a fast-forward). A non-fast-forward update
   // orphans commits already on the branch — the disaster an incorrect merge
-  // base can cause. Abort here, BEFORE any state event is published to
-  // purgatory or any object is pushed.
+  // base can cause. Abort here, BEFORE any state event receives pre-push
+  // acceptance or any object is pushed.
   assertFastForwardSafe(objects, params.defaultBranchHead, newTipHash);
 
-  // ── Step 2: Publish state to Grasp (purgatory) ──────────────────────────
+  // ── Step 2: Obtain pre-push state acceptance from Grasp ─────────────────
   const state = await RepoStateFactory.updateBranch(
     params.dTag,
     params.currentStateEvent,

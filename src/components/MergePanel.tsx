@@ -11,7 +11,8 @@
  *
  * The heavy lifting lives in `@/lib/git-grasp-pool`:
  *   - `performMerge` / `performPRMerge` / `performApplyToTip` — the shared
- *     purgatory → push → status → broadcast orchestration (`merge.ts`).
+ *     pre-push state acceptance → push → status → broadcast orchestration
+ *     (`merge.ts`).
  *   - `GitGraspPool.pushRefUpdate` — the multi-server Grasp push that
  *     tolerates lagging mirrors (`grasp-push.ts`).
  *
@@ -469,11 +470,12 @@ export function MergePanel({
   // ── Shared merge wiring ──────────────────────────────────────────────────
 
   /**
-   * Build the transports every merge strategy runs against: state events go
-   * to the Grasp relays (purgatory), the push fans out to every Grasp server
-   * via the pool, and status/state broadcasts go through the outbox. The
-   * returned `getPushSummary` exposes the delivery summary for the success
-   * toast.
+   * Build the transports every merge strategy runs against: state events first
+   * obtain Grasp relay acceptance, the push fans out to every Grasp server via
+   * the pool, and status/state broadcasts go through the outbox. A
+   * `purgatory:` response proves staging; a plain successful response may have
+   * broadcast immediately. The returned `getPushSummary` exposes the delivery
+   * summary for the success toast.
    */
   const createMergeTransports = useCallback(
     (accountPubkey: string, preflightStateEvent: NostrEvent | undefined) => {

@@ -20,12 +20,14 @@
   require one NIP-65 outbox EOSE, while new public repositories require both an
   author-outbox and proposed-repository-relay EOSE before signing. Repository
   settings, membership changes, public creation, and merges now consume frozen
-  winners from this shared gate. GRASP state transitions retain their
-  purgatory order: preflight, relay acknowledgement, Git push, then durable
-  broad publication, with no post-signing echo query in between. Confidential
-  repositories obtain the same proof only from their admitted private
-  repository relays and never disclose their coordinates to public enrichment
-  relays.
+  winners from this shared gate. GRASP state transitions retain their pre-push
+  acceptance order: preflight, relay acknowledgement, Git push, then durable
+  broad publication, with no post-signing echo query in between. A
+  `purgatory:` response proves staging; a plain successful `OK`, including from
+  Pyramid as of September 8, 2026, may mean the state is already visible.
+  Confidential repositories obtain the same proof only from their admitted
+  private repository relays and never disclose their coordinates to public
+  enrichment relays.
 - Keep one account-owned warm subscription for the encrypted notification-key
   envelope and derived read/archive state. Cross-device writes now wait for
   current EOSE-backed coverage and decryption without an action-time relay
