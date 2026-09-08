@@ -13,7 +13,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CastRefEventStore } from "applesauce-common/casts/cast";
 import { mapEventsToStore } from "applesauce-core";
 import type { IEventStore } from "applesauce-core/event-store";
-import { getOutboxes, type Filter } from "applesauce-core/helpers";
+import type { Filter } from "applesauce-core/helpers";
 import { onlyEvents } from "applesauce-relay";
 import type { RelayGroup } from "applesauce-relay";
 import type { NostrEvent } from "nostr-tools";
@@ -23,8 +23,6 @@ import {
   merge,
   Observable,
   of,
-  race,
-  timer,
   type Subscription,
 } from "rxjs";
 import {
@@ -49,6 +47,16 @@ import {
   createRelaySubscriptionCoverage,
   type RelaySubscriptionCoverage,
 } from "@/lib/relaySubscriptionCoverage";
+import {
+  assessMailboxDiscovery,
+  isRelayCoverageInFlight,
+  mailboxOutboxesObservable,
+  meetsBoundedTwoThirdsThreshold,
+  summarizeRelayCoveragePhases,
+  waitForCoverageDecision,
+  type MailboxDiscovery,
+  type PreflightCoverageAssessment,
+} from "@/lib/replaceablePreflightCoverage";
 import { resilientSubscription } from "@/lib/resilientSubscription";
 import { normalizeUrl } from "@/lib/url";
 import { relayGroupUrls$ } from "@/models/RepositoryRelayGroup";
@@ -66,20 +74,12 @@ const CACHE_HYDRATION_TIMEOUT_MS = 1_000;
 const SOFTWARE_COVERAGE_SETTLEMENT_TIMEOUT_MS =
   USER_IDENTITY_COVERAGE_SETTLEMENT_TIMEOUT_MS;
 
-type MailboxDiscovery = "known" | "checking" | "unavailable";
-
 interface SoftwarePublisherRelayScope {
   outboxes: string[];
   fallbacks: string[];
   distributionRelays: string[];
   relays: string[];
   mailboxDiscovery: MailboxDiscovery;
-}
-
-interface CoverageAssessment {
-  met: boolean;
-  possible: boolean;
-  summary: string;
 }
 
 export interface SoftwareApplicationSnapshot {
@@ -121,38 +121,6 @@ function sameStrings(left: readonly string[], right: readonly string[]) {
   );
 }
 
-function isInFlight(
-  coverage: RelaySubscriptionCoverage,
-  relay: string,
-): boolean {
-  const phase = coverage.get(relay)?.phase;
-  return phase === undefined || phase === "initial" || phase === "catching-up";
-}
-
-function meetsTwoThirdsThreshold(covered: number, total: number): boolean {
-  if (total === 0) return false;
-  return covered >= Math.max(1, Math.min(3, Math.ceil((total * 2) / 3)));
-}
-
-function assessMailboxDiscovery(
-  pubkey: string,
-  configuredLookups: readonly string[],
-  hasMailboxEvent: boolean,
-): MailboxDiscovery {
-  if (hasMailboxEvent) return "known";
-  const coverage = userIdentityCoverage.get(pubkey);
-  if (!coverage) return "checking";
-
-  const lookups = uniqueRelayUrls(configuredLookups);
-  const covered = lookups.filter((relay) => coverage.isCovered(relay)).length;
-  if (meetsTwoThirdsThreshold(covered, lookups.length)) return "known";
-  const possible =
-    covered + lookups.filter((relay) => isInFlight(coverage, relay)).length;
-  return meetsTwoThirdsThreshold(possible, lookups.length)
-    ? "checking"
-    : "unavailable";
-}
-
 function meetsSoftwareCoverageThreshold(
   coveredOutboxes: number,
   totalOutboxes: number,
@@ -161,29 +129,17 @@ function meetsSoftwareCoverageThreshold(
   coveredDistributionRelays: number,
 ): boolean {
   if (totalOutboxes === 0) {
-    return meetsTwoThirdsThreshold(coveredFallbacks, totalFallbacks);
+    return meetsBoundedTwoThirdsThreshold(coveredFallbacks, totalFallbacks);
   }
   if (coveredOutboxes === 0) return false;
   if (coveredOutboxes === 1) return coveredDistributionRelays >= 2;
   return coveredOutboxes >= 3 || coveredOutboxes / totalOutboxes >= 0.5;
 }
 
-function phaseSummary(
-  coverage: RelaySubscriptionCoverage,
-  relays: readonly string[],
-): string {
-  const counts = new Map<string, number>();
-  for (const relay of relays) {
-    const phase = coverage.get(relay)?.phase ?? "not-checked";
-    counts.set(phase, (counts.get(phase) ?? 0) + 1);
-  }
-  return [...counts].map(([phase, count]) => `${count} ${phase}`).join(", ");
-}
-
 function assessCoverage(
   scope: SoftwarePublisherRelayScope,
   coverage: RelaySubscriptionCoverage,
-): CoverageAssessment {
+): PreflightCoverageAssessment {
   if (scope.mailboxDiscovery !== "known") {
     return {
       met: false,
@@ -215,14 +171,17 @@ function assessCoverage(
 
   const possibleOutboxes =
     coveredOutboxes +
-    scope.outboxes.filter((relay) => isInFlight(coverage, relay)).length;
+    scope.outboxes.filter((relay) => isRelayCoverageInFlight(coverage, relay))
+      .length;
   const possibleFallbacks =
     coveredFallbacks +
-    scope.fallbacks.filter((relay) => isInFlight(coverage, relay)).length;
+    scope.fallbacks.filter((relay) => isRelayCoverageInFlight(coverage, relay))
+      .length;
   const possibleDistributionRelays =
     coveredDistributionRelays +
-    scope.distributionRelays.filter((relay) => isInFlight(coverage, relay))
-      .length;
+    scope.distributionRelays.filter((relay) =>
+      isRelayCoverageInFlight(coverage, relay),
+    ).length;
   const possible = meetsSoftwareCoverageThreshold(
     possibleOutboxes,
     scope.outboxes.length,
@@ -233,7 +192,7 @@ function assessCoverage(
   return {
     met: false,
     possible,
-    summary: `outboxes: ${phaseSummary(coverage, scope.outboxes) || "none configured"}; distribution relays: ${phaseSummary(coverage, scope.distributionRelays) || "none configured"}`,
+    summary: `outboxes: ${summarizeRelayCoveragePhases(coverage, scope.outboxes) || "none configured"}; distribution relays: ${summarizeRelayCoveragePhases(coverage, scope.distributionRelays) || "none configured"}`,
   };
 }
 
@@ -241,24 +200,16 @@ async function waitForCoverage(
   scope$: Observable<SoftwarePublisherRelayScope>,
   coverage: RelaySubscriptionCoverage,
 ): Promise<SoftwarePublisherRelayScope> {
-  const deadline = Date.now() + SOFTWARE_COVERAGE_SETTLEMENT_TIMEOUT_MS;
-  for (;;) {
-    const scope = await firstValueFrom(scope$.pipe(take(1)));
-    const assessment = assessCoverage(scope, coverage);
-    if (assessment.met) return scope;
-    const remaining = deadline - Date.now();
-    if (!assessment.possible || remaining <= 0) {
-      throw new Error(
+  return waitForCoverageDecision({
+    timeoutMs: SOFTWARE_COVERAGE_SETTLEMENT_TIMEOUT_MS,
+    getSnapshot: () => firstValueFrom(scope$.pipe(take(1))),
+    assess: (scope) => assessCoverage(scope, coverage),
+    changes: () => merge(coverage.changes$, scope$.pipe(skip(1))),
+    error: (assessment) =>
+      new Error(
         `Software publication checks are not ready (${assessment.summary}). Please check those relays and try again.`,
-      );
-    }
-    await firstValueFrom(
-      race(
-        merge(coverage.changes$, scope$.pipe(skip(1))).pipe(take(1)),
-        timer(remaining),
       ),
-    );
-  }
+  });
 }
 
 async function hydrateCachedCoordinate(
@@ -310,13 +261,7 @@ export function useSoftwarePublisherApplications(
   >(() => {
     if (!pubkey) return undefined;
     return combineLatest([
-      store.timeline([{ kinds: [10002], authors: [pubkey] } as Filter]).pipe(
-        map(() => {
-          const mailboxEvent = store.getReplaceable(10002, pubkey);
-          return mailboxEvent ? getOutboxes(mailboxEvent) : undefined;
-        }),
-        startWith(undefined),
-      ),
+      mailboxOutboxesObservable(store, pubkey),
       fallbackRelays,
       lookupRelays,
       relayGroupUrls$(repoRelayGroup),
@@ -345,7 +290,7 @@ export function useSoftwarePublisherApplications(
             distributionRelays,
             relays: uniqueRelayUrls([...outboxes, ...distributionRelays]),
             mailboxDiscovery: assessMailboxDiscovery(
-              pubkey,
+              userIdentityCoverage.get(pubkey),
               configuredLookups,
               mailboxOutboxes !== undefined,
             ),
