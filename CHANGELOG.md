@@ -13,6 +13,11 @@
 
 ### Changed
 
+- Share category-neutral replaceable-preflight mechanics for loader-free
+  mailbox observation, bounded lifecycle waiting, and relay diagnostics while
+  leaving each writer category's quorum policy local. The notification sync
+  pause banner now offers a per-relay status breakdown, including user-index
+  relays when mailbox discovery is the blocker.
 - Warm each selected NIP-82 release coordinate while its dialog is open and
   require the same publisher-relay coverage before treating a version as new.
   Release publication now combines that exact evidence with the shared

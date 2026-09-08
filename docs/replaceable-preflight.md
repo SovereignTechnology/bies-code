@@ -504,7 +504,10 @@ checks receive a fresh generation. A pause caused specifically by unavailable
 mailbox-discovery coverage belongs to the separate personal-singleton identity
 owner; restarting that owner from this service is deliberately deferred until
 identity-owner recovery can be exposed as a shared operation for every personal
-writer.
+writer. The paused banner exposes a relay-details popover built from the owning
+coverage lease. It lists the actual outbox and fallback relay lifecycle facts,
+or the user-index relay facts when mailbox discovery is the blocker, without
+changing which group votes for this category.
 
 This adoption removes the older address-loader relay reads and overlapping
 NIP-78 subscriptions while retaining bounded cache-backend hydration. It does

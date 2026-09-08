@@ -53,6 +53,7 @@ import type { NostrEvent } from "nostr-tools";
 import { getZapAmount } from "applesauce-common/helpers";
 import { useRelativeTime } from "@/hooks/useRelativeTime";
 import { NotificationSwipeSurface } from "@/components/NotificationSwipeSurface";
+import { RelayCoveragePopover } from "@/components/RelayCoveragePopover";
 
 const ITEMS_PER_PAGE = 10;
 const USER_ACTIVITY_PAGE_SIZE = 10;
@@ -416,16 +417,21 @@ export default function NotificationsPage() {
               </p>
             </div>
           </div>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="h-8 shrink-0 text-xs"
-            onClick={retrySync}
-          >
-            <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
-            Retry sync
-          </Button>
+          <div className="flex shrink-0 items-center gap-1">
+            {sync.relayCoverage && (
+              <RelayCoveragePopover groups={sync.relayCoverage} />
+            )}
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-8 shrink-0 text-xs"
+              onClick={retrySync}
+            >
+              <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
+              Retry sync
+            </Button>
+          </div>
         </div>
       )}
 

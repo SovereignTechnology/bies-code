@@ -10,6 +10,7 @@ import { getOutboxes, type Filter } from "applesauce-core/helpers";
 import { firstValueFrom, race, timer, type Observable } from "rxjs";
 import { map, startWith, take } from "rxjs/operators";
 import type {
+  RelayCoveragePhase,
   RelayCoverageState,
   RelaySubscriptionCoverage,
 } from "@/lib/relaySubscriptionCoverage";
@@ -47,6 +48,17 @@ export interface RelayTransportFacts {
   connected: boolean;
   healthy: boolean;
   rateLimitCooldownMs: number;
+}
+
+export interface RelayCoverageDetail {
+  relay: string;
+  phase: RelayCoveragePhase | "not-checked";
+  reason?: RelayCoverageState["reason"];
+}
+
+export interface RelayCoverageGroup {
+  label: string;
+  relays: RelayCoverageDetail[];
 }
 
 const RELAY_STATUS_LABELS: Record<RelayPreflightStatus, string> = {
@@ -124,6 +136,25 @@ export function formatRelayPreflightGroup(
     return count > 0 ? [`${count} ${RELAY_STATUS_LABELS[status]}`] : [];
   });
   return `${name}: ${details.join(", ")}.`;
+}
+
+/** Preserve per-relay lifecycle facts for an optional diagnostic surface. */
+export function buildRelayCoverageGroup(
+  label: string,
+  relays: readonly string[],
+  coverage: RelaySubscriptionCoverage | undefined,
+): RelayCoverageGroup {
+  return {
+    label,
+    relays: [...new Set(relays.map(normalizeUrl))].sort().map((relay) => {
+      const state = coverage?.get(relay);
+      return {
+        relay,
+        phase: state?.phase ?? "not-checked",
+        ...(state?.reason !== undefined ? { reason: state.reason } : {}),
+      };
+    }),
+  };
 }
 
 /** True while a current owner can still complete its initial or catch-up REQ. */

@@ -40,11 +40,13 @@ import {
 } from "@/lib/relaySubscriptionCoverage";
 import {
   assessMailboxDiscovery,
+  buildRelayCoverageGroup,
   isRelayCoverageInFlight,
   mailboxOutboxesObservable,
   meetsBoundedTwoThirdsThreshold,
   type MailboxDiscovery,
   type PreflightCoverageAssessment,
+  type RelayCoverageGroup,
 } from "@/lib/replaceablePreflightCoverage";
 import { resilientSubscription } from "@/lib/resilientSubscription";
 import { normalizeUrl } from "@/lib/url";
@@ -68,7 +70,7 @@ export type NotificationStateUpdater = (
 
 export type NotificationSyncStage = "envelope" | "state";
 
-export type NotificationSyncState =
+export type NotificationSyncState = (
   | {
       status: "checking";
       stage: NotificationSyncStage;
@@ -86,7 +88,8 @@ export type NotificationSyncState =
       stage: NotificationSyncStage;
       message: string;
       pendingChanges: boolean;
-    };
+    }
+) & { relayCoverage?: RelayCoverageGroup[] };
 
 export interface NotificationSyncController {
   readonly state$: BehaviorSubject<NotificationSyncState>;
@@ -100,6 +103,7 @@ export interface NotificationSyncController {
 export interface NotificationRelayScope {
   outboxes: string[];
   fallbacks: string[];
+  lookups: string[];
   relays: string[];
   mailboxDiscovery: MailboxDiscovery;
 }
@@ -230,7 +234,8 @@ function syncStateEquals(
     first.status === second.status &&
     first.stage === second.stage &&
     first.message === second.message &&
-    first.pendingChanges === second.pendingChanges
+    first.pendingChanges === second.pendingChanges &&
+    JSON.stringify(first.relayCoverage) === JSON.stringify(second.relayCoverage)
   );
 }
 
@@ -402,13 +407,15 @@ export function notificationRelayScopeObservable(
       const fallbacks = [...new Set(configuredFallbacks.map(normalizeUrl))]
         .filter((relay) => !outboxSet.has(relay))
         .sort();
+      const lookups = [...new Set(configuredLookups.map(normalizeUrl))].sort();
       return {
         outboxes,
         fallbacks,
+        lookups,
         relays: [...outboxes, ...fallbacks],
         mailboxDiscovery: assessMailboxDiscovery(
           userIdentityCoverage.get(pubkey),
-          configuredLookups.map(normalizeUrl),
+          lookups,
           mailboxOutboxes !== undefined,
         ),
       };
@@ -422,6 +429,10 @@ export function notificationRelayScopeObservable(
         first.fallbacks.length === second.fallbacks.length &&
         first.fallbacks.every(
           (relay, index) => relay === second.fallbacks[index],
+        ) &&
+        first.lookups.length === second.lookups.length &&
+        first.lookups.every(
+          (relay, index) => relay === second.lookups[index],
         ) &&
         first.mailboxDiscovery === second.mailboxDiscovery,
     ),
@@ -494,12 +505,14 @@ function coverageState(
   stage: NotificationSyncStage,
   assessment: PreflightCoverageAssessment,
   pendingChanges: boolean,
+  relayCoverage: RelayCoverageGroup[],
 ): NotificationSyncState {
   if (assessment.possible) {
     return {
       status: "checking",
       stage,
       pendingChanges,
+      relayCoverage,
       message: `Checking the encrypted notification ${stage}. ${assessment.summary}`,
     };
   }
@@ -507,6 +520,7 @@ function coverageState(
     status: "paused",
     stage,
     pendingChanges,
+    relayCoverage,
     message: `Cross-device notification state cannot be checked safely yet. ${assessment.summary}`,
   };
 }
@@ -536,6 +550,7 @@ export function startNotificationSync(
   let relayScope: NotificationRelayScope = {
     outboxes: [],
     fallbacks: [],
+    lookups: [],
     relays: [],
     mailboxDiscovery: "checking",
   };
@@ -602,7 +617,25 @@ export function startNotificationSync(
     stage: NotificationSyncStage,
     assessment: PreflightCoverageAssessment,
   ) => {
-    const next = coverageState(stage, assessment, pendingUpdates.length > 0);
+    const relayCoverage = [
+      ...(relayScope.mailboxDiscovery === "known"
+        ? []
+        : [
+            buildRelayCoverageGroup(
+              "User-index relays",
+              relayScope.lookups,
+              userIdentityCoverage.get(pubkey),
+            ),
+          ]),
+      buildRelayCoverageGroup("Outbox relays", relayScope.outboxes, coverage),
+      buildRelayCoverageGroup("Backup relays", relayScope.fallbacks, coverage),
+    ];
+    const next = coverageState(
+      stage,
+      assessment,
+      pendingUpdates.length > 0,
+      relayCoverage,
+    );
     coverageBlocked = next.status === "paused";
     emitState(next);
   };
