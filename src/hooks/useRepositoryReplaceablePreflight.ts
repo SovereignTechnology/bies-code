@@ -3,15 +3,8 @@ import { getOutboxes } from "applesauce-core/helpers";
 import type { Filter } from "applesauce-core/helpers";
 import { onlyEvents } from "applesauce-relay";
 import type { NostrEvent } from "nostr-tools";
-import {
-  BehaviorSubject,
-  firstValueFrom,
-  merge,
-  race,
-  Subscription,
-  timer,
-} from "rxjs";
-import { skip, take } from "rxjs/operators";
+import { BehaviorSubject, merge, Subscription } from "rxjs";
+import { skip } from "rxjs/operators";
 
 import { useEventStore } from "@/hooks/useEventStore";
 import { useToast } from "@/hooks/useToast";
@@ -30,6 +23,12 @@ import { normalizeUrl } from "@/lib/url";
 import { cacheRequest } from "@/services/cache";
 import { eventStore, pool } from "@/services/nostr";
 import { resilientRequest } from "@/lib/resilientSubscription";
+import {
+  summarizeRelayCoveragePhases,
+  waitForCoverageDecision,
+  type PreflightCoverageAssessment,
+} from "@/lib/replaceablePreflightCoverage";
+import type { RelaySubscriptionCoverage } from "@/lib/relaySubscriptionCoverage";
 
 const CACHE_HYDRATION_TIMEOUT_MS = 1_000;
 const FOCUSED_ABSENCE_TIMEOUT_MS = 10_000;
@@ -52,6 +51,13 @@ export interface RepositoryReplaceablePreflightOptions {
   expectedEventId: string | null;
   /** Hold dynamic deletion additions until a GRASP state/Git transition ends. */
   holdWriteWindow?: boolean;
+}
+
+interface RepositoryCoverageSnapshot {
+  resolved: ResolvedRepository;
+  repositoryRelays: string[];
+  coverage: RelaySubscriptionCoverage;
+  candidateIncluded: boolean;
 }
 
 function repositoryRelayVoters(resolved: ResolvedRepository): string[] {
@@ -360,75 +366,61 @@ export function useRepositoryReplaceablePreflight(
       resolved: ResolvedRepository;
       repositoryRelays: string[];
     }> => {
-      for (;;) {
-        const current = resolvedRef.current;
-        if (!current) throw new Error("Repository preflight is not ready.");
-        const repositoryRelays = repositoryRelayVoters(current);
-        if (repositoryRelays.length === 0) {
-          throw new Error(
-            "No admitted repository relay or route hint can confirm the current repository state.",
-          );
-        }
-        const coverage = candidateId
-          ? current.replaceableDeletionCoverage
-          : current.replaceableCoverage;
-        const candidateIncluded =
-          candidateId === undefined ||
-          current.replaceableDeletionCandidateIds.includes(candidateId);
-        const covered =
-          candidateIncluded &&
-          repositoryRelays.some((relay) => coverage.isCovered(relay));
-        if (covered) return { resolved: current, repositoryRelays };
-
-        const remaining = deadline - Date.now();
-        if (remaining <= 0) {
-          const counts = new Map<string, number>();
-          for (const relay of repositoryRelays) {
-            const phase = coverage.get(relay)?.phase ?? "not-checked";
-            counts.set(phase, (counts.get(phase) ?? 0) + 1);
-          }
-          const summary = [...counts]
-            .map(([phase, count]) => `${count} ${phase}`)
-            .join(", ");
-          throw new Error(
-            `No repository relay has current ${candidateId ? "exact-deletion" : "announcement and state"} coverage (${summary}). Please check the repository relays and try again.`,
-          );
-        }
-
-        const canStillSettle =
-          !candidateIncluded ||
-          repositoryRelays.some((relay) => {
-            const phase = coverage.get(relay)?.phase;
-            return (
-              phase === undefined ||
-              phase === "initial" ||
-              phase === "catching-up" ||
-              phase === "stopped"
+      const snapshot = await waitForCoverageDecision({
+        timeoutMs: Math.max(0, deadline - Date.now()),
+        getSnapshot: (): RepositoryCoverageSnapshot => {
+          const current = resolvedRef.current;
+          if (!current) throw new Error("Repository preflight is not ready.");
+          const repositoryRelays = repositoryRelayVoters(current);
+          if (repositoryRelays.length === 0) {
+            throw new Error(
+              "No admitted repository relay or route hint can confirm the current repository state.",
             );
-          });
-        if (!canStillSettle) {
-          const counts = new Map<string, number>();
-          for (const relay of repositoryRelays) {
-            const phase = coverage.get(relay)?.phase ?? "not-checked";
-            counts.set(phase, (counts.get(phase) ?? 0) + 1);
           }
-          const summary = [...counts]
-            .map(([phase, count]) => `${count} ${phase}`)
-            .join(", ");
-          throw new Error(
-            `No repository relay has current ${candidateId ? "exact-deletion" : "announcement and state"} coverage (${summary}). Please check the repository relays and try again.`,
-          );
-        }
-
-        await firstValueFrom(
-          race(
-            merge(coverage.changes$, resolvedRevision$.pipe(skip(1))).pipe(
-              take(1),
+          return {
+            resolved: current,
+            repositoryRelays,
+            coverage: candidateId
+              ? current.replaceableDeletionCoverage
+              : current.replaceableCoverage,
+            candidateIncluded:
+              candidateId === undefined ||
+              current.replaceableDeletionCandidateIds.includes(candidateId),
+          };
+        },
+        assess: (current): PreflightCoverageAssessment => ({
+          met:
+            current.candidateIncluded &&
+            current.repositoryRelays.some((relay) =>
+              current.coverage.isCovered(relay),
             ),
-            timer(remaining),
+          possible:
+            !current.candidateIncluded ||
+            current.repositoryRelays.some((relay) => {
+              const phase = current.coverage.get(relay)?.phase;
+              return (
+                phase === undefined ||
+                phase === "initial" ||
+                phase === "catching-up" ||
+                phase === "stopped"
+              );
+            }),
+          summary: summarizeRelayCoveragePhases(
+            current.coverage,
+            current.repositoryRelays,
           ),
-        );
-      }
+        }),
+        changes: (current) =>
+          merge(current.coverage.changes$, resolvedRevision$.pipe(skip(1))),
+        error: (assessment) =>
+          new Error(
+            `No repository relay has current ${candidateId ? "exact-deletion" : "announcement and state"} coverage (${assessment.summary}). Please check the repository relays and try again.`,
+          ),
+      });
+      return {
+        resolved: snapshot.resolved,
+        repositoryRelays: snapshot.repositoryRelays,
+      };
     },
     [resolvedRevision$],
   );
