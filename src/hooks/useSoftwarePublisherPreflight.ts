@@ -26,6 +26,7 @@ import {
   of,
   race,
   timer,
+  type Subscription,
 } from "rxjs";
 import {
   distinctUntilChanged,
@@ -41,6 +42,7 @@ import {
   isValidSoftwareApplication,
   SoftwareApplication,
   SOFTWARE_APPLICATION_KIND,
+  SOFTWARE_RELEASE_KIND,
 } from "@/casts/Software";
 import { use$ } from "@/hooks/use$";
 import { useEventStore } from "@/hooks/useEventStore";
@@ -102,6 +104,10 @@ export interface AccountSoftwareApplications {
   applications: SoftwareApplication[];
   settled: boolean;
   preflight: SoftwarePublisherPreflight | undefined;
+}
+
+export interface SoftwareReleaseCandidatePreflight {
+  assertAvailable(): Promise<void>;
 }
 
 function uniqueRelayUrls(values: readonly string[]): string[] {
@@ -256,7 +262,7 @@ async function waitForCoverage(
 }
 
 async function hydrateCachedCoordinate(
-  kind: typeof SOFTWARE_APPLICATION_KIND,
+  kind: typeof SOFTWARE_APPLICATION_KIND | typeof SOFTWARE_RELEASE_KIND,
   pubkey: string,
   identifier: string,
   store: IEventStore,
@@ -452,4 +458,83 @@ export function useSoftwarePublisherApplications(
   );
 
   return { applications, settled, preflight };
+}
+
+export function useSoftwareReleaseCandidatePreflight(
+  publisherPreflight: SoftwarePublisherPreflight | undefined,
+  appId: string | undefined,
+  version: string | undefined,
+  enabled: boolean,
+): SoftwareReleaseCandidatePreflight {
+  const store = useEventStore();
+  const identifier =
+    enabled && appId && version ? `${appId}@${version}` : undefined;
+  const coverage = useMemo(
+    () =>
+      publisherPreflight && identifier
+        ? createRelaySubscriptionCoverage({
+            settlementTimeoutMs: SOFTWARE_COVERAGE_SETTLEMENT_TIMEOUT_MS,
+          })
+        : undefined,
+    [identifier, publisherPreflight],
+  );
+
+  use$(() => {
+    if (!publisherPreflight || !identifier || !coverage) return undefined;
+    const relays$: Observable<string[]> = publisherPreflight.scope$.pipe(
+      map((scope): string[] => scope.relays),
+      distinctUntilChanged((left, right) => sameStrings(left, right)),
+    );
+    const source = resilientSubscription(
+      pool,
+      relays$,
+      [
+        {
+          kinds: [SOFTWARE_RELEASE_KIND],
+          authors: [publisherPreflight.pubkey],
+          "#d": [identifier],
+        } as Filter,
+      ],
+      {
+        settle: false,
+        paginate: false,
+        retryCount: Infinity,
+        onRelayLifecycle: (event) => coverage.onLifecycle(event),
+      },
+    ).pipe(onlyEvents(), mapEventsToStore(store), ignoreElements());
+
+    return new Observable<never>((subscriber) => {
+      const subscription: Subscription = source.subscribe(subscriber);
+      return () => {
+        coverage.stop();
+        subscription.unsubscribe();
+      };
+    });
+  }, [coverage, identifier, publisherPreflight, store]);
+
+  const assertAvailable = useCallback(async () => {
+    if (!publisherPreflight || !identifier || !coverage) {
+      throw new Error("Choose an application and release version to check.");
+    }
+    await Promise.all([
+      waitForCoverage(publisherPreflight.scope$, publisherPreflight.coverage),
+      waitForCoverage(publisherPreflight.scope$, coverage),
+    ]);
+    await hydrateCachedCoordinate(
+      SOFTWARE_RELEASE_KIND,
+      publisherPreflight.pubkey,
+      identifier,
+      store,
+    );
+    const existing = store.getReplaceable(
+      SOFTWARE_RELEASE_KIND,
+      publisherPreflight.pubkey,
+      identifier,
+    );
+    if (existing) {
+      throw new Error("This application already has that release version.");
+    }
+  }, [coverage, identifier, publisherPreflight, store]);
+
+  return { assertAvailable };
 }

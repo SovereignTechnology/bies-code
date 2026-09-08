@@ -11,7 +11,6 @@ import {
 } from "react";
 import { useActiveAccount } from "applesauce-react/hooks";
 import type { NostrEvent } from "nostr-tools";
-import { lastValueFrom } from "rxjs";
 import {
   Check,
   ChevronDown,
@@ -23,11 +22,7 @@ import {
   Upload,
   X,
 } from "lucide-react";
-import {
-  SOFTWARE_RELEASE_KIND,
-  type SoftwareApplication,
-  type SoftwareRelease,
-} from "@/casts/Software";
+import type { SoftwareApplication, SoftwareRelease } from "@/casts/Software";
 import { CreateSoftwareApplicationDialog } from "@/components/releases/CreateSoftwareApplicationDialog";
 import { LinkSoftwareApplicationDialog } from "@/components/releases/LinkSoftwareApplicationDialog";
 import { Badge } from "@/components/ui/badge";
@@ -62,10 +57,12 @@ import {
   SoftwareReleaseFactory,
 } from "@/factories/SoftwareReleaseFactory";
 import { useBlossomUpload, type Nip94Tags } from "@/hooks/useBlossomUpload";
-import { useEventStore } from "@/hooks/useEventStore";
-import type { SoftwarePublisherPreflight } from "@/hooks/useSoftwarePublisherPreflight";
+import {
+  useSoftwareReleaseCandidatePreflight,
+  type SoftwarePublisherPreflight,
+} from "@/hooks/useSoftwarePublisherPreflight";
 import { useToast } from "@/hooks/useToast";
-import { addressLoader, publish } from "@/services/nostr";
+import { publish } from "@/services/nostr";
 
 const CHANNEL_SUGGESTIONS = ["main", "beta", "nightly", "dev"];
 
@@ -200,7 +197,6 @@ interface CreateReleaseDialogProps {
   accountApplications: SoftwareApplication[];
   accountApplicationsSettled: boolean;
   existingReleases: SoftwareRelease[];
-  releaseRelays: string[];
   gitTags: Array<{ name: string; commitId: string }>;
   repoCoordinates: string[];
   maintainerPubkeys: string[];
@@ -780,7 +776,6 @@ export function CreateReleaseDialog({
   accountApplications,
   accountApplicationsSettled,
   existingReleases,
-  releaseRelays,
   gitTags,
   repoCoordinates,
   maintainerPubkeys,
@@ -788,7 +783,6 @@ export function CreateReleaseDialog({
   publisherPreflight,
 }: CreateReleaseDialogProps) {
   const account = useActiveAccount();
-  const store = useEventStore();
   const { uploadFile } = useBlossomUpload();
   const { toast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -881,6 +875,12 @@ export function CreateReleaseDialog({
     return [...existingVersions].filter((version) => !gitVersions.has(version));
   }, [existingVersions, gitVersionOptions]);
   const releaseVersion = canonicalReleaseVersion(version);
+  const releaseCandidatePreflight = useSoftwareReleaseCandidatePreflight(
+    publisherPreflight,
+    selectedApplication?.appId,
+    releaseVersion || undefined,
+    open,
+  );
   const versionAlreadyExists = existingVersions.has(releaseVersion);
   const buildCommitInvalid =
     buildCommit.trim().length > 0 && !GIT_COMMIT_ID.test(buildCommit.trim());
@@ -1218,27 +1218,14 @@ export function CreateReleaseDialog({
       }
 
       setStage("checking-version");
-      const releaseIdentifier = `${selectedApplication.appId}@${releaseVersion}`;
-      await lastValueFrom(
-        addressLoader({
-          kind: SOFTWARE_RELEASE_KIND,
-          pubkey: selectedApplication.pubkey,
-          identifier: releaseIdentifier,
-          relays: releaseRelays,
-        }),
-        { defaultValue: undefined },
-      );
-      if (
-        store.getReplaceable(
-          SOFTWARE_RELEASE_KIND,
-          selectedApplication.pubkey,
-          releaseIdentifier,
-        )
-      ) {
-        throw new Error(
-          `${selectedApplication.name} already has a ${releaseVersion} release.`,
-        );
+      if (!publisherPreflight) {
+        throw new Error("Software publication checks are not ready yet.");
       }
+      await publisherPreflight.executeApplication(
+        selectedApplication.appId,
+        selectedApplication.event.id,
+        async () => releaseCandidatePreflight.assertAvailable(),
+      );
 
       setStage("signing");
       const createdAt = Math.floor(Date.now() / 1000);

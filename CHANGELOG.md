@@ -13,6 +13,12 @@
 
 ### Changed
 
+- Warm each selected NIP-82 release coordinate while its dialog is open and
+  require the same publisher-relay coverage before treating a version as new.
+  Release publication now combines that exact evidence with the shared
+  application/deletion lease and a bounded cache lookup, removing the duplicate
+  action-time address-loader request; the limited recent-release feed remains
+  display-only and cannot prove absence.
 - Reuse one complete, page-owned publisher subscription for NIP-82 software
   applications and publisher-authored deletions. Application creation, editing,
   and repository linking now consume its EOSE-backed frozen winner plus a

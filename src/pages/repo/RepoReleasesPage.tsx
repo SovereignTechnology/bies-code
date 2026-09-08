@@ -1186,7 +1186,6 @@ export default function RepoReleasesPage({
     applications,
     releases,
     assetsById,
-    releaseRelays,
     applicationsSettled,
     releasesSettled,
     assetsSettled,
@@ -1240,11 +1239,11 @@ export default function RepoReleasesPage({
     canPublishRelease ? account?.pubkey : undefined,
     resolved?.repoRelayGroup,
   );
-  const releaseDiscoverySettled =
-    applicationsSettled && releasesSettled && !poolState.loading;
-  // Discovery can briefly become unsettled when live filters or Git refs
-  // refresh. Once opened, keep the dialog mounted so its draft is not reset.
-  const releaseFormReady = releaseDiscoverySettled || createReleaseOpen;
+  // The bounded recent-release feed is display-only. The publisher lease and
+  // exact candidate lease own write safety, so a flaky discovery-only relay
+  // must not hide the release form.
+  const releaseFormReady =
+    (accountApplicationsSettled && !poolState.loading) || createReleaseOpen;
 
   const latestMainReleaseIds = useMemo(() => {
     const seen = new Set<string>();
@@ -1415,7 +1414,7 @@ export default function RepoReleasesPage({
   }, [location.hash, renderedReleases.length]);
 
   if (view === "applications" && !eventId) {
-    if (loadingApplications || loadingReleases) {
+    if (loadingApplications) {
       return (
         <div className="container max-w-screen-xl px-4 py-6 md:px-8">
           <ReleasePageSkeleton />
@@ -1631,7 +1630,6 @@ export default function RepoReleasesPage({
           accountApplications={accountApplications}
           accountApplicationsSettled={accountApplicationsSettled}
           existingReleases={releases}
-          releaseRelays={releaseRelays}
           gitTags={gitTags}
           repoCoordinates={repo.confirmedMaintainerCoordinates}
           maintainerPubkeys={repo.confirmedMaintainers}

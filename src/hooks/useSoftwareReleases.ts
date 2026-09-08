@@ -51,7 +51,6 @@ export interface RepoSoftwareReleases {
   applications: SoftwareApplication[];
   releases: SoftwareRelease[];
   assetsById: Map<string, SoftwareAsset>;
-  releaseRelays: string[];
   applicationsSettled: boolean;
   releasesSettled: boolean;
   assetsSettled: boolean;
@@ -474,7 +473,6 @@ export function useSoftwareReleases(
     applications,
     releases,
     assetsById,
-    releaseRelays,
     applicationsSettled,
     releasesSettled,
     assetsSettled,
