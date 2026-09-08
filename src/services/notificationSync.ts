@@ -10,7 +10,6 @@
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 import { mapEventsToStore } from "applesauce-core";
 import type { Filter } from "applesauce-core/helpers";
-import { MailboxesModel } from "applesauce-core/models";
 import { AppDataFactory } from "applesauce-common/factories";
 import {
   getAppDataContent,
@@ -39,6 +38,14 @@ import {
   createRelaySubscriptionCoverage,
   type RelaySubscriptionCoverage,
 } from "@/lib/relaySubscriptionCoverage";
+import {
+  assessMailboxDiscovery,
+  isRelayCoverageInFlight,
+  mailboxOutboxesObservable,
+  meetsBoundedTwoThirdsThreshold,
+  type MailboxDiscovery,
+  type PreflightCoverageAssessment,
+} from "@/lib/replaceablePreflightCoverage";
 import { resilientSubscription } from "@/lib/resilientSubscription";
 import { normalizeUrl } from "@/lib/url";
 import { cacheRequest } from "@/services/cache";
@@ -94,7 +101,7 @@ export interface NotificationRelayScope {
   outboxes: string[];
   fallbacks: string[];
   relays: string[];
-  mailboxDiscovery: "known" | "checking" | "unavailable";
+  mailboxDiscovery: MailboxDiscovery;
 }
 
 interface NsecCache {
@@ -106,12 +113,6 @@ interface NsecCache {
 interface ResolvedNotificationSigner {
   signer: PrivateKeySigner;
   envelopeEventId: string;
-}
-
-interface CoverageAssessment {
-  met: boolean;
-  possible: boolean;
-  summary: string;
 }
 
 const PUBLISH_DEBOUNCE_MS = 2_000;
@@ -390,15 +391,13 @@ export function notificationRelayScopeObservable(
   pubkey: string,
 ): Observable<NotificationRelayScope> {
   return combineLatest([
-    eventStore.model(MailboxesModel, pubkey).pipe(startWith(undefined)),
+    mailboxOutboxesObservable(eventStore, pubkey),
     fallbackRelays,
     lookupRelays,
     userIdentityCoverage.changes$.pipe(startWith(undefined)),
   ]).pipe(
-    map(([mailboxes, configuredFallbacks, configuredLookups]) => {
-      const outboxes = [
-        ...new Set((mailboxes?.outboxes ?? []).map(normalizeUrl)),
-      ].sort();
+    map(([mailboxOutboxes, configuredFallbacks, configuredLookups]) => {
+      const outboxes = [...new Set(mailboxOutboxes ?? [])].sort();
       const outboxSet = new Set(outboxes);
       const fallbacks = [...new Set(configuredFallbacks.map(normalizeUrl))]
         .filter((relay) => !outboxSet.has(relay))
@@ -408,9 +407,9 @@ export function notificationRelayScopeObservable(
         fallbacks,
         relays: [...outboxes, ...fallbacks],
         mailboxDiscovery: assessMailboxDiscovery(
-          pubkey,
+          userIdentityCoverage.get(pubkey),
           configuredLookups.map(normalizeUrl),
-          mailboxes !== undefined,
+          mailboxOutboxes !== undefined,
         ),
       };
     }),
@@ -429,44 +428,6 @@ export function notificationRelayScopeObservable(
   );
 }
 
-function isInFlight(
-  coverage: RelaySubscriptionCoverage,
-  relay: string,
-): boolean {
-  const phase = coverage.get(relay)?.phase;
-  return phase === undefined || phase === "initial" || phase === "catching-up";
-}
-
-function meetsFallbackCoverageThreshold(
-  covered: number,
-  total: number,
-): boolean {
-  if (total === 0) return false;
-  const required = Math.max(1, Math.min(3, Math.ceil((total * 2) / 3)));
-  return covered >= required;
-}
-
-function assessMailboxDiscovery(
-  pubkey: string,
-  configuredLookups: string[],
-  hasMailboxEvent: boolean,
-): NotificationRelayScope["mailboxDiscovery"] {
-  if (hasMailboxEvent) return "known";
-
-  const coverage = userIdentityCoverage.get(pubkey);
-  if (!coverage) return "checking";
-
-  const lookups = [...new Set(configuredLookups)];
-  const covered = lookups.filter((relay) => coverage.isCovered(relay)).length;
-  if (meetsFallbackCoverageThreshold(covered, lookups.length)) return "known";
-
-  const possible =
-    covered + lookups.filter((relay) => isInFlight(coverage, relay)).length;
-  return meetsFallbackCoverageThreshold(possible, lookups.length)
-    ? "checking"
-    : "unavailable";
-}
-
 function meetsNotificationCoverageThreshold(
   coveredOutboxes: number,
   totalOutboxes: number,
@@ -474,7 +435,7 @@ function meetsNotificationCoverageThreshold(
   totalFallbacks: number,
 ): boolean {
   if (totalOutboxes === 0) {
-    return meetsFallbackCoverageThreshold(coveredFallbacks, totalFallbacks);
+    return meetsBoundedTwoThirdsThreshold(coveredFallbacks, totalFallbacks);
   }
   if (coveredOutboxes === 0) return false;
   if (coveredOutboxes === 1) return coveredFallbacks >= 2;
@@ -484,7 +445,7 @@ function meetsNotificationCoverageThreshold(
 function assessCoverage(
   scope: NotificationRelayScope,
   coverage: RelaySubscriptionCoverage,
-): CoverageAssessment {
+): PreflightCoverageAssessment {
   if (scope.mailboxDiscovery !== "known") {
     return {
       met: false,
@@ -504,10 +465,12 @@ function assessCoverage(
   ).length;
   const possibleOutboxes =
     coveredOutboxes +
-    scope.outboxes.filter((relay) => isInFlight(coverage, relay)).length;
+    scope.outboxes.filter((relay) => isRelayCoverageInFlight(coverage, relay))
+      .length;
   const possibleFallbacks =
     coveredFallbacks +
-    scope.fallbacks.filter((relay) => isInFlight(coverage, relay)).length;
+    scope.fallbacks.filter((relay) => isRelayCoverageInFlight(coverage, relay))
+      .length;
   const summary = `Outbox relays: ${coveredOutboxes}/${scope.outboxes.length} ready. Backup relays: ${coveredFallbacks}/${scope.fallbacks.length} ready.`;
 
   return {
@@ -529,7 +492,7 @@ function assessCoverage(
 
 function coverageState(
   stage: NotificationSyncStage,
-  assessment: CoverageAssessment,
+  assessment: PreflightCoverageAssessment,
   pendingChanges: boolean,
 ): NotificationSyncState {
   if (assessment.possible) {
@@ -637,7 +600,7 @@ export function startNotificationSync(
 
   const emitCoverageState = (
     stage: NotificationSyncStage,
-    assessment: CoverageAssessment,
+    assessment: PreflightCoverageAssessment,
   ) => {
     const next = coverageState(stage, assessment, pendingUpdates.length > 0);
     coverageBlocked = next.status === "paused";
