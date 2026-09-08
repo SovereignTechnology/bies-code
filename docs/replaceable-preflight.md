@@ -343,41 +343,58 @@ The relay rule follows the personal-state precedent but counts fallback relays
 instead of user-index relays, because generic indexes commonly reject kind
 `30078` while fallback relays are actual publication destinations:
 
-1. With configured outboxes, at least one outbox must be covered. One covered
-   outbox also requires two covered fallback relays. With multiple outboxes,
+1. The outbox frontier is not considered known merely because the mailbox
+   model currently has no value. A real kind `10002` winner establishes it
+   immediately; otherwise the personal-singleton identity owner must first
+   cover two thirds of the configured user-index relays, capped at three and
+   floored at one, to establish covered mailbox absence.
+2. With configured outboxes, at least one outbox must be covered. While exactly
+   one outbox is covered, regardless of the total configured, two covered
+   fallback relays are also required. Once two or more outboxes are covered,
    three covered outboxes or half of the configured outboxes is sufficient.
-2. Without configured outboxes, two thirds of the fallback set, capped at three
-   relays and floored at one, must be covered.
-3. `initial` and `catching-up` relays may be awaited within the existing bounded
+3. With covered mailbox absence and therefore no configured outboxes, two
+   thirds of the fallback set, capped at three relays and floored at one, must
+   be covered.
+4. `initial` and `catching-up` relays may be awaited within the existing bounded
    settlement deadline. Failed, disconnected, rate-limited, and
    `not-responding` relays do not block indefinitely.
 
 Once this threshold is warm for the current two-filter lease, writers consume
 the EventStore winners and decrypted projection without an action-time relay
 request. A missing envelope may create a fresh random derived key only after the
-envelope-only lease proves absence at the same threshold. The resulting state
-coordinate is a fresh unique address under that random key, but the combined
-warm lease is still established before its first state write. Both encrypted
-events publish to the same outbox and fallback frontier so the read evidence and
-durable destinations agree. Publishing encrypted content to those relays still
-reveals event existence, timing, and approximate size; it does not reveal the
-plaintext.
+envelope-only lease proves absence at the same threshold and a bounded exact
+IndexedDB read has also found no cached envelope. Both exact coordinates are
+hydrated from IndexedDB when their owner starts, with cached events routed
+through the EventStore; the envelope is checked locally once more immediately
+before bootstrap. These reads restore the useful local evidence from the old
+address loader without issuing a relay request. The resulting state coordinate
+is a fresh unique address under that random key, but the combined warm lease is
+still established before its first state write. Both encrypted events publish
+to the same outbox and fallback frontier so the read evidence and durable
+destinations agree. Publishing encrypted content to those relays still reveals
+event existence, timing, and approximate size; it does not reveal the plaintext.
 
 Read/archive actions remain immediate while coverage or decryption is pending.
 The store records their updater functions as local deltas, decrypts the current
 remote winner, and replays those deltas over it before signing. It must not
 publish a stale whole-state snapshot merely because local UI state changed
 first. Several rapid actions are debounced into one write. A new remote winner
-restarts reconciliation; a failed current-envelope or current-state decrypt is
-not retried passively on every store or lifecycle emission. The UI exposes an
-explicit retry and describes the failure as paused cross-device state sync,
-because notification delivery and the local read/archive controls still work.
+replaces the accepted base state, after which still-pending local deltas are
+replayed; this preserves remote reversals such as marking an item unread or
+restoring it. A failed current-envelope or current-state decrypt is not retried
+passively on every store or lifecycle emission. The UI exposes an explicit
+retry and describes the failure as paused cross-device state sync, because
+notification delivery and the local read/archive controls still work. Retry
+reuses the current warm owner for decrypt and publish failures, but replaces an
+owner whose coverage can no longer reach quorum so terminal or silent relay
+checks receive a fresh generation.
 
-This adoption removes the older address-loader reads and overlapping NIP-78
-subscriptions. It does not add NIP-09 deletion discovery, a post-write echo
-request, or a compare-and-swap protocol between concurrent clients. Later
-warm-subscription events continue to reconcile cross-client updates, while the
-durable outbox reports publication delivery separately.
+This adoption removes the older address-loader relay reads and overlapping
+NIP-78 subscriptions while retaining bounded cache-only hydration. It does not
+add NIP-09 deletion discovery, a post-write echo request, or a compare-and-swap
+protocol between concurrent clients. Later warm-subscription events continue
+to reconcile cross-client updates, while the durable outbox reports publication
+delivery separately.
 
 ## Writer checklist
 

@@ -29,7 +29,6 @@ import {
 import { distinctUntilChanged, map, startWith } from "rxjs/operators";
 import {
   DEFAULT_READ_STATE,
-  mergeReadStates,
   NIP78_KIND,
   NOTIFICATION_NSEC_D_TAG,
   NOTIFICATION_STATE_D_TAG,
@@ -42,9 +41,13 @@ import {
 } from "@/lib/relaySubscriptionCoverage";
 import { resilientSubscription } from "@/lib/resilientSubscription";
 import { normalizeUrl } from "@/lib/url";
+import { cacheRequest } from "@/services/cache";
 import { eventStore, pool } from "@/services/nostr";
-import { fallbackRelays } from "@/services/settings";
-import { USER_IDENTITY_COVERAGE_SETTLEMENT_TIMEOUT_MS } from "@/services/userIdentityCoverage";
+import { fallbackRelays, lookupRelays } from "@/services/settings";
+import {
+  USER_IDENTITY_COVERAGE_SETTLEMENT_TIMEOUT_MS,
+  userIdentityCoverage,
+} from "@/services/userIdentityCoverage";
 
 interface NotificationKeyEnvelope {
   "nsec-for-notification-state"?: string;
@@ -91,6 +94,7 @@ export interface NotificationRelayScope {
   outboxes: string[];
   fallbacks: string[];
   relays: string[];
+  mailboxDiscovery: "known" | "checking" | "unavailable";
 }
 
 interface NsecCache {
@@ -111,6 +115,7 @@ interface CoverageAssessment {
 }
 
 const PUBLISH_DEBOUNCE_MS = 2_000;
+const CACHE_HYDRATION_TIMEOUT_MS = 1_000;
 const signerCache = new Map<string, ResolvedNotificationSigner>();
 const signerInFlight = new Map<
   string,
@@ -186,11 +191,42 @@ function currentEvent(filter: Filter): NostrEvent | undefined {
   return eventStore.getByFilters(filter)[0] as NostrEvent | undefined;
 }
 
+async function hydrateCachedNotificationEvents(
+  filters: Filter[],
+): Promise<void> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const events = await Promise.race([
+      cacheRequest(filters),
+      new Promise<NostrEvent[]>((resolve) => {
+        timeoutId = setTimeout(() => resolve([]), CACHE_HYDRATION_TIMEOUT_MS);
+      }),
+    ]);
+    for (const event of events) eventStore.add(event);
+  } catch {
+    // IndexedDB is useful additional evidence, not a prerequisite for sync.
+  } finally {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
+  }
+}
+
 function stateEquals(
   first: NotificationReadState,
   second: NotificationReadState,
 ): boolean {
   return JSON.stringify(first) === JSON.stringify(second);
+}
+
+function syncStateEquals(
+  first: NotificationSyncState,
+  second: NotificationSyncState,
+): boolean {
+  return (
+    first.status === second.status &&
+    first.stage === second.stage &&
+    first.message === second.message &&
+    first.pendingChanges === second.pendingChanges
+  );
 }
 
 function replayUpdates(
@@ -352,8 +388,10 @@ export function notificationRelayScopeObservable(
   return combineLatest([
     eventStore.model(MailboxesModel, pubkey).pipe(startWith(undefined)),
     fallbackRelays,
+    lookupRelays,
+    userIdentityCoverage.changes$.pipe(startWith(undefined)),
   ]).pipe(
-    map(([mailboxes, configuredFallbacks]) => {
+    map(([mailboxes, configuredFallbacks, configuredLookups]) => {
       const outboxes = [
         ...new Set((mailboxes?.outboxes ?? []).map(normalizeUrl)),
       ].sort();
@@ -365,6 +403,11 @@ export function notificationRelayScopeObservable(
         outboxes,
         fallbacks,
         relays: [...outboxes, ...fallbacks],
+        mailboxDiscovery: assessMailboxDiscovery(
+          pubkey,
+          configuredLookups.map(normalizeUrl),
+          mailboxes !== undefined,
+        ),
       };
     }),
     distinctUntilChanged(
@@ -376,7 +419,8 @@ export function notificationRelayScopeObservable(
         first.fallbacks.length === second.fallbacks.length &&
         first.fallbacks.every(
           (relay, index) => relay === second.fallbacks[index],
-        ),
+        ) &&
+        first.mailboxDiscovery === second.mailboxDiscovery,
     ),
   );
 }
@@ -389,6 +433,36 @@ function isInFlight(
   return phase === undefined || phase === "initial" || phase === "catching-up";
 }
 
+function meetsFallbackCoverageThreshold(
+  covered: number,
+  total: number,
+): boolean {
+  if (total === 0) return false;
+  const required = Math.max(1, Math.min(3, Math.ceil((total * 2) / 3)));
+  return covered >= required;
+}
+
+function assessMailboxDiscovery(
+  pubkey: string,
+  configuredLookups: string[],
+  hasMailboxEvent: boolean,
+): NotificationRelayScope["mailboxDiscovery"] {
+  if (hasMailboxEvent) return "known";
+
+  const coverage = userIdentityCoverage.get(pubkey);
+  if (!coverage) return "checking";
+
+  const lookups = [...new Set(configuredLookups)];
+  const covered = lookups.filter((relay) => coverage.isCovered(relay)).length;
+  if (meetsFallbackCoverageThreshold(covered, lookups.length)) return "known";
+
+  const possible =
+    covered + lookups.filter((relay) => isInFlight(coverage, relay)).length;
+  return meetsFallbackCoverageThreshold(possible, lookups.length)
+    ? "checking"
+    : "unavailable";
+}
+
 function meetsNotificationCoverageThreshold(
   coveredOutboxes: number,
   totalOutboxes: number,
@@ -396,12 +470,7 @@ function meetsNotificationCoverageThreshold(
   totalFallbacks: number,
 ): boolean {
   if (totalOutboxes === 0) {
-    if (totalFallbacks === 0) return false;
-    const requiredFallbacks = Math.max(
-      1,
-      Math.min(3, Math.ceil((totalFallbacks * 2) / 3)),
-    );
-    return coveredFallbacks >= requiredFallbacks;
+    return meetsFallbackCoverageThreshold(coveredFallbacks, totalFallbacks);
   }
   if (coveredOutboxes === 0) return false;
   if (coveredOutboxes === 1) return coveredFallbacks >= 2;
@@ -412,6 +481,17 @@ function assessCoverage(
   scope: NotificationRelayScope,
   coverage: RelaySubscriptionCoverage,
 ): CoverageAssessment {
+  if (scope.mailboxDiscovery !== "known") {
+    return {
+      met: false,
+      possible: scope.mailboxDiscovery === "checking",
+      summary:
+        scope.mailboxDiscovery === "checking"
+          ? "Mailbox discovery is still checking the configured user-index relays."
+          : "Mailbox discovery could not confirm whether you have configured outbox relays.",
+    };
+  }
+
   const coveredOutboxes = scope.outboxes.filter((relay) =>
     coverage.isCovered(relay),
   ).length;
@@ -490,6 +570,7 @@ export function startNotificationSync(
     outboxes: [],
     fallbacks: [],
     relays: [],
+    mailboxDiscovery: "checking",
   };
   let coverage: RelaySubscriptionCoverage | undefined;
   let coverageChangesSub: Subscription | undefined;
@@ -506,20 +587,31 @@ export function startNotificationSync(
   let publishTimer: ReturnType<typeof setTimeout> | undefined;
   let publishRequested = false;
   let publishing = false;
-  let lastPublishedStateAt = 0;
   let lastPublishedEventId: string | null = null;
   let ownerRevision = 0;
+  let initialCacheHydration: Promise<void> = Promise.resolve();
+  let bootstrapCacheCheckedRevision = -1;
+  let coverageBlocked = false;
   let reconcileRunning = false;
   let reconcileAgain = false;
   let stopped = false;
+
+  // Invariant: readState$ is always baseState with every pending updater
+  // replayed in order. A remote winner replaces baseState; pending local intent
+  // is then reapplied before the next signature is created.
 
   const currentFilters = (notificationPubkey: string | null): Filter[] => [
     envelopeFilter(pubkey),
     ...(notificationPubkey ? [stateFilter(notificationPubkey)] : []),
   ];
 
+  const emitState = (next: NotificationSyncState) => {
+    if (!syncStateEquals(state$.getValue(), next)) state$.next(next);
+  };
+
   const emitReady = () => {
-    state$.next({
+    coverageBlocked = false;
+    emitState({
       status: "ready",
       stage: "state",
       message: pendingUpdates.length
@@ -530,12 +622,22 @@ export function startNotificationSync(
   };
 
   const emitPaused = (stage: NotificationSyncStage, message: string) => {
-    state$.next({
+    coverageBlocked = false;
+    emitState({
       status: "paused",
       stage,
       message,
       pendingChanges: pendingUpdates.length > 0,
     });
+  };
+
+  const emitCoverageState = (
+    stage: NotificationSyncStage,
+    assessment: CoverageAssessment,
+  ) => {
+    const next = coverageState(stage, assessment, pendingUpdates.length > 0);
+    coverageBlocked = next.status === "paused";
+    emitState(next);
   };
 
   const requestReconcile = () => {
@@ -557,8 +659,10 @@ export function startNotificationSync(
 
   const restartWarmOwner = (notificationPubkey: string | null) => {
     ownerRevision += 1;
+    const revision = ownerRevision;
     scopeNotificationPubkey = notificationPubkey;
     appliedStateEventId = null;
+    coverageBlocked = false;
     coverageChangesSub?.unsubscribe();
     coverage?.stop();
     relaySub?.unsubscribe();
@@ -570,6 +674,10 @@ export function startNotificationSync(
     coverage = nextCoverage;
     coverageChangesSub = nextCoverage.changes$.subscribe(requestReconcile);
     const filters = currentFilters(notificationPubkey);
+    initialCacheHydration = hydrateCachedNotificationEvents(filters);
+    void initialCacheHydration.then(() => {
+      if (!stopped && revision === ownerRevision) requestReconcile();
+    });
     storeSub = (
       eventStore.timeline(filters) as unknown as Observable<NostrEvent[]>
     ).subscribe(() => requestReconcile());
@@ -616,7 +724,6 @@ export function startNotificationSync(
         .sign();
 
       if (stopped || revision !== ownerRevision) return;
-      lastPublishedStateAt = signed.created_at;
       lastPublishedEventId = signed.id;
       eventStore.add(signed);
       const { outboxStore } = await import("@/services/outbox");
@@ -653,6 +760,9 @@ export function startNotificationSync(
     const activeCoverage = coverage;
     if (!activeCoverage) return;
     const revision = ownerRevision;
+    const ownerCacheHydration = initialCacheHydration;
+    await ownerCacheHydration;
+    if (stopped || revision !== ownerRevision) return;
     const envelope = currentEvent(envelopeFilter(pubkey));
     const envelopeSourceId = envelope?.id ?? "absent";
 
@@ -683,9 +793,7 @@ export function startNotificationSync(
     if (!resolvedSigner) {
       const assessment = assessCoverage(relayScope, activeCoverage);
       if (!assessment.met) {
-        state$.next(
-          coverageState("envelope", assessment, pendingUpdates.length > 0),
-        );
+        emitCoverageState("envelope", assessment);
         return;
       }
       // Confirmed envelope absence means no derived state coordinate exists.
@@ -694,6 +802,19 @@ export function startNotificationSync(
       if (pendingUpdates.length === 0) {
         emitReady();
         return;
+      }
+
+      // Bootstrap is destructive if an older envelope exists only in the
+      // local cache. Re-check that exact coordinate immediately before key
+      // creation; this is bounded IndexedDB evidence, never a relay request.
+      if (bootstrapCacheCheckedRevision !== revision) {
+        await hydrateCachedNotificationEvents([envelopeFilter(pubkey)]);
+        if (stopped || revision !== ownerRevision) return;
+        bootstrapCacheCheckedRevision = revision;
+        if (currentEvent(envelopeFilter(pubkey))?.id !== envelope?.id) {
+          requestReconcile();
+          return;
+        }
       }
       try {
         resolvedSigner = await resolveNotificationSigner(
@@ -724,9 +845,7 @@ export function startNotificationSync(
 
     const assessment = assessCoverage(relayScope, activeCoverage);
     if (!assessment.met) {
-      state$.next(
-        coverageState("state", assessment, pendingUpdates.length > 0),
-      );
+      emitCoverageState("state", assessment);
       return;
     }
 
@@ -754,10 +873,7 @@ export function startNotificationSync(
           requestReconcile();
           return;
         }
-        baseState =
-          latest.created_at > lastPublishedStateAt
-            ? relayState
-            : mergeReadStates(baseState, relayState);
+        baseState = relayState;
         appliedStateEventId = latest.id;
         const rebased = replayUpdates(baseState, pendingUpdates);
         if (!stateEquals(rebased, readState$.getValue()))
@@ -805,20 +921,23 @@ export function startNotificationSync(
         requestReconcile();
       }, PUBLISH_DEBOUNCE_MS);
       const current = state$.getValue();
-      state$.next({ ...current, pendingChanges: true });
+      emitState({ ...current, pendingChanges: true });
     },
     retry() {
       if (stopped) return;
+      const restartCoverage = coverageBlocked;
       failedEnvelopeId = null;
       failedStateId = null;
       publishRequested = pendingUpdates.length > 0 || publishRequested;
-      state$.next({
+      coverageBlocked = false;
+      emitState({
         status: "checking",
         stage: scopeNotificationPubkey ? "state" : "envelope",
         message: "Retrying encrypted notification state sync...",
         pendingChanges: pendingUpdates.length > 0,
       });
-      requestReconcile();
+      if (restartCoverage) restartWarmOwner(scopeNotificationPubkey);
+      else requestReconcile();
     },
     stop() {
       if (stopped) return;
