@@ -71,6 +71,7 @@ interface CreateRepoDialogProps {
 // ---------------------------------------------------------------------------
 
 const STEPS: { key: CreateRepoStep; label: string }[] = [
+  { key: "checking-relays", label: "Checking repository identifier" },
   { key: "building-commit", label: "Building initial commit" },
   { key: "signing-events", label: "Signing events" },
   {

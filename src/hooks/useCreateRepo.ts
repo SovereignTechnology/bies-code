@@ -2,10 +2,11 @@
  * useCreateRepo — orchestration hook for the repo creation flow.
  *
  * Coordinates the full sequence:
- *   1. Build git objects (blob → tree → commit → packfile)
- *   2. Sign kind:30617 (announcement) and kind:30618 (state) events
- *   3. Publish events to the Grasp relay (purgatory) + outbox/index relays
- *   4. Push the packfile to the Grasp git HTTP endpoint
+ *   1. Confirm the new coordinates are absent on their required frontiers
+ *   2. Build git objects (blob → tree → commit → packfile)
+ *   3. Sign kind:30617 (announcement) and kind:30618 (state) events
+ *   4. Publish events to the Grasp relay (purgatory) + outbox/index relays
+ *   5. Push the packfile to the Grasp git HTTP endpoint
  *
  * Exposes step-by-step progress state for the UI.
  */
@@ -41,6 +42,7 @@ import { resilientRequest } from "@/lib/resilientSubscription";
 import { onlyEvents } from "applesauce-relay";
 import { firstValueFrom, timeout, toArray } from "rxjs";
 import { repoCoordinate } from "@/lib/nip34";
+import { assertNewPublicRepositoryCoordinatesAbsent } from "@/hooks/useRepositoryReplaceablePreflight";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -49,6 +51,7 @@ import { repoCoordinate } from "@/lib/nip34";
 /** Progress step for the UI. */
 export type CreateRepoStep =
   | "idle"
+  | "checking-relays"
   | "building-commit"
   | "signing-events"
   | "publishing-announcement"
@@ -97,6 +100,13 @@ interface PrivateCreateRetry {
   state: NostrEvent;
 }
 
+interface PublicCreateRetry {
+  pubkey: string;
+  identifier: string;
+  commitHash: string;
+  state: NostrEvent;
+}
+
 // ---------------------------------------------------------------------------
 // Hook
 // ---------------------------------------------------------------------------
@@ -110,11 +120,13 @@ export function useCreateRepo() {
   const [state, setState] = useState<CreateRepoState>({ step: "idle" });
   const abortRef = useRef<AbortController | null>(null);
   const privateRetryRef = useRef<PrivateCreateRetry>();
+  const publicRetryRef = useRef<PublicCreateRetry>();
 
   const reset = useCallback(() => {
     abortRef.current?.abort();
     abortRef.current = null;
     privateRetryRef.current = undefined;
+    publicRetryRef.current = undefined;
     setState({ step: "idle" });
   }, []);
 
@@ -132,6 +144,29 @@ export function useCreateRepo() {
         if (input.private && input.graspServers.length !== 1) {
           throw new Error("Select exactly one private GRASP-08 service");
         }
+
+        // Resolve the proposed frontier before any signing or Git work. A
+        // public repository has no warm page owner yet, so its collision
+        // check is the one legitimate focused announcement/state request.
+        const encodedIdentifier = encodeURIComponent(input.identifier);
+        const cloneUrls = input.graspServers.map((server) =>
+          graspRepositoryCloneUrl(
+            server.serviceAddress,
+            npub,
+            encodedIdentifier,
+          ),
+        );
+        const relayUrls = input.graspServers.map((server) => server.wsUrl);
+        setState({ step: "checking-relays" });
+        if (!input.private) {
+          await assertNewPublicRepositoryCoordinatesAbsent(
+            pubkey,
+            input.identifier,
+            relayUrls,
+          );
+        }
+        if (abort.signal.aborted) return;
+
         // ── Step 1: Build git objects ──────────────────────────────────
         setState({ step: "building-commit" });
 
@@ -149,18 +184,6 @@ export function useCreateRepo() {
 
         // ── Step 2: Sign Nostr events ─────────────────────────────────
         setState({ step: "signing-events" });
-
-        // Build clone URLs and relay URLs for all selected Grasp servers
-        // Percent-encode the identifier per GRASP-01 §Git Smart HTTP path spec
-        const encodedIdentifier = encodeURIComponent(input.identifier);
-        const cloneUrls = input.graspServers.map((server) =>
-          graspRepositoryCloneUrl(
-            server.serviceAddress,
-            npub,
-            encodedIdentifier,
-          ),
-        );
-        const relayUrls = input.graspServers.map((s) => s.wsUrl);
 
         const privateList = privateGitRelayList$.getValue();
         if (
@@ -267,6 +290,13 @@ export function useCreateRepo() {
             announcement: signedAnnouncement,
             state: signedState,
           };
+        } else {
+          publicRetryRef.current = {
+            pubkey,
+            identifier: input.identifier,
+            commitHash,
+            state: signedState,
+          };
         }
 
         // ── Step 3: Publish announcement ──────────────────────────────
@@ -294,6 +324,7 @@ export function useCreateRepo() {
         if (!input.private) {
           // Public repositories remain discoverable through the normal index.
           await outboxStore.publish(signedAnnouncement, [
+            `outbox:${pubkey}`,
             "git-index",
             "fallback-relays",
           ]);
@@ -399,6 +430,17 @@ export function useCreateRepo() {
           throw new Error(
             `Git push failed on all servers:\n${errors.join("\n")}`,
           );
+        }
+
+        if (!input.private) {
+          // GRASP may withhold the state from reads while it is in purgatory.
+          // Broadcast only after Git data exists, never by querying for an
+          // echo between relay acknowledgement and the push.
+          await outboxStore.publish(signedState, [
+            `outbox:${pubkey}`,
+            repoCoordinate(pubkey, input.identifier),
+            "fallback-relays",
+          ]);
         }
 
         // Use the first clone URL as the canonical one for display
@@ -611,6 +653,23 @@ export function useCreateRepo() {
             `Git push failed on all servers:\n${errors.join("\n")}`,
           );
         }
+
+        const transaction = publicRetryRef.current;
+        if (
+          !transaction ||
+          transaction.pubkey !== pubkey ||
+          transaction.identifier !== input.identifier ||
+          transaction.commitHash !== commitHash
+        ) {
+          throw new Error(
+            "The repository creation session changed; start creation again",
+          );
+        }
+        await outboxStore.publish(transaction.state, [
+          `outbox:${pubkey}`,
+          repoCoordinate(pubkey, input.identifier),
+          "fallback-relays",
+        ]);
 
         const primaryCloneUrl = cloneUrls[0];
 
