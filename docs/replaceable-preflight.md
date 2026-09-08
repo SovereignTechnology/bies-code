@@ -202,11 +202,15 @@ announcement with the same clone and relay frontiers but no state is an
 incomplete, resumable creation rather than a collision. Confidential repository
 creation keeps its existing private-service-only collision check.
 
-An in-session public-creation retry retains the original signed state, commit
-hash, clone frontier, and packfile. It re-publishes that same state to the GRASP
-relays before pushing the same Git objects, re-arming expired purgatory without
-creating a state/commit mismatch. Session identity is checked before either
-side effect.
+A public-creation retry retains the original signed announcement and state,
+commit hash, clone and relay frontiers, and packfile for seven days in local
+browser storage. A later attempt for the same coordinate may use that record
+only after the focused collision check finds either no competing event or the
+exact retained state. It re-publishes the same announcement and state to the
+GRASP relays before pushing the same Git objects, re-arming expired purgatory
+without creating a state/commit mismatch. Account identity is checked before
+either side effect, and successful Git plus durable state delivery removes the
+record.
 
 Signed kind `5` requests are a modifier on the repository snapshot. Stable
 coordinate pointers stay in the base lease. Candidate-dependent exact `e`

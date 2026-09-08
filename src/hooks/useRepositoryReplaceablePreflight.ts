@@ -246,15 +246,23 @@ function assertPublicCreationCanProceed(
   dTag: string,
   proposedCloneUrls: string[],
   proposedRepositoryRelays: string[],
+  resumable?: { announcementId: string; stateId: string },
 ): void {
-  if (eventStore.getReplaceable(REPO_STATE_KIND, pubkey, dTag)) {
+  const state = eventStore.getReplaceable(REPO_STATE_KIND, pubkey, dTag);
+  const announcement = eventStore.getReplaceable(REPO_KIND, pubkey, dTag);
+  if (
+    state &&
+    (state.id !== resumable?.stateId ||
+      (announcement !== undefined &&
+        announcement.id !== resumable.announcementId))
+  ) {
     throw new Error(
       "This repository identifier already has published state. Choose another identifier.",
     );
   }
-  const announcement = eventStore.getReplaceable(REPO_KIND, pubkey, dTag);
   if (
     announcement &&
+    announcement.id !== resumable?.announcementId &&
     !resumablePublicAnnouncement(
       pubkey,
       dTag,
@@ -274,6 +282,7 @@ export async function assertNewPublicRepositoryCoordinatesAvailable(
   dTag: string,
   proposedCloneUrls: string[],
   proposedRepositoryRelays: string[],
+  resumable?: { announcementId: string; stateId: string },
 ): Promise<void> {
   await Promise.all([
     hydrateCachedCoordinate(REPO_KIND, pubkey, dTag),
@@ -284,6 +293,7 @@ export async function assertNewPublicRepositoryCoordinatesAvailable(
     dTag,
     proposedCloneUrls,
     proposedRepositoryRelays,
+    resumable,
   );
 
   const outboxes = mailboxOutboxes(pubkey);
@@ -317,6 +327,7 @@ export async function assertNewPublicRepositoryCoordinatesAvailable(
     dTag,
     proposedCloneUrls,
     proposedRepositoryRelays,
+    resumable,
   );
 }
 
