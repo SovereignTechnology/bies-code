@@ -22,7 +22,6 @@ import { getOrCreatePool } from "@/lib/git-grasp-pool";
 import {
   prepareRepositoryMembershipMutation,
   REPOSITORY_MEMBERSHIP_MUTATIONS_ENABLED,
-  repositoryMembershipSnapshotIds,
   RepositoryMembershipMutationRefusal,
   verifyRepositoryMembershipMutationResult,
   type RepositoryMembershipMutationIntent,
@@ -49,6 +48,9 @@ import {
   publish,
 } from "@/services/nostr";
 import { fallbackRelays, gitIndexRelays } from "@/services/settings";
+import { getOutboxes } from "applesauce-core/helpers";
+import type { ResolvedRepository } from "@/hooks/useResolvedRepository";
+import { useRepositoryReplaceablePreflight } from "@/hooks/useRepositoryReplaceablePreflight";
 
 export interface RepositoryMembershipMutationFailure {
   code: RepositoryMembershipMutationRefusalCode;
@@ -56,6 +58,7 @@ export interface RepositoryMembershipMutationFailure {
 }
 
 interface UseRepositoryMembershipMutationOptions {
+  resolved: ResolvedRepository;
   repo: ResolvedRepo;
   announcementsSettled: boolean;
   stateSettled: boolean;
@@ -83,29 +86,6 @@ const GIT_OBJECT_TIMEOUT_MS = 15_000;
 const PUBLICATION_TIMEOUT_MS = 15_000;
 const MAX_SNAPSHOT_AUTHORS = 64;
 const MAX_SNAPSHOT_RELAYS = 64;
-
-function mapsEqual(
-  left: ReadonlyMap<string, string>,
-  right: ReadonlyMap<string, string>,
-): boolean {
-  return (
-    left.size === right.size &&
-    [...left].every(([key, value]) => right.get(key) === value)
-  );
-}
-
-function arraysEqualAsSets(left: string[], right: string[]): boolean {
-  return setEqual(left, right);
-}
-
-function setEqual(left: Iterable<string>, right: Iterable<string>): boolean {
-  const leftSet = new Set(left);
-  const rightSet = new Set(right);
-  return (
-    leftSet.size === rightSet.size &&
-    [...leftSet].every((value) => rightSet.has(value))
-  );
-}
 
 function latestEventsByAuthor(events: NostrEvent[]): NostrEvent[] {
   return [
@@ -154,9 +134,9 @@ function requiredRelayRead(
   filters: Filter[],
   deadline: number,
   label: string,
+  requiredEoseCount = relays.length,
 ): Promise<CompleteRelayRead> {
   return new Promise((resolve, reject) => {
-    const required = new Set(relays.map(normalizeUrl));
     const eose = new Set<string>();
     const events = new Map<string, NostrEvent>();
     const resources: {
@@ -187,12 +167,7 @@ function requiredRelayRead(
       );
     resources.timerId = setTimeout(
       () =>
-        fail(
-          `${label} did not receive EOSE from ${
-            [...required].filter((relay) => !eose.has(relay)).join(", ") ||
-            "every required relay"
-          } before the bounded deadline.`,
-        ),
+        fail(`${label} did not reach its relay threshold before the deadline.`),
       Math.max(0, remaining),
     );
 
@@ -206,12 +181,9 @@ function requiredRelayRead(
       retryCount: 0,
       onRelayEose: (relay) => {
         eose.add(normalizeUrl(relay));
-        if (eose.size === required.size) {
+        if (eose.size >= requiredEoseCount) {
           finish({ events: [...events.values()], eoseRelays: [...eose] });
         }
-      },
-      onRelayError: (relay) => {
-        fail(`${label} failed on required relay ${normalizeUrl(relay)}.`);
       },
     }).subscribe({
       next: (response) => {
@@ -223,11 +195,9 @@ function requiredRelayRead(
         );
       },
       complete: () => {
-        if (eose.size !== required.size) {
+        if (eose.size < requiredEoseCount) {
           fail(
-            `${label} completed without EOSE from ${[...required]
-              .filter((relay) => !eose.has(relay))
-              .join(", ")}.`,
+            `${label} completed with ${eose.size} of ${requiredEoseCount} required relay responses.`,
           );
         }
       },
@@ -318,7 +288,6 @@ async function settleMutationSnapshot(
   actorPubkey: string,
   intent: RepositoryMembershipMutationIntent,
   relayUrls: string[],
-  knownTargetIds: string[] = [],
 ): Promise<MutationSnapshot> {
   const deadline = Date.now() + SNAPSHOT_TIMEOUT_MS;
   const authors = new Set(mutationAuthors(repo, actorPubkey, intent));
@@ -337,8 +306,7 @@ async function settleMutationSnapshot(
       "No repository, mailbox, Git index, or fallback relay is available. GitWorkshop does not yet support making this transition.",
     );
   }
-  const safetyRelays = new Set(baseRelays);
-  const mailboxAuthors = new Set<string>();
+  const checkedAbsentAuthors = new Set<string>();
 
   while (true) {
     if (authors.size > MAX_SNAPSHOT_AUTHORS) {
@@ -347,113 +315,109 @@ async function settleMutationSnapshot(
         `The affected closure exceeds ${MAX_SNAPSHOT_AUTHORS} authors. GitWorkshop does not yet support making this transition.`,
       );
     }
-    if (safetyRelays.size > MAX_SNAPSHOT_RELAYS) {
+    if (baseRelays.size > MAX_SNAPSHOT_RELAYS) {
       throw new RepositoryMembershipMutationRefusal(
         "incomplete_relay_view",
-        `The safety set exceeds ${MAX_SNAPSHOT_RELAYS} relays. GitWorkshop does not yet support making this transition.`,
+        `The delivery set exceeds ${MAX_SNAPSHOT_RELAYS} relays. GitWorkshop does not yet support making this transition.`,
       );
     }
 
     const authorList = [...authors].sort();
-    const undiscoveredMailboxAuthors = authorList.filter(
-      (author) => !mailboxAuthors.has(author),
+    const currentAnnouncements = eventStore.getByFilters([
+      {
+        kinds: [REPO_KIND],
+        authors: authorList,
+        "#d": [repo.dTag],
+      } as Filter,
+    ]);
+    const authorsWithAnnouncements = new Set(
+      currentAnnouncements.map(({ pubkey }) => pubkey),
     );
-    if (undiscoveredMailboxAuthors.length > 0) {
+    const absentAuthors = authorList.filter(
+      (author) =>
+        !authorsWithAnnouncements.has(author) &&
+        !checkedAbsentAuthors.has(author),
+    );
+
+    // An existing announcement is already covered by the page owner on the
+    // repository relays. Only an absent author coordinate introduces a new
+    // scope: discover that author's outbox and require one focused EOSE there.
+    if (absentAuthors.length > 0) {
       const mailboxEvents = await discoverMutationMailboxes(
-        undiscoveredMailboxAuthors,
+        absentAuthors,
         deadline,
       );
-      for (const event of mailboxEvents) {
-        for (const [name, url] of event.tags) {
-          if (name === "r" && /^wss?:\/\//.test(url ?? "")) {
-            safetyRelays.add(normalizeUrl(url));
-          }
+      const mailboxByAuthor = new Map(
+        mailboxEvents.map((event) => [event.pubkey, event]),
+      );
+      for (const author of absentAuthors) {
+        const mailbox = mailboxByAuthor.get(author);
+        const outboxes = mailbox
+          ? [...new Set(getOutboxes(mailbox).map(normalizeUrl))]
+          : [];
+        if (outboxes.length === 0) {
+          throw new RepositoryMembershipMutationRefusal(
+            "incomplete_relay_view",
+            `No NIP-65 outbox relay is available to confirm the absent repository announcement for ${author}. GitWorkshop does not yet support making this transition.`,
+          );
         }
-      }
-      for (const author of undiscoveredMailboxAuthors) {
-        mailboxAuthors.add(author);
+        const focused = await requiredRelayRead(
+          outboxes,
+          [
+            {
+              kinds: [REPO_KIND, REPO_STATE_KIND],
+              authors: [author],
+              "#d": [repo.dTag],
+            } as Filter,
+            {
+              kinds: [5],
+              authors: [author],
+              "#a": [
+                `${REPO_KIND}:${author}:${repo.dTag}`,
+                `${REPO_STATE_KIND}:${author}:${repo.dTag}`,
+              ],
+            } as Filter,
+          ],
+          deadline,
+          `Repository coordinate lookup for ${author}`,
+          1,
+        );
+        focused.events.forEach((event) => eventStore.add(event));
+        for (const relay of outboxes) baseRelays.add(relay);
+        checkedAbsentAuthors.add(author);
       }
       continue;
     }
 
-    const relayList = [...safetyRelays].sort();
-    const mailboxRead = await requiredRelayRead(
-      relayList,
-      [{ kinds: [10002], authors: authorList } as Filter],
-      deadline,
-      "Mailbox discovery",
-    );
-    const mailboxEvents = latestEventsByAuthor(
-      mailboxRead.events.filter(({ kind }) => kind === 10002),
-    );
-    const discoveredMailboxRelays = mailboxEvents.flatMap((event) =>
-      event.tags.flatMap(([name, url]) =>
-        name === "r" && /^wss?:\/\//.test(url ?? "") ? [normalizeUrl(url)] : [],
-      ),
-    );
-    const relayCount = safetyRelays.size;
-    for (const relay of discoveredMailboxRelays) safetyRelays.add(relay);
-    if (safetyRelays.size !== relayCount) continue;
-
+    const rawCandidates = eventStore.getByFilters([
+      {
+        kinds: [REPO_KIND, REPO_STATE_KIND],
+        authors: authorList,
+        "#d": [repo.dTag],
+      } as Filter,
+    ]);
+    const knownEventIds = rawCandidates.map(({ id }) => id);
     const addressCoordinates = authorList.flatMap((author) => [
       `${REPO_KIND}:${author}:${repo.dTag}`,
       `${REPO_STATE_KIND}:${author}:${repo.dTag}`,
       `10002:${author}:`,
     ]);
-    const candidateRead = await requiredRelayRead(
-      relayList,
-      [
-        { kinds: [10002], authors: authorList } as Filter,
-        {
-          kinds: [REPO_KIND],
-          authors: authorList,
-          "#d": [repo.dTag],
-        } as Filter,
-        {
-          kinds: [REPO_STATE_KIND],
-          authors: authorList,
-          "#d": [repo.dTag],
-        } as Filter,
-        {
-          kinds: [5],
-          authors: authorList,
-          "#a": addressCoordinates,
-        } as Filter,
-      ],
-      deadline,
-      "Announcement, state, and mailbox snapshot",
-    );
-    const rawCandidates = candidateRead.events;
-    const knownEventIds = [
-      ...new Set([
-        ...rawCandidates.map(({ id }) => id),
-        ...repo.discoveredAnnouncements.map(({ id }) => id),
-        ...repo.historicalAnnouncements.map(({ id }) => id),
-        ...knownTargetIds,
-      ]),
-    ];
-    const exactDeletionRead =
-      knownEventIds.length > 0
-        ? await requiredRelayRead(
-            relayList,
-            [
-              {
-                kinds: [5],
-                authors: authorList,
-                "#e": knownEventIds,
-              } as Filter,
-            ],
-            deadline,
-            "Exact deletion snapshot",
-          )
-        : { events: [], eoseRelays: relayList };
-    const deletionEvents = [
-      ...new Map(
-        [...rawCandidates, ...exactDeletionRead.events]
-          .filter(({ kind }) => kind === 5)
-          .map((event) => [event.id, event]),
-      ).values(),
-    ];
+    const deletionEvents = eventStore.getByFilters([
+      {
+        kinds: [5],
+        authors: authorList,
+        "#a": addressCoordinates,
+      } as Filter,
+      ...(knownEventIds.length > 0
+        ? [
+            {
+              kinds: [5],
+              authors: authorList,
+              "#e": knownEventIds,
+            } as Filter,
+          ]
+        : []),
+    ]);
     const announcements = withoutDeleted(
       rawCandidates.filter(({ kind }) => kind === REPO_KIND),
       deletionEvents,
@@ -463,10 +427,9 @@ async function settleMutationSnapshot(
       deletionEvents,
     );
     const refreshedMailboxEvents = latestEventsByAuthor(
-      withoutDeleted(
-        rawCandidates.filter(({ kind }) => kind === 10002),
-        deletionEvents,
-      ),
+      eventStore.getByFilters([
+        { kinds: [10002], authors: authorList } as Filter,
+      ]),
     );
 
     const nextAuthors = new Set(authors);
@@ -513,17 +476,6 @@ async function settleMutationSnapshot(
       ),
     ]) {
       finalRelays.add(normalizeUrl(relay));
-    }
-    const missingFinalRelays = [...finalRelays].filter(
-      (relay) => !safetyRelays.has(relay),
-    );
-    if (missingFinalRelays.length > 0) {
-      for (const relay of missingFinalRelays) safetyRelays.add(relay);
-      continue;
-    }
-
-    for (const event of [...rawCandidates, ...exactDeletionRead.events]) {
-      eventStore.add(event);
     }
     return {
       repo: refreshedRepo,
@@ -647,13 +599,13 @@ function graspServersForRepo(repo: ResolvedRepo): GraspServer[] {
 }
 
 export function useRepositoryMembershipMutation({
+  resolved,
   repo,
-  announcementsSettled,
-  stateSettled,
   relayUrls,
   repoState,
 }: UseRepositoryMembershipMutationOptions) {
   const account = useActiveAccount();
+  const replaceablePreflight = useRepositoryReplaceablePreflight(resolved);
   const persistedDelivery = useMaintainerAcceptanceJob(
     account?.pubkey ?? "",
     repo.selectedMaintainer,
@@ -697,22 +649,28 @@ export function useRepositoryMembershipMutation({
             `A signed membership replacement for ${repo.selectedCoordinate} is already pending or quarantined.`,
           );
         }
-        if (!announcementsSettled || !stateSettled) {
-          throw new RepositoryMembershipMutationRefusal(
-            "incomplete_relay_view",
-            "The current announcement and state snapshots have not settled. GitWorkshop does not yet support making this transition.",
-          );
-        }
+        const actorAnnouncement = eventStore.getReplaceable(
+          REPO_KIND,
+          account.pubkey,
+          repo.dTag,
+        );
+        await replaceablePreflight.execute(
+          {
+            kind: REPO_KIND,
+            actorPubkey: account.pubkey,
+            expectedEventId: actorAnnouncement?.id ?? null,
+          },
+          async () => undefined,
+        );
 
-        const first = await settleMutationSnapshot(
+        const snapshot = await settleMutationSnapshot(
           repo,
           account.pubkey,
           intent,
           relayUrls,
-          repoState ? [repoState.event.id] : [],
         );
         if (
-          winningCurrentState(first.repo, first.stateEvents)?.id !==
+          winningCurrentState(snapshot.repo, snapshot.stateEvents)?.id !==
           repoState?.event.id
         ) {
           throw new RepositoryMembershipMutationRefusal(
@@ -720,77 +678,26 @@ export function useRepositoryMembershipMutation({
             "The authoritative repository state changed after the page settled. GitWorkshop does not yet support making this transition.",
           );
         }
-        const firstProposal = prepareRepositoryMembershipMutation({
-          repo: first.repo,
+        const proposal = prepareRepositoryMembershipMutation({
+          repo: snapshot.repo,
           actorPubkey: account.pubkey,
           intent,
-          announcements: first.announcements,
-          stateEvents: first.stateEvents,
-          graspServers: graspServersForRepo(first.repo),
+          announcements: snapshot.announcements,
+          stateEvents: snapshot.stateEvents,
+          graspServers: graspServersForRepo(snapshot.repo),
           createdAt: Math.floor(Date.now() / 1000),
         });
         await ensureStateObjectsAvailable(
-          firstProposal.expectedCloneUrls,
+          proposal.expectedCloneUrls,
           repoState,
         );
 
-        // Re-fetch every predecessor immediately before signing. A changed
-        // announcement or state aborts without asking the signer for an event.
-        const second = await settleMutationSnapshot(
-          first.repo,
-          account.pubkey,
-          intent,
-          relayUrls,
-          [
-            ...(repoState ? [repoState.event.id] : []),
-            ...first.announcements.map(({ id }) => id),
-            ...first.stateEvents.map(({ id }) => id),
-            ...first.deletionEvents.flatMap((event) =>
-              event.tags.flatMap(([name, value]) =>
-                name === "e" && value ? [value] : [],
-              ),
-            ),
-          ],
-        );
-        if (
-          !mapsEqual(
-            repositoryMembershipSnapshotIds(first.announcements),
-            repositoryMembershipSnapshotIds(second.announcements),
-          ) ||
-          !mapsEqual(
-            repositoryMembershipSnapshotIds(first.stateEvents),
-            repositoryMembershipSnapshotIds(second.stateEvents),
-          ) ||
-          !mapsEqual(
-            repositoryMembershipSnapshotIds(first.mailboxEvents),
-            repositoryMembershipSnapshotIds(second.mailboxEvents),
-          ) ||
-          !arraysEqualAsSets(
-            first.deletionEvents.map(({ id }) => id),
-            second.deletionEvents.map(({ id }) => id),
-          ) ||
-          !arraysEqualAsSets(first.relayUrls, second.relayUrls) ||
-          !arraysEqualAsSets(first.indexRelayUrls, second.indexRelayUrls)
-        ) {
-          throw new RepositoryMembershipMutationRefusal(
-            "concurrent_change",
-            "An affected announcement or state event changed during preflight. GitWorkshop does not yet support making this transition.",
-          );
-        }
-
-        const finalCreatedAt = Math.floor(Date.now() / 1000);
-        const proposal = prepareRepositoryMembershipMutation({
-          repo: second.repo,
-          actorPubkey: account.pubkey,
-          intent,
-          announcements: second.announcements,
-          stateEvents: second.stateEvents,
-          graspServers: graspServersForRepo(second.repo),
-          createdAt: finalCreatedAt,
-        });
+        // Extension point: a future compare-and-rebase protocol would re-read
+        // the warm winner here. This phase deliberately freezes one coherent
+        // snapshot rather than issuing a second full relay request.
         const confirmationRelayUrls = [
           ...new Set(
-            [...proposal.expectedRelayUrls, ...second.indexRelayUrls].map(
+            [...proposal.expectedRelayUrls, ...snapshot.indexRelayUrls].map(
               normalizeUrl,
             ),
           ),
@@ -802,7 +709,7 @@ export function useRepositoryMembershipMutation({
           );
         }
         const unsnapshottedConfirmationRelays = confirmationRelayUrls.filter(
-          (relayUrl) => !second.relayUrls.includes(relayUrl),
+          (relayUrl) => !snapshot.relayUrls.includes(relayUrl),
         );
         if (unsnapshottedConfirmationRelays.length > 0) {
           throw new RepositoryMembershipMutationRefusal(
@@ -813,9 +720,9 @@ export function useRepositoryMembershipMutation({
         const deliveryRelayUrls = [
           ...new Set(
             [
-              ...second.relayUrls,
+              ...snapshot.relayUrls,
               ...proposal.expectedRelayUrls,
-              ...second.indexRelayUrls,
+              ...snapshot.indexRelayUrls,
             ].map(normalizeUrl),
           ),
         ];
@@ -824,8 +731,8 @@ export function useRepositoryMembershipMutation({
         saveMaintainerAcceptanceJob({
           key: operationKey,
           accountPubkey: account.pubkey,
-          invitationAnchor: second.repo.selectedMaintainer,
-          dTag: second.repo.dTag,
+          invitationAnchor: snapshot.repo.selectedMaintainer,
+          dTag: snapshot.repo.dTag,
           announcement: signedEvent,
           cloneUrls:
             intent.type === "accept" ? getRepoCloneUrls(signedEvent) : [],
@@ -849,7 +756,7 @@ export function useRepositoryMembershipMutation({
         try {
           await publish(
             signedEvent,
-            [repoCoordinate(account.pubkey, second.repo.dTag)],
+            [repoCoordinate(account.pubkey, snapshot.repo.dTag)],
             { optimistic: false },
           );
         } catch (error) {
@@ -896,15 +803,15 @@ export function useRepositoryMembershipMutation({
 
         const verifiedRepo = resolveChain(
           [
-            ...second.repo.historicalAnnouncements,
-            ...second.announcements.filter(
+            ...snapshot.repo.historicalAnnouncements,
+            ...snapshot.announcements.filter(
               ({ pubkey }) => pubkey !== account.pubkey,
             ),
-            ...second.deletionEvents,
+            ...snapshot.deletionEvents,
             refetchedEvent,
           ],
-          second.repo.selectedMaintainer,
-          second.repo.dTag,
+          snapshot.repo.selectedMaintainer,
+          snapshot.repo.dTag,
         );
         if (!verifyRepositoryMembershipMutationResult(proposal, verifiedRepo)) {
           const currentDelivery = getMaintainerAcceptanceJob(operationKey);
@@ -941,7 +848,7 @@ export function useRepositoryMembershipMutation({
         setPendingIntent(undefined);
       }
     },
-    [account, announcementsSettled, relayUrls, repo, repoState, stateSettled],
+    [account, relayUrls, repo, repoState, replaceablePreflight],
   );
 
   const deliveryBlocked =

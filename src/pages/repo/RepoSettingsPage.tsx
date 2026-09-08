@@ -369,6 +369,7 @@ function RepoSettingsForm({
   const navigate = useNavigate();
   const replaceablePreflight = useRepositoryReplaceablePreflight(resolved);
   const membershipMutation = useRepositoryMembershipMutation({
+    resolved,
     repo,
     announcementsSettled,
     stateSettled,
