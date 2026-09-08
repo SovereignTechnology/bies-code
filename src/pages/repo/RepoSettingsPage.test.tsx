@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { NostrEvent } from "nostr-tools";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -14,6 +14,7 @@ const repoId = "settings-account-scope";
 const mockState = vi.hoisted(() => ({
   activePubkey: "b".repeat(64),
   repo: undefined as ResolvedRepo | undefined,
+  membershipMutate: vi.fn(),
 }));
 
 vi.mock("applesauce-react/hooks", async (importOriginal) => {
@@ -33,6 +34,19 @@ vi.mock("./RepoContext", () => ({
     resolved: mockState.repo ? { repo: mockState.repo } : undefined,
     repoState: null,
     basePath: "/repo/settings-account-scope",
+    announcementsSettled: true,
+    repoRelayEose: true,
+  }),
+}));
+
+vi.mock("@/hooks/useRepositoryMembershipMutation", () => ({
+  useRepositoryMembershipMutation: () => ({
+    enabled: true,
+    deliveryBlocked: false,
+    mutate: mockState.membershipMutate,
+    pendingIntent: undefined,
+    failure: undefined,
+    clearFailure: vi.fn(),
   }),
 }));
 
@@ -67,6 +81,8 @@ function announcement(
     tags: [
       ["d", repoId],
       ["name", name],
+      ["clone", "https://example.com/repository.git"],
+      ["relays", "wss://relay.example.com"],
       ["maintainers", ...maintainers],
     ],
     sig: "f".repeat(128),
@@ -75,6 +91,11 @@ function announcement(
 
 describe("repository settings account scope", () => {
   beforeEach(() => {
+    mockState.membershipMutate
+      .mockReset()
+      .mockResolvedValue(
+        announcement(owner, "Saved announcement", [owner], 10, "9"),
+      );
     const events = [
       announcement(owner, "Owner announcement", [bob, carol], 1, "1"),
       announcement(bob, "Bob announcement", [owner], 2, "2"),
@@ -103,5 +124,70 @@ describe("repository settings account scope", () => {
     );
 
     expect(screen.getByLabelText("Name")).toHaveValue("Carol announcement");
+  });
+
+  it("stages several roster changes and publishes them only on save", async () => {
+    const ownerEvent: NostrEvent = {
+      ...announcement(owner, "Owner announcement", [owner, bob], 1, "1"),
+      tags: [
+        ["d", repoId],
+        ["name", "Owner announcement"],
+        ["clone", "https://example.com/repository.git"],
+        ["relays", "wss://relay.example.com"],
+        ["M", owner],
+        ["m", bob],
+        ["maintainers", owner, bob],
+      ],
+    };
+    const bobEvent: NostrEvent = {
+      ...announcement(bob, "Bob announcement", [owner, bob], 2, "2"),
+      tags: [
+        ["d", repoId],
+        ["name", "Bob announcement"],
+        ["clone", "https://example.com/repository.git"],
+        ["relays", "wss://relay.example.com"],
+        ["M", owner],
+        ["m", bob],
+        ["maintainers", owner, bob],
+      ],
+    };
+    mockState.repo = resolveChain([ownerEvent, bobEvent], owner, repoId);
+    mockState.activePubkey = owner;
+
+    render(
+      <TestApp>
+        <RepoSettingsPage />
+      </TestApp>,
+    );
+
+    fireEvent.change(screen.getByLabelText("Add maintainers"), {
+      target: { value: carol },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Stage maintainer invitation" }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: `Remove relationship ${bob}` }),
+    );
+
+    expect(mockState.membershipMutate).not.toHaveBeenCalled();
+    expect(screen.getByText("will invite")).toBeInTheDocument();
+    expect(screen.getByText("will remove")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() =>
+      expect(mockState.membershipMutate).toHaveBeenCalledWith(
+        {
+          type: "update-roster",
+          addPubkeys: [carol],
+          removePubkeys: [bob],
+        },
+        {
+          expectedAnnouncementId: ownerEvent.id,
+          announcementFields: undefined,
+        },
+      ),
+    );
   });
 });

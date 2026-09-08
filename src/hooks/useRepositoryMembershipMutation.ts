@@ -3,7 +3,7 @@ import { useActiveAccount } from "applesauce-react/hooks";
 import type { Filter } from "applesauce-core/helpers";
 import { firstValueFrom, type Subscription } from "rxjs";
 import { endWith, ignoreElements, timeout } from "rxjs/operators";
-import type { NostrEvent } from "nostr-tools";
+import type { EventTemplate, NostrEvent } from "nostr-tools";
 
 import type { RepositoryState } from "@/casts/RepositoryState";
 import { useMaintainerAcceptanceJob } from "@/hooks/useMaintainerAcceptanceJob";
@@ -57,6 +57,13 @@ import { useRepositoryReplaceablePreflight } from "@/hooks/useRepositoryReplacea
 export interface RepositoryMembershipMutationFailure {
   code: RepositoryMembershipMutationRefusalCode;
   message: string;
+}
+
+export interface RepositoryMembershipMutationOptions {
+  /** Announcement revision the settings form was opened against. */
+  expectedAnnouncementId?: string;
+  /** Non-membership fields to publish in the same roster replacement. */
+  announcementFields?: Pick<EventTemplate, "content" | "tags">;
 }
 
 interface UseRepositoryMembershipMutationOptions {
@@ -228,17 +235,19 @@ function mutationAuthors(
   actorPubkey: string,
   intent: RepositoryMembershipMutationIntent,
 ): string[] {
-  const target =
-    intent.type === "add" || intent.type === "remove"
-      ? intent.targetPubkey
-      : actorPubkey;
+  const targets =
+    intent.type === "update-roster"
+      ? [...intent.addPubkeys, ...intent.removePubkeys]
+      : intent.type === "add" || intent.type === "remove"
+        ? [intent.targetPubkey]
+        : [actorPubkey];
   return [
     ...new Set([
       ...repo.discoveryPubkeys,
       ...repo.historyPubkeys,
       ...repo.confirmedMaintainers,
       actorPubkey,
-      target,
+      ...targets,
     ]),
   ];
 }
@@ -658,7 +667,10 @@ export function useRepositoryMembershipMutation({
   const [failure, setFailure] = useState<RepositoryMembershipMutationFailure>();
 
   const mutate = useCallback(
-    async (intent: RepositoryMembershipMutationIntent): Promise<NostrEvent> => {
+    async (
+      intent: RepositoryMembershipMutationIntent,
+      options?: RepositoryMembershipMutationOptions,
+    ): Promise<NostrEvent> => {
       if (!REPOSITORY_MEMBERSHIP_MUTATIONS_ENABLED) {
         const refusal = new RepositoryMembershipMutationRefusal(
           "membership_mutations_disabled",
@@ -700,7 +712,8 @@ export function useRepositoryMembershipMutation({
           {
             kind: REPO_KIND,
             actorPubkey: account.pubkey,
-            expectedEventId: actorAnnouncement?.id ?? null,
+            expectedEventId:
+              options?.expectedAnnouncementId ?? actorAnnouncement?.id ?? null,
           },
           async (snapshot) => snapshot,
         );
@@ -733,6 +746,7 @@ export function useRepositoryMembershipMutation({
           intent,
           announcements: snapshot.announcements,
           stateEvents: snapshot.stateEvents,
+          announcementFields: options?.announcementFields,
           graspServers: graspServersForRepo(snapshot.repo),
           createdAt: Math.floor(Date.now() / 1000),
         });
@@ -748,24 +762,19 @@ export function useRepositoryMembershipMutation({
           ? snapshot.relayUrls
           : [
               ...new Set(
-                [...proposal.expectedRelayUrls, ...snapshot.indexRelayUrls].map(
-                  normalizeUrl,
-                ),
+                [
+                  ...snapshot.repo.relays,
+                  ...proposal.expectedRelayUrls,
+                  ...snapshot.indexRelayUrls,
+                ]
+                  .map(normalizeUrl)
+                  .filter((relayUrl) => snapshot.relayUrls.includes(relayUrl)),
               ),
             ];
         if (confirmationRelayUrls.length === 0) {
           throw new RepositoryMembershipMutationRefusal(
             "incomplete_relay_view",
             "No repository or configured Git index relay is available to acknowledge the replacement. Configure an acknowledgement relay before retrying. No repository update was published.",
-          );
-        }
-        const unsnapshottedConfirmationRelays = confirmationRelayUrls.filter(
-          (relayUrl) => !snapshot.relayUrls.includes(relayUrl),
-        );
-        if (unsnapshottedConfirmationRelays.length > 0) {
-          throw new RepositoryMembershipMutationRefusal(
-            "incomplete_relay_view",
-            `The acknowledgement relay set changed while this action was being prepared (${unsnapshottedConfirmationRelays.join(", ")}). Reload and retry after the relay view settles. No repository update was published.`,
           );
         }
         const deliveryRelayUrls = snapshot.repo.isPrivate

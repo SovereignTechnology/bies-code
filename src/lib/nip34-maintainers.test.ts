@@ -1120,6 +1120,84 @@ describe("conservative repository membership mutations", () => {
     ).toEqual([]);
   });
 
+  it("adds multiple maintainers in one legacy-migrating roster update", () => {
+    const ownerEvent = legacyAnnouncement(owner, [owner]);
+    const sole = resolveChain([ownerEvent], owner, repoId)!;
+
+    const proposal = prepareRepositoryMembershipMutation({
+      repo: sole,
+      actorPubkey: owner,
+      intent: {
+        type: "update-roster",
+        addPubkeys: [invitee, recursiveInvitee],
+        removePubkeys: [],
+      },
+      announcements: [ownerEvent],
+      stateEvents: [],
+      createdAt: 10,
+    });
+
+    expect(proposal.template.tags).toContainEqual(["M", owner]);
+    expect(proposal.template.tags).toContainEqual(["m", invitee, "10"]);
+    expect(proposal.template.tags).toContainEqual([
+      "m",
+      recursiveInvitee,
+      "10",
+    ]);
+    expect(proposal.expectedInvitations).toEqual([invitee, recursiveInvitee]);
+  });
+
+  it("combines roster additions, removals, and metadata in one replacement", () => {
+    const ownerEvent = announcement(owner, [
+      ["M", owner, "10"],
+      ["m", invitee, "10"],
+      ["name", "Before"],
+      ["maintainers", owner, invitee],
+    ]);
+    const inviteeEvent = announcement(
+      invitee,
+      [
+        ["M", owner, "20"],
+        ["m", invitee, "20"],
+        ["maintainers", owner, invitee],
+      ],
+      20,
+    );
+    const accepted = resolveChain([ownerEvent, inviteeEvent], owner, repoId)!;
+
+    const proposal = prepareRepositoryMembershipMutation({
+      repo: accepted,
+      actorPubkey: owner,
+      intent: {
+        type: "update-roster",
+        addPubkeys: [recursiveInvitee],
+        removePubkeys: [invitee],
+      },
+      announcements: [ownerEvent, inviteeEvent],
+      stateEvents: [],
+      announcementFields: {
+        content: "updated description",
+        tags: [
+          ["d", repoId],
+          ["name", "After"],
+          ["maintainers", owner, invitee],
+        ],
+      },
+      createdAt: 30,
+    });
+
+    expect(proposal.template.content).toBe("updated description");
+    expect(proposal.template.tags).toContainEqual(["name", "After"]);
+    expect(proposal.template.tags).toContainEqual(["m", invitee, "10", "30"]);
+    expect(proposal.template.tags).toContainEqual([
+      "m",
+      recursiveInvitee,
+      "30",
+    ]);
+    expect(proposal.expectedMaintainers).toEqual([owner]);
+    expect(proposal.expectedInvitations).toEqual([recursiveInvitee]);
+  });
+
   it("keeps an existing non-self legacy lead relationship untimed", () => {
     const leadEvent = announcement(owner, [
       ["M", owner],

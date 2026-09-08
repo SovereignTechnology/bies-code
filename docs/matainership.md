@@ -251,28 +251,33 @@ not make an absence-based lifecycle claim.
 
 ## Browser mutation safety
 
-GitWorkshop exposes one-at-a-time membership intents: add one maintainer,
-accept one invitation, remove one directly authored relationship, leave a
-lead-shaped repository, or explicitly repair one invalid self-`defer`. The
-complete-roster editor and every force path remain unavailable.
+GitWorkshop repository settings stage any number of maintainer invitations and
+direct lead-authored removals, then publish the exact roster diff with the
+other edited announcement fields in one replacement when the user saves.
+Invitation acceptance, leaving a lead-shaped repository, and explicitly
+repairing one invalid self-`defer` remain dedicated signer actions. Lead
+selection, arbitrary topology rewriting, and every force path remain
+unavailable.
 
-Each intent first looks up the affected authors' mailbox lists through the
-configured discovery relays, then refreshes those lists, announcements, and
-state events across the resulting safety set. Discovery-only lookup relays do
-not become safety authorities merely because they helped locate a NIP-65 list;
-the safety set consists of repository relays, discovered mailbox relays,
-configured Git indexes, and fallback publication relays. The client constructs
-the replacement in memory, simulates its exact member, moderator, invitation,
-and lead result, then repeats the settled fetch and compares every announcement,
-state, deletion, mailbox, and relay frontier immediately before signing. Every
-relay in that recursively discovered safety set must return a real EOSE for
-both bounded snapshots. Every branch and tag OID in the current signed state
-must also be fetched from the simulated post-change component's advertised Git
-servers without using the local object cache as evidence.
+Each roster or dedicated action first looks up the affected authors' mailbox
+lists through the configured discovery relays, then refreshes those lists,
+announcements, and state events across the resulting safety set. Discovery-only
+lookup relays do not become safety authorities merely because they helped
+locate a NIP-65 list; the safety set consists of repository relays, discovered
+mailbox relays, configured Git indexes, and fallback publication relays. The
+client constructs the replacement in memory, simulates its exact member,
+moderator, invitation, and lead result, then repeats the settled fetch and
+compares every announcement, state, deletion, mailbox, and relay frontier
+immediately before signing. Every relay in that recursively discovered safety
+set must return a real EOSE for both bounded snapshots. Every branch and tag OID
+in the current signed state must also be fetched from the simulated post-change
+component's advertised Git servers without using the local object cache as
+evidence.
 
 After signing, the replacement is saved as durable delivery work without an
-optimistic EventStore insertion. At least one settled post-change repository
-or configured Git-index relay must acknowledge it. GitWorkshop then refetches
+optimistic EventStore insertion. At least one settled repository or configured
+Git-index relay from the frozen preflight set must acknowledge it. GitWorkshop
+then refetches
 the exact event from an acknowledging relay and resolves the graph again; only
 a result identical to the preflighted effect is reported as successful. A
 signed event that has not passed those checks remains visibly queued or
