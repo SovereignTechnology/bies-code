@@ -288,6 +288,10 @@ async function settleMutationSnapshot(
   actorPubkey: string,
   intent: RepositoryMembershipMutationIntent,
   relayUrls: string[],
+  preflight: {
+    absentAuthors: string[];
+    focusedOutboxRelays: string[];
+  },
 ): Promise<MutationSnapshot> {
   const deadline = Date.now() + SNAPSHOT_TIMEOUT_MS;
   const authors = new Set(mutationAuthors(repo, actorPubkey, intent));
@@ -296,6 +300,7 @@ async function settleMutationSnapshot(
     [
       ...relayUrls,
       ...repo.relays,
+      ...preflight.focusedOutboxRelays,
       ...indexRelayUrls,
       ...fallbackRelays.getValue(),
     ].map(normalizeUrl),
@@ -306,7 +311,10 @@ async function settleMutationSnapshot(
       "No repository, mailbox, Git index, or fallback relay is available. GitWorkshop does not yet support making this transition.",
     );
   }
-  const checkedAbsentAuthors = new Set<string>();
+  // The shared repository gate already settled a focused outbox query when it
+  // proved the actor's coordinate absent. Carry that evidence and frontier
+  // into the authority snapshot instead of opening the same REQ again.
+  const checkedAbsentAuthors = new Set(preflight.absentAuthors);
 
   while (true) {
     if (authors.size > MAX_SNAPSHOT_AUTHORS) {
@@ -654,13 +662,13 @@ export function useRepositoryMembershipMutation({
           account.pubkey,
           repo.dTag,
         );
-        await replaceablePreflight.execute(
+        const repositoryPreflight = await replaceablePreflight.execute(
           {
             kind: REPO_KIND,
             actorPubkey: account.pubkey,
             expectedEventId: actorAnnouncement?.id ?? null,
           },
-          async () => undefined,
+          async (snapshot) => snapshot,
         );
 
         const snapshot = await settleMutationSnapshot(
@@ -668,6 +676,12 @@ export function useRepositoryMembershipMutation({
           account.pubkey,
           intent,
           relayUrls,
+          {
+            absentAuthors: repositoryPreflight.actorEvent
+              ? []
+              : [account.pubkey],
+            focusedOutboxRelays: repositoryPreflight.focusedOutboxRelays,
+          },
         );
         if (
           winningCurrentState(snapshot.repo, snapshot.stateEvents)?.id !==

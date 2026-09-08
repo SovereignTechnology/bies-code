@@ -206,22 +206,25 @@ post-signing echo request between steps 2 and 3.
 ### Maintainer invitation example
 
 Adding a maintainer is a **repository authority graph** action with the
-**external-subject discovery** modifier. The intended eventual flow is:
+**external-subject discovery** modifier. The category flow is:
 
 1. Keep the repository's identifier-wide kind `30617` discovery warm on its
    repository relays, while Git index and maintainer mailbox relays enrich the
    same owner without becoming required voters.
 2. Let selecting a prospective maintainer remain immediate.
-3. On selection, begin non-blocking discovery of that user's NIP-65 mailboxes.
-4. If outboxes are found, warm a focused kind `30617` query for that author and
-   repository identifier, including the deletion evidence needed by authority
-   resolution.
-5. At invitation time, consume the accumulated evidence and wait or request
-   only for missing coverage.
+3. At invitation time, consume the repository owner's accumulated evidence.
+4. If the candidate coordinate remains absent, discover that user's NIP-65
+   mailboxes and run one focused kind `30617`/`30618` plus deletion query on
+   their outboxes.
+5. Reuse that focused evidence inside the authority snapshot; do not repeat it.
 
 An already discovered candidate announcement needs no mailbox EOSE. If the
 candidate coordinate is absent from the repository snapshot, its outbox is the
 new scope and must settle before absence is used in the authority transition.
+Starting steps 3 and 4 speculatively when a user is selected remains a possible
+latency optimization. It needs an owned candidate-coverage lease so the action
+can distinguish a completed absence check from an in-flight prefetch; this
+phase deliberately keeps the one focused request inside the bounded action.
 
 ## Adoption
 

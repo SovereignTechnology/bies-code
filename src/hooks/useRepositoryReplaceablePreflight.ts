@@ -25,6 +25,8 @@ export interface RepositoryReplaceableSnapshot {
   winner: NostrEvent | undefined;
   /** Repository relay voters frozen before signing. */
   repositoryRelays: string[];
+  /** Newly queried author outboxes, empty when warm repository evidence sufficed. */
+  focusedOutboxRelays: string[];
 }
 
 export interface RepositoryReplaceablePreflightOptions {
@@ -302,8 +304,9 @@ export function useRepositoryReplaceablePreflight(
           options.actorPubkey,
           resolved.repo.dTag,
         );
+        let focusedOutboxRelays: string[] = [];
         if (!actorEvent) {
-          const outboxes = mailboxOutboxes(options.actorPubkey);
+          focusedOutboxRelays = mailboxOutboxes(options.actorPubkey);
           await confirmFocusedAbsence(
             [
               {
@@ -312,7 +315,12 @@ export function useRepositoryReplaceablePreflight(
                 "#d": [resolved.repo.dTag],
               } as Filter,
             ],
-            [{ name: "current NIP-65 outbox relays", relays: outboxes }],
+            [
+              {
+                name: "current NIP-65 outbox relays",
+                relays: focusedOutboxRelays,
+              },
+            ],
           );
           actorEvent = store.getReplaceable(
             options.kind,
@@ -333,7 +341,12 @@ export function useRepositoryReplaceablePreflight(
           );
         }
 
-        return await action({ actorEvent, winner, repositoryRelays });
+        return await action({
+          actorEvent,
+          winner,
+          repositoryRelays,
+          focusedOutboxRelays,
+        });
       } finally {
         setPending(false);
       }

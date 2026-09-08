@@ -13,6 +13,16 @@
 
 ### Changed
 
+- Reuse each repository page's live announcement, state, and deletion query as
+  the preflight for kind `30617` and `30618` replacements. Existing coordinates
+  require one currently covered repository relay; mailbox and Git index relays
+  enrich discovery without gating edits. New author coordinates additionally
+  require one NIP-65 outbox EOSE, while new public repositories require both an
+  author-outbox and proposed-repository-relay EOSE before signing. Repository
+  settings, membership changes, public creation, and merges now consume frozen
+  winners from this shared gate. GRASP state transitions retain their
+  purgatory order: preflight, relay acknowledgement, Git push, then durable
+  broad publication, with no post-signing echo query in between.
 - Keep one account-owned warm subscription for the encrypted notification-key
   envelope and derived read/archive state. Cross-device writes now wait for
   current EOSE-backed coverage and decryption without an action-time relay
