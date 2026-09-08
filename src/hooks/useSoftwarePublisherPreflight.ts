@@ -9,7 +9,7 @@
  * See docs/replaceable-preflight.md, "Software-publication adoption decision".
  */
 
-import { useCallback, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CastRefEventStore } from "applesauce-common/casts/cast";
 import { mapEventsToStore } from "applesauce-core";
 import type { IEventStore } from "applesauce-core/event-store";
@@ -107,6 +107,7 @@ export interface AccountSoftwareApplications {
 }
 
 export interface SoftwareReleaseCandidatePreflight {
+  candidateReady: boolean;
   assertAvailable(): Promise<void>;
 }
 
@@ -467,8 +468,21 @@ export function useSoftwareReleaseCandidatePreflight(
   enabled: boolean,
 ): SoftwareReleaseCandidatePreflight {
   const store = useEventStore();
-  const identifier =
+  const requestedIdentifier =
     enabled && appId && version ? `${appId}@${version}` : undefined;
+  const [identifier, setIdentifier] = useState<string | undefined>();
+
+  useEffect(() => {
+    if (!requestedIdentifier) {
+      setIdentifier(undefined);
+      return;
+    }
+    const timeoutId = setTimeout(() => setIdentifier(requestedIdentifier), 400);
+    return () => clearTimeout(timeoutId);
+  }, [requestedIdentifier]);
+
+  const candidateReady =
+    requestedIdentifier !== undefined && requestedIdentifier === identifier;
   const coverage = useMemo(
     () =>
       publisherPreflight && identifier
@@ -513,7 +527,13 @@ export function useSoftwareReleaseCandidatePreflight(
   }, [coverage, identifier, publisherPreflight, store]);
 
   const assertAvailable = useCallback(async () => {
-    if (!publisherPreflight || !identifier || !coverage) {
+    if (
+      !publisherPreflight ||
+      !requestedIdentifier ||
+      !candidateReady ||
+      !identifier ||
+      !coverage
+    ) {
       throw new Error("Choose an application and release version to check.");
     }
     await Promise.all([
@@ -534,7 +554,14 @@ export function useSoftwareReleaseCandidatePreflight(
     if (existing) {
       throw new Error("This application already has that release version.");
     }
-  }, [coverage, identifier, publisherPreflight, store]);
+  }, [
+    candidateReady,
+    coverage,
+    identifier,
+    publisherPreflight,
+    requestedIdentifier,
+    store,
+  ]);
 
-  return { assertAvailable };
+  return { candidateReady, assertAvailable };
 }

@@ -1673,6 +1673,7 @@ export function CreateReleaseDialog({
               busy ||
               ownedApplications.length === 0 ||
               versionAlreadyExists ||
+              !releaseCandidatePreflight.candidateReady ||
               buildCommitInvalid ||
               assetCommitInvalid ||
               uploadsIncomplete
