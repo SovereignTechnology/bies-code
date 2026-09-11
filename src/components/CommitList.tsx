@@ -1,3 +1,5 @@
+import { ErrorRetryAction } from "@/components/ErrorRetryAction";
+import type { ErrorRetryState } from "@/hooks/useErrorRetry";
 /**
  * Shared commit list display — used by RepoCommitsPage (branch history),
  * the PR commits view (range between tip and merge-base), and the compare
@@ -1035,7 +1037,13 @@ export function CommitListEmpty({
 // CommitListError
 // ---------------------------------------------------------------------------
 
-export function CommitListError({ message }: { message: string }) {
+export function CommitListError({
+  message,
+  recovery,
+}: {
+  message: string;
+  recovery?: ErrorRetryState;
+}) {
   return (
     <Card className="border-destructive/30">
       <CardContent className="p-4">
@@ -1043,6 +1051,11 @@ export function CommitListError({ message }: { message: string }) {
           <AlertCircle className="h-4 w-4 shrink-0" />
           <span>{message}</span>
         </div>
+        {recovery && (
+          <div className="mt-4">
+            <ErrorRetryAction recovery={recovery} />
+          </div>
+        )}
       </CardContent>
     </Card>
   );

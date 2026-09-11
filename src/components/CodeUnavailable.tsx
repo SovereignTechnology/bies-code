@@ -16,7 +16,6 @@ import {
   GitCommitHorizontal,
   Inbox,
   Loader2,
-  RotateCcw,
   SearchX,
   Server,
   ServerCrash,
@@ -24,7 +23,8 @@ import {
   XCircle,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
+import { ErrorRetryAction } from "@/components/ErrorRetryAction";
+import type { ErrorRetryState } from "@/hooks/useErrorRetry";
 import { GraspLogo } from "@/components/GraspLogo";
 import { graspCloneUrlNpub } from "@/lib/nip34";
 import { cn } from "@/lib/utils";
@@ -365,8 +365,8 @@ export interface CodeUnavailableProps {
   cloneUrls: string[];
   /** Subset of cloneUrls that are Grasp server clone URLs */
   graspCloneUrls?: string[];
-  /** Retry the explorer fetch across all servers */
-  onReload?: () => void;
+  /** Recovery state owned by the page, so loading does not reset its budget. */
+  recovery: ErrorRetryState;
 }
 
 export function CodeUnavailable({
@@ -374,7 +374,7 @@ export function CodeUnavailable({
   urls,
   cloneUrls,
   graspCloneUrls = [],
-  onReload,
+  recovery,
 }: CodeUnavailableProps) {
   const { icon, headline, description } = headlineFor(detail);
 
@@ -420,20 +420,13 @@ export function CodeUnavailable({
           </div>
         </div>
 
+        <div className="flex justify-center">
+          <ErrorRetryAction recovery={recovery} />
+        </div>
+
         {/* Per-server breakdown */}
         {cloneUrls.length > 0 && (
           <Card className="relative">
-            {onReload && (
-              <Button
-                variant="ghost"
-                size="icon"
-                className="absolute top-2 right-2 h-6 w-6 text-muted-foreground hover:text-foreground"
-                onClick={onReload}
-                title="Retry all servers"
-              >
-                <RotateCcw className="h-3.5 w-3.5" />
-              </Button>
-            )}
             <CardContent className="p-4 space-y-4">
               {graspUrls.length > 0 && otherUrls.length > 0 ? (
                 <>

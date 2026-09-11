@@ -588,6 +588,11 @@ export class GitHttpClient {
     if (expected) this.permanentFailures.clear();
   }
 
+  /** Allow an explicit recovery attempt to re-probe previously failed URLs. */
+  resetReadFailures(): void {
+    this.permanentFailures.clear();
+  }
+
   /** Check if a URL has permanently failed */
   isPermanentlyFailed(url: string): boolean {
     return this.permanentFailures.has(url);

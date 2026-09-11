@@ -13,6 +13,8 @@
  *   - PRCommitPage    (commit vs its first parent)
  */
 
+import { useErrorRetry } from "@/hooks/useErrorRetry";
+import { ErrorRetryAction } from "@/components/ErrorRetryAction";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   FileDiff,
@@ -319,6 +321,23 @@ export function CommitDiffView({
   const abortRef = useRef<AbortController | null>(null);
   const loading =
     phase.kind === "loading-trees" || phase.kind === "loading-diff";
+  const [retryVersion, setRetryVersion] = useState(0);
+  const recoveryKey = useMemo(
+    () => ({ pool, tipCommitId, baseCommitId }),
+    [pool, tipCommitId, baseCommitId],
+  );
+  const recovery = useErrorRetry({
+    resourceKey: recoveryKey,
+    failed: phase.kind === "error",
+    busy: loading,
+    onRetry: async (signal) => {
+      await pool.retryReads();
+      if (!signal.aborted) setRetryVersion((n) => n + 1);
+    },
+    policy: pool.requiresSigningForReads
+      ? { mode: "manual" }
+      : { mode: "read", requiresSigning: false, context: "availability" },
+  });
 
   const handleFileSelect = (path: string) => {
     setActiveFile(path);
@@ -405,7 +424,7 @@ export function CommitDiffView({
       abort.abort();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tipCommitId, baseCommitId, pool, fallbackUrls?.join(",")]);
+  }, [tipCommitId, baseCommitId, pool, fallbackUrls?.join(","), retryVersion]);
 
   // --- Render ---
 
@@ -425,7 +444,10 @@ export function CommitDiffView({
     return (
       <div className="flex items-start gap-3 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
         <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
-        <span>{phase.message}</span>
+        <div className="space-y-3">
+          <p>{phase.message}</p>
+          <ErrorRetryAction recovery={recovery} />
+        </div>
       </div>
     );
   }

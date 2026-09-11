@@ -21,6 +21,8 @@ import {
 } from "@/hooks/useGitExplorer";
 import { RefSelector } from "@/components/RefSelector";
 import { GitServerStatus } from "@/components/GitServerStatus";
+import { useErrorRetry } from "@/hooks/useErrorRetry";
+import { ErrorRetryAction } from "@/components/ErrorRetryAction";
 import { CodeUnavailable } from "@/components/CodeUnavailable";
 import { RepoAboutPanel } from "@/components/RepoAboutPanel";
 import type { RepositoryState } from "@/casts/RepositoryState";
@@ -155,6 +157,35 @@ export default function RepoCodePage() {
     stateRefs: repoState?.refs,
   });
   const activeExplorer = explorer;
+  const recoveryKey = useMemo(
+    () => ({ pool, treeRefAndPath, selectedSource }),
+    [pool, treeRefAndPath, selectedSource],
+  );
+  const recovery = useErrorRetry({
+    resourceKey: recoveryKey,
+    failed: !!activeExplorer.error,
+    busy: activeExplorer.loading || poolState.loading || poolState.pulling,
+    onRetry: async (signal) => {
+      await pool?.retryReads();
+      if (!signal.aborted) await activeExplorer.reload();
+    },
+    policy:
+      pool &&
+      !pool.requiresSigningForReads &&
+      !allUrlsIncompatible &&
+      cloneUrls.length > 0 &&
+      activeExplorer.errorDetail
+        ? {
+            mode: "read",
+            requiresSigning: false,
+            context:
+              activeExplorer.errorDetail.kind === "fetch-failed" ||
+              activeExplorer.errorDetail.kind === "no-servers"
+                ? "connection"
+                : "availability",
+          }
+        : { mode: "manual" },
+  });
   // Full file tree for go-to-file search. Uses the same commitHash the active
   // explorer is displaying so the search results stay consistent with the view.
   const fullFileTree = useFullFileTree(pool, activeExplorer.commitHash);
@@ -347,7 +378,7 @@ export default function RepoCodePage() {
                 urls={poolState.urls}
                 cloneUrls={cloneUrls}
                 graspCloneUrls={repo?.graspCloneUrls ?? []}
-                onReload={activeExplorer.reload}
+                recovery={recovery}
               />
             ) : (
               <Card className="border-destructive/30">
@@ -355,6 +386,9 @@ export default function RepoCodePage() {
                   <div className="flex items-center gap-2 text-sm text-destructive">
                     <AlertCircle className="h-4 w-4 shrink-0" />
                     <span>{activeExplorer.error}</span>
+                  </div>
+                  <div className="mt-4">
+                    <ErrorRetryAction recovery={recovery} />
                   </div>
                 </CardContent>
               </Card>

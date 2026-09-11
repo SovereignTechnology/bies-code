@@ -600,6 +600,24 @@ export class GitGraspPool {
     return this.state$.asObservable();
   }
 
+  /** Authenticated Git reads may request signatures and must not auto-retry. */
+  get requiresSigningForReads(): boolean {
+    return this.authorizationProvider !== undefined;
+  }
+
+  /** Recheck read endpoints without discarding successful object caches. */
+  async retryReads(): Promise<void> {
+    if (this.isDisposed || this.fetching) return;
+    this.stateManager.cancelBackoff();
+    this.http.resetReadFailures();
+    this.urlManager.resetFailures();
+    for (const tracker of this.urlManager.getAll()) {
+      this.cache.invalidateInfoRefs(tracker.url);
+    }
+    this.setState((prev) => ({ ...prev, retryAt: null }));
+    await this.runFetch();
+  }
+
   /** Get the current state snapshot */
   getState(): PoolState {
     return this.state$.getValue();

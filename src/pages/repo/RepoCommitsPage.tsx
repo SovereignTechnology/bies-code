@@ -1,3 +1,4 @@
+import { useErrorRetry } from "@/hooks/useErrorRetry";
 import { useMemo, useCallback, useEffect } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useSeoMeta } from "@unhead/react";
@@ -87,6 +88,27 @@ export default function RepoCommitsPage() {
   const historyCommit = activeExplorer.commitHash ?? undefined;
 
   const history = useInfiniteCommitHistory(pool, poolState, historyCommit);
+  const recoveryKey = useMemo(
+    () => ({ pool, historyCommit }),
+    [pool, historyCommit],
+  );
+  const recovery = useErrorRetry({
+    resourceKey: recoveryKey,
+    failed: !!history.error,
+    busy:
+      history.loading ||
+      history.loadingMore ||
+      poolState.loading ||
+      poolState.pulling,
+    onRetry: async (signal) => {
+      await pool?.retryReads();
+      if (!signal.aborted) history.reload();
+    },
+    policy:
+      pool && !pool.requiresSigningForReads
+        ? { mode: "read", requiresSigning: false, context: "availability" }
+        : { mode: "manual" },
+  });
 
   // CI checks (ngit-ci kinds 9841/9842) for the commits being displayed —
   // the singleton #c loader batches the whole page into one REQ per relay.
@@ -277,7 +299,9 @@ export default function RepoCommitsPage() {
         )}
       </div>
 
-      {history.error && <CommitListError message={history.error} />}
+      {history.error && (
+        <CommitListError message={history.error} recovery={recovery} />
+      )}
 
       {history.loading && <CommitListLoading count={8} />}
 

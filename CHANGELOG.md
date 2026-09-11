@@ -10,6 +10,10 @@
 
 ### Features
 
+- Add visible retry actions and bounded automatic recovery for public Git read
+  errors, with context-specific countdowns, pause controls, and offline/background
+  handling. Signing-capable reads and actions remain manual.
+
 ### Changes
 
 ## [4.0.0]

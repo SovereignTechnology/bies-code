@@ -472,7 +472,7 @@ export function useGitExplorer(
   pool: GitGraspPool | null,
   poolState: PoolState,
   options: UseGitExplorerOptions = {},
-): GitExplorerState & { reload: () => void } {
+): GitExplorerState & { reload: () => Promise<void> } {
   const { refAndPath, knownHeadCommit, stateRefs } = options;
 
   // RepositoryState.refs and PoolState.effectiveRefs are derived values whose
@@ -777,7 +777,10 @@ export function useGitExplorer(
           }
 
           // All URLs settled with no infoRefs — give up.
-          if (!state.loading && state.health === "all-failed") {
+          if (
+            !state.loading &&
+            (state.health === "all-failed" || state.error !== null)
+          ) {
             resolved = true;
             resolve(null);
           }
@@ -1103,7 +1106,7 @@ export function useGitExplorer(
 
   const reload = useCallback(() => {
     reloadCounterRef.current += 1;
-    run();
+    return run();
   }, [run]);
 
   return { ...state, reload };
@@ -1324,6 +1327,7 @@ export interface InfiniteCommitHistoryState {
   hasMore: boolean;
   /** Call to fetch the next batch. No-op while already loading. */
   loadMore: () => void;
+  reload: () => void;
 }
 
 const INFINITE_BATCH_SIZE = 50;
@@ -1347,6 +1351,7 @@ export function useInfiniteCommitHistory(
   batchSize: number = INFINITE_BATCH_SIZE,
   fallbackUrls?: string[],
 ): InfiniteCommitHistoryState {
+  const [retryVersion, setRetryVersion] = useState(0);
   const [commits, setCommits] = useState<Commit[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -1361,6 +1366,7 @@ export function useInfiniteCommitHistory(
   const lastInitKeyRef = useRef<string>("");
 
   const hasInfoRefs = pool ? !!pool.getEffectiveInfoRefs() : false;
+  const fallbackUrlsKey = fallbackUrls?.join(",");
 
   // ── Initial load ──────────────────────────────────────────────────────────
   // Re-runs when the ref or pool changes (e.g. branch switch).
@@ -1497,7 +1503,7 @@ export function useInfiniteCommitHistory(
     void init();
     return () => abort.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pool, ref, batchSize, hasInfoRefs, fallbackUrls?.join(",")]);
+  }, [pool, ref, batchSize, hasInfoRefs, fallbackUrlsKey, retryVersion]);
 
   // ── Load more ─────────────────────────────────────────────────────────────
   const loadMore = useCallback(() => {
@@ -1534,7 +1540,11 @@ export function useInfiniteCommitHistory(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pool, batchSize, loadingMore, loading, fallbackUrls?.join(",")]);
 
-  return { loading, loadingMore, error, commits, hasMore, loadMore };
+  const reload = useCallback(() => {
+    lastInitKeyRef.current = "";
+    setRetryVersion((n) => n + 1);
+  }, []);
+  return { loading, loadingMore, error, commits, hasMore, loadMore, reload };
 }
 
 // ---------------------------------------------------------------------------

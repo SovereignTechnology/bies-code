@@ -242,6 +242,16 @@ Routes live in `AppRouter.tsx`. To add one:
 
 The router auto-scrolls to top on navigation.
 
+## Error Recovery
+
+Use the shared `useErrorRetry` / `ErrorRetryAction` pattern for recoverable
+errors. Read [docs/error-recovery.md](docs/error-recovery.md) before adding retry
+behavior. Offer a visible manual retry; automatic retries require an explicitly
+audited read-only path that cannot request a signature. Keep the retry owner
+mounted during loading, use context-specific bounded delays, and cancel on
+navigation. Signing/authentication, mutations, and deterministic errors stay
+manual. Never add an independent error-component timer.
+
 ## Loading and Empty States
 
 **Use skeletons** for structured content (feeds, profiles, forms). **Use spinners** only for buttons or short operations.
