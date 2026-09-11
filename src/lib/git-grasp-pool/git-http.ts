@@ -503,7 +503,9 @@ export class GitHttpClient {
    */
   private pendingBackgroundParse = new Set<string>();
   /**
-   * In-flight dedup for blob:none packfile fetches, keyed by commitHash.
+   * In-flight dedup for blob:none packfile fetches, keyed by repository URL,
+   * effective transport URL, and commit hash. A mirror must make its own
+   * request rather than inherit another server's failure.
    *
    * On first load, fetchCommit launches up to 7 concurrent findObjectByPath
    * calls (one per README_NAMES candidate) via Promise.any.  Without dedup,
@@ -1586,8 +1588,10 @@ export class GitHttpClient {
     const cached = this.cache.peekRawObjects(commitHash);
     if (cached) return Promise.resolve(cached);
 
-    // 2. Join in-flight request
-    const inFlight = this.inFlightRawObjects.get(commitHash);
+    // Only share pending work for the same server and transport. Successful
+    // objects remain content-addressed and may be reused across mirrors.
+    const requestKey = JSON.stringify([repoUrl, effectiveUrl, commitHash]);
+    const inFlight = this.inFlightRawObjects.get(requestKey);
     if (inFlight) {
       return inFlight.then((entry) => {
         if (signal.aborted) throw new DOMException("Aborted", "AbortError");
@@ -1640,10 +1644,10 @@ export class GitHttpClient {
         return entry;
       })
       .finally(() => {
-        this.inFlightRawObjects.delete(commitHash);
+        this.inFlightRawObjects.delete(requestKey);
       });
 
-    this.inFlightRawObjects.set(commitHash, fetchPromise);
+    this.inFlightRawObjects.set(requestKey, fetchPromise);
     return fetchPromise.then((entry) => {
       if (signal.aborted) throw new DOMException("Aborted", "AbortError");
       return entry;
