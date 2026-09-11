@@ -143,11 +143,10 @@ export interface UrlState {
    * (tree/packfile) from this server, recorded independently of the
    * infoRefs-based connection `status`.
    *
-   * This lets the UI distinguish a server that returned a valid response
-   * genuinely lacking the requested commit's objects ("object-missing")
-   * from one where the git-upload-pack call or packfile transport/parse
-   * itself failed ("fetch-error") — the latter is NOT evidence that the
-   * server lacks the objects. null until an object fetch is attempted.
+   * This lets the UI distinguish an explicit upload-pack ref rejection
+   * ("object-missing") from a request or parsing failure ("fetch-error").
+   * The latter is not evidence that the server lacks the objects.
+   * null until an object fetch is attempted.
    */
   lastObjectFetch: ObjectFetchOutcome | null;
 }
@@ -156,9 +155,9 @@ export interface UrlState {
  * Result of attempting to fetch a commit's git objects from a single server.
  *
  * - "ok"             : the objects were fetched successfully.
- * - "object-missing" : the server returned a valid response (or explicitly
- *                      said "not our ref") but did not have the commit/tree
- *                      objects. Genuine missing-objects evidence.
+ * - "object-missing" : upload-pack explicitly rejected the requested ref
+ *                      ("not our ref"). This describes what the server served,
+ *                      not whether the object exists in its storage.
  * - "fetch-error"    : the git-upload-pack request or packfile transport/parse
  *                      failed before a valid response could be read. NOT
  *                      evidence the server lacks the objects.

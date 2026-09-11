@@ -62,10 +62,9 @@ export type FileEntry =
  *   - "no-branches"    : servers are reachable but advertise no branches.
  *   - "commit-missing" : branches exist, but the requested commit's objects
  *                        aren't served by any reachable server.
- *   - "fetch-failed"   : branches exist and at least one server should have the
- *                        commit, but every attempt to fetch the objects failed
- *                        at the transport/parse level (e.g. git-upload-pack
- *                        errored). NOT confirmed-missing objects.
+ *   - "fetch-failed"   : code could not be loaded, but the available evidence
+ *                        does not establish that every server rejected it.
+ *                        Includes mixed failures and unattempted fetches.
  */
 export type GitExplorerErrorKind =
   | "no-servers"
@@ -396,33 +395,26 @@ function describeMissingCode(
     };
   }
 
-  // Branches exist, but the objects for the requested commit aren't available
-  // on any reachable server. Distinguish two causes using the per-server
-  // object-fetch outcomes the pool recorded:
-  //   - At least one reachable server returned a valid response lacking the
-  //     commit's objects → genuinely missing objects ("commit-missing").
-  //   - No server confirmed the objects missing, but at least one attempt
-  //     failed at the transport/parse level (git-upload-pack errored, packfile
-  //     couldn't be read) → a fetch failure, not missing objects.
-  const objectFetches = reachable
-    .map((u) => u.lastObjectFetch)
-    .filter((o): o is NonNullable<typeof o> => o !== null)
-    .filter(
-      (o) =>
-        !opts.commitHash ||
-        o.commitHash.startsWith(opts.commitHash) ||
-        opts.commitHash.startsWith(o.commitHash),
-    );
-  const anyConfirmedMissing = objectFetches.some(
-    (o) => o.result === "object-missing",
-  );
-  const anyFetchError = objectFetches.some((o) => o.result === "fetch-error");
+  // A global unavailable diagnosis requires a matching rejection from every
+  // configured server. A failed connection, incomplete response, or absent
+  // outcome leaves availability unknown, even if another mirror rejected it.
+  const servers = Object.values(state.urls);
+  const allConfirmedMissing =
+    servers.length > 0 &&
+    servers.every((server) => {
+      const outcome = server.lastObjectFetch;
+      return (
+        server.status === "ok" &&
+        outcome?.result === "object-missing" &&
+        (!opts.commitHash || outcome.commitHash === opts.commitHash)
+      );
+    });
 
-  if (!anyConfirmedMissing && anyFetchError) {
+  if (!allConfirmedMissing) {
     return {
       message: opts.commitHash
-        ? `Couldn't fetch the code for commit ${opts.commitHash.slice(0, 8)} — the git server(s) responded but the object fetch failed.`
-        : "Couldn't fetch the code from the connected git server(s) — the object fetch failed.",
+        ? `Couldn't fetch the code for commit ${opts.commitHash.slice(0, 8)} — availability could not be confirmed.`
+        : "Couldn't fetch the code from the git server(s). Retry to check availability.",
       detail: {
         kind: "fetch-failed",
         requestedRef: opts.resolvedRef,
@@ -433,8 +425,8 @@ function describeMissingCode(
 
   return {
     message: opts.commitHash
-      ? `The connected git server(s) don't have the code for commit ${opts.commitHash.slice(0, 8)} yet.`
-      : "The connected git server(s) don't have the code for this commit yet.",
+      ? `The git server(s) rejected the request for commit ${opts.commitHash.slice(0, 8)}.`
+      : "The git server(s) rejected the request for this commit.",
     detail: {
       kind: "commit-missing",
       requestedRef: opts.resolvedRef,

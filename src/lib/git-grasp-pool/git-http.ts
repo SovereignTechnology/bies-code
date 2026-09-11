@@ -70,51 +70,15 @@ export class PermanentFetchError extends GitFetchError {
 }
 
 /**
- * Thrown (internally) when a server returned a valid response but genuinely
- * did not contain the requested commit/tree objects — including the explicit
- * "not our ref" (MissingRef) signal and the "commit/root tree object not
- * found in packfile" cases.
- *
- * This is the ONLY condition that constitutes evidence a server is missing the
- * objects. Every other thrown error (HTTP failure, transport, decompression,
- * unsupported Response API, etc.) is a fetch error and must NOT be reported as
- * "missing objects".
- */
-export class GitObjectMissingError extends Error {
-  constructor(message = "git server does not have the requested objects") {
-    super(message);
-    this.name = "GitObjectMissingError";
-  }
-}
-
-/**
- * Sentinel message used by the low-level tree/commit helpers when an expected
- * object is absent from an otherwise-valid packfile response.
- */
-const OBJECT_NOT_FOUND_RE = /object not found/i;
-
-/**
- * Classify an error thrown while fetching a commit's git objects
- * (tree/packfile) into "the server genuinely lacks the objects" vs. "the
- * fetch itself failed".
- *
- * Returns `{ missing: true }` only when we have positive evidence the server
- * returned a valid response without the objects (MissingRef / object-not-found
- * in the packfile). Otherwise the error is a transport/parse failure and is
- * classified via {@link classifyFetchError}, defaulting to a transient
- * "packfile-error" so the server is not blamed for missing objects.
+ * Only an explicit upload-pack rejection establishes that a server did not
+ * serve the requested ref. Missing objects in a parsed response may instead
+ * indicate an incomplete pack or a parser failure; classify those as fetch
+ * errors, without making a claim about the server's stored objects.
  */
 export function classifyObjectFetchError(
   err: unknown,
 ): { missing: true } | { missing: false; kind: UrlErrorKind } {
-  if (err instanceof GitObjectMissingError || err instanceof MissingRef) {
-    return { missing: true };
-  }
-  if (
-    err instanceof Error &&
-    OBJECT_NOT_FOUND_RE.test(err.message) &&
-    !(err instanceof GitFetchError)
-  ) {
+  if (err instanceof MissingRef) {
     return { missing: true };
   }
   // Aborts are not fetch failures — surface them so callers can short-circuit.
@@ -1131,17 +1095,17 @@ export class GitHttpClient {
     commitHash: string,
     nestLimit: number,
     signal: AbortSignal,
-  ): Promise<Tree | null> {
+  ): Promise<Tree> {
     signal = this.operationSignal(signal);
     // 1. Parsed tree cache (L1 + IDB, with >= nestLimit check)
     const cached = await this.cache.getTree(commitHash, nestLimit);
-    if (signal.aborted) return null;
+    signal.throwIfAborted();
     if (cached) return cached;
 
     // 2. Raw objects cache / in-flight dedup / network fetch (all via getRawObjects)
     const effectiveUrl = this.cors.resolveUrl(url);
     const serverCaps = await this.getServerCaps(url, signal);
-    if (signal.aborted) return null;
+    signal.throwIfAborted();
 
     const rawEntry = await this.getRawObjects(
       url,
@@ -1150,14 +1114,14 @@ export class GitHttpClient {
       serverCaps,
       signal,
     );
-    if (signal.aborted) return null;
+    signal.throwIfAborted();
 
     const rootObj = rawEntry.objects.get(rawEntry.rootTreeHash);
     if (!rootObj) {
-      // The packfile arrived but lacked the root tree object — genuine
-      // missing objects for this commit on this server.
-      throw new GitObjectMissingError(
+      throw new GitFetchError(
         `root tree object not found for commit ${commitHash}`,
+        "packfile-error",
+        false,
       );
     }
 

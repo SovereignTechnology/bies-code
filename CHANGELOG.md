@@ -4,6 +4,8 @@
 
 ### Fixes
 
+- Report Git fetch and parsing failures without incorrectly claiming a commit is missing; cancelled requests no longer leave misleading server status.
+
 ### Features
 
 ### Changes

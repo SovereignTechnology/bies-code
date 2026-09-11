@@ -1855,16 +1855,13 @@ export class GitGraspPool {
             nestLimit,
             signal,
           );
+          // Cancellation carries no evidence about this server's objects.
+          signal.throwIfAborted();
+          this.http.lifecycleSignal.throwIfAborted();
           const tracker = this.urlManager.get(url);
-          if (result) {
-            tracker?.recordOperationSuccess(Date.now() - start);
-            tracker?.recordObjectFetch(commitHash, "ok");
-          } else {
-            // fetchTree returned null without throwing — the server's response
-            // genuinely lacked the objects for this commit.
-            tracker?.recordObjectFetch(commitHash, "object-missing");
-          }
-          if (!result && isPoolUrl) {
+          tracker?.recordOperationSuccess(Date.now() - start);
+          tracker?.recordObjectFetch(commitHash, "ok");
+          if (isPoolUrl) {
             this.setState((prev) => ({
               ...prev,
               urls: this.urlManager.toStateRecord(),
@@ -1872,12 +1869,11 @@ export class GitGraspPool {
           }
           return result;
         } catch (err) {
-          if (signal.aborted) throw err;
+          if (signal.aborted || this.http.lifecycleSignal.aborted) return null;
           const classified = classifyObjectFetchError(err);
           const tracker = this.urlManager.get(url);
           if (classified.missing) {
-            // The server returned a valid response (or "not our ref") without
-            // the commit's objects — genuine missing objects.
+            // upload-pack explicitly rejected the requested ref.
             tracker?.recordObjectFetch(commitHash, "object-missing");
           } else {
             // The git-upload-pack call or packfile transport/parse failed.
