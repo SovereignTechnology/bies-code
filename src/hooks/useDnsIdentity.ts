@@ -1,3 +1,4 @@
+import { useErrorRetry, type ErrorRetryState } from "@/hooks/useErrorRetry";
 import { useState, useEffect } from "react";
 import { IdentityStatus } from "applesauce-loaders/helpers";
 import type { Identity } from "applesauce-loaders/helpers";
@@ -69,7 +70,9 @@ function parseNip05(nip05: string): { name: string; domain: string } | null {
  * identities already resolved this session (e.g. via usePrefetchNip05) are
  * available on the very first render — no loading flash.
  */
-export function useDnsIdentity(nip05: string | undefined): DnsIdentityState {
+export function useDnsIdentity(
+  nip05: string | undefined,
+): DnsIdentityState & { recovery: ErrorRetryState } {
   const [state, setState] = useState<DnsIdentityState>(() => {
     // Check the in-memory cache synchronously so components that arrive from
     // the repositories list (where usePrefetchNip05 has already run) render
@@ -82,6 +85,18 @@ export function useDnsIdentity(nip05: string | undefined): DnsIdentityState {
     if (isDotBitNip05(nip05)) return { status: "loading" };
     const cached = dnsIdentityLoader.getIdentity(parsed.name, parsed.domain);
     return cached ? cachedIdentityToState(cached) : { status: "loading" };
+  });
+
+  const [retryVersion, setRetryVersion] = useState(0);
+  const recovery = useErrorRetry({
+    resourceKey: nip05,
+    failed: state.status === "error",
+    busy: state.status === "loading",
+    onRetry: () => setRetryVersion((version) => version + 1),
+    policy:
+      nip05 && parseNip05(nip05)
+        ? { mode: "read", requiresSigning: false, context: "connection" }
+        : { mode: "manual" },
   });
 
   useEffect(() => {
@@ -97,6 +112,7 @@ export function useDnsIdentity(nip05: string | undefined): DnsIdentityState {
       return;
     }
     const { name, domain } = parsed;
+    setState({ status: "loading" });
 
     let cancelled = false;
 
@@ -166,7 +182,7 @@ export function useDnsIdentity(nip05: string | undefined): DnsIdentityState {
       // Check in-memory cache — avoids a loading flash when the identity is
       // already resolved (e.g. back-navigation or warm IDB).
       const cached = dnsIdentityLoader.getIdentity(name, domain);
-      if (cached) {
+      if (cached && retryVersion === 0) {
         setState(cachedIdentityToState(cached));
         return;
       }
@@ -176,7 +192,9 @@ export function useDnsIdentity(nip05: string | undefined): DnsIdentityState {
       );
 
       Promise.race([
-        dnsIdentityLoader.loadIdentity(name, domain),
+        retryVersion > 0
+          ? dnsIdentityLoader.fetchIdentity(name, domain)
+          : dnsIdentityLoader.loadIdentity(name, domain),
         timeoutPromise,
       ])
         .then((identity) => {
@@ -215,7 +233,7 @@ export function useDnsIdentity(nip05: string | undefined): DnsIdentityState {
     return () => {
       cancelled = true;
     };
-  }, [nip05]);
+  }, [nip05, retryVersion]);
 
-  return state;
+  return { ...state, recovery };
 }

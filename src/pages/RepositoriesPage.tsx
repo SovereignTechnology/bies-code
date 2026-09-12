@@ -215,6 +215,7 @@ export default function RepositoriesPage({
               status={namecoin.status}
               query={committedQuery}
               pubkey={namecoin.pubkey}
+              recovery={namecoin.recovery}
             />
           )}
         </div>

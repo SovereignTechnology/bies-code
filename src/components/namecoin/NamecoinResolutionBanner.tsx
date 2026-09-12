@@ -1,3 +1,5 @@
+import { ErrorRetryAction } from "@/components/ErrorRetryAction";
+import type { ErrorRetryState } from "@/hooks/useErrorRetry";
 import { AlertTriangle, Info, Link2, Loader2 } from "lucide-react";
 
 import type { NamecoinResolutionStatus } from "@/hooks/useNamecoinSearchResolution";
@@ -6,12 +8,14 @@ interface NamecoinResolutionBannerProps {
   status: NamecoinResolutionStatus;
   query: string;
   pubkey?: string;
+  recovery?: ErrorRetryState;
 }
 
 export function NamecoinResolutionBanner({
   status,
   query,
   pubkey,
+  recovery,
 }: NamecoinResolutionBannerProps) {
   if (status === "idle") return null;
 
@@ -55,8 +59,8 @@ export function NamecoinResolutionBanner({
         <AlertTriangle className="h-3.5 w-3.5" />
         <span>
           Namecoin resolver unavailable — could not reach any ElectrumX server.
-          Try again in a moment.
         </span>
+        {recovery && <ErrorRetryAction recovery={recovery} />}
       </div>
     );
   }

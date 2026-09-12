@@ -1,3 +1,4 @@
+import { useErrorRetry, type ErrorRetryState } from "@/hooks/useErrorRetry";
 import { useEffect, useState } from "react";
 import { fetchGraspServerInformation, type Nip11Document } from "@/lib/grasp";
 
@@ -9,10 +10,19 @@ export type GraspServerInfoState =
 /** Fetch a domain's NIP-11 document with cancellation and a bounded timeout. */
 export function useGraspServerInfo(
   domain: string | undefined,
-): GraspServerInfoState | undefined {
+): (GraspServerInfoState & { recovery: ErrorRetryState }) | undefined {
   const [state, setState] = useState<GraspServerInfoState | undefined>(
     domain ? { status: "loading" } : undefined,
   );
+
+  const [retryVersion, setRetryVersion] = useState(0);
+  const recovery = useErrorRetry({
+    resourceKey: domain,
+    failed: state?.status === "error",
+    busy: state?.status === "loading",
+    onRetry: () => setRetryVersion((version) => version + 1),
+    policy: { mode: "read", requiresSigning: false, context: "connection" },
+  });
 
   useEffect(() => {
     if (!domain) {
@@ -47,7 +57,7 @@ export function useGraspServerInfo(
       window.clearTimeout(timeout);
       controller.abort();
     };
-  }, [domain]);
+  }, [domain, retryVersion]);
 
-  return state;
+  return state ? { ...state, recovery } : undefined;
 }

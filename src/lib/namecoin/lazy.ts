@@ -44,7 +44,10 @@ function loadModule(): Promise<NamecoinModule> {
     modulePromise = import(
       /* webpackChunkName: "namecoin-resolver" */
       "./index"
-    );
+    ).catch((error: unknown) => {
+      modulePromise = null;
+      throw error;
+    });
   }
   return modulePromise;
 }

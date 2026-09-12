@@ -54,8 +54,9 @@ changes refs or publishes events. Gate automation with
   errors and authenticated pools.
 - Commit detail, diff, repository/PR history and PR base lookup: availability delays for public reads;
   authenticated pools remain manual.
-- Event search: shared manual retry where the search owner supplies a callback;
+- Event search: shared manual retry supplied by the search hook or page owner;
   deleted/vanished events are not retried as errors.
+- Identity, Namecoin and NIP-11 metadata: bounded connection retries for unsigned public reads; DNS retries bypass cached failures.
 - Patch parsing: manual retry, because the same invalid patch is deterministic.
 - Existing form submission, signing and application-error-boundary actions stay
   manual. Incompatible protocol and deliberate absence/deletion are not transient

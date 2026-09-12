@@ -193,15 +193,16 @@ export function EventSearchStatus({
     !search.deleted &&
     !search.vanished;
 
+  const retrySearch = onRetry ?? search.retry;
   const recovery = useErrorRetry({
     resourceKey: eventId ?? itemLabel,
     failed:
-      !!onRetry &&
+      !!retrySearch &&
       search.concludedNotFound &&
       !search.deleted &&
       !search.vanished,
     busy: isSearching,
-    onRetry: () => onRetry?.(),
+    onRetry: () => retrySearch?.(),
   });
 
   // Deletion check is running: settled, no active relay group, and not yet concluded
@@ -276,7 +277,7 @@ export function EventSearchStatus({
           )}
         </div>
 
-        {onRetry &&
+        {retrySearch &&
           search.concludedNotFound &&
           !search.deleted &&
           !search.vanished && (

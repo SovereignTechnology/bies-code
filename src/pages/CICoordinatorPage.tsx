@@ -1,3 +1,4 @@
+import { ErrorRetryAction } from "@/components/ErrorRetryAction";
 import { useMemo, type ReactNode } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { useSeoMeta } from "@unhead/react";
@@ -981,6 +982,9 @@ function CoordinatorInfrastructureCard({
               title="Identity does not match"
             >
               {identityName} does not currently resolve to this coordinator key.
+              {identity.status === "error" && (
+                <ErrorRetryAction recovery={identity.recovery} />
+              )}
             </InfrastructureNotice>
           ) : (
             <div className="space-y-2">
@@ -990,6 +994,7 @@ function CoordinatorInfrastructureCard({
               {server?.status === "error" && (
                 <InfrastructureNotice tone="warning" title="NIP-11 unavailable">
                   {server.message}
+                  <ErrorRetryAction recovery={server.recovery} />
                 </InfrastructureNotice>
               )}
               {server?.status === "found" && (

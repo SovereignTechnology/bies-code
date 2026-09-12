@@ -1,3 +1,5 @@
+import { ErrorRetryAction } from "@/components/ErrorRetryAction";
+import type { ErrorRetryState } from "@/hooks/useErrorRetry";
 import { useEffect, useMemo, useState } from "react";
 import { Link, Navigate, useParams, useLocation } from "react-router-dom";
 import { useActiveAccount } from "applesauce-react/hooks";
@@ -171,7 +173,13 @@ function RepoLayoutNip05({
   }
 
   if (identity.status === "error") {
-    return <Nip05ResolveError nip05={nip05} reason={identity.reason} />;
+    return (
+      <Nip05ResolveError
+        nip05={nip05}
+        reason={identity.reason}
+        recovery={identity.recovery}
+      />
+    );
   }
 
   return (
@@ -1688,9 +1696,11 @@ function Nip05NotFoundError({ nip05 }: { nip05: string }) {
 function Nip05ResolveError({
   nip05,
   reason,
+  recovery,
 }: {
   nip05: string;
   reason: "timeout" | "network" | "unknown";
+  recovery: ErrorRetryState;
 }) {
   const detail =
     reason === "timeout"
@@ -1714,6 +1724,7 @@ function Nip05ResolveError({
             <span className="font-mono text-foreground">{nip05}</span>.
           </p>
           <p className="text-sm text-muted-foreground">{detail}</p>
+          <ErrorRetryAction recovery={recovery} />
         </div>
         <Button asChild variant="outline">
           <Link to="/">

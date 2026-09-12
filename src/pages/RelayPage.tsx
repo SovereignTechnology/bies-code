@@ -1,3 +1,4 @@
+import { ErrorRetryAction } from "@/components/ErrorRetryAction";
 import { useMemo } from "react";
 import { Link, useParams } from "react-router-dom";
 import type { Filter } from "applesauce-core/helpers";
@@ -193,6 +194,7 @@ function GraspServiceOverview({
         {server?.status === "error" && (
           <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-900 dark:text-amber-100">
             GRASP metadata is unavailable: {server.message}
+            <ErrorRetryAction recovery={server.recovery} />
           </div>
         )}
 

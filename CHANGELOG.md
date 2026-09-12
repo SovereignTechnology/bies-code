@@ -4,6 +4,8 @@
 
 ### Fixes
 
+- Add recovery controls to exhausted event searches, identity lookups, Namecoin resolution and relay metadata errors instead of stranding users or showing a misleading not-found page.
+
 - Recover PR history and merge-base failures without a page reload; keep base lookup running across ordinary renders and provide bounded retry controls.
 
 - Keep concurrent Git mirror fetches independent so one server’s failure cannot suppress a request to another server.

@@ -1,3 +1,4 @@
+import { useErrorRetry, type ErrorRetryState } from "@/hooks/useErrorRetry";
 /**
  * Search-side Namecoin `.bit` / `d/` / `id/` resolution.
  *
@@ -23,6 +24,7 @@ export type NamecoinResolutionStatus =
   | "unavailable";
 
 export interface NamecoinSearchResolution {
+  recovery?: ErrorRetryState;
   /** True iff the query is an explicit `.bit` / `d/` / `id/` identifier. */
   isNamecoinQuery: boolean;
   /** Where the resolver is in its lifecycle. */
@@ -60,6 +62,15 @@ export function useNamecoinSearchResolution(
   // during in-flight resolution supersedes the previous one and its
   // late result is discarded.
   const activeQueryRef = useRef<string | null>(null);
+
+  const [retryVersion, setRetryVersion] = useState(0);
+  const recovery = useErrorRetry({
+    resourceKey: trimmedQuery,
+    failed: state.status === "unavailable",
+    busy: state.status === "resolving",
+    onRetry: () => setRetryVersion((version) => version + 1),
+    policy: { mode: "read", requiresSigning: false, context: "connection" },
+  });
 
   useEffect(() => {
     if (!isNamecoinQuery) {
@@ -100,7 +111,10 @@ export function useNamecoinSearchResolution(
         // unavailable from not-found" bullet.
         setState({ isNamecoinQuery: true, status: "unavailable" });
       });
-  }, [isNamecoinQuery, trimmedQuery]);
+    return () => {
+      activeQueryRef.current = null;
+    };
+  }, [isNamecoinQuery, trimmedQuery, retryVersion]);
 
-  return state;
+  return { ...state, recovery };
 }

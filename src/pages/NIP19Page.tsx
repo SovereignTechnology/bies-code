@@ -1,3 +1,4 @@
+import { ErrorRetryAction } from "@/components/ErrorRetryAction";
 import {
   normalizeToProfilePointer,
   normalizeToEventPointer,
@@ -542,7 +543,10 @@ function SoftwareReleaseRedirect({
     );
   }
 
-  if (search?.concludedNotFound) return <NotFound />;
+  if (search && (search.concludedNotFound || search.deleted || search.vanished))
+    return (
+      <EventSearchStatus search={search} itemLabel="Software application" />
+    );
   return <LoadingState message="Resolving software application…" />;
 }
 
@@ -937,9 +941,17 @@ function Nip05UserPage({ nip05 }: { nip05: string }) {
     return <LoadingState message={`Resolving ${nip05}…`} />;
   }
 
-  if (identity.status === "not-found" || identity.status === "error") {
-    return <NotFound />;
+  if (identity.status === "error") {
+    return (
+      <div className="mx-auto max-w-lg space-y-4 p-6">
+        <p>
+          Could not resolve {nip05}: {identity.message}
+        </p>
+        <ErrorRetryAction recovery={identity.recovery} />
+      </div>
+    );
   }
+  if (identity.status === "not-found") return <NotFound />;
 
   return <UserPage pubkey={identity.pubkey} />;
 }
