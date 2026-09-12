@@ -1,5 +1,5 @@
 import { useErrorRetry, type ErrorRetryState } from "@/hooks/useErrorRetry";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { IdentityStatus } from "applesauce-loaders/helpers";
 import type { Identity } from "applesauce-loaders/helpers";
 import { dnsIdentityLoader, nip05WarmupReady } from "@/services/nostr";
@@ -91,11 +91,15 @@ export function useDnsIdentity(
   const currentState: DnsIdentityState =
     stateKey === nip05 ? state : { status: "loading" };
   const [retryVersion, setRetryVersion] = useState(0);
+  const retryIdentity = useRef<string | undefined>(undefined);
   const recovery = useErrorRetry({
     resourceKey: nip05,
     failed: currentState.status === "error",
     busy: currentState.status === "loading",
-    onRetry: () => setRetryVersion((version) => version + 1),
+    onRetry: () => {
+      retryIdentity.current = nip05;
+      setRetryVersion((version) => version + 1);
+    },
     policy:
       nip05 && parseNip05(nip05)
         ? { mode: "read", requiresSigning: false, context: "connection" }
@@ -103,6 +107,9 @@ export function useDnsIdentity(
   });
 
   useEffect(() => {
+    // Bypass the cache only for the requested attempt, never a later identity.
+    const forceRefresh = !!nip05 && retryIdentity.current === nip05;
+    retryIdentity.current = undefined;
     setStateKey(nip05);
     if (!nip05) {
       setState({ status: "loading" });
@@ -122,6 +129,7 @@ export function useDnsIdentity(
     setState({ status: "loading" });
 
     let cancelled = false;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
 
     // ------------------------------------------------------------
     // Namecoin `.bit` short-circuit — opt-in path.
@@ -189,17 +197,20 @@ export function useDnsIdentity(
       // Check in-memory cache — avoids a loading flash when the identity is
       // already resolved (e.g. back-navigation or warm IDB).
       const cached = dnsIdentityLoader.getIdentity(name, domain);
-      if (cached && retryVersion === 0) {
+      if (cached && !forceRefresh) {
         setState(cachedIdentityToState(cached));
         return;
       }
 
-      const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("__timeout__")), RESOLVE_TIMEOUT_MS),
-      );
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error("__timeout__")),
+          RESOLVE_TIMEOUT_MS,
+        );
+      });
 
       Promise.race([
-        retryVersion > 0
+        forceRefresh
           ? dnsIdentityLoader.fetchIdentity(name, domain)
           : dnsIdentityLoader.loadIdentity(name, domain),
         timeoutPromise,
@@ -234,10 +245,12 @@ export function useDnsIdentity(
               message: msg,
             });
           }
-        });
+        })
+        .finally(() => clearTimeout(timeout));
     });
 
     return () => {
+      clearTimeout(timeout);
       cancelled = true;
     };
   }, [nip05, retryVersion]);
