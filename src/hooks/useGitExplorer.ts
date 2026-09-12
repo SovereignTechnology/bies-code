@@ -11,7 +11,7 @@
  *     route through the pool's winning URL with fallback and cache.
  */
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import type {
   Commit,
   Tree,
@@ -19,6 +19,7 @@ import type {
 } from "@/lib/vendored/git-natural-api";
 import type { GitGraspPool, PoolState } from "@/lib/git-grasp-pool";
 import { FULL_NEST_LIMIT } from "@/lib/git-grasp-pool/cache";
+import { useErrorRetry, type ErrorRetryState } from "@/hooks/useErrorRetry";
 import type { RepoStateRef } from "@/lib/nip34";
 
 // ---------------------------------------------------------------------------
@@ -1164,7 +1165,7 @@ export function useCommitHistory(
   maxCommits: number = 50,
   fallbackUrls?: string[],
   untilHash?: string,
-): CommitHistoryState {
+): CommitHistoryState & { recovery: ErrorRetryState } {
   const [state, setState] = useState<CommitHistoryState>(() => {
     // Fast path: check L1 cache synchronously on first render.
     if (ref && pool) {
@@ -1193,6 +1194,26 @@ export function useCommitHistory(
     return { loading: false, error: null, commits: [] };
   });
 
+  const [retryVersion, setRetryVersion] = useState(0);
+  const fallbackKey = fallbackUrls?.join(",");
+  const resourceKey = useMemo(
+    () => ({ pool, ref, maxCommits, fallbackKey, untilHash }),
+    [pool, ref, maxCommits, fallbackKey, untilHash],
+  );
+  const recovery = useErrorRetry({
+    resourceKey,
+    failed: !!state.error,
+    busy: state.loading || poolState.loading || poolState.pulling,
+    onRetry: async (signal) => {
+      await pool?.retryReads();
+      if (!signal.aborted) setRetryVersion((version) => version + 1);
+    },
+    policy:
+      pool && !pool.requiresSigningForReads
+        ? { mode: "read", requiresSigning: false, context: "availability" }
+        : { mode: "manual" },
+  });
+
   const hasInfoRefs = pool ? !!pool.getEffectiveInfoRefs() : false;
 
   useEffect(() => {
@@ -1204,6 +1225,8 @@ export function useCommitHistory(
     async function run() {
       if (!pool || !ref) return;
 
+      setState({ loading: true, error: null, commits: [] });
+
       // Wait for infoRefs if not yet available.
       let info = pool.getEffectiveInfoRefs();
       if (!info) {
@@ -1213,10 +1236,16 @@ export function useCommitHistory(
               resolve(null);
               return;
             }
+            let settled = false;
+            const finish = (value: InfoRefsUploadPackResponse | null) => {
+              if (settled) return;
+              settled = true;
+              resolve(value);
+              queueMicrotask(() => sub.unsubscribe());
+            };
             const sub = pool!.observable.subscribe((s) => {
               if (signal.aborted) {
-                sub.unsubscribe();
-                resolve(null);
+                finish(null);
                 return;
               }
               const available =
@@ -1224,13 +1253,14 @@ export function useCommitHistory(
                 Object.values(s.urls).find((u) => u.infoRefs)?.infoRefs ??
                 null;
               if (available) {
-                sub.unsubscribe();
-                resolve(available);
+                finish(available);
                 return;
               }
-              if (!s.loading && s.health === "all-failed") {
-                sub.unsubscribe();
-                resolve(null);
+              if (
+                !s.loading &&
+                (s.health === "all-failed" || s.error !== null)
+              ) {
+                finish(null);
               }
             });
             signal.addEventListener("abort", () => {
@@ -1282,6 +1312,7 @@ export function useCommitHistory(
         commitHash,
         maxCommits,
       );
+      if (signal.aborted) return;
       if (cachedHistory) {
         setState({ loading: false, error: null, commits: cachedHistory });
         return;
@@ -1299,19 +1330,42 @@ export function useCommitHistory(
       if (signal.aborted) return;
 
       if (!commits || commits.length === 0) {
-        setState({ loading: false, error: "No commits found", commits: [] });
+        setState({
+          loading: false,
+          error:
+            "Could not fetch the commit history. Try again when the Git servers are reachable.",
+          commits: [],
+        });
         return;
       }
 
       setState({ loading: false, error: null, commits });
     }
 
-    void run();
+    void run().catch((error: unknown) => {
+      if (!signal.aborted)
+        setState({
+          loading: false,
+          error:
+            error instanceof Error
+              ? error.message
+              : "Could not fetch commit history",
+          commits: [],
+        });
+    });
     return () => abort.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pool, ref, maxCommits, hasInfoRefs, fallbackUrls?.join(","), untilHash]);
+  }, [
+    pool,
+    ref,
+    maxCommits,
+    hasInfoRefs,
+    fallbackKey,
+    untilHash,
+    retryVersion,
+  ]);
 
-  return state;
+  return { ...state, recovery };
 }
 
 // ---------------------------------------------------------------------------

@@ -11,7 +11,8 @@
  *   - `computing`: true while the async lookup is in progress
  */
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
+import { useErrorRetry, type ErrorRetryState } from "@/hooks/useErrorRetry";
 import type { GitGraspPool, PoolState } from "@/lib/git-grasp-pool";
 
 export interface UsePRMergeBaseResult {
@@ -19,6 +20,7 @@ export interface UsePRMergeBaseResult {
   mergeBase: string | undefined;
   /** True while the async computation is in progress. */
   computing: boolean;
+  recovery: ErrorRetryState;
 }
 
 /**
@@ -54,16 +56,47 @@ export function usePRMergeBase(
   const [computing, setComputing] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
-  // Track the last tip+pool combination we ran for so we don't re-run
-  // unnecessarily when unrelated state changes.
-  const lastRunKeyRef = useRef<string>("");
+  const [failed, setFailed] = useState(false);
+  const [retryVersion, setRetryVersion] = useState(0);
+  const fallbackKey = fallbackUrls?.join(",");
   const effectiveTargetBranchHead =
     targetBranchHead ??
     (requireTargetBranchHead
       ? undefined
       : poolState.authoritativeHead?.commitId);
 
+  const resourceKey = useMemo(
+    () => ({
+      gitPool,
+      effectiveTargetBranchHead,
+      tipCommitId,
+      explicitMergeBase,
+      fallbackKey,
+    }),
+    [
+      gitPool,
+      effectiveTargetBranchHead,
+      tipCommitId,
+      explicitMergeBase,
+      fallbackKey,
+    ],
+  );
+  const recovery = useErrorRetry({
+    resourceKey,
+    failed,
+    busy: computing || targetBranchLoading,
+    onRetry: async (signal) => {
+      await gitPool?.retryReads();
+      if (!signal.aborted) setRetryVersion((version) => version + 1);
+    },
+    policy:
+      gitPool && !gitPool.requiresSigningForReads
+        ? { mode: "read", requiresSigning: false, context: "availability" }
+        : { mode: "manual" },
+  });
+
   useEffect(() => {
+    setFailed(false);
     // If an explicit merge base is provided, nothing to do.
     if (explicitMergeBase !== undefined) {
       setDerived(undefined);
@@ -75,14 +108,10 @@ export function usePRMergeBase(
     // Need a pool and both ends of the comparison to proceed.
     if (!gitPool || !effectiveTargetBranchHead || !tipCommitId) {
       setDerived(undefined);
-      lastRunKeyRef.current = "";
+      setFailed(Boolean(gitPool && tipCommitId && !targetBranchLoading));
       setComputing(Boolean(tipCommitId && gitPool && targetBranchLoading));
       return;
     }
-
-    const runKey = `${effectiveTargetBranchHead}:${tipCommitId}:${fallbackUrls?.join(",") ?? ""}`;
-    if (runKey === lastRunKeyRef.current) return;
-    lastRunKeyRef.current = runKey;
 
     // Abort any previous in-flight computation.
     abortRef.current?.abort();
@@ -102,30 +131,35 @@ export function usePRMergeBase(
       .then((result) => {
         if (abort.signal.aborted) return;
         setDerived(result ?? undefined);
+        setFailed(!result);
         setComputing(false);
       })
       .catch(() => {
         if (abort.signal.aborted) return;
+        setFailed(true);
         setComputing(false);
       });
 
     return () => {
       abort.abort();
     };
+    // fallbackKey tracks the URL values without cancelling work on array identity changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     gitPool,
     effectiveTargetBranchHead,
     tipCommitId,
     explicitMergeBase,
-    fallbackUrls,
+    fallbackKey,
+    retryVersion,
     targetBranchLoading,
     requireTargetBranchHead,
   ]);
 
   // If an explicit merge base is provided, use it directly.
   if (explicitMergeBase !== undefined) {
-    return { mergeBase: explicitMergeBase, computing: false };
+    return { mergeBase: explicitMergeBase, computing: false, recovery };
   }
 
-  return { mergeBase: derived, computing };
+  return { mergeBase: derived, computing, recovery };
 }

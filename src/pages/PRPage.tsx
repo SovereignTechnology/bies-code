@@ -1,3 +1,4 @@
+import { ErrorRetryAction } from "@/components/ErrorRetryAction";
 import React, {
   useCallback,
   useEffect,
@@ -514,17 +515,20 @@ export default function PRPage() {
   }, [pr?.tip.cloneUrls?.join(","), cloneUrls.join(",")]);
 
   // Merge-base: use explicit tag when available, otherwise derive via git
-  const { mergeBase: effectiveMergeBase, computing: computingMergeBase } =
-    usePRMergeBase(
-      gitPool,
-      gitPoolState,
-      pr?.tip.commitId,
-      pr?.tip.explicitMergeBase,
-      effectiveCloneUrls,
-      targetBranchHead,
-      gitPoolState.loading,
-      !!pr?.targetBranch,
-    );
+  const {
+    mergeBase: effectiveMergeBase,
+    computing: computingMergeBase,
+    recovery: mergeBaseRecovery,
+  } = usePRMergeBase(
+    gitPool,
+    gitPoolState,
+    pr?.tip.commitId,
+    pr?.tip.explicitMergeBase,
+    effectiveCloneUrls,
+    targetBranchHead,
+    gitPoolState.loading,
+    !!pr?.targetBranch,
+  );
 
   // Commit history for the PR commits tab — fetches from the effective tip.
   const prCommitHistory = useCommitHistory(
@@ -1978,6 +1982,9 @@ export default function PRPage() {
                       {computingMergeBase
                         ? "Determining base commit..."
                         : "Could not determine the base commit."}
+                      {!computingMergeBase && (
+                        <ErrorRetryAction recovery={mergeBaseRecovery} />
+                      )}
                     </div>
                   ) : !gitPool ? (
                     <div className="rounded-lg border border-dashed border-border/60 px-6 py-10 text-center text-sm text-muted-foreground">
@@ -2010,9 +2017,15 @@ export default function PRPage() {
                         {computingMergeBase
                           ? "Determining base commit..."
                           : "Could not determine the base commit for this PR."}
+                        {!computingMergeBase && (
+                          <ErrorRetryAction recovery={mergeBaseRecovery} />
+                        )}
                       </div>
                     ) : prCommitHistory.error ? (
-                      <CommitListError message={prCommitHistory.error} />
+                      <CommitListError
+                        message={prCommitHistory.error}
+                        recovery={prCommitHistory.recovery}
+                      />
                     ) : prCommitHistory.loading ? (
                       <CommitListLoading count={4} />
                     ) : prCommits.length === 0 ? (

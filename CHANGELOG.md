@@ -4,6 +4,8 @@
 
 ### Fixes
 
+- Recover PR history and merge-base failures without a page reload; keep base lookup running across ordinary renders and provide bounded retry controls.
+
 - Keep concurrent Git mirror fetches independent so one server’s failure cannot suppress a request to another server.
 
 - Report Git fetch and parsing failures without incorrectly claiming a commit is missing; cancelled requests no longer leave misleading server status.

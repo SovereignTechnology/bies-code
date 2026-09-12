@@ -52,7 +52,7 @@ changes refs or publishes events. Gate automation with
 - Code explorer: connection delays for fetch/connectivity failures, longer
   availability delays for missing refs/empty mirrors, manual for unclassified
   errors and authenticated pools.
-- Commit detail, diff and history: availability delays for public reads;
+- Commit detail, diff, repository/PR history and PR base lookup: availability delays for public reads;
   authenticated pools remain manual.
 - Event search: shared manual retry where the search owner supplies a callback;
   deleted/vanished events are not retried as errors.
