@@ -278,7 +278,7 @@ export function CISecretsDialog({
       onOpenChange(false);
       toast({
         title: "Secret update delivered; confirmation pending",
-        description: `${result.acceptedRelays.length} of ${result.attemptedRelays.length} inbox relays accepted it. Waiting for the coordinator to report the change in repository status.`,
+        description: `${result.acceptedRelays.length} of ${result.attemptedRelays.length} coordinator relays accepted it. Waiting for the coordinator to confirm the change.`,
       });
     } catch (error) {
       toast({

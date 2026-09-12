@@ -767,7 +767,8 @@ export function CICoordinatorDetailsCard({
                 <Clock3 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-300" />
                 <div>
                   <p className="text-[11px] font-medium text-amber-900 dark:text-amber-100">
-                    Delivered to inbox relays; awaiting coordinator status
+                    Delivered to the coordinator’s relays; awaiting their
+                    confirmation
                   </p>
                   <p className="mt-0.5 text-[10px] text-amber-800 dark:text-amber-200">
                     {pendingSecretChanges
