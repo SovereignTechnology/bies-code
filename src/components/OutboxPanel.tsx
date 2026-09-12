@@ -682,12 +682,13 @@ function RelayRow({
         )}
         {canRetry && (
           <button
-            className="shrink-0 text-muted-foreground hover:text-foreground"
+            className="shrink-0 inline-flex items-center gap-1 text-muted-foreground hover:text-foreground"
             onClick={() => outboxStore.retryRelay(itemId, relay.url)}
             aria-label="Retry relay"
             title="Retry now"
           >
             <RotateCw className="h-2.5 w-2.5" />
+            <span>Retry now</span>
           </button>
         )}
       </div>

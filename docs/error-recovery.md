@@ -65,3 +65,13 @@ changes refs or publishes events. Gate automation with
 Apply this pattern to new recovery UI rather than adding local timers or an
 icon-only retry button. When adopting another existing surface, first identify
 its operation owner, cancellation path, signing behavior, and existing retries.
+
+## Audit coverage
+
+See the [2026-09-12 UI audit](error-ui-audit.md) for the existing surfaces,
+recovery owners and deliberate manual/corrective exceptions. Hover previews,
+media, patch verification and payment setup use visible manual recovery;
+repository comparisons, branches/tags and README loads use bounded unsigned-read
+recovery. Keep diagnostics with their owning operation instead of adding a timer
+to each badge. Retry controls embedded in linked content must prevent link
+navigation when activated.

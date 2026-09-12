@@ -1,3 +1,5 @@
+import { useErrorRetry } from "@/hooks/useErrorRetry";
+import { ErrorRetryAction } from "@/components/ErrorRetryAction";
 /**
  * PatchCommitDetailView — commit detail view for patch-sourced commits.
  *
@@ -424,6 +426,32 @@ export function PatchCommitDetailView({
   });
   const abortRef = useRef<AbortController | null>(null);
 
+  const [retryVersion, setRetryVersion] = useState(0);
+  const recoveryKey = useMemo(
+    () => ({ pool, patchId: patch.event.id, baseCommitId }),
+    [pool, patch.event.id, baseCommitId],
+  );
+  const verificationUnavailable =
+    commitHashResult !== null &&
+    commitHashResult !== "computing" &&
+    commitHashResult.status === "unavailable";
+  const recovery = useErrorRetry({
+    resourceKey: recoveryKey,
+    failed:
+      verificationUnavailable ||
+      appliedDiff.kind === "error" ||
+      (appliedDiff.kind === "done" &&
+        appliedDiff.failureReason === "fetch-failed"),
+    busy: commitHashResult === "computing" || appliedDiff.kind === "computing",
+    onRetry: async (signal) => {
+      await pool?.retryReads();
+      if (!signal.aborted) {
+        setCommitHashResult(null);
+        setRetryVersion((version) => version + 1);
+      }
+    },
+  });
+
   const authorTs = commit.author.timestamp * 1000;
   const committerTs =
     (commit.committer?.timestamp ?? commit.author.timestamp) * 1000;
@@ -578,6 +606,7 @@ export function PatchCommitDetailView({
     chainToVerify,
     fallbackUrlsKey,
     fallbackUrls,
+    retryVersion,
   ]);
 
   // Apply the patch to the base commit to produce a clean applied diff.
@@ -675,7 +704,7 @@ export function PatchCommitDetailView({
       abort.abort();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [applyKey]);
+  }, [applyKey, retryVersion]);
 
   // Determine what diff to show and whether the toggle is relevant.
   // appliedDiff.kind === "done" && failedCount === 0 → show applied diff by default
@@ -701,6 +730,19 @@ export function PatchCommitDetailView({
 
   return (
     <div className="space-y-4">
+      {(verificationUnavailable ||
+        appliedDiff.kind === "error" ||
+        (appliedDiff.kind === "done" &&
+          appliedDiff.failureReason === "fetch-failed")) && (
+        <div className="rounded-lg border border-amber-500/30 p-4 space-y-3">
+          <p className="text-sm">
+            {appliedDiff.kind === "error"
+              ? appliedDiff.message
+              : "Could not complete patch verification or load its base files."}
+          </p>
+          <ErrorRetryAction recovery={recovery} />
+        </div>
+      )}
       {/* Back link */}
       <Link
         to={backTo}

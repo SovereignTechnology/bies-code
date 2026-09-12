@@ -1,3 +1,5 @@
+import { useErrorRetry } from "@/hooks/useErrorRetry";
+import { ErrorRetryAction } from "@/components/ErrorRetryAction";
 import {
   Suspense,
   useCallback,
@@ -71,7 +73,6 @@ import { compareTagsNewestFirst } from "@/lib/refStatus";
 import { parseUpstreamInput } from "@/lib/repoUpstreamInput";
 import { eventIdToNevent, repoToPath } from "@/lib/routeUtils";
 import { cn, safeFormat, safeFormatDistanceToNow } from "@/lib/utils";
-import NotFound from "../NotFound";
 import { useRepoContext } from "./RepoContext";
 import MarkdownContent from "@/components/DeferredMarkdownContent";
 const RELEASE_RENDER_BATCH = 20;
@@ -469,15 +470,23 @@ function ReleaseAssets({
   release,
   assetsById,
   settled,
+  retryMetadata,
   defaultOpen,
   blossomServers,
 }: {
   release: SoftwareRelease;
   assetsById: Map<string, SoftwareAsset>;
   settled: boolean;
+  retryMetadata: () => void;
   defaultOpen: boolean;
   blossomServers: string[];
 }) {
+  const recovery = useErrorRetry({
+    resourceKey: release.event.id,
+    failed: settled && release.assets.some(({ id }) => !assetsById.has(id)),
+    busy: !settled,
+    onRetry: retryMetadata,
+  });
   return (
     <Collapsible defaultOpen={defaultOpen} className="border-t">
       <CollapsibleTrigger className="group flex w-full items-center gap-2 px-5 py-3 text-left text-sm font-medium hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
@@ -516,6 +525,7 @@ function ReleaseAssets({
               <div key={id} className="px-4 py-3 text-sm text-muted-foreground">
                 Asset metadata is unavailable from the repository relays and
                 Zapstore.
+                <ErrorRetryAction recovery={recovery} />
               </div>
             );
           })}
@@ -530,6 +540,7 @@ function ReleaseCard({
   application,
   assetsById,
   assetsSettled,
+  retryMetadata,
   latest,
   blossomServers,
   releasePath,
@@ -542,6 +553,7 @@ function ReleaseCard({
   application: SoftwareApplication | undefined;
   assetsById: Map<string, SoftwareAsset>;
   assetsSettled: boolean;
+  retryMetadata: () => void;
   latest: boolean;
   blossomServers: string[];
   releasePath?: string;
@@ -692,6 +704,7 @@ function ReleaseCard({
           release={release}
           assetsById={assetsById}
           settled={assetsSettled}
+          retryMetadata={retryMetadata}
           defaultOpen={latest || hasTargetedAsset}
           blossomServers={blossomServers}
         />
@@ -720,6 +733,7 @@ function SoftwareApplicationPage({
   releases,
   assetsById,
   assetsSettled,
+  retryMetadata,
   latestMainReleaseIds,
   blossomServers,
   basePath,
@@ -733,6 +747,7 @@ function SoftwareApplicationPage({
   releases: SoftwareRelease[];
   assetsById: Map<string, SoftwareAsset>;
   assetsSettled: boolean;
+  retryMetadata: () => void;
   latestMainReleaseIds: Set<string>;
   blossomServers: string[];
   basePath: string;
@@ -974,6 +989,7 @@ function SoftwareApplicationPage({
                 application={application}
                 assetsById={assetsById}
                 assetsSettled={assetsSettled}
+                retryMetadata={retryMetadata}
                 latest={latestMainReleaseIds.has(release.event.id)}
                 blossomServers={blossomServers}
                 basePath={basePath}
@@ -1189,12 +1205,19 @@ export default function RepoReleasesPage({
     applicationsSettled,
     releasesSettled,
     assetsSettled,
+    retry: retryMetadata,
   } = useSoftwareReleases(
     repo?.confirmedMaintainerCoordinates,
     repo?.confirmedMaintainers,
     resolved?.repoRelayGroup,
     repo?.isPrivate,
   );
+  const metadataRecovery = useErrorRetry({
+    resourceKey: eventId,
+    failed: !!eventId,
+    busy: !applicationsSettled || !releasesSettled,
+    onRetry: retryMetadata,
+  });
   const { poolState } = useGitPool(cloneUrls);
 
   const gitTags = useMemo(
@@ -1498,6 +1521,7 @@ export default function RepoReleasesPage({
             )}
             assetsById={assetsById}
             assetsSettled={assetsSettled}
+            retryMetadata={retryMetadata}
             latestMainReleaseIds={latestMainReleaseIds}
             blossomServers={blossomServers}
             basePath={basePath}
@@ -1543,7 +1567,13 @@ export default function RepoReleasesPage({
       );
     }
 
-    if (!selectedRelease) return <NotFound />;
+    if (!selectedRelease)
+      return (
+        <div className="mx-auto max-w-lg space-y-4 p-6">
+          <p>Could not find this release on the searched relays.</p>
+          <ErrorRetryAction recovery={metadataRecovery} />
+        </div>
+      );
     const releaseApplication = applicationByReleaseKey.get(
       selectedRelease.applicationCoordinate,
     );
@@ -1561,6 +1591,7 @@ export default function RepoReleasesPage({
           application={releaseApplication}
           assetsById={assetsById}
           assetsSettled={assetsSettled}
+          retryMetadata={retryMetadata}
           latest={latestMainReleaseIds.has(selectedRelease.event.id)}
           blossomServers={blossomServers}
           basePath={basePath}
@@ -1713,6 +1744,7 @@ export default function RepoReleasesPage({
                   application={application}
                   assetsById={assetsById}
                   assetsSettled={assetsSettled}
+                  retryMetadata={retryMetadata}
                   latest={latestMainReleaseIds.has(release.event.id)}
                   blossomServers={blossomServers}
                   basePath={basePath}

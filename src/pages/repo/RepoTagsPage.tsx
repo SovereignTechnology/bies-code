@@ -1,3 +1,5 @@
+import { useErrorRetry } from "@/hooks/useErrorRetry";
+import { CommitListError } from "@/components/CommitList";
 /**
  * RepoTagsPage — full-page expansion of the popover ref selector's tags list.
  * Shows every tag in the merged ref view (across all configured git servers
@@ -147,6 +149,24 @@ export default function RepoTagsPage() {
   // -------------------------------------------------------------------------
   // Early returns
   // -------------------------------------------------------------------------
+  const recoveryKey = useMemo(
+    () => ({ pool, selectedSource }),
+    [pool, selectedSource],
+  );
+  const recovery = useErrorRetry({
+    resourceKey: recoveryKey,
+    failed: !!explorer.error,
+    busy: explorer.loading || poolState.loading || poolState.pulling,
+    onRetry: async (signal) => {
+      await pool?.retryReads();
+      if (!signal.aborted) await explorer.reload();
+    },
+    policy:
+      pool && !pool.requiresSigningForReads
+        ? { mode: "read", requiresSigning: false, context: "connection" }
+        : { mode: "manual" },
+  });
+
   if (cloneUrls.length === 0) {
     return (
       <div className="container max-w-screen-xl px-4 md:px-8 py-6">
@@ -176,10 +196,14 @@ export default function RepoTagsPage() {
   }
 
   const showSkeletons = explorer.loading && sortedTags.length === 0;
-  const showEmpty = !explorer.loading && sortedTags.length === 0;
+  const showEmpty =
+    !explorer.error && !explorer.loading && sortedTags.length === 0;
 
   return (
     <div className="container max-w-screen-xl px-4 md:px-8 py-6 space-y-4">
+      {explorer.error && (
+        <CommitListError message={explorer.error} recovery={recovery} />
+      )}
       {/* Title row: tag icon + count on the left, source dropdown on the right */}
       <div className="flex items-center gap-3 flex-wrap">
         <Tag className="h-5 w-5 text-muted-foreground shrink-0" />

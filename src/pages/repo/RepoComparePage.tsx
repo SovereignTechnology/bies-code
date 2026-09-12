@@ -1,3 +1,5 @@
+import { useErrorRetry } from "@/hooks/useErrorRetry";
+import { ErrorRetryAction } from "@/components/ErrorRetryAction";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useSeoMeta } from "@unhead/react";
@@ -363,6 +365,7 @@ function useComparison(
   pool: GitGraspPool | null,
   base: ResolvedComparisonRef | null,
   head: ResolvedComparisonRef | null,
+  retryVersion: number,
 ): ComparisonState {
   const [state, setState] = useState<ComparisonState>({ kind: "idle" });
   const baseCommitId = base?.commitId;
@@ -472,6 +475,7 @@ function useComparison(
     headFullName,
     baseKind,
     headKind,
+    retryVersion,
   ]);
 
   return state;
@@ -520,7 +524,32 @@ export default function RepoComparePage() {
     info,
     poolState.authoritativeHead?.commitId,
   );
-  const comparison = useComparison(pool, base, head);
+  const [retryVersion, setRetryVersion] = useState(0);
+  const comparison = useComparison(pool, base, head, retryVersion);
+  const recoveryKey = useMemo(
+    () => ({ pool, baseValue, headValue, sourceParam }),
+    [pool, baseValue, headValue, sourceParam],
+  );
+  const recovery = useErrorRetry({
+    resourceKey: recoveryKey,
+    failed: Boolean(
+      baseValue &&
+      headValue &&
+      (comparison.kind === "error" ||
+        poolState.error ||
+        (info && (!base || !head))),
+    ),
+    busy:
+      poolState.loading || poolState.pulling || comparison.kind === "loading",
+    onRetry: async (signal) => {
+      await pool?.retryReads();
+      if (!signal.aborted) setRetryVersion((version) => version + 1);
+    },
+    policy:
+      pool && !pool.requiresSigningForReads
+        ? { mode: "read", requiresSigning: false, context: "availability" }
+        : { mode: "manual" },
+  });
 
   useEffect(() => {
     setFileCount(undefined);
@@ -692,6 +721,7 @@ export default function RepoComparePage() {
                 Git sources unavailable
               </p>
               <p className="mt-1 text-muted-foreground">{unavailableMessage}</p>
+              <ErrorRetryAction recovery={recovery} />
             </div>
           </CardContent>
         </Card>
@@ -707,6 +737,7 @@ export default function RepoComparePage() {
                 <code className="font-mono text-foreground">{missingRef}</code>{" "}
                 is not available from the configured Git sources.
               </p>
+              <ErrorRetryAction recovery={recovery} />
             </div>
           </CardContent>
         </Card>
@@ -731,6 +762,7 @@ export default function RepoComparePage() {
                 <p className="mt-1 text-muted-foreground">
                   {comparison.message}
                 </p>
+                <ErrorRetryAction recovery={recovery} />
               </div>
             </CardContent>
           </Card>

@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState, useCallback } from "react";
 import type { CastRefEventStore } from "applesauce-common/casts/cast";
 import type { IEventStore } from "applesauce-core/event-store";
 import { mapEventsToStore } from "applesauce-core";
@@ -48,6 +48,7 @@ const RELEASE_DISCOVERY_LIMIT = 30;
 const ASSET_FILTER_CHUNK_SIZE = 100;
 
 export interface RepoSoftwareReleases {
+  retry: () => void;
   applications: SoftwareApplication[];
   releases: SoftwareRelease[];
   assetsById: Map<string, SoftwareAsset>;
@@ -287,6 +288,11 @@ export function useSoftwareReleases(
   privateRepository = false,
 ): RepoSoftwareReleases {
   const store = useEventStore();
+  const [retryVersion, setRetryVersion] = useState(0);
+  const retry = useCallback(
+    () => setRetryVersion((version) => version + 1),
+    [],
+  );
   const castStore = store as unknown as CastRefEventStore;
   const coordsKey = [...(repoCoords ?? [])].sort().join(",");
   const maintainerKey = [...(maintainerPubkeys ?? [])].sort().join(",");
@@ -307,7 +313,7 @@ export function useSoftwareReleases(
         return of(true);
       }
       return loadIntoStoreUntilSettled(repoRelays, [applicationFilter], store);
-    }, [coordsKey, maintainerKey, repoRelayKey, store]) ?? false;
+    }, [coordsKey, maintainerKey, repoRelayKey, store, retryVersion]) ?? false;
 
   const applications =
     use$(() => {
@@ -401,6 +407,7 @@ export function useSoftwareReleases(
       applicationMailboxesSettled,
       releaseRelayKey,
       store,
+      retryVersion,
     ]) ?? false;
 
   const releases =
@@ -454,7 +461,8 @@ export function useSoftwareReleases(
     use$(() => {
       if (assetIds.length === 0) return of(releasesSettled);
       return loadIntoStoreUntilSettled(assetRelays, assetFilters, store);
-    }, [assetIdsKey, assetRelayKey, releasesSettled, store]) ?? false;
+    }, [assetIdsKey, assetRelayKey, releasesSettled, store, retryVersion]) ??
+    false;
 
   const assets = use$(() => {
     if (assetIds.length === 0) return of([]);
@@ -470,6 +478,7 @@ export function useSoftwareReleases(
   );
 
   return {
+    retry,
     applications,
     releases,
     assetsById,

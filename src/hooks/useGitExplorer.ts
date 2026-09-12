@@ -1217,7 +1217,10 @@ export function useCommitHistory(
   const hasInfoRefs = pool ? !!pool.getEffectiveInfoRefs() : false;
 
   useEffect(() => {
-    if (!pool || !ref) return;
+    if (!pool || !ref) {
+      setState({ loading: false, error: null, commits: [] });
+      return;
+    }
 
     const abort = new AbortController();
     const signal = abort.signal;

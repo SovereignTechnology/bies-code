@@ -17,7 +17,7 @@
  * ```
  */
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useEffect, useState } from "react";
 import { use$ } from "@/hooks/use$";
 import { useEventStore } from "@/hooks/useEventStore";
 import { useActiveAccount } from "applesauce-react/hooks";
@@ -38,7 +38,12 @@ const BLOSSOM_PATH_REGEX = /^\/([a-f0-9]{64})\b/;
 export function useBlossomFallback(originalUrl: string) {
   const servers = useBlossomServers();
   const [fallbackIndex, setFallbackIndex] = useState(-1);
-  const failedRef = useRef(false);
+  const [failed, setFailed] = useState(false);
+  const retry = useCallback(() => {
+    setFallbackIndex(-1);
+    setFailed(false);
+  }, []);
+  useEffect(retry, [originalUrl, retry]);
 
   // Build the list of alternative URLs from configured Blossom servers.
   // Only applies if the URL path looks like a content-addressed blob (/<sha256>...).
@@ -71,24 +76,16 @@ export function useBlossomFallback(originalUrl: string) {
       : (alternatives[fallbackIndex] ?? originalUrl);
 
   const onError = useCallback(() => {
-    if (alternatives.length === 0) return;
-
-    setFallbackIndex((prev) => {
-      const next = prev + 1;
-      if (next < alternatives.length) {
-        return next;
-      }
-      if (!failedRef.current) {
-        failedRef.current = true;
-      }
-      return prev;
-    });
-  }, [alternatives]);
+    if (fallbackIndex + 1 < alternatives.length)
+      setFallbackIndex((index) => index + 1);
+    else setFailed(true);
+  }, [alternatives.length, fallbackIndex]);
 
   return {
     src,
     onError,
-    failed: failedRef.current && fallbackIndex >= alternatives.length - 1,
+    failed,
+    retry,
   };
 }
 

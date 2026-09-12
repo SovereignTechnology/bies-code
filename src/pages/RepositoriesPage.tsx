@@ -1,3 +1,5 @@
+import { useErrorRetry } from "@/hooks/useErrorRetry";
+import { ErrorRetryAction } from "@/components/ErrorRetryAction";
 import { useEffect, useRef, useCallback, useState } from "react";
 import type React from "react";
 import { Link, useSearchParams } from "react-router-dom";
@@ -81,6 +83,7 @@ export default function RepositoriesPage({
     }
   }, [committedQuery]);
 
+  const [retryVersion, setRetryVersion] = useState(0);
   const {
     repos,
     isLoading,
@@ -90,7 +93,7 @@ export default function RepositoriesPage({
     relayStatuses,
     profileRelayStatuses,
     namecoin,
-  } = useRepositorySearch(committedQuery, relayOverride);
+  } = useRepositorySearch(committedQuery, relayOverride, retryVersion);
 
   const title = relayLabel
     ? `Repositories on ${relayLabel} - ngit`
@@ -159,6 +162,13 @@ export default function RepositoriesPage({
     (status) => status !== "success",
   );
 
+  const recovery = useErrorRetry({
+    resourceKey: `${committedQuery}:${relayOverride?.join(",") ?? ""}`,
+    failed: relevantRelayStatuses.includes("error"),
+    busy: isLoading,
+    onRetry: () => setRetryVersion((version) => version + 1),
+  });
+
   return (
     <div className="min-h-full">
       {/* Header */}
@@ -172,6 +182,9 @@ export default function RepositoriesPage({
 
           {/* Relay status banner (connection state, repo count, etc.) */}
           {relayStatusBanner && <div>{relayStatusBanner}</div>}
+          {relevantRelayStatuses.includes("error") && (
+            <ErrorRetryAction recovery={recovery} />
+          )}
 
           <div className="flex items-center gap-4">
             <div className="relative max-w-md flex-1">

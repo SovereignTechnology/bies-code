@@ -1,3 +1,5 @@
+import { useErrorRetry } from "@/hooks/useErrorRetry";
+import { ErrorRetryAction } from "@/components/ErrorRetryAction";
 /**
  * MarkdownContent — markdown renderer with GitHub-style component overrides
  * and syntax highlighting.
@@ -225,6 +227,33 @@ function GitImage({
   const [dataUri, setDataUri] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const cloneKey = cloneUrls.join(",");
+  const imagePool = useMemo(
+    () =>
+      gitContext?.pool ??
+      (gitContext?.privateRepository || !src || !isRelativeSrc(src)
+        ? undefined
+        : getOrCreatePool({ cloneUrls })),
+    // cloneKey represents the clone URL values.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [gitContext?.pool, gitContext?.privateRepository, cloneKey, src],
+  );
+  const [retryVersion, setRetryVersion] = useState(0);
+  const [loadingImage, setLoadingImage] = useState(false);
+  const recoveryKey = useMemo(
+    () => ({ imagePool, commitHash, filePath, src }),
+    [imagePool, commitHash, filePath, src],
+  );
+  const recovery = useErrorRetry({
+    resourceKey: recoveryKey,
+    failed: !!error,
+    busy: loadingImage,
+    onRetry: async (signal) => {
+      await imagePool?.retryReads();
+      if (!signal.aborted) setRetryVersion((version) => version + 1);
+    },
+  });
+
   useEffect(() => {
     if (!src || !isRelativeSrc(src)) {
       // Absolute URL — use as-is (no state change needed, rendered below)
@@ -232,6 +261,10 @@ function GitImage({
     }
 
     let cancelled = false;
+    const abort = new AbortController();
+    setLoadingImage(true);
+    setError(null);
+    setDataUri(null);
     const resolvedPath = resolveRelativePath(filePath, src);
     const mediaType = getFileMediaType(resolvedPath);
     const mime =
@@ -245,13 +278,9 @@ function GitImage({
       try {
         // Route through the pool — uses the winning URL with fallback, CORS
         // proxy, and the pool's cache. No filterFailedUrls needed.
-        const pool =
-          gitContext?.pool ??
-          (gitContext?.privateRepository
-            ? undefined
-            : getOrCreatePool({ cloneUrls }));
+        const pool = imagePool;
         if (!pool) throw new Error("Private Git access is not ready");
-        const abort = new AbortController();
+
         const result = await pool.getObjectByPath(
           commitHash,
           resolvedPath,
@@ -270,17 +299,21 @@ function GitImage({
       }
     }
 
-    load();
+    void load().finally(() => {
+      if (!cancelled) setLoadingImage(false);
+    });
     return () => {
       cancelled = true;
+      abort.abort();
     };
   }, [
     src,
-    cloneUrls,
+    imagePool,
     commitHash,
     filePath,
     gitContext?.pool,
     gitContext?.privateRepository,
+    retryVersion,
   ]);
 
   if (!src) return null;
@@ -304,6 +337,7 @@ function GitImage({
     return (
       <span className="inline-flex items-center px-2 py-0.5 rounded text-xs bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300 font-mono">
         {error}
+        <ErrorRetryAction recovery={recovery} />
       </span>
     );
   }

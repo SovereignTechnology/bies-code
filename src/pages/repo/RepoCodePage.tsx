@@ -2222,7 +2222,28 @@ function ReadmeViewer({
   const [content, setContent] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
+  const [failed, setFailed] = useState(false);
+  const [retryVersion, setRetryVersion] = useState(0);
+  const recoveryKey = useMemo(
+    () => ({ pool, commitHash, readmePath }),
+    [pool, commitHash, readmePath],
+  );
+  const recovery = useErrorRetry({
+    resourceKey: recoveryKey,
+    failed,
+    busy: loading,
+    onRetry: async (signal) => {
+      await pool.retryReads();
+      if (!signal.aborted) setRetryVersion((version) => version + 1);
+    },
+    policy: pool.requiresSigningForReads
+      ? { mode: "manual" }
+      : { mode: "read", requiresSigning: false, context: "connection" },
+  });
+
   useEffect(() => {
+    setFailed(false);
+    setLoading(true);
     if (!commitHash) return;
 
     // Check text cache first (synchronous, no loading flash on remount).
@@ -2242,6 +2263,7 @@ function ReadmeViewer({
       .then(async (result) => {
         if (abort.signal.aborted) return;
         if (!result || result.isDir || !result.data) {
+          setFailed(true);
           setLoading(false);
           return;
         }
@@ -2253,11 +2275,14 @@ function ReadmeViewer({
         setLoading(false);
       })
       .catch(() => {
-        if (!abort.signal.aborted) setLoading(false);
+        if (!abort.signal.aborted) {
+          setLoading(false);
+          setFailed(true);
+        }
       });
 
     return () => abort.abort();
-  }, [pool, commitHash, readmePath, readmeName]);
+  }, [pool, commitHash, readmePath, readmeName, retryVersion]);
 
   if (loading) {
     return (
@@ -2277,7 +2302,16 @@ function ReadmeViewer({
     );
   }
 
-  if (!content) return null;
+  if (failed)
+    return (
+      <Card>
+        <CardContent className="p-4 space-y-3">
+          <p>Could not load {readmeName}.</p>
+          <ErrorRetryAction recovery={recovery} />
+        </CardContent>
+      </Card>
+    );
+  if (content === null) return null;
 
   const isMarkdown = isMarkdownFile(readmeName);
 

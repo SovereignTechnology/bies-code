@@ -200,6 +200,7 @@ export interface UseRepositorySearchResult {
 export function useRepositorySearch(
   query: string,
   relayOverride?: string[],
+  retryVersion = 0,
 ): UseRepositorySearchResult {
   const store = useEventStore();
   const account = useActiveAccount();
@@ -1021,6 +1022,7 @@ export function useRepositorySearch(
     // eslint-disable-next-line react-hooks/exhaustive-deps -- relays captured via relayKey
   }, [
     trimmedQuery,
+    retryVersion,
     relayKey,
     isSearchMode,
     pubkeyHexFromQuery,

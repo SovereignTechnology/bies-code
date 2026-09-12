@@ -1,5 +1,6 @@
+import type { ComponentProps } from "react";
 import { ErrorRetryAction } from "@/components/ErrorRetryAction";
-import type { ErrorRetryState } from "@/hooks/useErrorRetry";
+import { useErrorRetry, type ErrorRetryState } from "@/hooks/useErrorRetry";
 import { useEffect, useMemo, useState } from "react";
 import { Link, Navigate, useParams, useLocation } from "react-router-dom";
 import { useActiveAccount } from "applesauce-react/hooks";
@@ -199,7 +200,21 @@ function RepoLayoutNip05({
 // Core layout (pubkey already known)
 // ---------------------------------------------------------------------------
 
-function RepoLayoutResolved({
+function RepoLayoutResolved(
+  props: Omit<ComponentProps<typeof RepoLayoutSession>, "onRetryAccess">,
+) {
+  const [attempt, setAttempt] = useState(0);
+  return (
+    <RepoLayoutSession
+      {...props}
+      key={attempt}
+      onRetryAccess={() => setAttempt((value) => value + 1)}
+    />
+  );
+}
+
+function RepoLayoutSession({
+  onRetryAccess,
   pubkey,
   repoId,
   nip05Relays,
@@ -207,6 +222,7 @@ function RepoLayoutResolved({
   location,
   nip05,
 }: {
+  onRetryAccess: () => void;
   pubkey: string;
   repoId: string;
   /** Relay hints from NIP-05 identity resolution (shown as their own group). */
@@ -658,6 +674,12 @@ function RepoLayoutResolved({
     stateCreatedAt: repoState ? repoState.event.created_at : undefined,
     stateSettled: repoRelayEose && repoState !== undefined,
   });
+  const accessRecovery = useErrorRetry({
+    resourceKey: `${pubkey}:${repoId}`,
+    failed: !!privateAccessError,
+    busy: false,
+    onRetry: onRetryAccess,
+  });
 
   // The PR base path: basePath + /prs/<prId> — used for PR sub-route links.
   const prBasePath = useMemo(() => {
@@ -966,7 +988,13 @@ function RepoLayoutResolved({
           >
             <div className="flex gap-3 rounded-lg border border-destructive/40 bg-destructive/5 p-4 text-sm text-destructive">
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-              <p>{privateAccessError}</p>
+              <div className="space-y-3">
+                <p>{privateAccessError}</p>
+                <ErrorRetryAction recovery={accessRecovery} />
+                <Button asChild variant="outline" size="sm">
+                  <Link to="/settings">Review Private Git services</Link>
+                </Button>
+              </div>
             </div>
           </div>
         )}

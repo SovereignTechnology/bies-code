@@ -87,11 +87,14 @@ export function useDnsIdentity(
     return cached ? cachedIdentityToState(cached) : { status: "loading" };
   });
 
+  const [stateKey, setStateKey] = useState(nip05);
+  const currentState: DnsIdentityState =
+    stateKey === nip05 ? state : { status: "loading" };
   const [retryVersion, setRetryVersion] = useState(0);
   const recovery = useErrorRetry({
     resourceKey: nip05,
-    failed: state.status === "error",
-    busy: state.status === "loading",
+    failed: currentState.status === "error",
+    busy: currentState.status === "loading",
     onRetry: () => setRetryVersion((version) => version + 1),
     policy:
       nip05 && parseNip05(nip05)
@@ -100,7 +103,11 @@ export function useDnsIdentity(
   });
 
   useEffect(() => {
-    if (!nip05) return;
+    setStateKey(nip05);
+    if (!nip05) {
+      setState({ status: "loading" });
+      return;
+    }
 
     const parsed = parseNip05(nip05);
     if (!parsed) {
@@ -235,5 +242,5 @@ export function useDnsIdentity(
     };
   }, [nip05, retryVersion]);
 
-  return { ...state, recovery };
+  return { ...currentState, recovery };
 }

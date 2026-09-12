@@ -1,3 +1,5 @@
+import { useErrorRetry } from "@/hooks/useErrorRetry";
+import { CommitListError } from "@/components/CommitList";
 /**
  * RepoBranchesPage — full-page expansion of the popover ref selector's
  * branches list. Shows every branch in the merged ref view (across all
@@ -215,6 +217,24 @@ export default function RepoBranchesPage() {
   // -------------------------------------------------------------------------
   // Early returns: no clone URLs, incompatible protocols
   // -------------------------------------------------------------------------
+  const recoveryKey = useMemo(
+    () => ({ pool, selectedSource }),
+    [pool, selectedSource],
+  );
+  const recovery = useErrorRetry({
+    resourceKey: recoveryKey,
+    failed: !!explorer.error,
+    busy: explorer.loading || poolState.loading || poolState.pulling,
+    onRetry: async (signal) => {
+      await pool?.retryReads();
+      if (!signal.aborted) await explorer.reload();
+    },
+    policy:
+      pool && !pool.requiresSigningForReads
+        ? { mode: "read", requiresSigning: false, context: "connection" }
+        : { mode: "manual" },
+  });
+
   if (cloneUrls.length === 0) {
     return (
       <div className="container max-w-screen-xl px-4 md:px-8 py-6">
@@ -244,12 +264,16 @@ export default function RepoBranchesPage() {
   }
 
   const showSkeletons = explorer.loading && sortedBranches.length === 0;
-  const showEmpty = !explorer.loading && sortedBranches.length === 0;
+  const showEmpty =
+    !explorer.error && !explorer.loading && sortedBranches.length === 0;
   const branchCount = sortedBranches.length;
   const defaultBranchName = defaultBranch?.name;
 
   return (
     <div className="container max-w-screen-xl px-4 md:px-8 py-6 space-y-4">
+      {explorer.error && (
+        <CommitListError message={explorer.error} recovery={recovery} />
+      )}
       {/* Title row: branch icon + count on the left, source dropdown on the right */}
       <div className="flex items-center gap-3 flex-wrap">
         <GitBranch className="h-5 w-5 text-muted-foreground shrink-0" />

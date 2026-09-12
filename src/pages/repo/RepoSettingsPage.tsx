@@ -680,6 +680,7 @@ function RepoSettingsForm({
   const {
     status: upstreamNip05Status,
     resolvedUpstream: resolvedNip05Upstream,
+    recovery: upstreamRecovery,
   } = useResolvedUpstreamNip05(pendingUpstreamNip05);
 
   const hasValidUpstream = isValidRepoUpstream(upstream);
@@ -1586,6 +1587,7 @@ function RepoSettingsForm({
               upstreamInput={upstreamInput}
               pendingNip05={pendingUpstreamNip05}
               nip05Status={upstreamNip05Status}
+              recovery={upstreamRecovery}
               editorOpen={subordinateForkEditorOpen}
               inputBlurred={subordinateForkInputBlurred}
               focusRequest={subordinateForkFocusRequest}

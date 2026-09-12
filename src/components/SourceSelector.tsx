@@ -1,3 +1,5 @@
+import { useErrorRetry } from "@/hooks/useErrorRetry";
+import { ErrorRetryAction } from "@/components/ErrorRetryAction";
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import {
   Tooltip,
@@ -759,6 +761,15 @@ export function SourceSelector({
       ? poolWarning.gitCommitterDate
       : undefined;
 
+  const hasReadErrors = Object.values(urlStates).some(
+    (state) => state.status === "error" || state.status === "permanent-failure",
+  );
+  const recovery = useErrorRetry({
+    resourceKey: pool,
+    failed: hasReadErrors,
+    busy: !!pool?.getState().loading || !!pool?.getState().pulling,
+    onRetry: () => pool?.retryReads(),
+  });
   const usesGrasp = graspCloneUrls.length > 0;
   const graspUrls = cloneUrls.filter((u) => graspCloneUrls.includes(u));
   const otherUrls = cloneUrls.filter((u) =>
@@ -891,6 +902,11 @@ export function SourceSelector({
 
   return (
     <div className={outerClass}>
+      {pool && hasReadErrors && (
+        <div className="px-4 py-3">
+          <ErrorRetryAction recovery={recovery} />
+        </div>
+      )}
       {/* Header */}
       <div className="px-4 py-2.5 border-b border-border/40">
         <p className="text-xs font-semibold text-foreground">Explorer source</p>

@@ -5,12 +5,16 @@ import type { ErrorRetryState } from "@/hooks/useErrorRetry";
 /** Shared recovery actions; scheduling belongs to the operation owner. */
 export function ErrorRetryAction({ recovery }: { recovery: ErrorRetryState }) {
   return (
-    <div className="flex flex-wrap items-center gap-3 text-sm">
+    <span className="inline-flex flex-wrap items-center gap-3 text-sm">
       <Button
         variant="outline"
         size="sm"
         disabled={recovery.retrying}
-        onClick={recovery.retry}
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          recovery.retry();
+        }}
       >
         {recovery.retrying ? (
           <Loader2 className="h-4 w-4 mr-2 animate-spin" />
@@ -34,10 +38,18 @@ export function ErrorRetryAction({ recovery }: { recovery: ErrorRetryState }) {
         !recovery.paused &&
         !recovery.exhausted &&
         !recovery.retrying && (
-          <Button variant="ghost" size="sm" onClick={recovery.pause}>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              recovery.pause();
+            }}
+          >
             Pause retries
           </Button>
         )}
-    </div>
+    </span>
   );
 }

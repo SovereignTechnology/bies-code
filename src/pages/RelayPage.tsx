@@ -1,5 +1,6 @@
+import { useErrorRetry, type ErrorRetryState } from "@/hooks/useErrorRetry";
 import { ErrorRetryAction } from "@/components/ErrorRetryAction";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import type { Filter } from "applesauce-core/helpers";
 import type { RelayCountResponse as CountResponse } from "applesauce-relay";
@@ -100,6 +101,7 @@ function relayCount(
 
 function useGraspServiceCounts(
   relayUrl: string,
+  retryVersion: number,
 ): GraspServiceCounts | undefined {
   return use$(
     () =>
@@ -112,7 +114,7 @@ function useGraspServiceCounts(
           kinds: [PATCH_KIND, PR_KIND],
         } as Filter),
       }),
-    [relayUrl],
+    [relayUrl, retryVersion],
   );
 }
 
@@ -125,7 +127,14 @@ function GraspServiceOverview({
 }) {
   const relay = useMemo(() => pool.relay(relayUrl), [relayUrl]);
   const connected = use$(() => relay.connected$, [relay]);
-  const counts = useGraspServiceCounts(relayUrl);
+  const [countsVersion, setCountsVersion] = useState(0);
+  const counts = useGraspServiceCounts(relayUrl, countsVersion);
+  const countsRecovery = useErrorRetry({
+    resourceKey: relayUrl,
+    failed: !!counts && Object.values(counts).some((value) => value === null),
+    busy: !counts,
+    onRetry: () => setCountsVersion((version) => version + 1),
+  });
   const server = useGraspServerInfo(domain);
   const rootIdentity = useDnsIdentity(`_@${domain}`);
   const operatorPubkey =
@@ -202,7 +211,7 @@ function GraspServiceOverview({
           <AccessCard
             document={server?.status === "found" ? server.document : undefined}
           />
-          <ServiceCountsCard counts={counts} />
+          <ServiceCountsCard counts={counts} recovery={countsRecovery} />
           <ProtocolCard
             document={server?.status === "found" ? server.document : undefined}
           />
@@ -290,8 +299,10 @@ function AccessCard({ document }: { document: Nip11Document | undefined }) {
 
 function ServiceCountsCard({
   counts,
+  recovery,
 }: {
   counts: GraspServiceCounts | undefined;
+  recovery: ErrorRetryState;
 }) {
   const stats = [
     {
@@ -325,6 +336,9 @@ function ServiceCountsCard({
           </div>
         ))}
       </dl>
+      {counts && Object.values(counts).some((value) => value === null) && (
+        <ErrorRetryAction recovery={recovery} />
+      )}
     </div>
   );
 }
