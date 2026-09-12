@@ -1,3 +1,4 @@
+import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useSeoMeta } from "@unhead/react";
 import { nip19 } from "nostr-tools";
@@ -1471,16 +1472,14 @@ function PinButton({ coord, isPinned }: { coord: string; isPinned: boolean }) {
 }
 
 function CopyNpub({ npub }: { npub: string }) {
+  const copyToClipboard = useCopyToClipboard();
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(npub);
+    await copyToClipboard(npub, () => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // Clipboard API not available
-    }
+    });
   };
 
   return (

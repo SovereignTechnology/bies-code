@@ -1,3 +1,4 @@
+import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
 import { useErrorRetry } from "@/hooks/useErrorRetry";
 import { ErrorRetryAction } from "@/components/ErrorRetryAction";
 /**
@@ -30,6 +31,7 @@ interface CommitHoverCardBodyProps {
 }
 
 function CommitHoverCardBody({ hash, pool }: CommitHoverCardBodyProps) {
+  const copyToClipboard = useCopyToClipboard();
   const [commit, setCommit] = useState<Commit | null>(null);
   const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState(false);
@@ -102,9 +104,10 @@ function CommitHoverCardBody({ hash, pool }: CommitHoverCardBodyProps) {
   const handleCopy = async (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    await navigator.clipboard.writeText(commit.hash);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    await copyToClipboard(commit.hash, () => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
   };
 
   return (

@@ -1,3 +1,4 @@
+import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
 /**
  * CodeBlock — syntax-highlighted code viewer with line numbers.
  *
@@ -113,18 +114,19 @@ function CopyButton({
   getText: () => string;
   className?: string;
 }) {
+  const copyToClipboard = useCopyToClipboard();
   const [copied, setCopied] = useState(false);
 
   const handleCopy = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation();
       const text = getText();
-      navigator.clipboard.writeText(text).then(() => {
+      void copyToClipboard(text, () => {
         setCopied(true);
         setTimeout(() => setCopied(false), 1500);
       });
     },
-    [getText],
+    [getText, copyToClipboard],
   );
 
   return (
@@ -172,6 +174,7 @@ function PermalinkButton({
   endLine: number;
   className?: string;
 }) {
+  const copyToClipboard = useCopyToClipboard();
   const [copied, setCopied] = useState(false);
 
   const getUrl = useCallback((): string => {
@@ -185,12 +188,12 @@ function PermalinkButton({
     (e: React.MouseEvent) => {
       e.stopPropagation();
       const url = getUrl();
-      navigator.clipboard.writeText(url).then(() => {
+      void copyToClipboard(url, () => {
         setCopied(true);
         setTimeout(() => setCopied(false), 1500);
       });
     },
-    [getUrl],
+    [getUrl, copyToClipboard],
   );
 
   return (
@@ -242,6 +245,7 @@ export const CodeBlock = memo(function CodeBlock({
   initialLineRange: externalLineRange,
   scrollToLine: externalScrollToLine,
 }: CodeBlockProps) {
+  const copyToClipboard = useCopyToClipboard();
   const isDark = useIsDark();
   const theme = isDark ? "github-dark" : "github-light";
 
@@ -450,11 +454,11 @@ export const CodeBlock = memo(function CodeBlock({
         selStart - startLine,
         selEnd - startLine + 1,
       );
-      navigator.clipboard.writeText(lines.join("\n")).catch(() => {});
+      void copyToClipboard(lines.join("\n"));
     };
     el.addEventListener("keydown", handler);
     return () => el.removeEventListener("keydown", handler);
-  }, [selStart, selEnd, plainLines, startLine]);
+  }, [selStart, selEnd, plainLines, startLine, copyToClipboard]);
 
   // Clear selection when clicking outside
   useEffect(() => {

@@ -1,3 +1,4 @@
+import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
 import { useErrorRetry } from "@/hooks/useErrorRetry";
 import { ErrorRetryAction } from "@/components/ErrorRetryAction";
 /**
@@ -209,12 +210,14 @@ function CopyableHash({
   hash: string;
   className?: string;
 }) {
+  const copyToClipboard = useCopyToClipboard();
   const [copied, setCopied] = useState(false);
   const copy = useCallback(async () => {
-    await navigator.clipboard.writeText(hash);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  }, [hash]);
+    await copyToClipboard(hash, () => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }, [hash, copyToClipboard]);
 
   return (
     <div className="flex items-center gap-1">
@@ -408,6 +411,7 @@ export function PatchCommitDetailView({
   relayHint,
   authorizedPubkeys,
 }: PatchCommitDetailViewProps) {
+  const copyToClipboard = useCopyToClipboard();
   const [copied, setCopied] = useState(false);
   const [jsonOpen, setJsonOpen] = useState(false);
   const [showRawDiff, setShowRawDiff] = useState(false);
@@ -718,9 +722,10 @@ export function PatchCommitDetailView({
     !showRawDiff && appliedDiffReady ? appliedDiff.diff : patchDiff;
 
   const handleCopy = async () => {
-    await navigator.clipboard.writeText(commit.hash);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    await copyToClipboard(commit.hash, () => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
   };
 
   const eventCreatedAt = patch.event.created_at;

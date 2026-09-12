@@ -1,3 +1,4 @@
+import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
 /**
  * DiffView — renders a unified diff with syntax highlighting and line numbers.
  *
@@ -821,6 +822,7 @@ const FileDiffCard = memo(function FileDiffCard({
    */
   initialLineRange?: ParsedDiffHash | null;
 }) {
+  const copyToClipboard = useCopyToClipboard();
   const totalChanges = file.additions + file.deletions;
   const isLarge = totalChanges > LARGE_DIFF_THRESHOLD;
 
@@ -1062,11 +1064,18 @@ const FileDiffCard = memo(function FileDiffCard({
           if (content !== undefined) lines.push(content);
         }
       }
-      navigator.clipboard.writeText(lines.join("\n")).catch(() => {});
+      void copyToClipboard(lines.join("\n"));
     };
     el.addEventListener("keydown", handler);
     return () => el.removeEventListener("keydown", handler);
-  }, [selAnchor, selHead, lineContents, lineOrder, textSelActive]);
+  }, [
+    selAnchor,
+    selHead,
+    lineContents,
+    lineOrder,
+    textSelActive,
+    copyToClipboard,
+  ]);
 
   const openComposer = useCallback(
     (lineOrRange: string, anchorKey: LineKey) => {
@@ -1349,18 +1358,19 @@ function CopyButton({
   getText: () => string;
   className?: string;
 }) {
+  const copyToClipboard = useCopyToClipboard();
   const [copied, setCopied] = useState(false);
 
   const handleCopy = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation();
       const text = getText();
-      navigator.clipboard.writeText(text).then(() => {
+      void copyToClipboard(text, () => {
         setCopied(true);
         setTimeout(() => setCopied(false), 1500);
       });
     },
-    [getText],
+    [getText, copyToClipboard],
   );
 
   return (
@@ -1406,6 +1416,7 @@ function PermalinkButton({
   sel: SelectionCtx | null;
   lineRangeStr: string | null;
 }) {
+  const copyToClipboard = useCopyToClipboard();
   const [copied, setCopied] = useState(false);
 
   const getPermalinkUrl = useCallback((): string => {
@@ -1430,12 +1441,12 @@ function PermalinkButton({
     (e: React.MouseEvent) => {
       e.stopPropagation();
       const url = getPermalinkUrl();
-      navigator.clipboard.writeText(url).then(() => {
+      void copyToClipboard(url, () => {
         setCopied(true);
         setTimeout(() => setCopied(false), 1500);
       });
     },
-    [getPermalinkUrl],
+    [getPermalinkUrl, copyToClipboard],
   );
 
   return (

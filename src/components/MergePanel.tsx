@@ -1,3 +1,4 @@
+import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
 import { ManualRetryAction } from "@/components/ErrorRetryAction";
 /**
  * MergePanel — merge/apply button and status panel for PRs on Grasp repos.
@@ -286,6 +287,7 @@ export function MergePanel({
   openStackParent,
   onSuccessfulPush,
 }: MergePanelProps) {
+  const copyToClipboard = useCopyToClipboard();
   const account = useActiveAccount();
   const profile = useMyProfile();
   const { toast } = useToast();
@@ -456,20 +458,13 @@ export function MergePanel({
     !!account && !!detectedMergeCommit && mergeStep === "idle";
 
   const copyLocalMergeCommand = useCallback(async () => {
-    try {
-      await navigator.clipboard.writeText(localMergeCommand);
+    await copyToClipboard(localMergeCommand, () => {
       toast({
         title: "Local merge command copied",
         description: localMergeCommand,
       });
-    } catch {
-      toast({
-        title: "Could not copy command",
-        description: localMergeCommand,
-        variant: "destructive",
-      });
-    }
-  }, [localMergeCommand, toast]);
+    });
+  }, [localMergeCommand, toast, copyToClipboard]);
 
   // ── Shared merge wiring ──────────────────────────────────────────────────
 

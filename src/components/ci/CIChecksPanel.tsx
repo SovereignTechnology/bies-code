@@ -1,3 +1,4 @@
+import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
 import { useErrorRetry } from "@/hooks/useErrorRetry";
 import { ErrorRetryAction } from "@/components/ErrorRetryAction";
 /**
@@ -1030,20 +1031,18 @@ function CIArtifactRow({
   filename: string | undefined;
   artifactName: string | undefined;
 }) {
+  const copyToClipboard = useCopyToClipboard();
   const [copied, setCopied] = useState(false);
   const hash = getBlossomHash(url);
 
   const copyHash = useCallback(async () => {
     if (!hash) return;
 
-    try {
-      await navigator.clipboard.writeText(hash);
+    await copyToClipboard(hash, () => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // Clipboard access can be unavailable in insecure browser contexts.
-    }
-  }, [hash]);
+    });
+  }, [hash, copyToClipboard]);
 
   return (
     <tr className="border-t border-border/40 align-middle first:border-t-0">

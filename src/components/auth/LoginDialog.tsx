@@ -1,3 +1,4 @@
+import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
 import { ManualRetryAction } from "@/components/ErrorRetryAction";
 // NOTE: This file is stable and usually should not be modified.
 // It is important that all functionality in this file is preserved, and should only be modified if explicitly requested.
@@ -67,6 +68,7 @@ const LoginDialog: React.FC<LoginDialogProps> = ({
   onLogin,
   onCreateAccount,
 }) => {
+  const copyToClipboard = useCopyToClipboard();
   const [page, setPage] = useState<LoginPage>("landing");
   const [isLoading, setIsLoading] = useState(false);
   const [isFileLoading, setIsFileLoading] = useState(false);
@@ -222,9 +224,10 @@ const LoginDialog: React.FC<LoginDialogProps> = ({
 
   const handleCopyUri = async () => {
     if (!nostrConnectSession) return;
-    await navigator.clipboard.writeText(nostrConnectSession.uri);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    await copyToClipboard(nostrConnectSession.uri, () => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
   };
 
   // On mobile, open the nostrconnect:// URI directly — this launches signer apps like Amber
@@ -572,9 +575,20 @@ const LoginDialog: React.FC<LoginDialogProps> = ({
               </div>
 
               {errors.file && (
-                <p className="text-sm text-red-500 text-center">
-                  {errors.file}
-                </p>
+                <div className="space-y-2 text-center">
+                  <p role="alert" className="text-sm text-red-500">
+                    {errors.file}
+                  </p>
+                  <ManualRetryAction
+                    label="Choose file again"
+                    busy={isLoading || isFileLoading}
+                    onRetry={() => {
+                      if (!fileInputRef.current) return;
+                      fileInputRef.current.value = "";
+                      fileInputRef.current.click();
+                    }}
+                  />
+                </div>
               )}
             </form>
           )}

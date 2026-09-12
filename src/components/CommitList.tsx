@@ -1,3 +1,4 @@
+import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
 import { ErrorRetryAction } from "@/components/ErrorRetryAction";
 import type { ErrorRetryState } from "@/hooks/useErrorRetry";
 /**
@@ -864,14 +865,16 @@ export function CommitRow({
   ciRepo?: ResolvedRepo;
   ciServiceControls?: readonly CIServiceControl[];
 }) {
+  const copyToClipboard = useCopyToClipboard();
   const [copied, setCopied] = useState(false);
   const subject = commit.message.split("\n")[0];
   const shortHash = commit.hash.slice(0, 8);
 
   const handleCopy = async () => {
-    await navigator.clipboard.writeText(commit.hash);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    await copyToClipboard(commit.hash, () => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
   };
 
   const isMerge = commit.parents.length > 1;

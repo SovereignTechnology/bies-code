@@ -1,3 +1,4 @@
+import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
 import {
   Suspense,
   useMemo,
@@ -1812,6 +1813,7 @@ function FileContentViewer({
   cloneUrls: string[];
   commitHash: string | null;
 }) {
+  const copyToClipboard = useCopyToClipboard();
   const mediaType = useMemo(
     () => getFileMediaType(filename, fileBytes ?? undefined),
     [filename, fileBytes],
@@ -1851,11 +1853,11 @@ function FileContentViewer({
   // Copy text content to clipboard (text/code/markdown/SVG source)
   const handleCopyText = useCallback(() => {
     if (!content) return;
-    navigator.clipboard.writeText(content).then(() => {
+    void copyToClipboard(content, () => {
       setCopiedText(true);
       setTimeout(() => setCopiedText(false), 2000);
     });
-  }, [content]);
+  }, [content, copyToClipboard]);
 
   // Copy image to clipboard as PNG via canvas (raster images and SVG)
   const handleCopyImage = useCallback(() => {
@@ -1864,32 +1866,41 @@ function FileContentViewer({
     const isSvg = mediaType?.kind === "svg";
     if (!isRaster && !isSvg) return;
     const mime = isRaster ? mediaType.mime : "image/svg+xml";
-    const blob = new Blob([fileBytes.buffer as ArrayBuffer], { type: mime });
-    const url = URL.createObjectURL(blob);
-    const img = new Image();
-    img.onload = () => {
-      const canvas = document.createElement("canvas");
-      canvas.width = img.naturalWidth;
-      canvas.height = img.naturalHeight;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return;
-      ctx.drawImage(img, 0, 0);
-      canvas.toBlob((pngBlob) => {
-        if (!pngBlob) return;
-        navigator.clipboard
-          .write([new ClipboardItem({ "image/png": pngBlob })])
-          .then(() => {
-            setCopiedImage(true);
-            setTimeout(() => setCopiedImage(false), 2000);
-          })
-          .catch(() => {
-            // Clipboard write failed (e.g. permissions denied) — silently ignore
+    void copyToClipboard(
+      async () => {
+        const blob = new Blob([fileBytes.buffer as ArrayBuffer], {
+          type: mime,
+        });
+        const url = URL.createObjectURL(blob);
+        try {
+          const img = new Image();
+          img.src = url;
+          await img.decode();
+          const canvas = document.createElement("canvas");
+          canvas.width = img.naturalWidth;
+          canvas.height = img.naturalHeight;
+          const ctx = canvas.getContext("2d");
+          if (!ctx) throw new Error("Could not prepare image for copying.");
+          ctx.drawImage(img, 0, 0);
+          const pngBlob = await new Promise<Blob>((resolve, reject) => {
+            canvas.toBlob((result) => {
+              if (result) resolve(result);
+              else reject(new Error("Could not convert image for copying."));
+            }, "image/png");
           });
-      }, "image/png");
-      URL.revokeObjectURL(url);
-    };
-    img.src = url;
-  }, [fileBytes, mediaType]);
+          await navigator.clipboard.write([
+            new ClipboardItem({ "image/png": pngBlob }),
+          ]);
+        } finally {
+          URL.revokeObjectURL(url);
+        }
+      },
+      () => {
+        setCopiedImage(true);
+        setTimeout(() => setCopiedImage(false), 2000);
+      },
+    );
+  }, [fileBytes, mediaType, copyToClipboard]);
 
   // Loading state
   if (!isBinaryMedia && content === null) {

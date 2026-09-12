@@ -1,3 +1,4 @@
+import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
 import { useErrorRetry } from "@/hooks/useErrorRetry";
 import { ErrorRetryAction } from "@/components/ErrorRetryAction";
 import React, { useState, useMemo, useEffect, useRef } from "react";
@@ -412,6 +413,7 @@ function ServerRow({
   gitCommitterDate?: number;
   pool?: GitGraspPool | null;
 }) {
+  const copyToClipboard = useCopyToClipboard();
   const missingHead = serverStatus.missingHead ?? false;
   const [copied, setCopied] = useState(false);
 
@@ -465,9 +467,10 @@ function ServerRow({
           : "diverged";
 
   const handleCopy = () => {
-    navigator.clipboard.writeText(serverStatus.url);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
+    void copyToClipboard(serverStatus.url, () => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
   };
 
   const npub = isGrasp

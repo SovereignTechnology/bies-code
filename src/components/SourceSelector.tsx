@@ -1,3 +1,4 @@
+import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
 import { useErrorRetry } from "@/hooks/useErrorRetry";
 import { ErrorRetryAction } from "@/components/ErrorRetryAction";
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
@@ -304,6 +305,7 @@ function SourceServerRow({
   /** True when the nostr state includes the current ref, false when it doesn't, undefined when unknown */
   currentRefInNostrState?: boolean;
 }) {
+  const copyToClipboard = useCopyToClipboard();
   const [copied, setCopied] = useState(false);
   const [serverCommitTs, setServerCommitTs] = useState<number | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -440,9 +442,10 @@ function SourceServerRow({
 
   const handleCopy = (e: React.MouseEvent) => {
     e.stopPropagation();
-    navigator.clipboard.writeText(url);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
+    void copyToClipboard(url, () => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
   };
 
   const npub = isGrasp ? (graspCloneUrlNpub(url) ?? undefined) : undefined;

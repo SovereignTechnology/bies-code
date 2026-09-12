@@ -1,3 +1,4 @@
+import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
 import { useErrorRetry } from "@/hooks/useErrorRetry";
 import { ErrorRetryAction } from "@/components/ErrorRetryAction";
 /**
@@ -176,13 +177,14 @@ export function EventSearchStatus({
   searchMoreActive,
   onRetry,
 }: EventSearchStatusProps) {
+  const copyToClipboard = useCopyToClipboard();
   const [copied, setCopied] = useState(false);
 
   const nevent = eventId ? eventIdToNevent(eventId) : undefined;
 
   function handleCopy() {
     if (!nevent) return;
-    navigator.clipboard.writeText(nevent).then(() => {
+    void copyToClipboard(nevent, () => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     });

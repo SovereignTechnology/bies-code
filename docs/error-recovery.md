@@ -92,6 +92,14 @@ change or owner unmount; they never invoke a signer automatically. Interactive
 notifications from a modal render inside that dialog so recovery remains in its
 keyboard and screen-reader focus scope.
 
+For clipboard actions, use the callback returned by `useCopyToClipboard`: `const copy = useCopyToClipboard(); copy(value, onCopied)`. It reports
+failures through manual recovery and runs success feedback only after the write
+succeeds. Pass an async writer instead of text for image conversion and copying.
+The retry preserves the original content and never repeats signing or payment.
+Recovery toast producers do not subscribe to toast state, so displaying a
+notification does not rerender every copy button. Local file errors should offer
+file reselection; QR rendering errors offer manual regeneration of the same value.
+
 Retry the failed step using its original inputs. Preserve successful steps:
 comment-plus-status recovery must not post the comment again, label restoration
 must not delete the original event again, and release delivery must reuse the

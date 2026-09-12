@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useRef } from "react";
 import { useActiveAccount } from "applesauce-react/hooks";
-import { useToast } from "@/hooks/useToast";
+import { toast as showToast } from "@/hooks/useToast";
 import { ToastAction } from "@/components/ui/toast";
 import { ManualRetryAction } from "@/components/ErrorRetryAction";
 
 /** User-triggered recovery for action errors; never schedules or signs on its own. */
 export function useRecoveryToast() {
-  const { toast: showToast } = useToast();
   const account = useActiveAccount();
   const currentAccount = useRef(account?.pubkey);
   currentAccount.current = account?.pubkey;
@@ -75,7 +74,7 @@ export function useRecoveryToast() {
       dismissals.current.add(result.dismiss);
       return result;
     },
-    [showToast],
+    [],
   );
   return { toast };
 }

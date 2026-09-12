@@ -1,3 +1,4 @@
+import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
 import { useErrorRetry } from "@/hooks/useErrorRetry";
 import { ErrorRetryAction } from "@/components/ErrorRetryAction";
 /**
@@ -119,6 +120,7 @@ function describeWalletError(err: unknown): {
 }
 
 export function ZapModal({ open, onOpenChange, event, lnurl }: ZapModalProps) {
+  const copyToClipboard = useCopyToClipboard();
   const account = useActiveAccount();
   useLoadProfile(event.pubkey);
   const recipient = useUser(event.pubkey);
@@ -449,10 +451,10 @@ export function ZapModal({ open, onOpenChange, event, lnurl }: ZapModalProps) {
   // --- copy invoice ---
   const copyInvoice = useCallback(() => {
     if (!invoice) return;
-    navigator.clipboard.writeText(invoice).then(() => {
+    void copyToClipboard(invoice, () => {
       toast({ title: "Invoice copied" });
     });
-  }, [invoice]);
+  }, [invoice, copyToClipboard]);
 
   // ---------------------------------------------------------------------------
   // Render

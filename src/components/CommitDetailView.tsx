@@ -1,3 +1,4 @@
+import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
 /**
  * CommitDetailView — shared commit detail UI used by RepoCommitPage and
  * PRCommitPage.
@@ -224,6 +225,7 @@ function CommitDetail({
   relayHint?: string;
   authorizedPubkeys?: Set<string>;
 }) {
+  const copyToClipboard = useCopyToClipboard();
   const [copied, setCopied] = useState(false);
 
   const authorTs = commit.author.timestamp * 1000;
@@ -234,9 +236,10 @@ function CommitDetail({
   const parentHash = commit.parents?.[0] ?? null;
 
   const handleCopy = async () => {
-    await navigator.clipboard.writeText(commit.hash);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    await copyToClipboard(commit.hash, () => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
   };
 
   return (

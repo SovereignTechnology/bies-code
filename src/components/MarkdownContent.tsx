@@ -1,3 +1,4 @@
+import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
 import { useErrorRetry } from "@/hooks/useErrorRetry";
 import { ErrorRetryAction } from "@/components/ErrorRetryAction";
 /**
@@ -452,6 +453,7 @@ function HeadingWithAnchor({
   className?: string;
   [key: string]: unknown;
 }) {
+  const copyToClipboard = useCopyToClipboard();
   const text = childrenToText(children);
   const slug = slugifyHeading(text);
   const [copied, setCopied] = useState(false);
@@ -460,12 +462,12 @@ function HeadingWithAnchor({
     (e: React.MouseEvent) => {
       e.preventDefault();
       const url = `${window.location.href.split("#")[0]}#${slug}`;
-      navigator.clipboard.writeText(url).then(() => {
+      void copyToClipboard(url, () => {
         setCopied(true);
         setTimeout(() => setCopied(false), 2000);
       });
     },
-    [slug],
+    [slug, copyToClipboard],
   );
 
   const Tag = `h${level}` as "h1" | "h2" | "h3" | "h4" | "h5" | "h6";
