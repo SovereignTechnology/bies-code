@@ -501,6 +501,8 @@ export class GitGraspPool {
   // --- Fetch lifecycle ---
   private abort: AbortController | null = null;
   private fetching = false;
+  private fetchTask: Promise<void> | null = null;
+  private readRecovery: Promise<void> | null = null;
   private fetchedOnce = false;
   private disposed = false;
 
@@ -605,17 +607,44 @@ export class GitGraspPool {
     return this.authorizationProvider !== undefined;
   }
 
-  /** Recheck read endpoints without discarding successful object caches. */
-  async retryReads(): Promise<void> {
-    if (this.isDisposed || this.fetching) return;
-    this.stateManager.cancelBackoff();
+  /**
+   * Re-enable read endpoints while retaining successful object caches.
+   * Known-object reads can preserve refs; unavailable pools still need discovery.
+   * Concurrent recovery callers share and await the active pool fetch.
+   */
+  retryReads({
+    refreshRefs = true,
+  }: { refreshRefs?: boolean } = {}): Promise<void> {
+    if (this.isDisposed) return Promise.resolve();
+    if (this.readRecovery) return this.readRecovery;
+    if (this.fetchTask) return this.fetchTask;
+
     this.http.resetReadFailures();
     this.urlManager.resetFailures();
-    for (const tracker of this.urlManager.getAll()) {
-      this.cache.invalidateInfoRefs(tracker.url);
+    if (
+      !refreshRefs &&
+      this.getEffectiveInfoRefs() &&
+      this.getState().health !== "all-failed"
+    ) {
+      return Promise.resolve();
     }
-    this.setState((prev) => ({ ...prev, retryAt: null }));
-    await this.runFetch();
+
+    // Publish the shared promise before emitting state or starting network work.
+    this.readRecovery = Promise.resolve()
+      .then(async () => {
+        if (this.isDisposed) return;
+        if (this.fetchTask) return this.fetchTask;
+        this.stateManager.cancelBackoff();
+        for (const tracker of this.urlManager.getAll()) {
+          this.cache.invalidateInfoRefs(tracker.url);
+        }
+        this.setState((prev) => ({ ...prev, retryAt: null }));
+        await this.runFetch();
+      })
+      .finally(() => {
+        this.readRecovery = null;
+      });
+    return this.readRecovery;
   }
 
   /** Get the current state snapshot */
@@ -1265,7 +1294,15 @@ export class GitGraspPool {
     this.startFetch();
   }
 
-  private async runFetch(): Promise<void> {
+  private runFetch(): Promise<void> {
+    const task = this.performFetch().finally(() => {
+      if (this.fetchTask === task) this.fetchTask = null;
+    });
+    this.fetchTask = task;
+    return task;
+  }
+
+  private async performFetch(): Promise<void> {
     const allUrls = this.urlManager.getLiveUrls();
     if (allUrls.length === 0) {
       this.fetching = false;

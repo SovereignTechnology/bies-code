@@ -2233,7 +2233,7 @@ function ReadmeViewer({
     failed,
     busy: loading,
     onRetry: async (signal) => {
-      await pool.retryReads();
+      await pool.retryReads({ refreshRefs: false });
       if (!signal.aborted) setRetryVersion((version) => version + 1);
     },
     policy: pool.requiresSigningForReads

@@ -331,7 +331,7 @@ export function CommitDiffView({
     failed: phase.kind === "error",
     busy: loading,
     onRetry: async (signal) => {
-      await pool.retryReads();
+      await pool.retryReads({ refreshRefs: false });
       if (!signal.aborted) setRetryVersion((n) => n + 1);
     },
     policy: pool.requiresSigningForReads

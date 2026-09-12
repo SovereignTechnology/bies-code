@@ -1205,7 +1205,9 @@ export function useCommitHistory(
     failed: !!state.error,
     busy: state.loading || poolState.loading || poolState.pulling,
     onRetry: async (signal) => {
-      await pool?.retryReads();
+      await pool?.retryReads({
+        refreshRefs: !/^[0-9a-f]{40}$/i.test(ref ?? ""),
+      });
       if (!signal.aborted) setRetryVersion((version) => version + 1);
     },
     policy:

@@ -249,7 +249,7 @@ function GitImage({
     failed: !!error,
     busy: loadingImage,
     onRetry: async (signal) => {
-      await imagePool?.retryReads();
+      await imagePool?.retryReads({ refreshRefs: false });
       if (!signal.aborted) setRetryVersion((version) => version + 1);
     },
   });

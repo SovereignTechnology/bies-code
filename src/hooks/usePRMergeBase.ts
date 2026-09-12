@@ -86,7 +86,7 @@ export function usePRMergeBase(
     failed,
     busy: computing || targetBranchLoading,
     onRetry: async (signal) => {
-      await gitPool?.retryReads();
+      await gitPool?.retryReads({ refreshRefs: !effectiveTargetBranchHead });
       if (!signal.aborted) setRetryVersion((version) => version + 1);
     },
     policy:

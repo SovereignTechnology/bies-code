@@ -45,7 +45,12 @@ Do not schedule another UI attempt while that operation is busy. For Git,
 `pool.retryReads()` cancels the pending pool backoff, re-enables failed endpoints,
 refreshes advertised refs, and preserves successful object caches. It never
 changes refs or publishes events. Gate automation with
-`pool.requiresSigningForReads`, then retry the owning view after the refresh.
+`pool.requiresSigningForReads`, then retry the owning view after recovery.
+Concurrent recovery requests await the same pool fetch. Reads for a known commit
+or file use `pool.retryReads({ refreshRefs: false })`: re-enable failed endpoints
+and retry the object without invalidating refs or restarting pool backoff. If
+refs are unavailable or the entire pool failed, discovery still runs. Branch/tag
+lookups and explicit server re-probes retain the default ref refresh.
 
 ## Current adoption
 

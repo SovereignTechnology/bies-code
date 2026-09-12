@@ -444,7 +444,7 @@ export function PatchCommitDetailView({
         appliedDiff.failureReason === "fetch-failed"),
     busy: commitHashResult === "computing" || appliedDiff.kind === "computing",
     onRetry: async (signal) => {
-      await pool?.retryReads();
+      await pool?.retryReads({ refreshRefs: false });
       if (!signal.aborted) {
         setCommitHashResult(null);
         setRetryVersion((version) => version + 1);

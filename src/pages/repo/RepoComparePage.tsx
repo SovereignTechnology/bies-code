@@ -542,7 +542,7 @@ export default function RepoComparePage() {
     busy:
       poolState.loading || poolState.pulling || comparison.kind === "loading",
     onRetry: async (signal) => {
-      await pool?.retryReads();
+      await pool?.retryReads({ refreshRefs: !base || !head });
       if (!signal.aborted) setRetryVersion((version) => version + 1);
     },
     policy:

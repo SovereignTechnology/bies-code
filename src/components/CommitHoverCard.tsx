@@ -42,7 +42,7 @@ function CommitHoverCardBody({ hash, pool }: CommitHoverCardBodyProps) {
     failed: !loading && !commit,
     busy: loading,
     onRetry: async (signal) => {
-      await pool.retryReads();
+      await pool.retryReads({ refreshRefs: false });
       if (!signal.aborted) setRetryVersion((version) => version + 1);
     },
   });
