@@ -4,7 +4,7 @@
 
 ### Fixes
 
-- Complete recovery controls across Git comparisons, refs, README/media, patch verification, release metadata and discovery diagnostics; preserve manual signing/payment flows and document the app-wide error UI audit.
+- Complete recovery controls across Git comparisons, refs, README/media, patch verification, release metadata and discovery diagnostics; preserve manual signing/payment flows.
 
 - Add recovery controls to exhausted event searches, identity lookups, Namecoin resolution and relay metadata errors instead of stranding users or showing a misleading not-found page.
 
