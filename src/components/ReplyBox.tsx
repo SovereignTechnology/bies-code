@@ -15,7 +15,7 @@ import type { NostrEvent } from "nostr-tools";
 import { useActiveAccount } from "applesauce-react/hooks";
 import { runner } from "@/services/actions";
 import { createAnonRunner } from "@/lib/anonPublish";
-import { useToast } from "@/hooks/useToast";
+import { useRecoveryToast as useToast } from "@/hooks/useRecoveryToast";
 import { useProfile } from "@/hooks/useProfile";
 import { useUserDisplayName } from "@/hooks/useUserDisplayName";
 import { ChangeIssueStatus, CreateComment } from "@/actions/nip34";
@@ -175,6 +175,18 @@ export function ReplyBox({
         const message =
           err instanceof Error ? err.message : "Failed to post comment";
         toast({
+          recovery: {
+            action: () =>
+              commentPosted && nextStatus && statusActions
+                ? activeRunner.run(
+                    ChangeIssueStatus,
+                    statusActions.itemId,
+                    statusActions.itemAuthorPubkey,
+                    statusActions.repoCoords,
+                    nextStatus,
+                  )
+                : submitComment(trimmed, useAnonMode, nextStatus),
+          },
           title: commentPosted
             ? "Comment posted, but status unchanged"
             : "Failed to post comment",

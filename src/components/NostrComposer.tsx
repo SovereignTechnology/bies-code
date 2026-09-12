@@ -1,3 +1,4 @@
+import { ManualRetryAction } from "@/components/ErrorRetryAction";
 /**
  * NostrComposer — a drop-in replacement for <Textarea> with nostr-aware features:
  *
@@ -171,7 +172,8 @@ export const NostrComposer = forwardRef<
   const activeTab = activeTabProp ?? internalTab;
   const _setActiveTab = onTabChange ?? setInternalTab;
 
-  const { uploadFile, isUploading } = useBlossomUpload();
+  const { uploadFile, isUploading, error: uploadError } = useBlossomUpload();
+  const [failedFile, setFailedFile] = useState<File>();
 
   useEffect(() => {
     onUploadingChange?.(isUploading);
@@ -261,6 +263,9 @@ export const NostrComposer = forwardRef<
       if (tags) {
         insertUrl(tags[0][1]);
         onUploadedTags?.(tags);
+        setFailedFile(undefined);
+      } else {
+        setFailedFile(file);
       }
     },
     [uploadFile, insertUrl, onUploadedTags],
@@ -280,6 +285,9 @@ export const NostrComposer = forwardRef<
       if (tags) {
         insertUrl(tags[0][1]);
         onUploadedTags?.(tags);
+        setFailedFile(undefined);
+      } else {
+        setFailedFile(file);
       }
     },
     [uploadFile, insertUrl, onUploadedTags],
@@ -363,6 +371,24 @@ export const NostrComposer = forwardRef<
         </div>
       )}
 
+      {uploadError && failedFile && (
+        <div className="space-y-2 rounded-md border border-destructive/40 p-3">
+          <p role="alert" className="text-sm text-destructive">
+            {uploadError}
+          </p>
+          <ManualRetryAction
+            busy={isUploading}
+            onRetry={async () => {
+              const tags = await uploadFile(failedFile);
+              if (tags) {
+                insertUrl(tags[0][1]);
+                onUploadedTags?.(tags);
+                setFailedFile(undefined);
+              }
+            }}
+          />
+        </div>
+      )}
       {/* nsec guard */}
       {hasNsec && (
         <div className="flex items-center gap-2 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive">

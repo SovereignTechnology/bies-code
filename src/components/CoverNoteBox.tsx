@@ -17,7 +17,7 @@ import { useCallback, useRef, useState } from "react";
 import type { NostrEvent } from "nostr-tools";
 import { useActiveAccount } from "applesauce-react/hooks";
 import { runner } from "@/services/actions";
-import { useToast } from "@/hooks/useToast";
+import { useRecoveryToast as useToast } from "@/hooks/useRecoveryToast";
 import { useProfile } from "@/hooks/useProfile";
 import { useUserDisplayName } from "@/hooks/useUserDisplayName";
 import { CreateCoverNote } from "@/actions/nip34";
@@ -85,8 +85,8 @@ export function CoverNoteBox({
   }, []);
 
   const handleSubmit = useCallback(
-    async (e: React.FormEvent) => {
-      e.preventDefault();
+    async (e?: React.FormEvent) => {
+      e?.preventDefault();
 
       const trimmed = body.trim();
       if (!trimmed) return;
@@ -119,6 +119,7 @@ export function CoverNoteBox({
         const message =
           err instanceof Error ? err.message : "Failed to save cover note";
         toast({
+          recovery: { action: () => handleSubmit() },
           title: "Failed to save cover note",
           description: message,
           variant: "destructive",

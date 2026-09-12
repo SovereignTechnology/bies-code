@@ -1,6 +1,9 @@
 # Error recovery
 
-Recoverable error views offer a visible **Retry now** button beside the error.
+Every actionable error needs an explicit recovery action beside its message.
+A submit button elsewhere in a form is not sufficient. Recoverable errors offer
+**Retry now**; invalid input and denied access explain what must change and keep
+the relevant editing, login or access controls available.
 Keep the explanation and useful source diagnostics visible; do not replace them
 with a toast. Buttons show pending work and prevent overlapping attempts.
 
@@ -74,3 +77,23 @@ its operation owner, cancellation path, signing behavior, and existing retries.
 Keep diagnostics with their owning operation instead of adding a timer to each
 badge. Retry controls embedded in linked content must prevent link navigation
 when activated.
+
+## Manual action errors
+
+Use `ManualRetryAction` for inline signing, upload and mutation failures. It
+shares the recovery button and guards overlapping clicks without scheduling
+timers or subscribing to connectivity events. Keep the owner's existing busy,
+validation, authorization and confirmation checks on the retry path.
+
+For actions already reporting errors through toasts, `useRecoveryToast` accepts
+`recovery: { action, label? }`. Recoverable error notifications remain visible
+until dismissed or replaced. Their callbacks expire on navigation, account
+change or owner unmount; they never invoke a signer automatically. Interactive
+notifications from a modal render inside that dialog so recovery remains in its
+keyboard and screen-reader focus scope.
+
+Retry the failed step using its original inputs. Preserve successful steps:
+comment-plus-status recovery must not post the comment again, label restoration
+must not delete the original event again, and release delivery must reuse the
+same signed asset/release events. Changing a release draft requires fresh
+preflight and signing. Never retry a payment whose outcome is uncertain.

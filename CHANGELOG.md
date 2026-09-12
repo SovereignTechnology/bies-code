@@ -4,6 +4,8 @@
 
 ### Fixes
 
+- Make action errors explicitly recoverable across account, collaboration, settings, upload and release flows; preserve partial successes and keep signing/payment recovery manual.
+
 - Complete recovery controls across Git comparisons, refs, README/media, patch verification, release metadata and discovery diagnostics; preserve manual signing/payment flows.
 
 - Add recovery controls to exhausted event searches, identity lookups, Namecoin resolution and relay metadata errors instead of stranding users or showing a misleading not-found page.

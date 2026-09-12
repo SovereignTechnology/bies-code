@@ -1,3 +1,4 @@
+import { useRecoveryToast } from "@/hooks/useRecoveryToast";
 /**
  * Shared components used in both IssuePage and PRPage thread views.
  */
@@ -165,6 +166,7 @@ export function EventBodyCard({
   const activeAccount = useActiveAccount();
   const isOwn = !!activeAccount && activeAccount.pubkey === event.pubkey;
 
+  const { toast: deletionToast } = useRecoveryToast();
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteReason, setDeleteReason] = useState("");
   const [deleting, setDeleting] = useState(false);
@@ -202,13 +204,24 @@ export function EventBodyCard({
         deleteReason.trim() || undefined,
       );
     } catch (err) {
-      console.error("[EventBodyCard] failed to delete event:", err);
+      deletionToast({
+        title: "Could not delete event",
+        description: err instanceof Error ? err.message : "Request failed",
+        variant: "destructive",
+        recovery: {
+          label: "Review deletion",
+          action: () => {
+            setDeleteReason(deleteReason);
+            setDeleteOpen(true);
+          },
+        },
+      });
     } finally {
       setDeleting(false);
       setDeleteOpen(false);
       setDeleteReason("");
     }
-  }, [deleting, event, repoCoords, deleteReason]);
+  }, [deletionToast, deleting, event, repoCoords, deleteReason]);
 
   return (
     <>
@@ -465,6 +478,7 @@ function DeleteEventButton({
   repoCoords: string[];
   label?: string;
 }) {
+  const { toast: deletionToast } = useRecoveryToast();
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteReason, setDeleteReason] = useState("");
   const [deleting, setDeleting] = useState(false);
@@ -480,13 +494,24 @@ function DeleteEventButton({
         deleteReason.trim() || undefined,
       );
     } catch (err) {
-      console.error("[DeleteEventButton] failed to delete:", err);
+      deletionToast({
+        title: "Could not delete event",
+        description: err instanceof Error ? err.message : "Request failed",
+        variant: "destructive",
+        recovery: {
+          label: "Review deletion",
+          action: () => {
+            setDeleteReason(deleteReason);
+            setDeleteOpen(true);
+          },
+        },
+      });
     } finally {
       setDeleting(false);
       setDeleteOpen(false);
       setDeleteReason("");
     }
-  }, [deleting, event, repoCoords, deleteReason]);
+  }, [deletionToast, deleting, event, repoCoords, deleteReason]);
 
   const reasonId = `delete-${event.id.slice(0, 8)}-reason`;
 
@@ -1053,6 +1078,7 @@ export function ResolvedThreadCard({
   // Authorised resolvers collapse the thread by default
   const [expanded, setExpanded] = useState(!authorised);
   const [jsonOpen, setJsonOpen] = useState(false);
+  const { toast: deletionToast } = useRecoveryToast();
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteReason, setDeleteReason] = useState("");
   const [deleting, setDeleting] = useState(false);
@@ -1068,13 +1094,24 @@ export function ResolvedThreadCard({
         deleteReason.trim() || undefined,
       );
     } catch (err) {
-      console.error("[ResolvedThreadCard] failed to delete:", err);
+      deletionToast({
+        title: "Could not delete event",
+        description: err instanceof Error ? err.message : "Request failed",
+        variant: "destructive",
+        recovery: {
+          label: "Review deletion",
+          action: () => {
+            setDeleteReason(deleteReason);
+            setDeleteOpen(true);
+          },
+        },
+      });
     } finally {
       setDeleting(false);
       setDeleteOpen(false);
       setDeleteReason("");
     }
-  }, [deleting, event, repoCoords, deleteReason]);
+  }, [deletionToast, deleting, event, repoCoords, deleteReason]);
 
   const reasonId = `delete-resolve-${event.id.slice(0, 8)}-reason`;
 

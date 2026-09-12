@@ -1,3 +1,4 @@
+import { useRecoveryToast } from "@/hooks/useRecoveryToast";
 /**
  * Recursive thread tree renderer.
  *
@@ -500,6 +501,7 @@ export function ThreadComment({
   const elRef = ref as RefObject<HTMLDivElement>;
 
   const [replying, setReplying] = useState(false);
+  const { toast: deletionToast } = useRecoveryToast();
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteReason, setDeleteReason] = useState("");
   const [deleting, setDeleting] = useState(false);
@@ -527,13 +529,24 @@ export function ThreadComment({
         deleteReason.trim() || undefined,
       );
     } catch (err) {
-      console.error("[ThreadComment] failed to delete comment:", err);
+      deletionToast({
+        title: "Could not delete event",
+        description: err instanceof Error ? err.message : "Request failed",
+        variant: "destructive",
+        recovery: {
+          label: "Review deletion",
+          action: () => {
+            setDeleteReason(deleteReason);
+            setDeleteOpen(true);
+          },
+        },
+      });
     } finally {
       setDeleting(false);
       setDeleteOpen(false);
       setDeleteReason("");
     }
-  }, [deleting, ctx, event, deleteReason]);
+  }, [deletionToast, deleting, ctx, event, deleteReason]);
 
   const isInline = isInlineComment(event);
 

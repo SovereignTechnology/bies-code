@@ -1,3 +1,5 @@
+import { useErrorRetry } from "@/hooks/useErrorRetry";
+import { ErrorRetryAction } from "@/components/ErrorRetryAction";
 /**
  * CIChecksPanel — GitHub-style checks box for a PR / patch detail page.
  *
@@ -76,7 +78,7 @@ import type {
 import type { PRCIChecks } from "@/hooks/useCI";
 import { runner } from "@/services/actions";
 import { TriggerManualCI } from "@/actions/nip34";
-import { useToast } from "@/hooks/useToast";
+import { useRecoveryToast as useToast } from "@/hooks/useRecoveryToast";
 import { Button } from "@/components/ui/button";
 import { use$ } from "@/hooks/use$";
 import { useEventStore } from "@/hooks/useEventStore";
@@ -801,6 +803,7 @@ function ManualRetryButton({ workflowResult }: { workflowResult: NostrEvent }) {
       });
     } catch (error) {
       toast({
+        recovery: { action: () => retry() },
         title: "Failed to request workflow retry",
         description:
           error instanceof Error
@@ -1149,6 +1152,7 @@ function CILogViewer({
       }
 
       const text = await response.text();
+      if (controller.signal.aborted) return;
       const node = containerRef.current;
       const noticeHeight = noticeRef.current?.offsetHeight ?? 0;
       const logHeight = logContentRef.current?.scrollHeight ?? 0;
@@ -1166,7 +1170,7 @@ function CILogViewer({
       const reason = error instanceof Error ? error.message : "Unknown error";
       const savedLogDescription = isTailOnly ? "tail" : "log output";
       setFullLogError(
-        `Full log is no longer available. Showing the saved ${savedLogDescription}. (${reason})`,
+        `Could not fetch the full log. Showing the saved ${savedLogDescription}. (${reason})`,
       );
     } finally {
       if (!controller.signal.aborted) {
@@ -1175,6 +1179,14 @@ function CILogViewer({
       }
     }
   }, [fullLog, isLoadingFullLog, isTailOnly, logUrl]);
+  const logRecoveryKey = useMemo(() => ({ log, logUrl }), [log, logUrl]);
+  const logRecovery = useErrorRetry({
+    resourceKey: logRecoveryKey,
+    failed: !!fullLogError,
+    busy: isLoadingFullLog,
+    onRetry: loadFullLog,
+    policy: { mode: "read", requiresSigning: false, context: "connection" },
+  });
 
   useLayoutEffect(() => {
     const node = containerRef.current;
@@ -1226,15 +1238,7 @@ function CILogViewer({
                 <AlertCircle className="h-3.5 w-3.5 shrink-0" />
                 <span>{fullLogError}</span>
               </span>
-              {logUrl && (
-                <button
-                  type="button"
-                  onClick={() => void loadFullLog()}
-                  className="text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-                >
-                  Retry
-                </button>
-              )}
+              {logUrl && <ErrorRetryAction recovery={logRecovery} />}
             </span>
           ) : isTailOnly && logUrl ? (
             <span>

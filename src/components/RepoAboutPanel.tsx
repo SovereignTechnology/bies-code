@@ -83,7 +83,7 @@ import { useRepoContext } from "@/pages/repo/RepoContext";
 import { useActiveAccount } from "applesauce-react/hooks";
 import { DeleteRepo } from "@/actions/nip34";
 import { runner } from "@/services/actions";
-import { useToast } from "@/hooks/useToast";
+import { useRecoveryToast as useToast } from "@/hooks/useRecoveryToast";
 import { useNavigate } from "react-router-dom";
 import { useUserPath } from "@/hooks/useUserPath";
 import { normalizeUrl } from "@/lib/url";
@@ -1015,6 +1015,7 @@ function FullVariant({
 // ---------------------------------------------------------------------------
 
 function NgitCloneField({ cloneUrl }: { cloneUrl: string }) {
+  const { toast: copyToast } = useToast();
   const [copied, setCopied] = useState(false);
 
   const handleCopy = useCallback(async () => {
@@ -1023,9 +1024,14 @@ function NgitCloneField({ cloneUrl }: { cloneUrl: string }) {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      /* clipboard unavailable */
+      copyToast({
+        title: "Could not copy",
+        description: "Try again or select and copy the displayed value.",
+        variant: "destructive",
+        recovery: { action: () => handleCopy() },
+      });
     }
-  }, [cloneUrl]);
+  }, [cloneUrl, copyToast]);
 
   return (
     <div className="space-y-1.5">
@@ -1170,13 +1176,22 @@ function CloneServerRow({
   isGrasp: boolean;
   sourceLabel?: string;
 }) {
+  const { toast: copyToast } = useToast();
   const [copied, setCopied] = useState(false);
 
   const handleCopy = useCallback(async () => {
-    await navigator.clipboard.writeText(url);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  }, [url]);
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      copyToast({
+        title: "Could not copy",
+        variant: "destructive",
+        recovery: { action: () => handleCopy() },
+      });
+    }
+  }, [url, copyToast]);
 
   const npub = isGrasp ? (graspCloneUrlNpub(url) ?? undefined) : undefined;
   const pubkey = npub ? npubToPubkey(npub) : undefined;
@@ -1583,6 +1598,7 @@ function DeleteRepoModal({
     } catch (err) {
       console.error("[DeleteRepoModal] failed to delete:", err);
       toast({
+        recovery: { action: () => handleDelete() },
         title: "Delete failed",
         description:
           "Could not publish the deletion request. Please try again.",
@@ -1590,7 +1606,6 @@ function DeleteRepoModal({
       });
     } finally {
       setDeleting(false);
-      setReason("");
     }
   }, [
     deleting,
@@ -1861,6 +1876,7 @@ function MultiAnnouncementsModal({
 // ---------------------------------------------------------------------------
 
 function CopyRow({ label, value }: { label: string; value: string }) {
+  const { toast: copyToast } = useToast();
   const [copied, setCopied] = useState(false);
 
   const handleCopy = useCallback(async () => {
@@ -1869,9 +1885,14 @@ function CopyRow({ label, value }: { label: string; value: string }) {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      /* clipboard unavailable */
+      copyToast({
+        title: "Could not copy",
+        description: "Try again or select and copy the displayed value.",
+        variant: "destructive",
+        recovery: { action: () => handleCopy() },
+      });
     }
-  }, [value]);
+  }, [value, copyToast]);
 
   return (
     <button
@@ -1922,13 +1943,22 @@ function CloneDropdown({
   additionalGitServerUrls: string[];
 }) {
   const [open, setOpen] = useState(false);
+  const { toast: copyToast } = useToast();
   const [copiedNostrUrl, setCopiedNostrUrl] = useState(false);
 
   const handleCopyNostrUrl = async () => {
     if (!nostrCloneUrl) return;
-    await navigator.clipboard.writeText(nostrCloneUrl);
-    setCopiedNostrUrl(true);
-    setTimeout(() => setCopiedNostrUrl(false), 2000);
+    try {
+      await navigator.clipboard.writeText(nostrCloneUrl);
+      setCopiedNostrUrl(true);
+      setTimeout(() => setCopiedNostrUrl(false), 2000);
+    } catch {
+      copyToast({
+        title: "Could not copy",
+        variant: "destructive",
+        recovery: { action: () => handleCopyNostrUrl() },
+      });
+    }
   };
 
   const hasRawUrls =

@@ -1,3 +1,4 @@
+import { useRecoveryToast } from "@/hooks/useRecoveryToast";
 import { useState, useCallback } from "react";
 import type { NostrEvent } from "nostr-tools";
 import {
@@ -29,6 +30,7 @@ function eventToNip19(event: NostrEvent): string {
 // ---------------------------------------------------------------------------
 
 function CopyRow({ label, value }: { label: string; value: string }) {
+  const { toast } = useRecoveryToast();
   const [copied, setCopied] = useState(false);
 
   const handleCopy = useCallback(async () => {
@@ -37,9 +39,14 @@ function CopyRow({ label, value }: { label: string; value: string }) {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      /* clipboard unavailable */
+      toast({
+        title: "Could not copy",
+        description: "Try again or select and copy the displayed value.",
+        variant: "destructive",
+        recovery: { action: () => handleCopy() },
+      });
     }
-  }, [value]);
+  }, [toast, value]);
 
   return (
     <button

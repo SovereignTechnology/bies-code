@@ -1,3 +1,4 @@
+import { ManualRetryAction } from "@/components/ErrorRetryAction";
 /**
  * RepoSettingsPage — edit repository settings for the selected maintainer.
  *
@@ -2843,6 +2844,7 @@ function RepoSettingsForm({
                     {saveError}
                   </p>
                 </div>
+                <ManualRetryAction onRetry={handleSave} busy={!canSave} />
               </div>
             )}
 

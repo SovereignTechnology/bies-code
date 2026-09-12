@@ -19,7 +19,7 @@ import { useIsGitRepoFollowing } from "@/hooks/useIsGitRepoFollowing";
 import { useRobustGitRepoFollowActions } from "@/hooks/useRobustGitRepoFollowActions";
 import { useRepoFollowers } from "@/hooks/useRepoFollowers";
 import { useAuthModal } from "@/contexts/AuthModalContext";
-import { useToast } from "@/hooks/useToast";
+import { useRecoveryToast as useToast } from "@/hooks/useRecoveryToast";
 import { cn } from "@/lib/utils";
 import {
   Popover,
@@ -67,6 +67,7 @@ export function FollowRepoButton({
       }
     } catch (err) {
       toast({
+        recovery: { action: () => handleClick() },
         title: isFollowing
           ? "Failed to unfollow repository"
           : "Failed to follow repository",

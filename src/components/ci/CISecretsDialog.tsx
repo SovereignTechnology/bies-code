@@ -30,7 +30,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { useToast } from "@/hooks/useToast";
+import { useRecoveryToast as useToast } from "@/hooks/useRecoveryToast";
 import {
   CI_SECRET_NAME_PATTERN,
   isCISecretsDecryptionBunkerConnection,
@@ -282,6 +282,7 @@ export function CISecretsDialog({
       });
     } catch (error) {
       toast({
+        recovery: { action: () => submit() },
         title: "Secret update was not delivered",
         description:
           error instanceof Error

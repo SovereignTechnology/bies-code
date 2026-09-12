@@ -3,7 +3,7 @@ import { useActiveAccount } from "applesauce-react/hooks";
 import { runner } from "@/services/actions";
 import { createAnonRunner } from "@/lib/anonPublish";
 import { CreateIssue } from "@/actions/nip34";
-import { useToast } from "@/hooks/useToast";
+import { useRecoveryToast as useToast } from "@/hooks/useRecoveryToast";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -216,6 +216,15 @@ export function CreateIssueForm({
         const message =
           err instanceof Error ? err.message : "Failed to create issue";
         toast({
+          recovery: {
+            action: () =>
+              submitIssue(
+                trimmedSubject,
+                trimmedContent,
+                allLabels,
+                useAnonMode,
+              ),
+          },
           title: "Failed to create issue",
           description: message,
           variant: "destructive",

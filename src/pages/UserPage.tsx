@@ -26,7 +26,7 @@ import {
   useUserPinnedRepos,
   useUserPinnedCoords,
 } from "@/hooks/useUserPinnedRepos";
-import { useToast } from "@/hooks/useToast";
+import { useRecoveryToast as useToast } from "@/hooks/useRecoveryToast";
 import { UserAvatar, UserLink, UserName } from "@/components/UserAvatar";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Card, CardContent } from "@/components/ui/card";
@@ -907,6 +907,7 @@ function PinnedReposSection({
       } catch (err) {
         setLocalOrder(null); // revert
         toast({
+          recovery: { action: () => handleDragEnd(event) },
           title: "Failed to reorder pinned repositories",
           description:
             err instanceof Error
@@ -1111,12 +1112,13 @@ function PinnedRepoCard({
   });
   const coord = `30617:${repo.selectedMaintainer}:${repo.dTag}`;
 
-  const handleUnpin = async (e: React.MouseEvent) => {
-    e.stopPropagation();
+  const handleUnpin = async (e?: React.MouseEvent) => {
+    e?.stopPropagation();
     try {
       await unpinRepo(coord);
     } catch (err) {
       toast({
+        recovery: { action: () => handleUnpin() },
         title: "Failed to unpin repository",
         description:
           err instanceof Error ? err.message : "An unexpected error occurred.",
@@ -1424,8 +1426,8 @@ function PinButton({ coord, isPinned }: { coord: string; isPinned: boolean }) {
   const { pinRepo, unpinRepo, pending } = useRobustPinnedRepoActions();
   const { toast } = useToast();
 
-  const handleClick = async (e: React.MouseEvent) => {
-    e.stopPropagation();
+  const handleClick = async (e?: React.MouseEvent) => {
+    e?.stopPropagation();
     try {
       if (isPinned) {
         await unpinRepo(coord);
@@ -1434,6 +1436,7 @@ function PinButton({ coord, isPinned }: { coord: string; isPinned: boolean }) {
       }
     } catch (err) {
       toast({
+        recovery: { action: () => handleClick() },
         title: isPinned
           ? "Failed to unpin repository"
           : "Failed to pin repository",
@@ -1529,6 +1532,7 @@ function FollowButton({ pubkey }: { pubkey: string }) {
       await follow(pubkey);
     } catch (err) {
       toast({
+        recovery: { action: () => doFollow() },
         title: "Failed to follow",
         description:
           err instanceof Error ? err.message : "An unexpected error occurred.",
@@ -1543,6 +1547,7 @@ function FollowButton({ pubkey }: { pubkey: string }) {
         await unfollow(pubkey);
       } catch (err) {
         toast({
+          recovery: { action: () => handleClick() },
           title: "Failed to unfollow",
           description:
             err instanceof Error
@@ -1650,6 +1655,7 @@ function GitAuthorFollowButton({ pubkey }: { pubkey: string }) {
         await removeGitAuthor(pubkey);
       } catch (err) {
         toast({
+          recovery: { action: () => handleClick() },
           title: "Failed to remove git author",
           description:
             err instanceof Error
@@ -1663,6 +1669,7 @@ function GitAuthorFollowButton({ pubkey }: { pubkey: string }) {
         await addGitAuthor(pubkey);
       } catch (err) {
         toast({
+          recovery: { action: () => handleClick() },
           title: "Failed to add git author",
           description:
             err instanceof Error

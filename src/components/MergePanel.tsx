@@ -1,3 +1,4 @@
+import { ManualRetryAction } from "@/components/ErrorRetryAction";
 /**
  * MergePanel — merge/apply button and status panel for PRs on Grasp repos.
  *
@@ -1386,7 +1387,14 @@ export function MergePanel({
             {/* Error details */}
             {mergeStep === "failed" && mergeError && !pushDelivery && (
               <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-                {mergeError}
+                <p role="alert">{mergeError}</p>
+                <ManualRetryAction
+                  onRetry={() => {
+                    setMergeStep("idle");
+                    setMergeError(null);
+                    mergeability.recheck();
+                  }}
+                />
               </div>
             )}
           </div>

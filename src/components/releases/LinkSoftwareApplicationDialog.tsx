@@ -1,3 +1,4 @@
+import { ManualRetryAction } from "@/components/ErrorRetryAction";
 import { useEffect, useState } from "react";
 import { useActiveAccount } from "applesauce-react/hooks";
 import { Link2, Loader2, Package } from "lucide-react";
@@ -304,9 +305,15 @@ export function LinkSoftwareApplicationDialog({
         )}
 
         {error && (
-          <p className="text-sm text-destructive" role="alert">
-            {error}
-          </p>
+          <div className="space-y-2">
+            <p className="text-sm text-destructive" role="alert">
+              {error}
+            </p>
+            <ManualRetryAction
+              onRetry={handleLinkRequest}
+              busy={publishing || !selectedApplication}
+            />
+          </div>
         )}
 
         <DialogFooter>

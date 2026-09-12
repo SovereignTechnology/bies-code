@@ -34,7 +34,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
-import { toast } from "@/hooks/useToast";
+import { useRecoveryToast } from "@/hooks/useRecoveryToast";
 import { useLoginActions } from "@/hooks/useLoginActions";
 import { useProfile } from "@/hooks/useProfile";
 import { useActiveAccount } from "applesauce-react/hooks";
@@ -110,6 +110,7 @@ type CreateAccountStep = "display-name" | "secure" | "publishing";
 // ---------------------------------------------------------------------------
 
 export function AuthModal() {
+  const { toast } = useRecoveryToast();
   const { isOpen, initialView, onAuthSuccess, closeAuthModal } = useAuthModal();
 
   const [view, setView] = useState<AuthModalView>(initialView);
@@ -225,13 +226,14 @@ export function AuthModal() {
       setHasSaved(true);
     } catch {
       toast({
+        recovery: { action: () => handleDownloadKey() },
         title: "Download failed",
         description:
           "Could not download the key file. Please copy it manually.",
         variant: "destructive",
       });
     }
-  }, [nsec]);
+  }, [toast, nsec]);
 
   const copyKeyToClipboard = useCallback(
     async (description?: string) => {
@@ -243,6 +245,7 @@ export function AuthModal() {
         toast({ title: "Key copied", description });
       } catch {
         toast({
+          recovery: { action: () => copyKeyToClipboard(description) },
           title: "Copy failed",
           description:
             "Could not copy to clipboard. Please download the key instead.",
@@ -250,7 +253,7 @@ export function AuthModal() {
         });
       }
     },
-    [nsec],
+    [toast, nsec],
   );
 
   const handleCopyKey = useCallback(
@@ -282,6 +285,7 @@ export function AuthModal() {
       const message =
         err instanceof Error ? err.message : "Failed to create account";
       toast({
+        recovery: { action: () => handleCreateAccount() },
         title: "Account creation failed",
         description: message,
         variant: "destructive",
@@ -292,6 +296,7 @@ export function AuthModal() {
       setIsPublishing(false);
     }
   }, [
+    toast,
     hasSaved,
     ackLoss,
     ackExposure,

@@ -1,3 +1,4 @@
+import { ManualRetryAction } from "@/components/ErrorRetryAction";
 /**
  * RepoAdvancedRepairPage — danger-zone raw editor for the signer's OWN
  * kind:30617 announcement role tags (`M` / `m` / `o`).
@@ -775,7 +776,16 @@ function AdvancedRepairEditor({
             className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive"
           >
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-            <p>{publishError}</p>
+            <div className="space-y-2">
+              <p>{publishError}</p>
+              <ManualRetryAction
+                onRetry={() => {
+                  setConfirmChecked(false);
+                  setConfirmOpen(true);
+                }}
+                busy={!build.replacement || !hasChanges || publishing}
+              />
+            </div>
           </div>
         )}
 

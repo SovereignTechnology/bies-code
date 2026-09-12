@@ -33,7 +33,7 @@ import type {
 } from "@/casts/CICoordinator";
 import { runner } from "@/services/actions";
 import { SetCIService } from "@/actions/nip34";
-import { useToast } from "@/hooks/useToast";
+import { useRecoveryToast as useToast } from "@/hooks/useRecoveryToast";
 import { UserAvatar, UserLink, UserName } from "@/components/UserAvatar";
 import { EventCardActions } from "@/components/EventCardActions";
 import { Badge } from "@/components/ui/badge";
@@ -892,6 +892,7 @@ export function CIServiceControlPanel({
       });
     } catch (error) {
       toast({
+        recovery: { action: () => updateService() },
         title: enabled
           ? "Could not request coordinator service"
           : "Could not stop the service request",

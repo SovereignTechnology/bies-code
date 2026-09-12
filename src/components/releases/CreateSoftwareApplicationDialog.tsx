@@ -1,3 +1,4 @@
+import { ManualRetryAction } from "@/components/ErrorRetryAction";
 import { useEffect, useId, useState } from "react";
 import type { CastRefEventStore } from "applesauce-common/casts/cast";
 import { useActiveAccount } from "applesauce-react/hooks";
@@ -415,7 +416,17 @@ export function CreateSoftwareApplicationDialog({
           </div>
         </div>
 
-        {error && <p className="text-sm text-destructive">{error}</p>}
+        {error && (
+          <div className="space-y-2">
+            <p role="alert" className="text-sm text-destructive">
+              {error}
+            </p>
+            <ManualRetryAction
+              onRetry={handleSubmitRequest}
+              busy={publishing}
+            />
+          </div>
+        )}
 
         <DialogFooter>
           <Button

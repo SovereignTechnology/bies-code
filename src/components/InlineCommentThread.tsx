@@ -1,3 +1,4 @@
+import { useRecoveryToast } from "@/hooks/useRecoveryToast";
 /**
  * InlineCommentThread — GitHub-style inline code review comment thread.
  *
@@ -48,7 +49,7 @@ import {
 import { useActiveAccount } from "applesauce-react/hooks";
 import { useProfile } from "@/hooks/useProfile";
 import { useUserDisplayName } from "@/hooks/useUserDisplayName";
-import { useToast } from "@/hooks/useToast";
+import { useRecoveryToast as useToast } from "@/hooks/useRecoveryToast";
 import { useAuthModal } from "@/contexts/AuthModalContext";
 import { ThreadComment, ThreadCtx } from "@/components/ThreadTree";
 import { formatDistanceToNow } from "date-fns";
@@ -170,6 +171,7 @@ function InlineComposer({
       onSubmitted(!!replyToComment);
     } catch (err) {
       toast({
+        recovery: { action: () => submitComment() },
         title: "Failed to post comment",
         description: err instanceof Error ? err.message : "Unknown error",
         variant: "destructive",
@@ -299,6 +301,7 @@ function ResolvedFooter({
     { addSuffix: true },
   );
 
+  const { toast: deletionToast } = useRecoveryToast();
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteReason, setDeleteReason] = useState("");
   const [deleting, setDeleting] = useState(false);
@@ -316,13 +319,24 @@ function ResolvedFooter({
         deleteReason.trim() || undefined,
       );
     } catch (err) {
-      console.error("[ResolvedFooter] failed to delete:", err);
+      deletionToast({
+        title: "Could not delete event",
+        description: err instanceof Error ? err.message : "Request failed",
+        variant: "destructive",
+        recovery: {
+          label: "Review deletion",
+          action: () => {
+            setDeleteReason(deleteReason);
+            setDeleteOpen(true);
+          },
+        },
+      });
     } finally {
       setDeleting(false);
       setDeleteOpen(false);
       setDeleteReason("");
     }
-  }, [deleting, resolveEvent, repoCoords, deleteReason]);
+  }, [deletionToast, deleting, resolveEvent, repoCoords, deleteReason]);
 
   return (
     <>
@@ -543,6 +557,7 @@ export function InlineCommentThread({
       toast({ title: "Thread resolved" });
     } catch (err) {
       toast({
+        recovery: { action: () => handleResolve() },
         title: "Failed to resolve thread",
         description: err instanceof Error ? err.message : "Unknown error",
         variant: "destructive",

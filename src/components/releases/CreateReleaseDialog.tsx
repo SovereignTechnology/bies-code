@@ -1,3 +1,4 @@
+import { ManualRetryAction } from "@/components/ErrorRetryAction";
 import {
   useCallback,
   useEffect,
@@ -805,6 +806,11 @@ export function CreateReleaseDialog({
   const [notes, setNotes] = useState("");
   const [assets, setAssets] = useState<ReleaseAssetDraft[]>([]);
   const [platformFocusAssetId, setPlatformFocusAssetId] = useState<string>();
+  const pendingPublication = useRef<{
+    key: string;
+    assets: NostrEvent[];
+    release: NostrEvent;
+  }>();
   const [stage, setStage] = useState<PublishStage>("editing");
   const [error, setError] = useState<string>();
   const busy = stage !== "editing";
@@ -918,6 +924,7 @@ export function CreateReleaseDialog({
     setBuildCommit("");
     setNotes("");
     setAssets([]);
+    pendingPublication.current = undefined;
     selectedFileIdsRef.current.clear();
     setPlatformFocusAssetId(undefined);
     setCreateApplicationOpen(false);
@@ -1196,7 +1203,23 @@ export function CreateReleaseDialog({
   };
 
   const handleSubmit = async () => {
-    const validationError = validate();
+    const publicationKey = JSON.stringify([
+      account?.pubkey,
+      selectedApplication?.event.id,
+      releaseVersion,
+      channel,
+      buildCommit,
+      notes,
+      assets,
+      repoCoordinates,
+      relayHint,
+    ]);
+    let publication =
+      pendingPublication.current?.key === publicationKey
+        ? pendingPublication.current
+        : undefined;
+
+    const validationError = publication ? undefined : validate();
     if (validationError) {
       setError(validationError);
       return;
@@ -1217,70 +1240,75 @@ export function CreateReleaseDialog({
         uploadedAssets.push({ draft: asset, uploaded: asset.uploaded });
       }
 
-      setStage("checking-version");
-      if (!publisherPreflight) {
-        throw new Error("Software publication checks are not ready yet.");
-      }
-      await publisherPreflight.executeApplication(
-        selectedApplication.appId,
-        selectedApplication.event.id,
-        async () => releaseCandidatePreflight.assertAvailable(),
-      );
-
-      setStage("signing");
-      const createdAt = Math.floor(Date.now() / 1000);
-      const signedAssets: NostrEvent[] = [];
-      for (const { draft, uploaded } of uploadedAssets) {
-        signedAssets.push(
-          await SoftwareAssetFactory.create({
-            applicationCoordinate: selectedApplication.coordinate,
-            appId: selectedApplication.appId,
-            relayHint,
-            version: releaseVersion,
-            url: uploaded.url,
-            filename: draft.filename,
-            mimeType: draft.mimeType,
-            sha256: uploaded.sha256,
-            size: uploaded.size,
-            platforms: draft.platforms,
-            minPlatformVersion: draft.minPlatformVersion,
-            targetPlatformVersion: draft.targetPlatformVersion,
-            supportedNips: draft.supportedNips,
-            variant: draft.variant,
-            commit: draft.commit,
-            minAllowedVersion: draft.minAllowedVersion,
-            versionCode: draft.versionCode,
-            minAllowedVersionCode: draft.minAllowedVersionCode,
-            apkCertificateHashes: draft.apkCertificateHashes,
-            originalWebUrl: draft.originalWebUrl,
-            createdAt,
-          }).sign(account.signer),
+      if (!publication) {
+        setStage("checking-version");
+        if (!publisherPreflight) {
+          throw new Error("Software publication checks are not ready yet.");
+        }
+        await publisherPreflight.executeApplication(
+          selectedApplication.appId,
+          selectedApplication.event.id,
+          async () => releaseCandidatePreflight.assertAvailable(),
         );
-      }
 
-      const release = await SoftwareReleaseFactory.create({
-        applicationCoordinate: selectedApplication.coordinate,
-        appId: selectedApplication.appId,
-        version: releaseVersion,
-        channel: channel.trim(),
-        commit: buildCommit,
-        notes,
-        assets: signedAssets.map((asset, index) => ({
-          eventId: asset.id,
+        setStage("signing");
+        const createdAt = Math.floor(Date.now() / 1000);
+        const signedAssets: NostrEvent[] = [];
+        for (const { draft, uploaded } of uploadedAssets) {
+          signedAssets.push(
+            await SoftwareAssetFactory.create({
+              applicationCoordinate: selectedApplication.coordinate,
+              appId: selectedApplication.appId,
+              relayHint,
+              version: releaseVersion,
+              url: uploaded.url,
+              filename: draft.filename,
+              mimeType: draft.mimeType,
+              sha256: uploaded.sha256,
+              size: uploaded.size,
+              platforms: draft.platforms,
+              minPlatformVersion: draft.minPlatformVersion,
+              targetPlatformVersion: draft.targetPlatformVersion,
+              supportedNips: draft.supportedNips,
+              variant: draft.variant,
+              commit: draft.commit,
+              minAllowedVersion: draft.minAllowedVersion,
+              versionCode: draft.versionCode,
+              minAllowedVersionCode: draft.minAllowedVersionCode,
+              apkCertificateHashes: draft.apkCertificateHashes,
+              originalWebUrl: draft.originalWebUrl,
+              createdAt,
+            }).sign(account.signer),
+          );
+        }
+
+        const release = await SoftwareReleaseFactory.create({
+          applicationCoordinate: selectedApplication.coordinate,
+          appId: selectedApplication.appId,
+          version: releaseVersion,
+          channel: channel.trim(),
+          commit: buildCommit,
+          notes,
+          assets: signedAssets.map((asset, index) => ({
+            eventId: asset.id,
+            relayHint,
+            platforms: uploadedAssets[index].draft.platforms,
+          })),
           relayHint,
-          platforms: uploadedAssets[index].draft.platforms,
-        })),
-        relayHint,
-        createdAt,
-      }).sign(account.signer);
+          createdAt,
+        }).sign(account.signer);
 
+        publication = { key: publicationKey, assets: signedAssets, release };
+        pendingPublication.current = publication;
+      }
       setStage("publishing-assets");
       await Promise.all(
-        signedAssets.map((asset) => publish(asset, repoCoordinates)),
+        publication.assets.map((asset) => publish(asset, repoCoordinates)),
       );
 
       setStage("publishing-release");
-      await publish(release, repoCoordinates);
+      await publish(publication.release, repoCoordinates);
+      pendingPublication.current = undefined;
 
       toast({
         title: "Release published",
@@ -1648,12 +1676,20 @@ export function CreateReleaseDialog({
           )}
 
           {error && (
-            <p
-              className="rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive"
-              role="alert"
-            >
-              {error}
-            </p>
+            <div className="space-y-2 rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3">
+              <p role="alert" className="text-sm text-destructive">
+                {error}
+              </p>
+              <ManualRetryAction
+                onRetry={handleSubmit}
+                busy={
+                  busy ||
+                  uploadsIncomplete ||
+                  buildCommitInvalid ||
+                  assetCommitInvalid
+                }
+              />
+            </div>
           )}
         </div>
 

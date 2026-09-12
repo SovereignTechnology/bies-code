@@ -1,3 +1,4 @@
+import { useRecoveryToast } from "@/hooks/useRecoveryToast";
 /**
  * ReactionsBar — NIP-25 (kind:7) reactions for NIP-34 thread events.
  *
@@ -70,6 +71,7 @@ export function ReactionsBar({
   repoCoords,
   className,
 }: ReactionsBarProps) {
+  const { toast } = useRecoveryToast();
   const store = useEventStore();
   const castStore = store as unknown as CastRefEventStore;
   const activeAccount = useActiveAccount();
@@ -122,13 +124,18 @@ export function ReactionsBar({
       try {
         await runner.run(CreateReaction, event, emoji, repoCoords);
       } catch (err) {
-        console.error("[ReactionsBar] failed to send reaction:", err);
+        toast({
+          title: "Could not send reaction",
+          description: err instanceof Error ? err.message : "Request failed",
+          variant: "destructive",
+          recovery: { action: () => sendReaction(emoji) },
+        });
       } finally {
         setSending(false);
         setPickerOpen(false);
       }
     },
-    [privateRepository, sending, activeAccount, event, repoCoords],
+    [toast, privateRepository, sending, activeAccount, event, repoCoords],
   );
 
   const confirmDeleteReaction = useCallback(async () => {
@@ -142,13 +149,31 @@ export function ReactionsBar({
         deleteReason.trim() || undefined,
       );
     } catch (err) {
-      console.error("[ReactionsBar] failed to delete reaction:", err);
+      toast({
+        title: "Could not remove reaction",
+        description: err instanceof Error ? err.message : "Request failed",
+        variant: "destructive",
+        recovery: {
+          label: "Review removal",
+          action: () => {
+            setDeleteTarget(deleteTarget);
+            setDeleteReason(deleteReason);
+          },
+        },
+      });
     } finally {
       setDeleting(false);
       setDeleteTarget(null);
       setDeleteReason("");
     }
-  }, [privateRepository, deleteTarget, deleting, repoCoords, deleteReason]);
+  }, [
+    toast,
+    privateRepository,
+    deleteTarget,
+    deleting,
+    repoCoords,
+    deleteReason,
+  ]);
 
   // Find the current user's reaction event for a given emoji (for deletion)
   const myReactionEvent = useCallback(

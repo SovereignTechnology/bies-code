@@ -38,6 +38,7 @@ export function useBlossomUpload() {
   const store = useEventStore();
   const { toast } = useToast();
   const [isUploading, setIsUploading] = useState(false);
+  const [error, setError] = useState<string>();
 
   // Reactively subscribe to the user's blossom server list (kind 10063)
   const blossomServers = use$(
@@ -53,7 +54,9 @@ export function useBlossomUpload() {
       file: File,
       options?: BlossomUploadOptions,
     ): Promise<Nip94Tags | null> => {
+      setError(undefined);
       if (!account) {
+        setError("Log in before uploading an attachment.");
         toast({
           title: "Not logged in",
           description: "You must be logged in to upload files.",
@@ -84,6 +87,7 @@ export function useBlossomUpload() {
       } catch (err) {
         if (options?.signal?.aborted) return null;
         const message = err instanceof Error ? err.message : "Upload failed";
+        setError(message);
         toast({
           title: "Upload failed",
           description: message,
@@ -97,5 +101,5 @@ export function useBlossomUpload() {
     [account, blossomServers, toast],
   );
 
-  return { uploadFile, isUploading };
+  return { uploadFile, isUploading, error };
 }

@@ -57,7 +57,7 @@ import {
   useRobustReplaceableAction,
   type ReplaceablePreflightSnapshot,
 } from "@/hooks/useRobustReplaceableAction";
-import { useToast } from "@/hooks/useToast";
+import { useRecoveryToast as useToast } from "@/hooks/useRecoveryToast";
 import {
   AddInboxRelayFromPreflight,
   AddOutboxRelayFromPreflight,
@@ -283,6 +283,7 @@ function OutboxRelaysSection() {
       await execute(MAILBOXES_KIND, action);
     } catch (err) {
       toast({
+        recovery: { action: () => safeRun(action) },
         title: "Failed to update relay list",
         description:
           err instanceof Error ? err.message : "An unexpected error occurred.",
@@ -341,6 +342,7 @@ function InboxRelaysSection() {
       await execute(MAILBOXES_KIND, action);
     } catch (err) {
       toast({
+        recovery: { action: () => safeRun(action) },
         title: "Failed to update relay list",
         description:
           err instanceof Error ? err.message : "An unexpected error occurred.",
@@ -573,6 +575,9 @@ function GraspRelaysSection() {
         setDraftAddresses(null); // close draft on success
       } catch (err) {
         toast({
+          recovery: {
+            action: () => publishGraspList(addresses, expectedEventId),
+          },
           title: "Failed to update grasp server list",
           description:
             err instanceof Error
@@ -914,6 +919,7 @@ function PrivateGitRelaysSection() {
       });
     } catch (error) {
       toast({
+        recovery: { action: () => persist() },
         title: "Failed to update private Git services",
         description:
           error instanceof Error

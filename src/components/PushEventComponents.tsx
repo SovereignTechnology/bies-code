@@ -1,3 +1,4 @@
+import { useRecoveryToast } from "@/hooks/useRecoveryToast";
 /**
  * PushEventComponents — timeline nodes for patch-set pushes and PR Updates.
  *
@@ -539,6 +540,7 @@ export function PRUpdatePushEvent({
   const activeAccount = useActiveAccount();
   const isOwn = !!activeAccount && activeAccount.pubkey === update.event.pubkey;
 
+  const { toast: deletionToast } = useRecoveryToast();
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteReason, setDeleteReason] = useState("");
   const [deleting, setDeleting] = useState(false);
@@ -554,13 +556,24 @@ export function PRUpdatePushEvent({
         deleteReason.trim() || undefined,
       );
     } catch (err) {
-      console.error("[PRUpdatePushEvent] failed to delete event:", err);
+      deletionToast({
+        title: "Could not delete event",
+        description: err instanceof Error ? err.message : "Request failed",
+        variant: "destructive",
+        recovery: {
+          label: "Review deletion",
+          action: () => {
+            setDeleteReason(deleteReason);
+            setDeleteOpen(true);
+          },
+        },
+      });
     } finally {
       setDeleting(false);
       setDeleteOpen(false);
       setDeleteReason("");
     }
-  }, [deleting, update.event, repoCoords, deleteReason]);
+  }, [deletionToast, deleting, update.event, repoCoords, deleteReason]);
 
   const deleteReasonId = `delete-pr-update-${update.event.id.slice(0, 8)}-reason`;
 
