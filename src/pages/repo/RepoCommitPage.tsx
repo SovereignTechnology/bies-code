@@ -1,3 +1,4 @@
+import { useLocation } from "react-router-dom";
 import { useSeoMeta } from "@unhead/react";
 import { useRepoContext } from "./RepoContext";
 import { useProfile } from "@/hooks/useProfile";
@@ -13,6 +14,7 @@ import { useActiveAccount } from "applesauce-react/hooks";
 import { useRepositoryCITrust } from "@/hooks/useRepositoryCITrust";
 
 export default function RepoCommitPage() {
+  const location = useLocation();
   const { cloneUrls, commitId, resolved, pubkey, repoId, basePath } =
     useRepoContext();
   const repo = resolved?.repo;
@@ -84,6 +86,8 @@ export default function RepoCommitPage() {
         headerExtra={
           ci && ci.runs.length > 0 ? (
             <CIChecksPanel
+              key={`${commitId}:${location.key}`}
+              expandOnArrival={location.hash === "#checks"}
               checks={{
                 runs: ci.runs,
                 currentRuns: ci.runs,

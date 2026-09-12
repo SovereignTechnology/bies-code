@@ -290,6 +290,7 @@ export default function RepoTagsPage() {
                   </Link>
                   {ci?.status && (
                     <CIStatusTrustIcon
+                      to={`${basePath}/commit/${tag.hash}#checks`}
                       status={ci.status}
                       resolution={trustResolution}
                       statusSummary={summarizeRuns(ci.runs)}

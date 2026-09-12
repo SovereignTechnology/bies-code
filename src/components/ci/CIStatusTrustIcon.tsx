@@ -1,3 +1,4 @@
+import { Link } from "react-router-dom";
 import { CircleHelp, ShieldAlert } from "lucide-react";
 import {
   Popover,
@@ -21,6 +22,8 @@ import {
 
 interface CIStatusTrustIconProps {
   status: CICheckStatus;
+  /** Navigate to expanded checks instead of opening the trust popover. */
+  to?: string;
   resolution: CITrustResolution;
   /** More specific rollup copy, such as “2 checks successful”. */
   statusSummary?: string;
@@ -36,6 +39,7 @@ interface CIStatusTrustIconProps {
  */
 export function CIStatusTrustIcon({
   status,
+  to,
   resolution,
   statusSummary,
   className,
@@ -62,53 +66,64 @@ export function CIStatusTrustIcon({
     </div>
   );
 
+  const triggerClassName = cn(
+    "relative inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full transition-colors",
+    "hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+    attentionTone === "caution" &&
+      "bg-amber-500/10 ring-1 ring-inset ring-amber-500/40 hover:bg-amber-500/15",
+    attentionTone === "danger" &&
+      "bg-red-500/10 ring-1 ring-inset ring-red-500/50 hover:bg-red-500/15",
+    buttonClassName,
+  );
+  const label = `${summary}. ${trustLabel}. Open CI details`;
+  const icon = (
+    <>
+      <CIStatusIcon
+        status={status}
+        className={cn("h-4 w-4", className)}
+        decorative
+      />
+      {attentionTone === "caution" && (
+        <CircleHelp
+          className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full bg-background text-amber-600 dark:text-amber-400"
+          strokeWidth={2.5}
+          aria-hidden="true"
+        />
+      )}
+      {attentionTone === "danger" && (
+        <ShieldAlert
+          className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full bg-background text-red-600 dark:text-red-400"
+          strokeWidth={2.5}
+          aria-hidden="true"
+        />
+      )}
+    </>
+  );
+  const trigger = to ? (
+    <Link to={to} className={triggerClassName} aria-label={label}>
+      {icon}
+    </Link>
+  ) : (
+    <button type="button" className={triggerClassName} aria-label={label}>
+      {icon}
+    </button>
+  );
+
   return (
     <Popover>
       <Tooltip>
         <TooltipTrigger asChild>
-          <PopoverTrigger asChild>
-            <button
-              type="button"
-              className={cn(
-                "relative inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full transition-colors",
-                "hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
-                attentionTone === "caution" &&
-                  "bg-amber-500/10 ring-1 ring-inset ring-amber-500/40 hover:bg-amber-500/15",
-                attentionTone === "danger" &&
-                  "bg-red-500/10 ring-1 ring-inset ring-red-500/50 hover:bg-red-500/15",
-                buttonClassName,
-              )}
-              aria-label={`${summary}. ${trustLabel}. Open CI details`}
-            >
-              <CIStatusIcon
-                status={status}
-                className={cn("h-4 w-4", className)}
-                decorative
-              />
-              {attentionTone === "caution" && (
-                <CircleHelp
-                  className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full bg-background text-amber-600 dark:text-amber-400"
-                  strokeWidth={2.5}
-                  aria-hidden="true"
-                />
-              )}
-              {attentionTone === "danger" && (
-                <ShieldAlert
-                  className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full bg-background text-red-600 dark:text-red-400"
-                  strokeWidth={2.5}
-                  aria-hidden="true"
-                />
-              )}
-            </button>
-          </PopoverTrigger>
+          {to ? trigger : <PopoverTrigger asChild>{trigger}</PopoverTrigger>}
         </TooltipTrigger>
         <TooltipContent side="top">
           {summary} · {trustLabel}
         </TooltipContent>
       </Tooltip>
-      <PopoverContent align={align} sideOffset={6} className="w-80 p-3">
-        {content}
-      </PopoverContent>
+      {!to && (
+        <PopoverContent align={align} sideOffset={6} className="w-80 p-3">
+          {content}
+        </PopoverContent>
+      )}
     </Popover>
   );
 }

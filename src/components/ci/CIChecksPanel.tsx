@@ -103,6 +103,8 @@ export interface CIRunTrustContext {
 }
 
 interface CIChecksPanelProps {
+  /** Expand current workflows and scroll here when following a checks link. */
+  expandOnArrival?: boolean;
   checks: PRCIChecks;
   /** Whether the active account is a confirmed repository maintainer. */
   canRetry?: boolean;
@@ -475,15 +477,22 @@ export function CITriggerRefBadge({
 
 export function CIChecksPanel({
   checks,
+  expandOnArrival = false,
   canRetry = false,
   trustContext,
   className,
 }: CIChecksPanelProps) {
   const { currentRuns, olderRuns } = checks;
-  if (checks.runs.length === 0) return null;
+  const panelRef = useRef<HTMLDivElement>(null);
+  const hasRuns = checks.runs.length > 0;
+  useEffect(() => {
+    if (expandOnArrival && hasRuns)
+      panelRef.current?.scrollIntoView({ block: "start" });
+  }, [expandOnArrival, hasRuns]);
+  if (!hasRuns) return null;
 
   return (
-    <Card className={className}>
+    <Card id="checks" ref={panelRef} className={cn("scroll-mt-20", className)}>
       <CardContent className="p-0">
         {/* Header */}
         <div className="flex items-center gap-2 px-4 py-3 border-b border-border/60">
@@ -512,10 +521,11 @@ export function CIChecksPanel({
                 canRetry={canRetry}
                 trustContext={trustContext}
                 defaultOpen={
-                  currentRuns.length === 1 &&
-                  (run.status === "failure" ||
-                    run.status === "timed_out" ||
-                    run.status === "startup_failure")
+                  expandOnArrival ||
+                  (currentRuns.length === 1 &&
+                    (run.status === "failure" ||
+                      run.status === "timed_out" ||
+                      run.status === "startup_failure"))
                 }
               />
             ))}

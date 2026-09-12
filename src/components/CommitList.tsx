@@ -952,6 +952,7 @@ export function CommitRow({
       </span>
       {ci?.status && (
         <CIStatusTrustIcon
+          to={`${basePath}/commit/${commit.hash}#checks`}
           status={ci.status}
           resolution={trustResolution}
           statusSummary={summarizeRuns(ci.runs)}

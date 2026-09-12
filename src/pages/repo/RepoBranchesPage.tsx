@@ -390,6 +390,7 @@ export default function RepoBranchesPage() {
                   </Link>
                   {ci?.status && (
                     <CIStatusTrustIcon
+                      to={`${basePath}/commit/${branch.hash}#checks`}
                       status={ci.status}
                       resolution={trustResolution}
                       statusSummary={summarizeRuns(ci.runs)}

@@ -1439,6 +1439,7 @@ function CodeBar({
             </Link>
             {headCommitCI?.status && (
               <CIStatusTrustIcon
+                to={`${basePath}/commit/${commitHash}#checks`}
                 status={headCommitCI.status}
                 resolution={headCommitTrust}
                 statusSummary={summarizeRuns(headCommitCI.runs)}
