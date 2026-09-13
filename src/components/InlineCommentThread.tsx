@@ -140,7 +140,13 @@ function InlineComposer({
   replyToComment,
 }: InlineComposerProps) {
   const composerRef = useRef<NostrComposerHandle>(null);
-  const { draft, update, clear, saved } = useComposerDraft(
+  const {
+    key: draftKey,
+    draft,
+    update,
+    clear,
+    saved,
+  } = useComposerDraft(
     replyToComment
       ? `comment:${replyToComment.id}`
       : inlineDraftScope(rootEvent.id, parentEvent.id, commentOptions),
@@ -228,6 +234,7 @@ function InlineComposer({
 
         <form onSubmit={handleSubmit} className="min-w-0 flex-1 space-y-2">
           <NostrComposer
+            key={draftKey}
             ref={composerRef}
             value={body}
             onChange={setBody}

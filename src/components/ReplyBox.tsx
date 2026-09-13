@@ -92,9 +92,14 @@ export function ReplyBox({
   statusActions,
 }: ReplyBoxProps) {
   const composerRef = useRef<NostrComposerHandle>(null);
-  const { draft, update, clear, hasDraft, saved } = useComposerDraft(
-    `comment:${(parentEvent ?? rootEvent).id}`,
-  );
+  const {
+    key: draftKey,
+    draft,
+    update,
+    clear,
+    hasDraft,
+    saved,
+  } = useComposerDraft(`comment:${(parentEvent ?? rootEvent).id}`);
   const body = draft.body;
   const setBody = useCallback(
     (value: string) => update("body", value),
@@ -275,6 +280,7 @@ export function ReplyBox({
         }}
       >
         <NostrComposer
+          key={draftKey}
           ref={composerRef}
           value={body}
           onChange={setBody}

@@ -99,7 +99,13 @@ export function CreateIssueForm({
   const account = useActiveAccount();
   const isLoggedIn = !!account;
 
-  const { draft, update, clear, saved } = useComposerDraft(draftScope);
+  const {
+    key: draftKey,
+    draft,
+    update,
+    clear,
+    saved,
+  } = useComposerDraft(draftScope);
   const { subject, body: content, labels, uploadedTagGroups } = draft;
   const setSubject = (value: string) => update("subject", value);
   const setContent = (value: string) => update("body", value);
@@ -311,6 +317,7 @@ export function CreateIssueForm({
           Description
         </Label>
         <NostrComposer
+          key={draftKey}
           ref={composerRef}
           value={content}
           onChange={setContent}

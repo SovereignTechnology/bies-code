@@ -19,6 +19,7 @@ import {
   useRef,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useState,
   useImperativeHandle,
@@ -174,6 +175,24 @@ export const NostrComposer = forwardRef<
 
   const { uploadFile, isUploading, error: uploadError } = useBlossomUpload();
   const [failedFile, setFailedFile] = useState<File>();
+  const pendingUploads = useRef(new Set<AbortController>());
+  const previousValue = useRef(value);
+
+  useLayoutEffect(() => {
+    // Clearing the editor also invalidates attachments still in flight.
+    if (previousValue.current.trim() && !value.trim()) {
+      pendingUploads.current.forEach((controller) => controller.abort());
+    }
+    previousValue.current = value;
+  }, [value]);
+
+  useLayoutEffect(() => {
+    const pending = pendingUploads.current;
+    return () => {
+      pending.forEach((controller) => controller.abort());
+      pending.clear();
+    };
+  }, []);
 
   useEffect(() => {
     onUploadingChange?.(isUploading);
@@ -253,22 +272,43 @@ export const NostrComposer = forwardRef<
     [value, onChange],
   );
 
+  // Upload completion uses the current text/cursor, never the text at upload start.
+  const uploadResult = useRef({ insertUrl, onUploadedTags });
+  useLayoutEffect(() => {
+    uploadResult.current = { insertUrl, onUploadedTags };
+  }, [insertUrl, onUploadedTags]);
+
+  const attachFile = useCallback(
+    async (file: File) => {
+      const controller = new AbortController();
+      pendingUploads.current.add(controller);
+      try {
+        const tags = await uploadFile(file, { signal: controller.signal });
+        // Transport cancellation may arrive after completion, so also guard writes.
+        if (controller.signal.aborted) return;
+        if (tags) {
+          uploadResult.current.insertUrl(tags[0][1]);
+          uploadResult.current.onUploadedTags?.(tags);
+          setFailedFile(undefined);
+        } else {
+          setFailedFile(file);
+        }
+      } finally {
+        pendingUploads.current.delete(controller);
+      }
+    },
+    [uploadFile],
+  );
+
   // Handle file selected via the hidden file input
   const handleFileChange = useCallback(
     async (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
       if (!file) return;
       e.target.value = "";
-      const tags = await uploadFile(file);
-      if (tags) {
-        insertUrl(tags[0][1]);
-        onUploadedTags?.(tags);
-        setFailedFile(undefined);
-      } else {
-        setFailedFile(file);
-      }
+      await attachFile(file);
     },
-    [uploadFile, insertUrl, onUploadedTags],
+    [attachFile],
   );
 
   // Handle paste — intercept image data from clipboard
@@ -280,17 +320,9 @@ export const NostrComposer = forwardRef<
 
       e.preventDefault();
       const file = imageItem.getAsFile();
-      if (!file) return;
-      const tags = await uploadFile(file);
-      if (tags) {
-        insertUrl(tags[0][1]);
-        onUploadedTags?.(tags);
-        setFailedFile(undefined);
-      } else {
-        setFailedFile(file);
-      }
+      if (file) await attachFile(file);
     },
-    [uploadFile, insertUrl, onUploadedTags],
+    [attachFile],
   );
 
   // Extract unique nostr: identifiers from value for preview chips
@@ -378,14 +410,7 @@ export const NostrComposer = forwardRef<
           </p>
           <ManualRetryAction
             busy={isUploading}
-            onRetry={async () => {
-              const tags = await uploadFile(failedFile);
-              if (tags) {
-                insertUrl(tags[0][1]);
-                onUploadedTags?.(tags);
-                setFailedFile(undefined);
-              }
-            }}
+            onRetry={() => attachFile(failedFile)}
           />
         </div>
       )}
