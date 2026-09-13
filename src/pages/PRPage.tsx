@@ -1271,22 +1271,48 @@ export default function PRPage() {
     if (!gitPool) return null;
 
     return (
-      <CommitDetailView
-        commitId={prCommitId}
-        pool={gitPool}
-        basePath={prBasePath ?? ""}
-        backTo={prBasePath ? `${prBasePath}/commits` : ".."}
-        backLabel="PR commits"
-        fallbackUrls={prCloneUrls}
-        rootEvent={pr?.rootEvent}
-        commentMap={inlineCommentMap}
-        repoCoords={repoAllCoords ?? pr?.repoCoords}
-        relayHint={repoRelayHints[0]}
-        authorizedPubkeys={pr?.authorisedUsers}
-      />
+      <div className="space-y-4">
+        {!prRetainedCommitHistory.loading &&
+          !prRetainedCommitHistory.error &&
+          latestPRCommitIds !== undefined &&
+          !latestPRCommitIds.has(prCommitId) && (
+            <div
+              role="status"
+              className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-4 text-sm"
+            >
+              <AlertCircle className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+              <span>
+                This commit is outdated and is no longer part of the latest PR
+                revision.
+              </span>
+              <Link
+                to={prBasePath ? `${prBasePath}/commits` : ".."}
+                className="underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                View latest commits
+              </Link>
+            </div>
+          )}
+        <CommitDetailView
+          commitId={prCommitId}
+          pool={gitPool}
+          basePath={prBasePath ?? ""}
+          backTo={prBasePath ? `${prBasePath}/commits` : ".."}
+          backLabel="PR commits"
+          fallbackUrls={prCloneUrls}
+          rootEvent={pr?.rootEvent}
+          commentMap={inlineCommentMap}
+          repoCoords={repoAllCoords ?? pr?.repoCoords}
+          relayHint={repoRelayHints[0]}
+          authorizedPubkeys={pr?.authorisedUsers}
+        />
+      </div>
     );
   }, [
     prCommitId,
+    latestPRCommitIds,
+    prRetainedCommitHistory.loading,
+    prRetainedCommitHistory.error,
     rootEventLoaded,
     isPatch,
     commitDetailPatchChain.loading,
@@ -1589,9 +1615,9 @@ export default function PRPage() {
                           ? originalPRCommits.map((c) => ({
                               hash: c.hash,
                               subject: c.message.split("\n")[0],
-                              // Don't link to commit pages for superseded commits
-                              // since those commits may not be on the current branch.
-                              href: undefined,
+                              href: prBasePath
+                                ? `${prBasePath}/commit/${c.hash}`
+                                : undefined,
                               superseded:
                                 latestPRCommitIds !== undefined
                                   ? !latestPRCommitIds.has(c.hash)
@@ -1604,7 +1630,9 @@ export default function PRPage() {
                                   subject: originalPRCommitHistory.loading
                                     ? "Loading commits…"
                                     : "(commits not available)",
-                                  href: undefined,
+                                  href: prBasePath
+                                    ? `${prBasePath}/commit/${originalPRTipCommitId}`
+                                    : undefined,
                                   superseded:
                                     latestPRCommitIds !== undefined
                                       ? !latestPRCommitIds.has(
