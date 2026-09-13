@@ -348,7 +348,7 @@ export function ReplyBox({
                 onClick={clear}
                 disabled={isPending || isUploading}
               >
-                Discard draft
+                Discard
               </Button>
             )}
             <div className="flex">

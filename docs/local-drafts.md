@@ -13,9 +13,9 @@ top-level comments and replies to different comments remain independent.
 Returning to the repository's issues page reopens an unfinished issue form.
 Returning to a discussion opens saved reply composers beneath their parents.
 Closing the issue modal with ×, Escape, or an outside click keeps its draft.
-**Discard draft** replaces Cancel in issue and code-comment composers, clearing
-the draft and closing the composer. Discussion replies have **Discard draft**
-beside Comment. Deleting all text (both title and description for issues) also
+**Discard** clears the draft and closes issue and code-comment composers. An
+empty issue form shows **Cancel** instead. Comment composers only show
+**Discard** beside Comment when there is a draft. Deleting all text (both title and description for issues) also
 removes the draft. Issue labels and uploaded attachment metadata survive alongside the text.
 Preview mode, authentication choices, and pending operations are not persisted.
 

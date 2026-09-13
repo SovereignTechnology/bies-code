@@ -104,6 +104,7 @@ export function CreateIssueForm({
     draft,
     update,
     clear,
+    hasDraft,
     saved,
   } = useComposerDraft(draftScope);
   const { subject, body: content, labels, uploadedTagGroups } = draft;
@@ -459,7 +460,7 @@ export function CreateIssueForm({
               }}
               disabled={isPending || isUploading}
             >
-              Discard draft
+              {hasDraft ? "Discard" : "Cancel"}
             </Button>
           )}
           <Button

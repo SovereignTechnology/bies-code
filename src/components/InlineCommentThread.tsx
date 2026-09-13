@@ -145,6 +145,7 @@ function InlineComposer({
     draft,
     update,
     clear,
+    hasDraft,
     saved,
   } = useComposerDraft(
     replyToComment
@@ -258,19 +259,21 @@ function InlineComposer({
             />
 
             <div className="flex items-center gap-2 ml-auto">
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={() => {
-                  clear();
-                  onCancel();
-                }}
-                disabled={isPending || isUploading}
-                className="h-7 text-xs"
-              >
-                Discard draft
-              </Button>
+              {hasDraft && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    clear();
+                    onCancel();
+                  }}
+                  disabled={isPending || isUploading}
+                  className="h-7 text-xs"
+                >
+                  Discard
+                </Button>
+              )}
               <Button
                 type="submit"
                 size="sm"
