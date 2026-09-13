@@ -65,7 +65,11 @@ Android builds and the branding-regeneration script are documented in `docs/andr
 
 ## Changelog
 
-Update `CHANGELOG.md` for significant changes only; keep its `Unreleased` section current and NEVER remove it during release so it remains as a placeholder.
+Update `CHANGELOG.md` for significant changes only, following
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Keep `Unreleased`
+current and never remove it during release. Give each release a short descriptive
+title, followed by categorized changes. For larger releases, add a short summary
+between the title and the changes to explain the main themes.
 
 ## Releases
 

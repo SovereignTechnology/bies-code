@@ -2,7 +2,31 @@
 
 ## [Unreleased]
 
-### Fixes
+## [4.1.0] - 2026-09-13
+
+**Local drafts & easier recovery**
+
+### Added
+
+- Save issue and comment drafts locally per account across refreshes and browser restarts. Restore unfinished replies beside their parent and code-review drafts under their file. Closing the issue modal keeps its draft; Discard or deleting all text clears it.
+
+- Add visible retry actions and bounded automatic recovery for public Git read
+  errors, with context-specific countdowns, pause controls, and offline/background
+  handling. Signing-capable reads and actions remain manual.
+
+### Changed
+
+- Fetch coordinator profile advertisements through the shared page subscription.
+
+- Restore the MIT license text and update the bundled ngit workflow guidance.
+
+### Fixed
+
+- Prevent attachment uploads from restoring discarded drafts or overwriting newer text after a composer closes, clears, or switches accounts.
+
+- Link original pull-request commits to their contextual details page.
+
+- Show a coordinator profile link only when the coordinator advertises its profile.
 
 - Show expandable annotated tag messages on the tags page, including release notes and changelogs.
 
@@ -23,16 +47,6 @@
 - Keep concurrent Git mirror fetches independent so one server’s failure cannot suppress a request to another server.
 
 - Report Git fetch and parsing failures without incorrectly claiming a commit is missing; cancelled requests no longer leave misleading server status.
-
-### Features
-
-- Save issue and comment drafts locally per account, restore unfinished replies beside their parent and code-review drafts under their file, and allow drafts to be discarded or cleared by deleting the text.
-
-- Add visible retry actions and bounded automatic recovery for public Git read
-  errors, with context-specific countdowns, pause controls, and offline/background
-  handling. Signing-capable reads and actions remain manual.
-
-### Changes
 
 ## [4.0.0]
 
