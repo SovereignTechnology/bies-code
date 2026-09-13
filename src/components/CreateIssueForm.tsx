@@ -99,8 +99,7 @@ export function CreateIssueForm({
   const account = useActiveAccount();
   const isLoggedIn = !!account;
 
-  const { draft, update, clear, hasDraft, saved } =
-    useComposerDraft(draftScope);
+  const { draft, update, clear, saved } = useComposerDraft(draftScope);
   const { subject, body: content, labels, uploadedTagGroups } = draft;
   const setSubject = (value: string) => update("subject", value);
   const setContent = (value: string) => update("body", value);
@@ -288,7 +287,7 @@ export function CreateIssueForm({
 
   return (
     <form onSubmit={handleSubmit} className="space-y-5">
-      {(hasDraft || !saved) && <DraftStatus saved={saved} onDiscard={clear} />}
+      <DraftStatus saved={saved} />
       {/* Title */}
       <div className="space-y-1.5">
         <Label htmlFor="issue-subject" className="text-sm font-medium">
@@ -447,10 +446,13 @@ export function CreateIssueForm({
               type="button"
               variant="ghost"
               size="sm"
-              onClick={onCancel}
-              disabled={isPending}
+              onClick={() => {
+                clear();
+                onCancel();
+              }}
+              disabled={isPending || isUploading}
             >
-              Cancel
+              Discard draft
             </Button>
           )}
           <Button

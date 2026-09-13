@@ -140,7 +140,7 @@ function InlineComposer({
   replyToComment,
 }: InlineComposerProps) {
   const composerRef = useRef<NostrComposerHandle>(null);
-  const { draft, update, clear, hasDraft, saved } = useComposerDraft(
+  const { draft, update, clear, saved } = useComposerDraft(
     replyToComment
       ? `comment:${replyToComment.id}`
       : inlineDraftScope(rootEvent.id, parentEvent.id, commentOptions),
@@ -242,9 +242,7 @@ function InlineComposer({
             onUploadingChange={setIsUploading}
           />
 
-          {(hasDraft || !saved) && (
-            <DraftStatus saved={saved} onDiscard={clear} />
-          )}
+          <DraftStatus saved={saved} />
           <div className="flex flex-wrap items-center gap-2">
             <ComposerModeToggle
               value={body}
@@ -257,11 +255,14 @@ function InlineComposer({
                 type="button"
                 variant="ghost"
                 size="sm"
-                onClick={onCancel}
-                disabled={isPending}
+                onClick={() => {
+                  clear();
+                  onCancel();
+                }}
+                disabled={isPending || isUploading}
                 className="h-7 text-xs"
               >
-                Cancel
+                Discard draft
               </Button>
               <Button
                 type="submit"

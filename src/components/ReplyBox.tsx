@@ -292,9 +292,7 @@ export function ReplyBox({
           onUploadingChange={setIsUploading}
         />
 
-        {(hasDraft || !saved) && (
-          <DraftStatus saved={saved} onDiscard={clear} />
-        )}
+        <DraftStatus saved={saved} />
 
         <div className="flex flex-wrap items-center gap-2">
           {showAttach && (
@@ -315,7 +313,7 @@ export function ReplyBox({
             onTabChange={setActiveTab}
           />
 
-          <div className="flex items-center gap-3 ml-auto">
+          <div className="flex flex-wrap items-center justify-end gap-2 ml-auto">
             {/* Anonymous checkbox — only shown when not logged in */}
             {!isLoggedIn && (
               <div className="flex items-center gap-1.5">
@@ -335,6 +333,18 @@ export function ReplyBox({
               </div>
             )}
 
+            {hasDraft && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="px-2 text-xs"
+                onClick={clear}
+                disabled={isPending || isUploading}
+              >
+                Discard draft
+              </Button>
+            )}
             <div className="flex">
               <Button
                 type="submit"
