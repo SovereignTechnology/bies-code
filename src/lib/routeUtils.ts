@@ -4,6 +4,8 @@
  * Supported formats (all accepted as incoming routes):
  *   /:npub/:repoId
  *   /:npub/:relayHint/:repoId      relay hint has no "://" — wss:// is stripped when generating
+ *   /:nprofile/:repoId             includes relay hints embedded in the profile
+ *   /:nprofile/:relayHint/:repoId
  *   /:nip05/:repoId                nip05 = user@domain.com or domain.com
  *   /:nip05/:relayHint/:repoId
  *
@@ -288,6 +290,8 @@ function stripSubPaths(splat: string): string {
  * Segment layouts:
  *   [npub, ...repoId]
  *   [npub, relayHint, ...repoId]
+ *   [nprofile, ...repoId]
+ *   [nprofile, relayHint, ...repoId]
  *   [nip05, ...repoId]
  *   [nip05, relayHint, ...repoId]
  *
@@ -319,6 +323,27 @@ export function parseRepoRoute(splat: string): ParsedRepoRoute | undefined {
   if (segments.length < 2) return undefined;
 
   const [first] = segments;
+
+  // nprofile carries the same author identity as npub, plus discovery hints.
+  if (first.startsWith("nprofile1")) {
+    try {
+      const decoded = nip19.decode(first);
+      if (decoded.type !== "nprofile") return undefined;
+      const parsed = parseRelayAndRepoId(segments.slice(1));
+      if (!parsed) return undefined;
+      const profileRelays = (decoded.data.relays ?? [])
+        .map(normalizeRelayHint)
+        .filter((relay): relay is string => relay !== undefined);
+      return {
+        type: "npub",
+        pubkey: decoded.data.pubkey,
+        repoId: parsed.repoId,
+        relayHints: [...new Set([...parsed.relayHints, ...profileRelays])],
+      };
+    } catch {
+      return undefined;
+    }
+  }
 
   // --- npub / hex-pubkey routes ---
   if (isPubkeyIdentifier(first)) {

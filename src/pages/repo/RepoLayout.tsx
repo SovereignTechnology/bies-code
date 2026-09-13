@@ -251,7 +251,46 @@ function RepoLayoutSession({
   const basePath = useMemo(() => {
     return repoToPath(pubkey, repoId, relayHints, nip05);
   }, [pubkey, repoId, relayHints, nip05]);
-  const isReleasesTab = location.pathname.startsWith(`${basePath}/releases`);
+  const repoPageSuffix = useMemo(() => {
+    if (location.pathname.startsWith(basePath)) {
+      return location.pathname.slice(basePath.length);
+    }
+
+    // Incoming nprofile, raw-hex and legacy identity routes may not equal the
+    // canonical basePath. Locate explicit relay segments in the URL itself;
+    // nprofile relay hints do not occupy path segments. Parse with a plain
+    // npub to distinguish explicit hints from those embedded in the identity.
+    const rawSegments = location.pathname.slice(1).split("/").filter(Boolean);
+    const explicitRoute = parseRepoRoute(
+      [nip19.npubEncode(pubkey), ...rawSegments.slice(1)].join("/"),
+    );
+    const hasRelaySegment = (explicitRoute?.relayHints.length ?? 0) > 0;
+    let repoSegmentIndex = hasRelaySegment ? 2 : 1;
+    if (hasRelaySegment) {
+      let relaySegment = rawSegments[1] ?? "";
+      try {
+        relaySegment = decodeURIComponent(relaySegment);
+      } catch {
+        // Keep the raw segment when it is not valid percent-encoding.
+      }
+      if (relaySegment === "ws:" || relaySegment === "wss:") {
+        repoSegmentIndex = 3;
+      }
+    }
+    const suffix = rawSegments.slice(repoSegmentIndex + 1).join("/");
+    return suffix ? `/${suffix}` : "";
+  }, [basePath, location.pathname, pubkey]);
+
+  const isCodeTab =
+    repoPageSuffix.startsWith("/tree") ||
+    repoPageSuffix === "" ||
+    repoPageSuffix === "/";
+  const isIssuesTab = repoPageSuffix.startsWith("/issues");
+  const isPRsTab = repoPageSuffix.startsWith("/prs");
+  const isActionsTab = repoPageSuffix.startsWith("/actions");
+  const isAboutTab = repoPageSuffix.startsWith("/about");
+  const isSettingsTab = repoPageSuffix.startsWith("/settings");
+  const isReleasesTab = repoPageSuffix.startsWith("/releases");
 
   // Delay showing the repo search status page so the skeleton shows first.
   // Timer starts on mount (keyed to pubkey+repoId) and is never reset by
@@ -432,40 +471,6 @@ function RepoLayoutSession({
   const showReleases =
     !isPrivate && (hasReleases || isReleasesTab || canOpenSettings);
 
-  const repoPageSuffix = useMemo(() => {
-    if (location.pathname.startsWith(basePath)) {
-      return location.pathname.slice(basePath.length);
-    }
-
-    // Incoming raw-hex and legacy identity routes may not equal the canonical
-    // npub/NIP-05 basePath. Locate the repo segment from the parsed relay shape
-    // without searching decoded repo IDs for reserved sub-page words.
-    const rawSegments = location.pathname.slice(1).split("/").filter(Boolean);
-    let repoSegmentIndex = relayHints.length > 0 ? 2 : 1;
-    if (relayHints.length > 0) {
-      let relaySegment = rawSegments[1] ?? "";
-      try {
-        relaySegment = decodeURIComponent(relaySegment);
-      } catch {
-        // Keep the raw segment when it is not valid percent-encoding.
-      }
-      if (relaySegment === "ws:" || relaySegment === "wss:") {
-        repoSegmentIndex = 3;
-      }
-    }
-    const suffix = rawSegments.slice(repoSegmentIndex + 1).join("/");
-    return suffix ? `/${suffix}` : "";
-  }, [basePath, location.pathname, relayHints.length]);
-
-  const isCodeTab =
-    location.pathname.startsWith(`${basePath}/tree`) ||
-    location.pathname === basePath ||
-    location.pathname === `${basePath}/`;
-  const isIssuesTab = location.pathname.startsWith(`${basePath}/issues`);
-  const isPRsTab = location.pathname.startsWith(`${basePath}/prs`);
-  const isActionsTab = location.pathname.startsWith(`${basePath}/actions`);
-  const isAboutTab = location.pathname.startsWith(`${basePath}/about`);
-  const isSettingsTab = location.pathname.startsWith(`${basePath}/settings`);
   // Determine which sub-page to render from the repository suffix.
   const {
     subPage,

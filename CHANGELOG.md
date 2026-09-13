@@ -4,6 +4,8 @@
 
 ### Fixes
 
+- Accept `nprofile` repository URLs and use their embedded relay hints for discovery.
+
 - Open expanded workflow details on the commit page when selecting CI status from repository, commit history, branch and tag rows.
 
 - Surface clipboard and QR rendering failures with manual retry, and provide file reselection beside login file errors; only show copy success after the clipboard write completes.
