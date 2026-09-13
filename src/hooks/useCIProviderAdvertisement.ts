@@ -22,9 +22,6 @@ export interface CIProviderAdvertisementState {
 export function useCIProviderAdvertisement(
   pubkey: string | undefined,
 ): CIProviderAdvertisementState {
-  const store = useEventStore();
-  const castStore = store as unknown as CastRefEventStore;
-
   const query = use$(() => {
     if (!pubkey) {
       return of({ settled: true, relayCount: 0, failedRelayCount: 0 });
@@ -32,7 +29,25 @@ export function useCIProviderAdvertisement(
     return ciIdentityEnrichment$(pubkey);
   }, [pubkey]);
 
-  const advertisement = use$(() => {
+  const advertisement = useStoredCIProviderAdvertisement(pubkey);
+
+  return {
+    advertisement,
+    settled: query?.settled === true,
+    partial:
+      (query?.failedRelayCount ?? 0) > 0 ||
+      (query?.settled === true && (query.relayCount ?? 0) === 0),
+  };
+}
+
+/** Read a validated advertisement loaded by the owning page, without relay fetching. */
+export function useStoredCIProviderAdvertisement(
+  pubkey: string | undefined,
+): CIProviderAdvertisement | undefined {
+  const store = useEventStore();
+  const castStore = store as unknown as CastRefEventStore;
+
+  return use$(() => {
     if (!pubkey) return of(undefined);
     return combineLatest([
       store.timeline([
@@ -52,12 +67,4 @@ export function useCIProviderAdvertisement(
       }),
     );
   }, [pubkey, store]);
-
-  return {
-    advertisement,
-    settled: query?.settled === true,
-    partial:
-      (query?.failedRelayCount ?? 0) > 0 ||
-      (query?.settled === true && (query.relayCount ?? 0) === 0),
-  };
 }

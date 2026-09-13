@@ -65,9 +65,6 @@ export interface CICoordinatorAdvertisementState {
 export function useCICoordinatorAdvertisement(
   pubkey: string | undefined,
 ): CICoordinatorAdvertisementState {
-  const store = useEventStore();
-  const castStore = store as unknown as CastRefEventStore;
-
   const query = use$(() => {
     if (!pubkey) {
       return of({ settled: true, relayCount: 0, failedRelayCount: 0 });
@@ -75,7 +72,25 @@ export function useCICoordinatorAdvertisement(
     return ciIdentityEnrichment$(pubkey);
   }, [pubkey]);
 
-  const advertisement = use$(() => {
+  const advertisement = useStoredCICoordinatorAdvertisement(pubkey);
+
+  return {
+    advertisement,
+    settled: query?.settled === true,
+    partial:
+      (query?.failedRelayCount ?? 0) > 0 ||
+      (query?.settled === true && (query.relayCount ?? 0) === 0),
+  };
+}
+
+/** Read a validated advertisement loaded by the owning page, without relay fetching. */
+export function useStoredCICoordinatorAdvertisement(
+  pubkey: string | undefined,
+): CICoordinatorAdvertisement | undefined {
+  const store = useEventStore();
+  const castStore = store as unknown as CastRefEventStore;
+
+  return use$(() => {
     if (!pubkey) return undefined;
     return store
       .timeline([
@@ -96,14 +111,6 @@ export function useCICoordinatorAdvertisement(
         ),
       );
   }, [pubkey, store]);
-
-  return {
-    advertisement,
-    settled: query?.settled === true,
-    partial:
-      (query?.failedRelayCount ?? 0) > 0 ||
-      (query?.settled === true && (query.relayCount ?? 0) === 0),
-  };
 }
 
 function wasSeenOnOutbox(event: NostrEvent, outboxes: readonly string[]) {

@@ -14,8 +14,8 @@ import { useUserGitAuthorFollows } from "@/hooks/useUserGitAuthorFollows";
 import { useUserStarredRepos } from "@/hooks/useUserStarredRepos";
 import { useUserActivity } from "@/hooks/useUserActivity";
 import { usePrefetchNip05 } from "@/hooks/usePrefetchNip05";
-import { useCICoordinatorAdvertisement } from "@/hooks/useCICoordinatorProfile";
-import { useCIProviderAdvertisement } from "@/hooks/useCIProviderAdvertisement";
+import { useStoredCICoordinatorAdvertisement } from "@/hooks/useCICoordinatorProfile";
+import { useStoredCIProviderAdvertisement } from "@/hooks/useCIProviderAdvertisement";
 import { useDefaultRepoPath } from "@/hooks/useRepoPath";
 import { ActivityFeed } from "@/components/ActivityFeed";
 import { useIsFollowing } from "@/hooks/useIsFollowing";
@@ -151,9 +151,8 @@ export default function UserPage({ pubkey }: UserPageProps) {
     setSearchParams(tab === "overview" ? {} : { tab });
   };
 
-  // Subscribe to this user's replaceable events (kind 0, 3, 10002, 10017,
-  // 10018) for the duration of the profile page visit. No-op for own profile.
-  useUserProfileSubscription(pubkey);
+  // Load profile data and both CI advertisements together for this visit.
+  useUserProfileSubscription(pubkey, { includeCIAdvertisements: true });
 
   // Reactive data for tabs
   const activity = useUserActivity(pubkey);
@@ -162,8 +161,8 @@ export default function UserPage({ pubkey }: UserPageProps) {
   const starredRepos = useUserStarredRepos(pubkey);
   const pinnedCoords = useUserPinnedCoords(pubkey);
   const pinnedRepos = useUserPinnedRepos(pubkey);
-  const coordinatorAdvertisement = useCICoordinatorAdvertisement(pubkey);
-  const providerAdvertisement = useCIProviderAdvertisement(pubkey);
+  const coordinatorAdvertisement = useStoredCICoordinatorAdvertisement(pubkey);
+  const providerAdvertisement = useStoredCIProviderAdvertisement(pubkey);
 
   // Prefetch NIP-05 identity so useRepoPath resolves it from IDB on next visit
   usePrefetchNip05([pubkey]);
@@ -295,7 +294,7 @@ export default function UserPage({ pubkey }: UserPageProps) {
               {/* Npub copy + follow buttons */}
               <div className="mt-4 flex items-center gap-2 flex-wrap">
                 <CopyNpub npub={npub} />
-                {coordinatorAdvertisement.advertisement && (
+                {coordinatorAdvertisement && (
                   <Button
                     asChild
                     variant="outline"
@@ -308,7 +307,7 @@ export default function UserPage({ pubkey }: UserPageProps) {
                     </Link>
                   </Button>
                 )}
-                {providerAdvertisement.advertisement && (
+                {providerAdvertisement && (
                   <Button
                     asChild
                     variant="outline"
