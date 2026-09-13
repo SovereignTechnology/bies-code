@@ -1,3 +1,5 @@
+import { useComposerDraft } from "@/hooks/useComposerDraft";
+import { DraftStatus } from "@/components/DraftStatus";
 /**
  * ReplyBox — NIP-22 comment composer for NIP-34 issues and PRs.
  *
@@ -90,14 +92,26 @@ export function ReplyBox({
   statusActions,
 }: ReplyBoxProps) {
   const composerRef = useRef<NostrComposerHandle>(null);
-  const [body, setBody] = useState("");
+  const {
+    key: draftKey,
+    draft,
+    update,
+    clear,
+    hasDraft,
+    saved,
+  } = useComposerDraft(`comment:${(parentEvent ?? rootEvent).id}`);
+  const body = draft.body;
+  const setBody = useCallback(
+    (value: string) => update("body", value),
+    [update],
+  );
   const [activeTab, setActiveTab] = useState<ComposerTab>("write");
   const [focused, setFocused] = useState(false);
   const [isPending, setIsPending] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [anonMode, setAnonMode] = useState(false);
-  /** NIP-94 tag groups accumulated from Blossom uploads in this session */
-  const [uploadedTagGroups, setUploadedTagGroups] = useState<Nip94Tags[]>([]);
+  /** Upload metadata is retained with the local draft. */
+  const uploadedTagGroups = draft.uploadedTagGroups;
   const { toast } = useToast();
   const { openAuthModal } = useAuthModal();
 
@@ -116,9 +130,12 @@ export function ReplyBox({
   // For a top-level comment that's the root; for a reply it's the comment.
   const parent = parentEvent ?? rootEvent;
 
-  const handleUploadedTags = useCallback((tags: Nip94Tags) => {
-    setUploadedTagGroups((prev) => [...prev, tags]);
-  }, []);
+  const handleUploadedTags = useCallback(
+    (tags: Nip94Tags) => {
+      update("uploadedTagGroups", (prev) => [...prev, tags]);
+    },
+    [update],
+  );
 
   const submitComment = useCallback(
     async (
@@ -167,9 +184,8 @@ export function ReplyBox({
             : "Your comment has been published.",
         });
 
-        setBody("");
+        clear();
         setActiveTab("write");
-        setUploadedTagGroups([]);
         onSubmitted?.();
       } catch (err) {
         const message =
@@ -194,9 +210,8 @@ export function ReplyBox({
           variant: "destructive",
         });
         if (commentPosted) {
-          setBody("");
+          clear();
           setActiveTab("write");
-          setUploadedTagGroups([]);
           onSubmitted?.();
         }
       } finally {
@@ -211,6 +226,7 @@ export function ReplyBox({
       isLoggedIn,
       uploadedTagGroups,
       statusActions,
+      clear,
     ],
   );
 
@@ -258,12 +274,13 @@ export function ReplyBox({
       {/* Composer */}
       <form
         onSubmit={handleSubmit}
-        className="flex-1 space-y-2"
+        className="min-w-0 flex-1 space-y-2"
         onBlur={(e) => {
           if (!e.currentTarget.contains(e.relatedTarget)) setFocused(false);
         }}
       >
         <NostrComposer
+          key={draftKey}
           ref={composerRef}
           value={body}
           onChange={setBody}
@@ -280,6 +297,8 @@ export function ReplyBox({
           onUploadedTags={handleUploadedTags}
           onUploadingChange={setIsUploading}
         />
+
+        <DraftStatus saved={saved} />
 
         <div className="flex flex-wrap items-center gap-2">
           {showAttach && (
@@ -300,7 +319,7 @@ export function ReplyBox({
             onTabChange={setActiveTab}
           />
 
-          <div className="flex items-center gap-3 ml-auto">
+          <div className="flex flex-wrap items-center justify-end gap-2 ml-auto">
             {/* Anonymous checkbox — only shown when not logged in */}
             {!isLoggedIn && (
               <div className="flex items-center gap-1.5">
@@ -320,6 +339,18 @@ export function ReplyBox({
               </div>
             )}
 
+            {hasDraft && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="px-2 text-xs"
+                onClick={clear}
+                disabled={isPending || isUploading}
+              >
+                Discard
+              </Button>
+            )}
             <div className="flex">
               <Button
                 type="submit"

@@ -1,3 +1,9 @@
+import {
+  useComposerDraft,
+  useHasComposerDraft,
+} from "@/hooks/useComposerDraft";
+import { inlineDraftScope } from "@/lib/inlineDraft";
+import { DraftStatus } from "@/components/DraftStatus";
 import { useRecoveryToast } from "@/hooks/useRecoveryToast";
 /**
  * InlineCommentThread — GitHub-style inline code review comment thread.
@@ -134,7 +140,20 @@ function InlineComposer({
   replyToComment,
 }: InlineComposerProps) {
   const composerRef = useRef<NostrComposerHandle>(null);
-  const [body, setBody] = useState("");
+  const {
+    key: draftKey,
+    draft,
+    update,
+    clear,
+    hasDraft,
+    saved,
+  } = useComposerDraft(
+    replyToComment
+      ? `comment:${replyToComment.id}`
+      : inlineDraftScope(rootEvent.id, parentEvent.id, commentOptions),
+  );
+  const body = draft.body;
+  const setBody = (value: string) => update("body", value);
   const [activeTab, setActiveTab] = useState<ComposerTab>("write");
   const [isPending, setIsPending] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
@@ -166,7 +185,7 @@ function InlineComposer({
         );
       }
       toast({ title: "Comment posted" });
-      setBody("");
+      clear();
       setActiveTab("write");
       onSubmitted(!!replyToComment);
     } catch (err) {
@@ -187,6 +206,7 @@ function InlineComposer({
     replyToComment,
     onSubmitted,
     toast,
+    clear,
   ]);
 
   const handleSubmit = useCallback(
@@ -213,8 +233,9 @@ function InlineComposer({
           </AvatarFallback>
         </Avatar>
 
-        <form onSubmit={handleSubmit} className="flex-1 space-y-2">
+        <form onSubmit={handleSubmit} className="min-w-0 flex-1 space-y-2">
           <NostrComposer
+            key={draftKey}
             ref={composerRef}
             value={body}
             onChange={setBody}
@@ -229,7 +250,8 @@ function InlineComposer({
             onUploadingChange={setIsUploading}
           />
 
-          <div className="flex items-center gap-2">
+          <DraftStatus saved={saved} />
+          <div className="flex flex-wrap items-center gap-2">
             <ComposerModeToggle
               value={body}
               activeTab={activeTab}
@@ -237,16 +259,21 @@ function InlineComposer({
             />
 
             <div className="flex items-center gap-2 ml-auto">
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={onCancel}
-                disabled={isPending}
-                className="h-7 text-xs"
-              >
-                Cancel
-              </Button>
+              {hasDraft && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    clear();
+                    onCancel();
+                  }}
+                  disabled={isPending || isUploading}
+                  className="h-7 text-xs"
+                >
+                  Discard
+                </Button>
+              )}
               <Button
                 type="submit"
                 size="sm"
@@ -460,6 +487,16 @@ export function InlineCommentThread({
    */
   const [composerKey, setComposerKey] = useState(0);
   const effectiveParent = parentEvent ?? rootEvent;
+  const hasInlineDraft = useHasComposerDraft(
+    comments.length === 0
+      ? [inlineDraftScope(rootEvent.id, effectiveParent.id, commentOptions)]
+      : [],
+  );
+  const hasReplyDraft = useHasComposerDraft(
+    comments.map((comment) => `comment:${comment.id}`),
+  );
+  const showComposer = composerOpen || hasInlineDraft;
+  const bodyCollapsed = collapsed && !hasInlineDraft && !hasReplyDraft;
   const { toast } = useToast();
   const activeAccount = useActiveAccount();
 
@@ -492,9 +529,17 @@ export function InlineCommentThread({
       repoCoords,
       canReply: false as const,
       hideInlineCommentBanner: true,
+      activeReplyId: composerOpen ? replyToComment?.id : undefined,
       onReply: isBuzz ? undefined : handleReplyFromComment,
     }),
-    [rootEvent, repoCoords, handleReplyFromComment, isBuzz],
+    [
+      rootEvent,
+      repoCoords,
+      handleReplyFromComment,
+      isBuzz,
+      composerOpen,
+      replyToComment,
+    ],
   );
 
   // The thread root is the first inline comment — used as the parent for the resolve event.
@@ -567,7 +612,7 @@ export function InlineCommentThread({
     }
   }, [threadRootComment, resolving, rootEvent, repoCoords, toast]);
 
-  if (comments.length === 0 && !composerOpen && !autoFocus) {
+  if (comments.length === 0 && !showComposer && !autoFocus) {
     return null;
   }
 
@@ -598,9 +643,9 @@ export function InlineCommentThread({
           type="button"
           onClick={() => setCollapsed((c) => !c)}
           className="flex items-center gap-1.5 min-w-0 flex-1 text-left"
-          aria-label={collapsed ? "Expand thread" : "Collapse thread"}
+          aria-label={bodyCollapsed ? "Expand thread" : "Collapse thread"}
         >
-          {collapsed ? (
+          {bodyCollapsed ? (
             <ChevronRight
               className={cn(
                 "h-3.5 w-3.5 shrink-0",
@@ -653,7 +698,7 @@ export function InlineCommentThread({
       </div>
 
       {/* Thread body — hidden when collapsed */}
-      {!collapsed && (
+      {!bodyCollapsed && (
         <ThreadCtx.Provider value={threadCtxValue}>
           {/* Root inline comments (have "f" tag) */}
           {rootComments.map((comment) => (
@@ -679,9 +724,9 @@ export function InlineCommentThread({
               authorizedPubkeys={authorizedPubkeys}
               repoCoords={repoCoords}
             />
-          ) : composerOpen ? (
+          ) : showComposer ? (
             <InlineComposer
-              key={composerKey}
+              key={`${activeAccount?.pubkey ?? "anonymous"}:${replyToComment?.id ?? "inline"}:${composerKey}`}
               rootEvent={rootEvent}
               parentEvent={effectiveParent}
               commentOptions={commentOptions}

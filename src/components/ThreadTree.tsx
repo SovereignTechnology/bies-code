@@ -1,3 +1,7 @@
+import {
+  useComposerDraft,
+  useHasComposerDraft,
+} from "@/hooks/useComposerDraft";
 import { useRecoveryToast } from "@/hooks/useRecoveryToast";
 /**
  * Recursive thread tree renderer.
@@ -153,6 +157,14 @@ export function ThreadTree({
   const resolutionChild = visibleChildren.find((c) =>
     isResolutionEvent(c.event),
   );
+  const draftScopes: string[] = [];
+  const pendingNodes = resolutionChild ? [node] : [];
+  while (pendingNodes.length) {
+    const current = pendingNodes.pop()!;
+    draftScopes.push(`comment:${current.event.id}`);
+    pendingNodes.push(...current.children);
+  }
+  const hasDraft = useHasComposerDraft(draftScopes);
   const nonResolutionChildren = resolutionChild
     ? visibleChildren.filter((c) => !isResolutionEvent(c.event))
     : visibleChildren;
@@ -206,6 +218,7 @@ export function ThreadTree({
       style={{ borderLeftColor: "rgb(59 130 246 / 0.5)" }}
     >
       <ResolvedThreadCard
+        keepExpanded={hasDraft}
         event={resolutionChild.event}
         rootCommentEvent={node.event}
         authorised={authorised}
@@ -501,6 +514,7 @@ export function ThreadComment({
   const elRef = ref as RefObject<HTMLDivElement>;
 
   const [replying, setReplying] = useState(false);
+  const { hasDraft: hasReplyDraft } = useComposerDraft(`comment:${event.id}`);
   const { toast: deletionToast } = useRecoveryToast();
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteReason, setDeleteReason] = useState("");
@@ -635,16 +649,21 @@ export function ThreadComment({
       </div>
 
       {/* Inline reply composer */}
-      {!isBuzz && replying && ctx && (
-        <div className="mt-3 sm:ml-[38px]">
-          <ReplyBox
-            rootEvent={ctx.rootEvent}
-            parentEvent={event}
-            onSubmitted={() => setReplying(false)}
-            priorityPubkeys={ctx.priorityPubkeys}
-          />
-        </div>
-      )}
+      {!isBuzz &&
+        (replying ||
+          ((canReply || !!onReplyCallback) &&
+            hasReplyDraft &&
+            ctx?.activeReplyId !== event.id)) &&
+        ctx && (
+          <div className="mt-3 sm:ml-[38px]">
+            <ReplyBox
+              rootEvent={ctx.rootEvent}
+              parentEvent={event}
+              onSubmitted={() => setReplying(false)}
+              priorityPubkeys={ctx.priorityPubkeys}
+            />
+          </div>
+        )}
 
       {/* Delete comment dialog */}
       <AlertDialog

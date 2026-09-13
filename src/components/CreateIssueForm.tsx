@@ -1,3 +1,5 @@
+import { useComposerDraft } from "@/hooks/useComposerDraft";
+import { DraftStatus } from "@/components/DraftStatus";
 import { useState, useCallback, useMemo, useRef } from "react";
 import { useActiveAccount } from "applesauce-react/hooks";
 import { runner } from "@/services/actions";
@@ -79,6 +81,7 @@ function LockedLabelBadge({
 interface CreateIssueFormProps {
   /** Ordered repository coordinates, selected maintainer first */
   repoCoords: string[];
+  draftScope: string;
   /** Called after the issue is successfully published */
   onSuccess?: () => void;
   /** Called when the user cancels */
@@ -87,6 +90,7 @@ interface CreateIssueFormProps {
 
 export function CreateIssueForm({
   repoCoords,
+  draftScope,
   onSuccess,
   onCancel,
 }: CreateIssueFormProps) {
@@ -95,18 +99,24 @@ export function CreateIssueForm({
   const account = useActiveAccount();
   const isLoggedIn = !!account;
 
-  const [subject, setSubject] = useState("");
-  const [content, setContent] = useState("");
+  const {
+    key: draftKey,
+    draft,
+    update,
+    clear,
+    hasDraft,
+    saved,
+  } = useComposerDraft(draftScope);
+  const { subject, body: content, labels, uploadedTagGroups } = draft;
+  const setSubject = (value: string) => update("subject", value);
+  const setContent = (value: string) => update("body", value);
   const [activeTab, setActiveTab] = useState<ComposerTab>("write");
   const [labelInput, setLabelInput] = useState("");
   const [labelError, setLabelError] = useState<string | null>(null);
-  const [labels, setLabels] = useState<string[]>([]);
   const [isPending, setIsPending] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [anonMode, setAnonMode] = useState(false);
   const [showHashtagHint, setShowHashtagHint] = useState(false);
-  /** NIP-94 tag groups accumulated from Blossom uploads in this session */
-  const [uploadedTagGroups, setUploadedTagGroups] = useState<Nip94Tags[]>([]);
   const { openAuthModal } = useAuthModal();
   const composerRef = useRef<NostrComposerHandle>(null);
   const hashtagHintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
@@ -147,14 +157,17 @@ export function CreateIssueForm({
       return;
     }
 
-    setLabels((prev) => [...prev, normalised]);
+    update("labels", (prev) => [...prev, normalised]);
     setLabelInput("");
     setLabelError(null);
-  }, [labelInput, labels, contentLabels]);
+  }, [labelInput, labels, contentLabels, update]);
 
-  const removeLabel = useCallback((label: string) => {
-    setLabels((prev) => prev.filter((l) => l !== label));
-  }, []);
+  const removeLabel = useCallback(
+    (label: string) => {
+      update("labels", (prev) => prev.filter((l) => l !== label));
+    },
+    [update],
+  );
 
   const handleLabelKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -166,9 +179,12 @@ export function CreateIssueForm({
     [addLabel],
   );
 
-  const handleUploadedTags = useCallback((tags: Nip94Tags) => {
-    setUploadedTagGroups((prev) => [...prev, tags]);
-  }, []);
+  const handleUploadedTags = useCallback(
+    (tags: Nip94Tags) => {
+      update("uploadedTagGroups", (prev) => [...prev, tags]);
+    },
+    [update],
+  );
 
   const submitIssue = useCallback(
     async (
@@ -210,7 +226,7 @@ export function CreateIssueForm({
           description: `"${trimmedSubject}" has been published.`,
         });
 
-        setUploadedTagGroups([]);
+        clear();
         onSuccess?.();
       } catch (err) {
         const message =
@@ -233,7 +249,7 @@ export function CreateIssueForm({
         setIsPending(false);
       }
     },
-    [repoCoords, toast, onSuccess, isLoggedIn, uploadedTagGroups],
+    [repoCoords, toast, onSuccess, isLoggedIn, uploadedTagGroups, clear],
   );
 
   const handleSubmit = useCallback(
@@ -278,6 +294,7 @@ export function CreateIssueForm({
 
   return (
     <form onSubmit={handleSubmit} className="space-y-5">
+      <DraftStatus saved={saved} />
       {/* Title */}
       <div className="space-y-1.5">
         <Label htmlFor="issue-subject" className="text-sm font-medium">
@@ -301,6 +318,7 @@ export function CreateIssueForm({
           Description
         </Label>
         <NostrComposer
+          key={draftKey}
           ref={composerRef}
           value={content}
           onChange={setContent}
@@ -436,10 +454,13 @@ export function CreateIssueForm({
               type="button"
               variant="ghost"
               size="sm"
-              onClick={onCancel}
-              disabled={isPending}
+              onClick={() => {
+                clear();
+                onCancel();
+              }}
+              disabled={isPending || isUploading}
             >
-              Cancel
+              {hasDraft ? "Discard" : "Cancel"}
             </Button>
           )}
           <Button

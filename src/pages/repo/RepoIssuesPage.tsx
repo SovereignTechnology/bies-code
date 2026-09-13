@@ -1,3 +1,4 @@
+import { useComposerDraft } from "@/hooks/useComposerDraft";
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { eventIdMatchesSearch, eventIdToNevent } from "@/lib/routeUtils";
@@ -66,6 +67,13 @@ export default function RepoIssuesPage() {
 
   // New issue dialog
   const [newIssueOpen, setNewIssueOpen] = useState(false);
+  const draftScope = `issue:30617:${pubkey}:${repoId}`;
+  const { key: draftKey, hasDraft } = useComposerDraft(draftScope);
+  const [dismissedDraft, setDismissedDraft] = useState<string | null>(null);
+  const closeIssue = () => {
+    setNewIssueOpen(false);
+    setDismissedDraft(draftKey);
+  };
 
   // Filters — all multi-select; status defaults to open
   const [statusFilter, setStatusFilter] = useState<IssueStatus[]>(
@@ -210,7 +218,10 @@ export default function RepoIssuesPage() {
     <div className="container max-w-screen-xl px-4 md:px-8 py-6">
       {/* New Issue Dialog */}
       {repo && !isReadOnlyRepository && (
-        <Dialog open={newIssueOpen} onOpenChange={setNewIssueOpen}>
+        <Dialog
+          open={newIssueOpen || (hasDraft && dismissedDraft !== draftKey)}
+          onOpenChange={(open) => (open ? setNewIssueOpen(true) : closeIssue())}
+        >
           <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2">
@@ -224,9 +235,11 @@ export default function RepoIssuesPage() {
               </DialogDescription>
             </DialogHeader>
             <CreateIssueForm
+              key={draftKey}
+              draftScope={draftScope}
               repoCoords={repo.confirmedMemberCoordinates}
-              onSuccess={() => setNewIssueOpen(false)}
-              onCancel={() => setNewIssueOpen(false)}
+              onSuccess={closeIssue}
+              onCancel={closeIssue}
             />
           </DialogContent>
         </Dialog>
