@@ -26,6 +26,8 @@
 
 ### Features
 
+- Save issue and comment drafts locally per account, restore unfinished replies beside their parent, and allow drafts to be discarded or cleared by deleting the text.
+
 - Add visible retry actions and bounded automatic recovery for public Git read
   errors, with context-specific countdowns, pause controls, and offline/background
   handling. Signing-capable reads and actions remain manual.

@@ -1,3 +1,4 @@
+import { useComposerDraft } from "@/hooks/useComposerDraft";
 import { useRecoveryToast } from "@/hooks/useRecoveryToast";
 /**
  * Recursive thread tree renderer.
@@ -501,6 +502,7 @@ export function ThreadComment({
   const elRef = ref as RefObject<HTMLDivElement>;
 
   const [replying, setReplying] = useState(false);
+  const { hasDraft: hasReplyDraft } = useComposerDraft(`comment:${event.id}`);
   const { toast: deletionToast } = useRecoveryToast();
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteReason, setDeleteReason] = useState("");
@@ -635,7 +637,7 @@ export function ThreadComment({
       </div>
 
       {/* Inline reply composer */}
-      {!isBuzz && replying && ctx && (
+      {!isBuzz && (replying || (canReply && hasReplyDraft)) && ctx && (
         <div className="mt-3 sm:ml-[38px]">
           <ReplyBox
             rootEvent={ctx.rootEvent}
