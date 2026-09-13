@@ -295,7 +295,7 @@ export default function UserPage({ pubkey }: UserPageProps) {
               {/* Npub copy + follow buttons */}
               <div className="mt-4 flex items-center gap-2 flex-wrap">
                 <CopyNpub npub={npub} />
-                {coordinatorAdvertisement && (
+                {coordinatorAdvertisement.advertisement && (
                   <Button
                     asChild
                     variant="outline"
