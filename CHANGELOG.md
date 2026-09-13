@@ -4,6 +4,8 @@
 
 ### Fixes
 
+- Show expandable annotated tag messages on the tags page, including release notes and changelogs.
+
 - Accept `nprofile` repository URLs and use their embedded relay hints for discovery.
 
 - Open expanded workflow details on the commit page when selecting CI status from repository, commit history, branch and tag rows.

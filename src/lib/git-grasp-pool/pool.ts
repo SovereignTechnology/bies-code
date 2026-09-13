@@ -1990,6 +1990,16 @@ export class GitGraspPool {
     );
   }
 
+  /** Read the annotation using the raw tag OID, never the peeled commit OID. */
+  async getTagMessage(
+    tagHash: string,
+    signal: AbortSignal,
+  ): Promise<string | null> {
+    return this.withFallback(signal, (url) =>
+      this.http.fetchTagMessage(url, tagHash, signal),
+    );
+  }
+
   /**
    * Get a blob by its object hash.
    *

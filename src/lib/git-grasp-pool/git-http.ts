@@ -1226,6 +1226,41 @@ export class GitHttpClient {
   // Blobs / objects
   // -----------------------------------------------------------------------
 
+  /** Fetch an annotated tag's message, retaining its raw bytes in the object cache. */
+  async fetchTagMessage(
+    url: string,
+    tagHash: string,
+    signal: AbortSignal,
+  ): Promise<string | null> {
+    signal = this.operationSignal(signal);
+    let data = await this.cache.getBlob(tagHash);
+    if (signal.aborted) return null;
+    if (!data) {
+      const serverCaps = await this.getServerCaps(url, signal);
+      if (signal.aborted) return null;
+      const object = await this.withAuthorizationRetry(url, signal, (headers) =>
+        fetchObject(
+          this.cors.resolveUrl(url),
+          tagHash,
+          serverCaps,
+          signal,
+          headers,
+        ),
+      );
+      if (signal.aborted || !object) return null;
+      if (object.type !== 4)
+        throw new Error("The selected object is not an annotated tag.");
+      data = object.data;
+      this.cache.putBlob(tagHash, data);
+    }
+    const text = new TextDecoder().decode(data);
+    const separator = text.indexOf("\n\n");
+    if (separator < 0 || !text.startsWith("object ")) {
+      throw new Error("The annotated tag has an invalid header.");
+    }
+    return text.slice(separator + 2);
+  }
+
   /**
    * Fetch a blob by its object hash, checking cache first.
    */

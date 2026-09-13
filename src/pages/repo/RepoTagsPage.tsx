@@ -6,7 +6,7 @@ import { CommitListError } from "@/components/CommitList";
  * + Nostr state) with:
  *
  *   - target commit hash + first-line message + committer timestamp
- *   - annotated/lightweight indicator (annotated = `rawTagOid !== undefined`,
+ *   - annotation disclosure (annotated = `rawTagOid !== undefined`,
  *     per `parseRefs` in `useGitExplorer.ts`)
  *   - per-ref status vs the Nostr-signed state
  *
@@ -14,7 +14,7 @@ import { CommitListError } from "@/components/CommitList";
  * no ahead/behind computation — that's specific to branches.
  */
 import { useCallback, useEffect, useMemo } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
 import { useSeoMeta } from "@unhead/react";
 import { useRepoContext } from "./RepoContext";
 import { useProfile } from "@/hooks/useProfile";
@@ -22,6 +22,7 @@ import { useGitPool } from "@/hooks/useGitPool";
 import { useGitExplorer } from "@/hooks/useGitExplorer";
 import { useRefsWithStatus } from "@/hooks/useRefsWithStatus";
 import { SourceSelectorDropdown } from "@/components/SourceSelector";
+import { TagListRow } from "@/components/TagListRow";
 import { RefRow } from "@/components/RefRow";
 import { compareTagsNewestFirst } from "@/lib/refStatus";
 import { Card, CardContent } from "@/components/ui/card";
@@ -256,7 +257,7 @@ export default function RepoTagsPage() {
       )}
 
       {!showSkeletons && !showEmpty && (
-        <Card>
+        <Card className="overflow-hidden">
           <div className="divide-y divide-border/40">
             {sortedTags.map((tag) => {
               const row = (
@@ -266,7 +267,6 @@ export default function RepoTagsPage() {
                   pool={pool}
                   urlStates={poolState.urls}
                   cloneUrls={cloneUrls}
-                  annotated={tag.rawTagOid !== undefined}
                 />
               );
               const ci = ciChecks?.get(tag.hash);
@@ -281,24 +281,26 @@ export default function RepoTagsPage() {
                 ),
               );
               return (
-                <div key={tag.name} className="flex items-center pr-4">
-                  <Link
-                    to={tagHref(tag.name)}
-                    className="min-w-0 flex-1 transition-colors hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                  >
-                    {row}
-                  </Link>
-                  {ci?.status && (
-                    <CIStatusTrustIcon
-                      to={`${basePath}/commit/${tag.hash}#checks`}
-                      status={ci.status}
-                      resolution={trustResolution}
-                      statusSummary={summarizeRuns(ci.runs)}
-                      className="h-3.5 w-3.5"
-                      buttonClassName="ml-2"
-                    />
-                  )}
-                </div>
+                <TagListRow
+                  key={`${tag.name}:${tag.rawTagOid ?? tag.hash}`}
+                  name={tag.name}
+                  href={tagHref(tag.name)}
+                  tagOid={tag.rawTagOid}
+                  pool={pool}
+                  checks={
+                    ci?.status && (
+                      <CIStatusTrustIcon
+                        to={`${basePath}/commit/${tag.hash}#checks`}
+                        status={ci.status}
+                        resolution={trustResolution}
+                        statusSummary={summarizeRuns(ci.runs)}
+                        className="h-3.5 w-3.5"
+                      />
+                    )
+                  }
+                >
+                  {row}
+                </TagListRow>
               );
             })}
           </div>
