@@ -1032,12 +1032,14 @@ export function ZapMessageCard({
  * Includes JSON view and delete buttons.
  */
 export function ResolvedThreadCard({
+  keepExpanded = false,
   event,
   rootCommentEvent,
   authorised,
   repoCoords,
   children,
 }: {
+  keepExpanded?: boolean;
   event: NostrEvent;
   /**
    * The root inline comment event (the one being resolved). Used to extract
@@ -1117,7 +1119,7 @@ export function ResolvedThreadCard({
 
   return (
     <>
-      {expanded ? (
+      {expanded || keepExpanded ? (
         <>
           {/* Thread content */}
           {children && <div className="mb-0">{children}</div>}
@@ -1288,6 +1290,8 @@ export interface RenameItem {
 }
 
 export interface ThreadContext {
+  /** A separate composer currently owns this reply; avoid duplicating its draft. */
+  activeReplyId?: string;
   rootEvent: NostrEvent;
   /** Repo coordinate strings (e.g. "30617:<pubkey>:<d>") for relay group keying */
   repoCoords?: string[];

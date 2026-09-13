@@ -25,3 +25,11 @@ unavailable or full, editing continues in memory with a visible warning rather
 than a false saved indicator. In-memory fallback cannot survive a reload.
 
 Drafts are specific to this browser and origin. Clearing site data removes them.
+
+Code-review drafts additionally include the root and parent event IDs, file,
+commit, line range, and diff side. Returning to **Files Changed** shows unfinished
+code comments under the corresponding file header, including collapsed files.
+Different lines and revisions keep separate drafts. Replies to existing code
+comments use the same parent-event drafts as the conversation view and reopen
+beneath their parent. Resolved threads with unfinished replies remain expanded
+so their drafts are not hidden.

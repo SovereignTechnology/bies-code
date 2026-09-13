@@ -1,3 +1,12 @@
+import {
+  useComposerDraftScopes,
+  useHasComposerDraft,
+} from "@/hooks/useComposerDraft";
+import {
+  inlineDraftPrefix,
+  inlineDraftScope,
+  parseInlineDraftLocation,
+} from "@/lib/inlineDraft";
 import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
 /**
  * DiffView — renders a unified diff with syntax highlighting and line numbers.
@@ -109,6 +118,7 @@ function useIsDark(): boolean {
 // ---------------------------------------------------------------------------
 
 interface InlineCommentCtx {
+  draftLocations: { scope: string; location: InlineCommentOptions }[];
   rootEvent: NostrEvent;
   parentEvent: NostrEvent;
   commentMap: InlineCommentMap;
@@ -605,6 +615,19 @@ export const DiffView = memo(function DiffView({
   authorizedPubkeys,
 }: DiffViewProps) {
   const files = useMemo(() => parseDiff(diff), [diff]);
+  const draftScopes = useComposerDraftScopes(
+    rootEvent
+      ? inlineDraftPrefix(rootEvent.id, (parentEvent ?? rootEvent).id)
+      : null,
+  );
+  const draftLocations = useMemo(
+    () =>
+      draftScopes.flatMap((scope) => {
+        const location = parseInlineDraftLocation(scope);
+        return location ? [{ scope, location }] : [];
+      }),
+    [draftScopes],
+  );
 
   // ---------------------------------------------------------------------------
   // Hash-driven expand + scroll — self-contained, works for all callers
@@ -708,6 +731,7 @@ export const DiffView = memo(function DiffView({
           rootEvent,
           parentEvent: parentEvent ?? rootEvent,
           commentMap,
+          draftLocations,
           commitId,
           repoCoords,
           relayHint,
@@ -823,6 +847,7 @@ const FileDiffCard = memo(function FileDiffCard({
   initialLineRange?: ParsedDiffHash | null;
 }) {
   const copyToClipboard = useCopyToClipboard();
+  const inlineCtx = useContext(InlineCommentContext);
   const totalChanges = file.additions + file.deletions;
   const isLarge = totalChanges > LARGE_DIFF_THRESHOLD;
 
@@ -918,6 +943,19 @@ const FileDiffCard = memo(function FileDiffCard({
     (file.to !== "/dev/null" ? file.to : undefined) ??
     (file.from !== "/dev/null" ? file.from : undefined) ??
     "unknown";
+  const fileReplyScopes = inlineCtx
+    ? buildThreadEvents(
+        inlineCtx.commentMap.byFile.get(filename) ?? [],
+        inlineCtx.commentMap,
+      ).map((comment) => `comment:${comment.id}`)
+    : [];
+  const hasFileReplyDraft = useHasComposerDraft(fileReplyScopes);
+  useEffect(() => {
+    if (hasFileReplyDraft) {
+      setCollapsed(false);
+      setHidden(false);
+    }
+  }, [hasFileReplyDraft]);
   const lang = langFromFilename(filename);
   const isNew = file.new === true || file.from === "/dev/null";
   const isDeleted = file.deleted === true || file.to === "/dev/null";
@@ -1240,6 +1278,45 @@ const FileDiffCard = memo(function FileDiffCard({
         wordWrap={wordWrap}
         onToggleWrap={toggleWrap}
       />
+
+      {/* Recover code drafts even when the file or its diff is collapsed. */}
+      {inlineCtx?.draftLocations
+        .filter(({ scope, location }) => {
+          if (
+            location.filePath !== filename ||
+            location.commitId !== inlineCtx.commitId
+          )
+            return false;
+          const activeScope =
+            composingRange && composingKey && !collapsed && !hidden
+              ? inlineDraftScope(
+                  inlineCtx.rootEvent.id,
+                  inlineCtx.parentEvent.id,
+                  {
+                    filePath: filename,
+                    commitId: inlineCtx.commitId,
+                    line: composingRange,
+                    lineSide:
+                      lineKeyType(composingKey) === "del" ? "del" : undefined,
+                  },
+                )
+              : null;
+          return scope !== activeScope;
+        })
+        .map(({ scope, location }) => (
+          <InlineCommentThread
+            key={scope}
+            comments={[]}
+            rootEvent={inlineCtx.rootEvent}
+            parentEvent={inlineCtx.parentEvent}
+            commentOptions={{
+              ...location,
+              repoCoords: inlineCtx.repoCoords,
+              relayHint: inlineCtx.relayHint,
+            }}
+            repoCoords={inlineCtx.repoCoords}
+          />
+        ))}
 
       <div className="overflow-hidden rounded-b-lg">
         {/* Large diff notice — shown instead of content until user loads it */}

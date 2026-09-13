@@ -17,7 +17,9 @@ interface Snapshot {
 const snapshots = new Map<string, Snapshot>();
 const listeners = new Set<() => void>();
 let listening = false;
-const notify = () => listeners.forEach((listener) => listener());
+const notify = () => {
+  listeners.forEach((listener) => listener());
+};
 function onStorage(event: StorageEvent) {
   if (event.key === null) snapshots.clear();
   else snapshots.delete(event.key);
@@ -99,4 +101,44 @@ export function useComposerDraft(scope: string) {
     hasDraft: !!(draft.subject.trim() || draft.body.trim()),
     saved,
   };
+}
+
+/** Observe drafts without mounting their composers (including collapsed threads). */
+export function useHasComposerDraft(scopes: string[]) {
+  const account = useActiveAccount();
+  const prefix = `gitworkshop:draft:v1:${account?.pubkey ?? "anonymous"}:`;
+  return useSyncExternalStore(subscribe, () =>
+    scopes.some((scope) => {
+      const draft = decode(read(prefix + scope).raw);
+      return !!(draft.subject.trim() || draft.body.trim());
+    }),
+  );
+}
+
+/** Enumerate saved locations once per diff, also including in-memory fallback. */
+export function useComposerDraftScopes(scopePrefix: string | null) {
+  const account = useActiveAccount();
+  const prefix = `gitworkshop:draft:v1:${account?.pubkey ?? "anonymous"}:`;
+  const encodedScopes = useSyncExternalStore(subscribe, () => {
+    if (scopePrefix === null) return "[]";
+    const keys = new Set(snapshots.keys());
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key) keys.add(key);
+      }
+    } catch {
+      /* In-memory drafts remain discoverable when storage is unavailable. */
+    }
+    const scopes = [...keys]
+      .filter((key) => {
+        if (!key.startsWith(prefix + scopePrefix)) return false;
+        const draft = decode(read(key).raw);
+        return !!(draft.subject.trim() || draft.body.trim());
+      })
+      .map((key) => key.slice(prefix.length))
+      .sort();
+    return JSON.stringify(scopes);
+  });
+  return useMemo(() => JSON.parse(encodedScopes) as string[], [encodedScopes]);
 }
