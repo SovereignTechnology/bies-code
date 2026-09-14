@@ -253,6 +253,18 @@ immediately on a non-purgatory server therefore cannot trigger a hidden
 background REQ in that window. Once the Git transition finishes, pending
 authority and candidate changes are applied and warmed normally.
 
+### Manual merge recovery
+
+Merge Recheck and Retry now also restart an exhausted repository coverage lease.
+The preflight owner uses the same admitted repository voters as signing: it
+restarts the base or exact-deletion lease only when every voter is unavailable,
+not responding, or stopped. Covered and still-settling leases remain owned.
+The page replaces only the exhausted lease, retaining its existing filters and
+relay frontier and invalidating old-generation callbacks through normal teardown.
+Recovery is refused during a held GRASP write window. It never signs or pushes;
+the user must confirm the merge again after rechecking. Existing transport
+backoff, the five-second settlement deadline, and EOSE requirements still apply.
+
 ### Maintainer invitation example
 
 Adding a maintainer is a **repository authority graph** action with the

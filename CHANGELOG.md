@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- Restart stalled repository preflight queries when manually rechecking a merge, without replacing covered queries or automatically signing another merge.
+
 - Show individual GRASP state-publication responses when a merge stops before pushing, distinguishing relay rejections from missing acknowledgments and timeouts.
 
 ## [4.1.0] - 2026-09-13

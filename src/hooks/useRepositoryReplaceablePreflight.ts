@@ -558,5 +558,32 @@ export function useRepositoryReplaceablePreflight(
     [store, toast, waitForRepositoryCoverage],
   );
 
-  return { execute };
+  const retryCoverage = useCallback(() => {
+    const current = resolvedRef.current;
+    if (!current || current.replaceableWriteWindow.isHeld()) return;
+    const relays = repositoryRelayVoters(current);
+    if (relays.length === 0) return;
+    const scopes = [
+      ["base", current.replaceableCoverage],
+      ["deletions", current.replaceableDeletionCoverage],
+    ] as const;
+    for (const [scope, coverage] of scopes) {
+      // A covered relay already satisfies this category; an in-flight one
+      // can still satisfy it. Only replace an exhausted query owner.
+      if (
+        relays.every((relay) => {
+          const phase = coverage.get(relay)?.phase;
+          return (
+            phase === "not-responding" ||
+            phase === "unavailable" ||
+            phase === "stopped"
+          );
+        })
+      ) {
+        current.restartReplaceableCoverage(scope);
+      }
+    }
+  }, []);
+
+  return { execute, retryCoverage };
 }

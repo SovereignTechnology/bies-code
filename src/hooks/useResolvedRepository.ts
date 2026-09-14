@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { use$ } from "./use$";
 import { useEventStore } from "./useEventStore";
 import {
@@ -73,6 +73,8 @@ export interface ResolvedRepository {
   replaceableDeletionCoverage: RelaySubscriptionCoverage;
   /** Candidate IDs covered by replaceableDeletionCoverage. */
   replaceableDeletionCandidateIds: readonly string[];
+  /** Manually replace a stalled page-owned query; never use during a Git write. */
+  restartReplaceableCoverage(scope: "base" | "deletions"): void;
   /** Prevents dynamic deletion evidence from opening a REQ during GRASP writes. */
   replaceableWriteWindow: RepositoryReplaceableWriteWindow;
 }
@@ -471,13 +473,30 @@ export function useResolvedRepository(
       [deletionCandidateInput$],
     ) ?? [];
   const deletionCandidateKey = deletionCandidateIds.join(",");
+  const [coverageRetryRevision, setCoverageRetryRevision] = useState(0);
+  const [deletionRetryRevision, setDeletionRetryRevision] = useState(0);
+  const restartReplaceableCoverage = useCallback(
+    (scope: "base" | "deletions") => {
+      if (replaceableWriteWindow.isHeld()) return;
+      if (scope === "base")
+        setCoverageRetryRevision((revision) => revision + 1);
+      else setDeletionRetryRevision((revision) => revision + 1);
+    },
+    [replaceableWriteWindow],
+  );
   const replaceableCoverage = useMemo(
     () =>
       createRelaySubscriptionCoverage({
         settlementTimeoutMs: REPOSITORY_COVERAGE_SETTLEMENT_TIMEOUT_MS,
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [key, maintainerKey, deletionAuthorsKey, privateProbeStatus],
+    [
+      key,
+      maintainerKey,
+      deletionAuthorsKey,
+      privateProbeStatus,
+      coverageRetryRevision,
+    ],
   );
   const replaceableDeletionCoverage = useMemo(
     () =>
@@ -485,7 +504,13 @@ export function useResolvedRepository(
         settlementTimeoutMs: REPOSITORY_COVERAGE_SETTLEMENT_TIMEOUT_MS,
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [key, deletionAuthorsKey, deletionCandidateKey, privateProbeStatus],
+    [
+      key,
+      deletionAuthorsKey,
+      deletionCandidateKey,
+      privateProbeStatus,
+      deletionRetryRevision,
+    ],
   );
 
   use$(() => {
@@ -801,6 +826,7 @@ export function useResolvedRepository(
           replaceableCoverage,
           replaceableDeletionCoverage,
           replaceableDeletionCandidateIds: deletionCandidateIds,
+          restartReplaceableCoverage,
           replaceableWriteWindow,
         }
       : undefined;

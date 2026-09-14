@@ -972,6 +972,7 @@ export function MergePanel({
                     size="sm"
                     className="h-7 text-xs"
                     onClick={() => {
+                      replaceablePreflight.retryCoverage();
                       setMergeStep("idle");
                       setMergeError(null);
                       setPushDelivery(null);
@@ -1428,6 +1429,7 @@ export function MergePanel({
                 )}
                 <ManualRetryAction
                   onRetry={() => {
+                    replaceablePreflight.retryCoverage();
                     setMergeStep("idle");
                     setMergeError(null);
                     mergeability.recheck();
