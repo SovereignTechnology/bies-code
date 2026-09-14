@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Show individual GRASP state-publication responses when a merge stops before pushing, distinguishing relay rejections from missing acknowledgments and timeouts.
+
 ## [4.1.0] - 2026-09-13
 
 **Local drafts & easier recovery**

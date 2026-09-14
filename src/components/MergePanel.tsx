@@ -27,6 +27,7 @@ import { ManualRetryAction } from "@/components/ErrorRetryAction";
 
 import { useState, useCallback, useMemo } from "react";
 import { useActiveAccount } from "applesauce-react/hooks";
+import { TimeoutError } from "applesauce-core/observable";
 import type { PublishResponse } from "applesauce-relay";
 import { nip19 } from "nostr-tools";
 import type { NostrEvent } from "nostr-tools";
@@ -198,9 +199,13 @@ type MergeStep =
   | "done"
   | "failed";
 
+type StatePublishResponse = PublishResponse & {
+  failure?: "timeout" | "transport";
+};
+
 interface StatePublishDelivery {
   event: NostrEvent;
-  responses: PublishResponse[];
+  responses: StatePublishResponse[];
 }
 
 type MergePanelStatus =
@@ -244,12 +249,25 @@ function formatResolvedIssuesSuffix(count: number): string {
 async function publishToGraspRelays(
   event: NostrEvent,
   relayUrls: string[],
-): Promise<PublishResponse[]> {
+): Promise<StatePublishResponse[]> {
   if (relayUrls.length === 0) {
     throw new Error("No Grasp relay URLs available");
   }
 
-  return relayPool.publish(relayUrls, event);
+  return Promise.all(
+    relayUrls.map(async (from): Promise<StatePublishResponse> => {
+      try {
+        return await relayPool.relay(from).publish(event);
+      } catch (error) {
+        return {
+          from,
+          ok: false,
+          failure: error instanceof TimeoutError ? "timeout" : "transport",
+          message: error instanceof Error ? error.message : String(error),
+        };
+      }
+    }),
+  );
 }
 
 const STEP_LABELS: Record<MergeStep, string> = {
@@ -486,7 +504,9 @@ export function MergePanel({
           setStatePublishDelivery({ event: state, responses });
 
           if (!responses.some((response) => response.ok)) {
-            throw new Error("All Grasp relays rejected the state event.");
+            throw new Error(
+              "No Grasp relay acknowledged the state event. Git objects have not been pushed.",
+            );
           }
         },
         pushObjects: async (objects, refUpdate) => {
@@ -1383,6 +1403,29 @@ export function MergePanel({
             {mergeStep === "failed" && mergeError && !pushDelivery && (
               <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
                 <p role="alert">{mergeError}</p>
+                {statePublishDelivery && (
+                  <div className="mt-2 space-y-2 text-xs">
+                    <p className="break-all text-muted-foreground">
+                      State event: {statePublishDelivery.event.id}
+                    </p>
+                    <ul className="space-y-1">
+                      {statePublishDelivery.responses.map((response) => (
+                        <li key={response.from} className="break-words">
+                          <span className="font-medium">{response.from}</span>
+                          {": "}
+                          {response.ok
+                            ? "Accepted"
+                            : response.failure === "timeout"
+                              ? "Acknowledgment timed out"
+                              : response.failure === "transport"
+                                ? "No acknowledgment received"
+                                : "Rejected by relay"}
+                          {response.message && ` — ${response.message}`}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
                 <ManualRetryAction
                   onRetry={() => {
                     setMergeStep("idle");
