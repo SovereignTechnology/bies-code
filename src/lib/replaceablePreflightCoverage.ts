@@ -227,17 +227,28 @@ export function mailboxOutboxesObservable(
     .pipe(map(read), startWith(read()));
 }
 
-/** Compact raw lifecycle summary for diagnostics owned by category policy. */
+/** Compact, readable query-status summary for category-owned diagnostics. */
 export function summarizeRelayCoveragePhases(
   coverage: RelaySubscriptionCoverage,
   relays: readonly string[],
 ): string {
-  const counts = new Map<string, number>();
+  const counts = new Map<RelayCoveragePhase | "not-checked", number>();
   for (const relay of relays) {
     const phase = coverage.get(normalizeUrl(relay))?.phase ?? "not-checked";
     counts.set(phase, (counts.get(phase) ?? 0) + 1);
   }
-  return [...counts].map(([phase, count]) => `${count} ${phase}`).join(", ");
+  const labels: Record<RelayCoveragePhase | "not-checked", string> = {
+    initial: "pending",
+    covered: "complete",
+    "catching-up": "catching up",
+    "not-responding": "timed out",
+    unavailable: "unavailable",
+    stopped: "stopped",
+    "not-checked": "not started",
+  };
+  return [...counts]
+    .map(([phase, count]) => `${count} ${labels[phase]}`)
+    .join(", ");
 }
 
 /**

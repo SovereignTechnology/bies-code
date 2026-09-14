@@ -417,7 +417,7 @@ export function useRepositoryReplaceablePreflight(
           merge(current.coverage.changes$, resolvedRevision$.pipe(skip(1))),
         error: (assessment) =>
           new Error(
-            `No repository relay has current ${candidateId ? "exact-deletion" : "announcement and state"} coverage (${assessment.summary}). Please check the repository relays and try again.`,
+            `Couldn't finish checking ${candidateId ? "whether the current repository announcement or state was deleted" : "the latest repository announcement and state"}. Relay checks: ${assessment.summary}. Retry to check again.`,
           ),
       });
       return {
