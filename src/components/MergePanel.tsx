@@ -952,7 +952,7 @@ export function MergePanel({
 
               {/* Action buttons / recheck */}
               <div className="shrink-0 flex items-center gap-2">
-                {displayedStatus === "loading" && (
+                {mergeStep === "idle" && displayedStatus === "loading" && (
                   <span className="text-xs text-muted-foreground">
                     Checking...
                   </span>
@@ -964,8 +964,9 @@ export function MergePanel({
                   </span>
                 )}
 
-                {(mergeability.status === "error" ||
-                  mergeability.status === "conflicts" ||
+                {((mergeStep === "idle" &&
+                  (mergeability.status === "error" ||
+                    mergeability.status === "conflicts")) ||
                   mergeStep === "failed") && (
                   <Button
                     variant="ghost"
