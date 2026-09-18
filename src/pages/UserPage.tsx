@@ -1,5 +1,11 @@
 import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import {
+  Link,
+  Navigate,
+  useLocation,
+  useNavigate,
+  useSearchParams,
+} from "react-router-dom";
 import { useSeoMeta } from "@unhead/react";
 import { nip19 } from "nostr-tools";
 import type { NostrEvent } from "nostr-tools";
@@ -55,7 +61,6 @@ import {
   GripVertical,
   ChevronDown,
   ChevronRight,
-  RadioTower,
   Cpu,
 } from "lucide-react";
 import { useState, useCallback, type ReactNode } from "react";
@@ -141,6 +146,7 @@ const TABS: { id: TabId; label: string; icon: ReactNode }[] = [
 ];
 
 export default function UserPage({ pubkey }: UserPageProps) {
+  const location = useLocation();
   useLoadProfile(pubkey);
   const profile = useProfile(pubkey);
   const repos = useUserRepositories(pubkey);
@@ -180,6 +186,19 @@ export default function UserPage({ pubkey }: UserPageProps) {
     ogImageAlt: displayName,
     twitterCard: profile?.picture ? "summary" : "summary_large_image",
   });
+
+  if (coordinatorAdvertisement?.event.pubkey === pubkey) {
+    return (
+      <Navigate
+        to={{
+          pathname: `/coordinator/${npub}`,
+          search: location.search,
+          hash: location.hash,
+        }}
+        replace
+      />
+    );
+  }
 
   return (
     <div className="min-h-full">
@@ -294,19 +313,6 @@ export default function UserPage({ pubkey }: UserPageProps) {
               {/* Npub copy + follow buttons */}
               <div className="mt-4 flex items-center gap-2 flex-wrap">
                 <CopyNpub npub={npub} />
-                {coordinatorAdvertisement && (
-                  <Button
-                    asChild
-                    variant="outline"
-                    size="sm"
-                    className="gap-1.5"
-                  >
-                    <Link to={`/coordinator/${npub}`}>
-                      <RadioTower className="h-3.5 w-3.5" />
-                      CI coordinator
-                    </Link>
-                  </Button>
-                )}
                 {providerAdvertisement && (
                   <Button
                     asChild

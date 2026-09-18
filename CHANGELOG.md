@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- Redirect user profiles to their coordinator page when a validated coordinator advertisement is discovered.
+
 - Report relay rate-limit cooldowns during merge preflight recovery instead of misleading timeouts, and restart the check deadline when the catch-up query resumes.
 
 - Restart stalled repository preflight queries when manually rechecking a merge, without replacing covered queries or automatically signing another merge.
