@@ -858,9 +858,10 @@ export function StatusChangeCard({
           </div>
         )}
         {event.content.trim() && (
-          <p className="mt-1.5 text-sm text-foreground/80 whitespace-pre-wrap break-words">
-            {event.content.trim()}
-          </p>
+          <CommentContent
+            content={event.content.trim()}
+            className="mt-1.5 text-sm text-foreground/80 break-words"
+          />
         )}
       </div>
 
