@@ -545,16 +545,11 @@ describe("stable-filter lifecycle coverage", () => {
       expect(summarizeRelayCoveragePhases(coverage, [RELAY_URL])).toBe(
         "1 waiting for rate-limit cooldown",
       );
-      await vi.waitFor(() =>
-        expect(
-          server.messages.filter(
-            (message) => Array.isArray(message) && message[0] === "REQ",
-          ),
-        ).toHaveLength(2),
-      );
+      // Consume the recovery request immediately: waitFor's default 50 ms
+      // polling interval can exhaust the new 50 ms settlement deadline.
+      const gapFillId = await expectReq(server);
       expect(phases).not.toContain("not-responding");
       expect(coverage.isCovered(RELAY_URL)).toBe(false);
-      const gapFillId = await expectReq(server);
       server.send(["EOSE", gapFillId]);
       await vi.waitFor(() => expect(coverage.isCovered(RELAY_URL)).toBe(true));
     } finally {
