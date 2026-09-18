@@ -131,6 +131,10 @@ longer votes as in-flight forever, but does not cancel or restart the underlying
 request. A late EOSE for the same generation still restores `covered`.
 `unavailable` facts retain a compact reason so action errors can distinguish
 disconnected, rate-limited, authentication, rejection, and recovery states.
+Foreground catch-up requests project their own backoff onto the owning lease:
+a rate-limit cooldown is unavailable, not a silent EOSE timeout. When the
+catch-up request actually starts again, its settlement deadline starts afresh;
+only its real EOSE can restore coverage while the live request remains owned.
 
 The coverage layer reports lifecycle facts. It does not decide whether one,
 one-third, a majority, or every relay is enough. Category policy intersects its

@@ -931,7 +931,7 @@ function processRelay(
             return;
           }
           gapFillSub?.unsubscribe();
-          const lifecycleGeneration = beginLifecycle("catching-up");
+          let lifecycleGeneration = beginLifecycle("catching-up");
           const gapFillCursor = getSafeRecoveryCursor();
           const gapFilters: Filter[] = getFilters().map((f) => ({
             ...f,
@@ -971,6 +971,22 @@ function processRelay(
             paginate: false,
             retryCount: gapFillRetryCount,
             retryDelay: opts.retryDelay,
+            onRelayLifecycle: opts.onRelayLifecycle
+              ? (event) => {
+                  if (lifecycleGeneration !== latestLifecycleGeneration) return;
+                  // The nested request owns its backoff. Project that state
+                  // onto the parent lease instead of timing out a catch-up
+                  // which has not yet been allowed to send its REQ.
+                  if (event.phase === "unavailable") {
+                    lifecycleGeneration = beginLifecycle(
+                      "unavailable",
+                      event.reason,
+                    );
+                  } else if (event.phase === "initial") {
+                    lifecycleGeneration = beginLifecycle("catching-up");
+                  }
+                }
+              : undefined,
             onRelayEose: () => {
               gapFillEoseSeen = true;
               // Catch-up evidence is current only while the persistent live

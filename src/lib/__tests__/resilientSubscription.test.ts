@@ -76,6 +76,7 @@ import {
   resilientRequest,
 } from "@/lib/resilientSubscription";
 import { createRelaySubscriptionCoverage } from "@/lib/relaySubscriptionCoverage";
+import { summarizeRelayCoveragePhases } from "@/lib/replaceablePreflightCoverage";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -166,14 +167,14 @@ function triggerForegroundResume(): void {
       configurable: true,
       value: "hidden",
     });
-    nowSpy.mockReturnValue(now);
+    nowSpy.mockReturnValue(now - 31_000);
     document.dispatchEvent(new Event("visibilitychange"));
 
     Object.defineProperty(document, "visibilityState", {
       configurable: true,
       value: "visible",
     });
-    nowSpy.mockReturnValue(now + 31_000);
+    nowSpy.mockReturnValue(now);
     document.dispatchEvent(new Event("visibilitychange"));
   } finally {
     nowSpy.mockRestore();
@@ -508,6 +509,59 @@ describe("stable-filter lifecycle coverage", () => {
     server.send(["EOSE", gapFillId]);
     await vi.waitFor(() => expect(coverage.isCovered(RELAY_URL)).toBe(true));
     subscription.unsubscribe();
+  });
+
+  it("reports foreground cooldown without timing out and requires EOSE after recovery", async () => {
+    const coverage = createRelaySubscriptionCoverage({
+      settlementTimeoutMs: 50,
+    });
+    const phases: string[] = [];
+    const changes = coverage.changes$.subscribe((state) =>
+      phases.push(state.phase),
+    );
+    const subscription = resilientSubscription(
+      pool,
+      [RELAY_URL],
+      [{ kinds: [1] }],
+      {
+        settle: false,
+        retryDelay: 0,
+        onRelayLifecycle: (event) => coverage.onLifecycle(event),
+      },
+    ).subscribe();
+
+    try {
+      const liveId = await expectReq(server);
+      server.send(["EOSE", liveId]);
+      await vi.waitFor(() => expect(coverage.isCovered(RELAY_URL)).toBe(true));
+      phases.length = 0;
+      markRateLimited(RELAY_URL, Date.now() + 150);
+      triggerForegroundResume();
+
+      expect(coverage.get(RELAY_URL)).toMatchObject({
+        phase: "unavailable",
+        reason: "rate-limited",
+      });
+      expect(summarizeRelayCoveragePhases(coverage, [RELAY_URL])).toBe(
+        "1 waiting for rate-limit cooldown",
+      );
+      await vi.waitFor(() =>
+        expect(
+          server.messages.filter(
+            (message) => Array.isArray(message) && message[0] === "REQ",
+          ),
+        ).toHaveLength(2),
+      );
+      expect(phases).not.toContain("not-responding");
+      expect(coverage.isCovered(RELAY_URL)).toBe(false);
+      const gapFillId = await expectReq(server);
+      server.send(["EOSE", gapFillId]);
+      await vi.waitFor(() => expect(coverage.isCovered(RELAY_URL)).toBe(true));
+    } finally {
+      subscription.unsubscribe();
+      coverage.stop();
+      changes.unsubscribe();
+    }
   });
 
   it("retries a foreground gap-fill that closes before EOSE", async () => {

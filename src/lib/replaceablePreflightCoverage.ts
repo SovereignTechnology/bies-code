@@ -232,12 +232,20 @@ export function summarizeRelayCoveragePhases(
   coverage: RelaySubscriptionCoverage,
   relays: readonly string[],
 ): string {
-  const counts = new Map<RelayCoveragePhase | "not-checked", number>();
+  type Status =
+    | RelayCoveragePhase
+    | NonNullable<RelayCoverageState["reason"]>
+    | "not-checked";
+  const counts = new Map<Status, number>();
   for (const relay of relays) {
-    const phase = coverage.get(normalizeUrl(relay))?.phase ?? "not-checked";
+    const state = coverage.get(normalizeUrl(relay));
+    const phase =
+      state?.phase === "unavailable" && state.reason
+        ? state.reason
+        : (state?.phase ?? "not-checked");
     counts.set(phase, (counts.get(phase) ?? 0) + 1);
   }
-  const labels: Record<RelayCoveragePhase | "not-checked", string> = {
+  const labels: Record<Status, string> = {
     initial: "pending",
     covered: "complete",
     "catching-up": "catching up",
@@ -245,6 +253,12 @@ export function summarizeRelayCoveragePhases(
     unavailable: "unavailable",
     stopped: "stopped",
     "not-checked": "not started",
+    "rate-limited": "waiting for rate-limit cooldown",
+    auth: "requiring authentication",
+    permanent: "rejecting the request",
+    transport: "disconnected",
+    closed: "recovering after closure",
+    error: "recovering after an error",
   };
   return [...counts]
     .map(([phase, count]) => `${count} ${labels[phase]}`)

@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- Report relay rate-limit cooldowns during merge preflight recovery instead of misleading timeouts, and restart the check deadline when the catch-up query resumes.
+
 - Restart stalled repository preflight queries when manually rechecking a merge, without replacing covered queries or automatically signing another merge.
 
 - Show individual GRASP state-publication responses when a merge stops before pushing, distinguishing relay rejections from missing acknowledgments and timeouts.
