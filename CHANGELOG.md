@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- Advance relay connection backoff after WebSocket errors without a close event, preventing unreachable relays from retrying every second indefinitely.
+
 - Redirect user profiles to their coordinator page when a validated coordinator advertisement is discovered.
 
 - Report relay rate-limit cooldowns during merge preflight recovery instead of misleading timeouts, and restart the check deadline when the catch-up query resumes.

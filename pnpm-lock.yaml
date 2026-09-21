@@ -14,6 +14,9 @@ patchedDependencies:
   applesauce-core@6.2.0:
     hash: nwe24476jbggrk6aoloy54zqqi
     path: patches/applesauce-core@6.2.0.patch
+  applesauce-relay@6.2.1:
+    hash: v7obauyoasg5ubxqtxxcqo5vfa
+    path: patches/applesauce-relay@6.2.1.patch
   applesauce-signers@6.2.2:
     hash: ufhsn7avkq6nndfxhwr7dim2zu
     path: patches/applesauce-signers@6.2.2.patch
@@ -158,7 +161,7 @@ importers:
         version: 6.0.0(@capacitor/core@8.4.1)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(typescript@5.9.3)
       applesauce-relay:
         specifier: ^6.2.1
-        version: 6.2.1(typescript@5.9.3)
+        version: 6.2.1(patch_hash=v7obauyoasg5ubxqtxxcqo5vfa)(typescript@5.9.3)
       applesauce-signers:
         specifier: ^6.2.2
         version: 6.2.2(patch_hash=ufhsn7avkq6nndfxhwr7dim2zu)(@capacitor/core@8.4.1)(typescript@5.9.3)
@@ -9146,7 +9149,7 @@ snapshots:
       - supports-color
       - typescript
 
-  applesauce-relay@6.2.1(typescript@5.9.3):
+  applesauce-relay@6.2.1(patch_hash=v7obauyoasg5ubxqtxxcqo5vfa)(typescript@5.9.3):
     dependencies:
       "@noble/hashes": 2.2.0
       applesauce-core: 6.2.0(patch_hash=nwe24476jbggrk6aoloy54zqqi)(typescript@5.9.3)
