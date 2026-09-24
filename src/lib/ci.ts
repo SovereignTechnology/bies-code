@@ -550,3 +550,92 @@ export function summarizeRuns(runs: CIWorkflowRun[]): string {
   }
   return parts.join(", ");
 }
+
+/** Display name for a workflow file, e.g. `.ngit/act/workflows/ci.yml` → `ci`. */
+export function ciWorkflowName(workflowPath: string | undefined): string {
+  if (!workflowPath) return "(workflow)";
+  const file = workflowPath.split("/").pop() || workflowPath;
+  return file.replace(/\.ya?ml$/i, "") || file;
+}
+
+/** Maintainer who explicitly requested a run (manual replay or service request). */
+export function ciRunRequester(run: CIWorkflowRun): string | undefined {
+  return (
+    run.workflowResult?.manualTriggerRef?.pubkey ??
+    run.pendingRun?.manualTriggerRef?.pubkey ??
+    run.workflowResult?.serviceRequestRef?.pubkey ??
+    run.pendingRun?.serviceRequestRef?.pubkey
+  );
+}
+
+/** Coarse outcome bucket used by the Actions list status filter and pill. */
+export type CIRunOutcome =
+  | "running"
+  | "queued"
+  | "success"
+  | "failure"
+  | "cancelled";
+
+export function ciRunOutcome(run: CIWorkflowRun): CIRunOutcome {
+  switch (run.status) {
+    case "pending":
+      return run.pendingRun?.progressStatus === "queued" ? "queued" : "running";
+    case "success":
+      return "success";
+    case "failure":
+    case "timed_out":
+    case "startup_failure":
+      return "failure";
+    default:
+      return "cancelled";
+  }
+}
+
+export const CI_RUN_OUTCOME_LABELS: Record<CIRunOutcome, string> = {
+  running: "Running",
+  queued: "Queued",
+  success: "Success",
+  failure: "Failure",
+  cancelled: "Cancelled",
+};
+
+export interface WorkflowTiming {
+  queuedAt: number | undefined;
+  startedAt: number | undefined;
+  completedAt: number | undefined;
+  queuePosition: number | undefined;
+}
+
+export function getWorkflowTiming(run: CIWorkflowRun): WorkflowTiming {
+  const earliestJobTimestamp = (
+    key: "queuedAt" | "startedAt",
+  ): number | undefined =>
+    run.jobs.reduce<number | undefined>((earliest, { result }) => {
+      const timestamp = result[key];
+      return timestamp === undefined
+        ? earliest
+        : Math.min(earliest ?? timestamp, timestamp);
+    }, undefined);
+  const latestJobCompletionAt = run.jobs.reduce<number | undefined>(
+    (latest, { result }) =>
+      latest === undefined
+        ? result.event.created_at
+        : Math.max(latest, result.event.created_at),
+    undefined,
+  );
+
+  return {
+    queuedAt:
+      run.pendingRun?.queuedAt ??
+      run.workflowResult?.queuedAt ??
+      earliestJobTimestamp("queuedAt"),
+    startedAt:
+      run.pendingRun?.startedAt ??
+      run.workflowResult?.startedAt ??
+      earliestJobTimestamp("startedAt"),
+    completedAt: run.pendingRun
+      ? undefined
+      : (run.workflowResult?.event.created_at ?? latestJobCompletionAt),
+    queuePosition: run.pendingRun?.queueRounds,
+  };
+}

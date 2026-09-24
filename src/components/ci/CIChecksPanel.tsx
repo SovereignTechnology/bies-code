@@ -90,6 +90,8 @@ import { mapEventsToStore } from "applesauce-core";
 import { getSeenRelays } from "applesauce-core/helpers";
 import { onlyEvents } from "applesauce-relay";
 import { CICoordinatorLink } from "./CICoordinatorLink";
+import { useCurrentUnixSeconds } from "@/hooks/useCurrentUnixSeconds";
+import { getWorkflowTiming } from "@/lib/ci";
 
 /**
  * Repository trust inputs for per-run warnings. `repo` alone enables the
@@ -144,67 +146,6 @@ function formatPendingRunStatus(run: CIRun, nowSeconds: number): string {
   return duration
     ? `running for ${duration}`
     : `started ${formatDistanceToNow(new Date(startedAt * 1000), { addSuffix: true })}`;
-}
-
-/**
- * Keeps pending CI durations accurate without polling completed workflow rows.
- */
-function useCurrentUnixSeconds(enabled: boolean): number {
-  const [nowSeconds, setNowSeconds] = useState(() =>
-    Math.floor(Date.now() / 1000),
-  );
-
-  useEffect(() => {
-    if (!enabled) return;
-
-    const tick = () => setNowSeconds(Math.floor(Date.now() / 1000));
-    tick();
-    const interval = setInterval(tick, 1000);
-    return () => clearInterval(interval);
-  }, [enabled]);
-
-  return nowSeconds;
-}
-
-interface WorkflowTiming {
-  queuedAt: number | undefined;
-  startedAt: number | undefined;
-  completedAt: number | undefined;
-  queuePosition: number | undefined;
-}
-
-function getWorkflowTiming(run: CIWorkflowRun): WorkflowTiming {
-  const earliestJobTimestamp = (
-    key: "queuedAt" | "startedAt",
-  ): number | undefined =>
-    run.jobs.reduce<number | undefined>((earliest, { result }) => {
-      const timestamp = result[key];
-      return timestamp === undefined
-        ? earliest
-        : Math.min(earliest ?? timestamp, timestamp);
-    }, undefined);
-  const latestJobCompletionAt = run.jobs.reduce<number | undefined>(
-    (latest, { result }) =>
-      latest === undefined
-        ? result.event.created_at
-        : Math.max(latest, result.event.created_at),
-    undefined,
-  );
-
-  return {
-    queuedAt:
-      run.pendingRun?.queuedAt ??
-      run.workflowResult?.queuedAt ??
-      earliestJobTimestamp("queuedAt"),
-    startedAt:
-      run.pendingRun?.startedAt ??
-      run.workflowResult?.startedAt ??
-      earliestJobTimestamp("startedAt"),
-    completedAt: run.pendingRun
-      ? undefined
-      : (run.workflowResult?.event.created_at ?? latestJobCompletionAt),
-    queuePosition: run.pendingRun?.queueRounds,
-  };
 }
 
 function formatCompletedRunStatus(run: CIWorkflowRun): string {
@@ -745,57 +686,83 @@ export function CIRunRow({
         </div>
 
         <CollapsibleContent>
-          <div className="space-y-2 px-3 pb-3 sm:pl-10 sm:pr-4">
-            {expandedTrustResolution && (
-              <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
-                <span>Trust context</span>
-                <CITrustContextLabel resolution={expandedTrustResolution} />
-              </div>
-            )}
-            <WorkflowTimingDetails
-              run={run}
-              nowSeconds={nowSeconds}
-              canRetry={
-                canRetry && !!run.workflowResult && run.status !== "pending"
-              }
-            />
-            {(run.runner || run.platform) && (
-              <div className="text-[11px] text-muted-foreground">
-                {[run.runner, run.platform].filter(Boolean).join(" · ")}
-              </div>
-            )}
-            {run.pendingRun && (
-              <div className="flex items-center gap-2 rounded-md border border-border/60 px-3 py-2 text-xs text-muted-foreground">
-                <CIStatusIcon status="pending" className="h-3.5 w-3.5" />
-                Workflow {formatPendingRunStatus(run.pendingRun, nowSeconds)}
-                <EventCardActions event={run.pendingRun.event} />
-              </div>
-            )}
-            {run.jobs.map((job) => (
-              <CIJobRow
-                key={job.jobId}
-                job={job}
-                trustResolution={
-                  providerTrust
-                    ? getCIJobTrustResolution(providerTrust, run, job)
-                    : undefined
-                }
-              />
-            ))}
-            {run.inProgressJobs.map((jobId) => (
-              <div
-                key={`progress-${jobId}`}
-                className="flex items-center gap-2 rounded-md border border-border/60 px-3 py-2 text-xs text-muted-foreground"
-              >
-                <CIStatusIcon status="pending" className="h-3.5 w-3.5" />
-                <span className="truncate font-mono">{jobId}</span>
-                <span className="ml-auto shrink-0">in progress</span>
-              </div>
-            ))}
-          </div>
+          <CIRunDetails
+            run={run}
+            nowSeconds={nowSeconds}
+            canRetry={canRetry}
+            expandedTrustResolution={expandedTrustResolution}
+            providerTrust={providerTrust}
+            className="px-3 pb-3 sm:pl-10 sm:pr-4"
+          />
         </CollapsibleContent>
       </Collapsible>
     </li>
+  );
+}
+
+/** Expanded body of a workflow run: timing, jobs, logs, and artifacts. */
+export function CIRunDetails({
+  run,
+  nowSeconds,
+  canRetry = false,
+  expandedTrustResolution,
+  providerTrust,
+  className,
+}: {
+  run: CIWorkflowRun;
+  nowSeconds: number;
+  canRetry?: boolean;
+  expandedTrustResolution?: CITrustResolution;
+  providerTrust?: CITrustContextState;
+  className?: string;
+}) {
+  return (
+    <div className={cn("space-y-2", className)}>
+      {expandedTrustResolution && (
+        <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+          <span>Trust context</span>
+          <CITrustContextLabel resolution={expandedTrustResolution} />
+        </div>
+      )}
+      <WorkflowTimingDetails
+        run={run}
+        nowSeconds={nowSeconds}
+        canRetry={canRetry && !!run.workflowResult && run.status !== "pending"}
+      />
+      {(run.runner || run.platform) && (
+        <div className="text-[11px] text-muted-foreground">
+          {[run.runner, run.platform].filter(Boolean).join(" · ")}
+        </div>
+      )}
+      {run.pendingRun && (
+        <div className="flex items-center gap-2 rounded-md border border-border/60 px-3 py-2 text-xs text-muted-foreground">
+          <CIStatusIcon status="pending" className="h-3.5 w-3.5" />
+          Workflow {formatPendingRunStatus(run.pendingRun, nowSeconds)}
+          <EventCardActions event={run.pendingRun.event} />
+        </div>
+      )}
+      {run.jobs.map((job) => (
+        <CIJobRow
+          key={job.jobId}
+          job={job}
+          trustResolution={
+            providerTrust
+              ? getCIJobTrustResolution(providerTrust, run, job)
+              : undefined
+          }
+        />
+      ))}
+      {run.inProgressJobs.map((jobId) => (
+        <div
+          key={`progress-${jobId}`}
+          className="flex items-center gap-2 rounded-md border border-border/60 px-3 py-2 text-xs text-muted-foreground"
+        >
+          <CIStatusIcon status="pending" className="h-3.5 w-3.5" />
+          <span className="truncate font-mono">{jobId}</span>
+          <span className="ml-auto shrink-0">in progress</span>
+        </div>
+      ))}
+    </div>
   );
 }
 

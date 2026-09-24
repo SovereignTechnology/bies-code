@@ -203,7 +203,6 @@ export default function RepoCoordinatorsPage({
         canRetry={isMaintainer}
         coordinatorRelationships={coordinatorRelationships}
         serviceControls={coordinatorState?.serviceControls}
-        showCoordinatorTrust
         trust={trust}
       />
     </div>
