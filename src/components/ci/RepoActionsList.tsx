@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import {
   ChevronDown,
@@ -23,7 +23,6 @@ import {
   getCICoordinatorRelationship,
   getCIRunMaintainerRequester,
   type CICoordinatorRelationship,
-  wasCIServiceRequestedWhenRunStarted,
 } from "@/lib/ciCoordinatorRelationship";
 import {
   getCIRunTrustResolution,
@@ -42,6 +41,8 @@ import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuCheckboxItem,
+  DropdownMenuGroup,
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
@@ -70,8 +71,6 @@ const REQUESTED_NOW = "__requested_now__";
 const REQUESTED_PREVIOUSLY = "__requested_previously__";
 const UNASSOCIATED = "__unassociated__";
 const PULL_REQUESTS = "__pull_requests__";
-const REQUESTER_PREFIX = "requester:";
-const COORDINATOR_PREFIX = "coordinator:";
 const OUTCOME_ORDER: CIRunOutcome[] = [
   "running",
   "queued",
@@ -118,22 +117,22 @@ export function RepoActionsList({
   const [triggerFilter, setTriggerFilter] = useState<string>(ALL);
   const [statusFilter, setStatusFilter] = useState<string>(ALL);
   const [branchFilter, setBranchFilter] = useState<string>(ALL);
-  const [actorFilter, setActorFilter] = useState<string>(ALL);
+  const [requesterFilter, setRequesterFilter] = useState<string[]>([]);
+  const [actorCoordinatorFilter, setActorCoordinatorFilter] = useState<
+    string[]
+  >([]);
   const [query, setQuery] = useState("");
 
   const classifiedRuns = useMemo(
     () =>
       (runs ?? []).map((run) => ({
         run,
+        startedAt: runStartedAt(run),
         // Only name requesters the repository confirms as maintainers; the
         // quote itself is coordinator-supplied.
         requester: getCIRunMaintainerRequester(
           run,
           repo?.confirmedMaintainers ?? [],
-        ),
-        serviceRequestedAtRun: wasCIServiceRequestedWhenRunStarted(
-          run,
-          serviceControls,
         ),
         relationship: getCICoordinatorRelationship(
           coordinatorRelationships,
@@ -304,8 +303,7 @@ export function RepoActionsList({
       );
   }, [coordinatorVisibleRuns]);
 
-  // "Triggered by" covers maintainers who requested a run and the
-  // coordinators that ran it; values are prefixed to keep the roles apart.
+  // Requesters initiate runs; coordinators orchestrate them.
   const actors = useMemo(() => {
     const requesters = new Set<string>();
     const coordinators = new Set<string>();
@@ -324,10 +322,6 @@ export function RepoActionsList({
     [actors],
   );
   const profiles = useProfilesForPubkeys(searchPubkeys);
-  const shortName = (pubkey: string) =>
-    profiles.get(pubkey)?.display_name ||
-    profiles.get(pubkey)?.name ||
-    `${nip19.npubEncode(pubkey).slice(0, 12)}…`;
 
   const normalizedQuery = query.trim().toLowerCase();
   const hasActiveFilters =
@@ -336,7 +330,8 @@ export function RepoActionsList({
     triggerFilter !== ALL ||
     statusFilter !== ALL ||
     branchFilter !== ALL ||
-    actorFilter !== ALL ||
+    requesterFilter.length > 0 ||
+    actorCoordinatorFilter.length > 0 ||
     normalizedQuery !== "";
   const filteredRuns = useMemo(() => {
     if (!runs) return undefined;
@@ -365,9 +360,13 @@ export function RepoActionsList({
         if (branchFilter !== ALL && runBranchKey(run) !== branchFilter)
           return false;
         if (
-          actorFilter !== ALL &&
-          actorFilter !== `${REQUESTER_PREFIX}${requester}` &&
-          actorFilter !== `${COORDINATOR_PREFIX}${run.pubkey}`
+          requesterFilter.length > 0 &&
+          (!requester || !requesterFilter.includes(requester))
+        )
+          return false;
+        if (
+          actorCoordinatorFilter.length > 0 &&
+          !actorCoordinatorFilter.includes(run.pubkey)
         )
           return false;
         if (terms.length === 0) return true;
@@ -390,9 +389,10 @@ export function RepoActionsList({
           .toLowerCase();
         return terms.every((term) => haystack.includes(term));
       })
-      .sort((a, b) => runStartedAt(b.run) - runStartedAt(a.run));
+      .sort((a, b) => b.startedAt - a.startedAt);
   }, [
-    actorFilter,
+    requesterFilter,
+    actorCoordinatorFilter,
     branchFilter,
     coordinatorVisibleRuns,
     normalizedQuery,
@@ -430,7 +430,8 @@ export function RepoActionsList({
     setTriggerFilter(ALL);
     setStatusFilter(ALL);
     setBranchFilter(ALL);
-    setActorFilter(ALL);
+    setRequesterFilter([]);
+    setActorCoordinatorFilter([]);
   };
   const selectCoordinator = (pubkey: string) => {
     setCoordinatorFilter(pubkey);
@@ -514,7 +515,10 @@ export function RepoActionsList({
                     : kind === "tag"
                       ? Tag
                       : GitBranch;
-                const text = value === PULL_REQUESTS ? "Pull requests" : value;
+                const text =
+                  value === PULL_REQUESTS
+                    ? "Pull requests"
+                    : value.replace(/^refs\/(heads|tags)\//, "");
                 return {
                   value,
                   label: (
@@ -527,23 +531,20 @@ export function RepoActionsList({
                 };
               })}
             />
-            <FilterMenu
-              label="Triggered by"
-              value={actorFilter}
-              onChange={setActorFilter}
-              options={[
-                ...actors.requesters.map((pubkey) => ({
-                  value: `${REQUESTER_PREFIX}${pubkey}`,
-                  group: "Maintainers",
-                  label: <UserLink pubkey={pubkey} avatarSize="xs" noLink />,
-                  selectedLabel: shortName(pubkey),
-                })),
-                ...actors.coordinators.map((pubkey) => ({
-                  value: `${COORDINATOR_PREFIX}${pubkey}`,
-                  group: "Coordinators",
-                  label: <UserLink pubkey={pubkey} avatarSize="xs" noLink />,
-                  selectedLabel: shortName(pubkey),
-                })),
+            <ActorFilterMenu
+              groups={[
+                {
+                  label: "Requesters",
+                  pubkeys: actors.requesters,
+                  selected: requesterFilter,
+                  onChange: setRequesterFilter,
+                },
+                {
+                  label: "Coordinators",
+                  pubkeys: actors.coordinators,
+                  selected: actorCoordinatorFilter,
+                  onChange: setActorCoordinatorFilter,
+                },
               ]}
             />
 
@@ -857,20 +858,94 @@ function runStartedAt(run: CIWorkflowRun): number {
   return startedAt ?? queuedAt ?? run.createdAt;
 }
 
-/** Branch-filter key for a run: the branch/tag name, or all PR runs. */
+/** Full refs distinguish branches and tags with the same name. */
 function runBranchKey(run: CIWorkflowRun): string | undefined {
   if (run.prRootId) return PULL_REQUESTS;
   const ref = run.branchRef;
-  if (ref?.startsWith("refs/heads/")) return ref.slice("refs/heads/".length);
-  if (ref?.startsWith("refs/tags/")) return ref.slice("refs/tags/".length);
+  if (ref?.startsWith("refs/heads/") || ref?.startsWith("refs/tags/"))
+    return ref;
   return undefined;
+}
+
+interface ActorFilterGroup {
+  label: string;
+  pubkeys: string[];
+  selected: string[];
+  onChange: (selected: string[]) => void;
+}
+
+function ActorFilterMenu({ groups }: { groups: ActorFilterGroup[] }) {
+  const count = groups.reduce(
+    (total, group) => total + group.selected.length,
+    0,
+  );
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          size="sm"
+          className={cn(
+            "h-9 gap-1 px-2.5 text-sm font-normal text-muted-foreground hover:text-foreground data-[state=open]:bg-muted",
+            count > 0 && "bg-muted text-foreground",
+          )}
+        >
+          {count > 0 ? `Actor (${count})` : "Actor"}
+          <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-70" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="end"
+        className="max-h-80 w-64 overflow-y-auto"
+      >
+        <p className="px-2 py-1.5 text-xs text-muted-foreground">
+          Match any selection within each group. Both groups apply when
+          selected.
+        </p>
+        {groups.map(({ label, pubkeys, selected, onChange }) => (
+          <DropdownMenuGroup key={label} aria-label={label}>
+            <DropdownMenuSeparator />
+            <DropdownMenuLabel>{label}</DropdownMenuLabel>
+            <DropdownMenuCheckboxItem
+              checked={selected.length === 0}
+              onCheckedChange={() => onChange([])}
+              onSelect={(event) => event.preventDefault()}
+            >
+              All {label.toLowerCase()}
+            </DropdownMenuCheckboxItem>
+            {pubkeys.map((pubkey) => (
+              <DropdownMenuCheckboxItem
+                key={pubkey}
+                checked={selected.includes(pubkey)}
+                textValue={nip19.npubEncode(pubkey)}
+                onCheckedChange={(checked) =>
+                  onChange(
+                    checked
+                      ? [...selected, pubkey]
+                      : selected.filter((value) => value !== pubkey),
+                  )
+                }
+                onSelect={(event) => event.preventDefault()}
+              >
+                <UserLink pubkey={pubkey} avatarSize="xs" noLink />
+              </DropdownMenuCheckboxItem>
+            ))}
+            {pubkeys.length === 0 && (
+              <p className="px-2 py-1.5 text-xs text-muted-foreground">
+                No {label.toLowerCase()} found.
+              </p>
+            )}
+          </DropdownMenuGroup>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
 }
 
 interface FilterOption {
   value: string;
   label: ReactNode;
-  /** Consecutive options sharing a group render under one heading. */
-  group?: string;
   /** Plain text shown on the trigger once selected (defaults to label). */
   selectedLabel?: string;
 }
@@ -890,6 +965,8 @@ function FilterMenu({
 }) {
   const selected = options.find((option) => option.value === value);
   const active = value !== ALL;
+  const selectedLabel =
+    selected?.selectedLabel ?? String(selected?.label ?? value);
 
   return (
     <DropdownMenu>
@@ -903,9 +980,7 @@ function FilterMenu({
           )}
         >
           <span className="truncate">
-            {active && selected
-              ? `${label}: ${selected.selectedLabel ?? String(selected.label)}`
-              : label}
+            {active ? `${label}: ${selectedLabel}` : label}
           </span>
           <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-70" />
         </Button>
@@ -920,17 +995,15 @@ function FilterMenu({
         <DropdownMenuSeparator />
         <DropdownMenuRadioGroup value={value} onValueChange={onChange}>
           <DropdownMenuRadioItem value={ALL}>All</DropdownMenuRadioItem>
-          {options.map((option, index) => (
-            <Fragment key={option.value}>
-              {option.group && option.group !== options[index - 1]?.group && (
-                <DropdownMenuLabel className="pt-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                  {option.group}
-                </DropdownMenuLabel>
-              )}
-              <DropdownMenuRadioItem value={option.value}>
-                {option.label}
-              </DropdownMenuRadioItem>
-            </Fragment>
+          {active && !selected && (
+            <DropdownMenuRadioItem value={value}>
+              {selectedLabel} (no matching runs)
+            </DropdownMenuRadioItem>
+          )}
+          {options.map((option) => (
+            <DropdownMenuRadioItem key={option.value} value={option.value}>
+              {option.label}
+            </DropdownMenuRadioItem>
           ))}
         </DropdownMenuRadioGroup>
         {options.length === 0 && (
