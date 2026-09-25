@@ -18,7 +18,7 @@
  *   // search.event — the found NostrEvent (if any)
  */
 
-import { useMemo, useRef } from "react";
+import { useMemo, useRef, useState, useCallback } from "react";
 import { use$ } from "./use$";
 import { useEventStore } from "./useEventStore";
 import { pool } from "@/services/nostr";
@@ -44,6 +44,8 @@ export interface RelayStatusEntry {
 }
 
 export interface EventSearchState {
+  /** Manual restart; relay reads may request AUTH signatures. */
+  retry?: () => void;
   /** Per-relay status map: relay URL → { status, group label } */
   relayStatuses: Record<string, RelayStatusEntry>;
   /** The label of the group currently being searched (null if done) */
@@ -201,6 +203,8 @@ export function useEventSearch(
   retryKey?: number,
 ): EventSearchState | undefined {
   const store = useEventStore();
+  const [attempt, setAttempt] = useState(0);
+  const retry = useCallback(() => setAttempt((value) => value + 1), []);
 
   // Stable key for the target so use$ re-subscribes when it changes
   const targetKey = useMemo(() => {
@@ -230,7 +234,7 @@ export function useEventSearch(
     groupsRef.current = groups;
   }
 
-  return use$(() => {
+  const state = use$(() => {
     if (!target) return undefined;
 
     return searchForEvent(pool, target, groupsRef.current, opts).pipe(
@@ -245,7 +249,8 @@ export function useEventSearch(
       // Share so multiple subscribers don't create multiple searches
       shareReplay(1),
     ) as unknown as Observable<EventSearchState>;
-  }, [targetKey, groupsKey, store, retryKey]);
+  }, [targetKey, groupsKey, store, retryKey, attempt]);
+  return state ? { ...state, retry } : undefined;
 }
 
 // Re-export types for convenience

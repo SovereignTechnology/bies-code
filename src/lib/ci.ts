@@ -1,5 +1,5 @@
 /**
- * ngit-ci CI workflow events (experimental kinds 9840 / 9841 / 9842 / 39842).
+ * ngit-ci CI protocol events.
  *
  * Kind 9841 — "CI Job Result": one job's result, signed by the compute
  * provider. Content is a small log tail, with the full log in a `logs` tag.
@@ -20,7 +20,7 @@
  * Multi-maintainer repos are announced under one coordinate per maintainer,
  * so CI events may carry multiple `a` tags — one per coordinate. All #a
  * fetches and store reads pass the repo's full coordinate set
- * (repo.allCoordinates) so events tagged under any maintainer's coordinate
+ * (repo.confirmedMaintainerCoordinates) so events tagged under any maintainer's coordinate
  * are found.
  *
  * Trust model: none yet — all CI events are displayed regardless of signer.
@@ -47,11 +47,46 @@ export const CI_RESULT_KIND = 9842;
 /** Kind 39842 — CI workflow progress (temporary addressable marker). */
 export const CI_RUN_KIND = 39842;
 
+/** Kind 19843 — live coordinator capabilities and service policy. */
+export const CI_COORDINATOR_ADVERTISEMENT_KIND = 19843;
+
+/** Kind 19844 — repositories for which a coordinator is request-ready. */
+export const CI_REQUEST_READINESS_KIND = 19844;
+
+/** Kind 19845 — live native Nix compute-provider capabilities. */
+export const CI_NIX_PROVIDER_ADVERTISEMENT_KIND = 19845;
+
+/** Kind 39844 — effective coordinator service for one repository root. */
+export const CI_REPOSITORY_STATUS_KIND = 39844;
+
+/** Kind 9843 — standing request for coordinator service. */
+export const CI_SERVICE_REQUEST_KIND = 9843;
+
+/** Kind 9844 — stop a standing coordinator service request. */
+export const CI_SERVICE_STOP_KIND = 9844;
+
+/** Kind 9845 — one directed native Nix job allocation. */
+export const CI_NIX_JOB_ALLOCATION_KIND = 9845;
+
+/** Kind 29846 — ephemeral, encrypted repository-secret update. */
+export const CI_REPOSITORY_SECRET_UPDATE_KIND = 29846;
+
+/** Reserved kind:29846 name which binds a repository scope to a NIP-46 bunker. */
+export const CI_SECRETS_DECRYPTION_BUNKER_NAME =
+  "WORKFLOW_SECRETS_DECRYPTION_BUNKER";
+
 /** All ngit-ci event kinds. */
 export const CI_EVENT_KINDS = [
   CI_JOB_RESULT_KIND,
   CI_RESULT_KIND,
   CI_RUN_KIND,
+] as const;
+
+/** Discovery/state events used by the repository Actions surface. */
+export const CI_COORDINATOR_EVENT_KINDS = [
+  CI_COORDINATOR_ADVERTISEMENT_KIND,
+  CI_REQUEST_READINESS_KIND,
+  CI_REPOSITORY_STATUS_KIND,
 ] as const;
 
 /** Conclusion values ngit-ci reports, aligned with GitHub's conclusion field. */
@@ -182,10 +217,10 @@ const WORKFLOW_ATTEMPT_CONTEXT_TAGS = new Set([
  * Build the correlation key shared by an ngit-ci progress marker and its
  * final result.
  *
- * Kind:9842 intentionally does not reference the kind:39842 event or its
- * `d` identifier. The stable per-attempt value available to both events is
- * `queued_at`; combine it with the coordinator and every shared context tag
- * to avoid conflating distinct triggers of the same workflow and commit.
+ * Current kind:9842 events carry the Workflow Progress `d` value as their
+ * non-Git-ref `r` tag, giving an exact correlation key. Older publishers did
+ * not include that value, so `queued_at` plus the shared context remains a
+ * deliberately conservative compatibility fallback.
  *
  * A missing queue timestamp is deliberately not guessed. Leaving an older or
  * malformed progress marker visible is safer than hiding a different attempt.
@@ -193,6 +228,9 @@ const WORKFLOW_ATTEMPT_CONTEXT_TAGS = new Set([
 function workflowAttemptContextKey(
   event: CIRun | CIResult,
 ): string | undefined {
+  if (event.workflowRunId) {
+    return JSON.stringify([event.pubkey, event.workflowRunId]);
+  }
   if (event.queuedAt === undefined) return undefined;
 
   const contextTags = event.event.tags
@@ -212,8 +250,8 @@ function workflowAttemptContextKey(
  * - Every kind:9842 event is an independent completed workflow attempt, even
  *   when several attempts use the same commit and workflow path.
  * - A pending kind:39842 marker is omitted once exactly one kind:9842 result
- *   has the same coordinator, `queued_at`, and complete shared trigger
- *   context. Kind:9842 does not carry the marker's `d` identifier, so an
+ *   has the same coordinator and workflow-run ID. The older `queued_at` plus
+ *   shared-context correlation remains as a compatibility fallback; an
  *   ambiguous or incomplete correlation never hides a progress marker.
  * - A result only receives jobs that it explicitly quotes with `q` tags.
  *   Unquoted job results are not rendered as top-level runs: workflow results
@@ -434,6 +472,18 @@ export function splitRunsByCommit(
   return { current, older };
 }
 
+/**
+ * Repository coordinates a workflow run claims to belong to, preferring the
+ * container event (result / progress marker) over per-job results.
+ */
+export function workflowRunRepoCoords(run: CIWorkflowRun): string[] {
+  const containerCoords =
+    run.workflowResult?.repoCoords ?? run.pendingRun?.repoCoords;
+  if (containerCoords && containerCoords.length > 0) return containerCoords;
+
+  return Array.from(new Set(run.jobs.flatMap((job) => job.result.repoCoords)));
+}
+
 // ---------------------------------------------------------------------------
 // Display helpers
 // ---------------------------------------------------------------------------
@@ -460,7 +510,7 @@ export function ciStatusLabel(status: CICheckStatus): string {
   }
 }
 
-/** Format a duration in seconds as "42s" / "2m 5s" / "1h 3m". */
+/** Format a duration using at most two units, from seconds through weeks. */
 export function formatCIDuration(seconds: number | undefined): string | null {
   if (seconds === undefined || !Number.isFinite(seconds) || seconds < 0)
     return null;
@@ -471,7 +521,13 @@ export function formatCIDuration(seconds: number | undefined): string | null {
   if (m < 60) return rs > 0 ? `${m}m ${rs}s` : `${m}m`;
   const h = Math.floor(m / 60);
   const rm = m % 60;
-  return rm > 0 ? `${h}h ${rm}m` : `${h}h`;
+  if (h < 24) return rm > 0 ? `${h}h ${rm}m` : `${h}h`;
+  const d = Math.floor(h / 24);
+  const rh = h % 24;
+  if (d < 7) return rh > 0 ? `${d}d ${rh}h` : `${d}d`;
+  const w = Math.floor(d / 7);
+  const rd = d % 7;
+  return rd > 0 ? `${w}w ${rd}d` : `${w}w`;
 }
 
 /**
@@ -499,4 +555,89 @@ export function summarizeRuns(runs: CIWorkflowRun[]): string {
     parts.push(`${n} ${ciStatusLabel(status).toLowerCase()}`);
   }
   return parts.join(", ");
+}
+
+/** Display name for a workflow file, e.g. `.ngit/act/workflows/ci.yml` → `ci`. */
+export function ciWorkflowName(workflowPath: string | undefined): string {
+  if (!workflowPath) return "(workflow)";
+  const file = workflowPath.split("/").pop() || workflowPath;
+  return file.replace(/\.ya?ml$/i, "") || file;
+}
+
+/** Coarse outcome bucket used by the Actions list status filter and pill. */
+export type CIRunOutcome =
+  | "running"
+  | "queued"
+  | "success"
+  | "failure"
+  | "neutral"
+  | "skipped"
+  | "cancelled";
+
+export function ciRunOutcome(run: CIWorkflowRun): CIRunOutcome {
+  switch (run.status) {
+    case "pending":
+      return run.pendingRun?.progressStatus === "queued" ? "queued" : "running";
+    case "success":
+      return "success";
+    case "failure":
+    case "timed_out":
+    case "startup_failure":
+      return "failure";
+    case "neutral":
+    case "skipped":
+    case "cancelled":
+      return run.status;
+  }
+}
+
+export const CI_RUN_OUTCOME_LABELS: Record<CIRunOutcome, string> = {
+  running: "Running",
+  queued: "Queued",
+  success: "Success",
+  failure: "Failure",
+  neutral: "Neutral",
+  skipped: "Skipped",
+  cancelled: "Cancelled",
+};
+
+export interface WorkflowTiming {
+  queuedAt: number | undefined;
+  startedAt: number | undefined;
+  completedAt: number | undefined;
+  queuePosition: number | undefined;
+}
+
+export function getWorkflowTiming(run: CIWorkflowRun): WorkflowTiming {
+  const earliestJobTimestamp = (
+    key: "queuedAt" | "startedAt",
+  ): number | undefined =>
+    run.jobs.reduce<number | undefined>((earliest, { result }) => {
+      const timestamp = result[key];
+      return timestamp === undefined
+        ? earliest
+        : Math.min(earliest ?? timestamp, timestamp);
+    }, undefined);
+  const latestJobCompletionAt = run.jobs.reduce<number | undefined>(
+    (latest, { result }) =>
+      latest === undefined
+        ? result.event.created_at
+        : Math.max(latest, result.event.created_at),
+    undefined,
+  );
+
+  return {
+    queuedAt:
+      run.pendingRun?.queuedAt ??
+      run.workflowResult?.queuedAt ??
+      earliestJobTimestamp("queuedAt"),
+    startedAt:
+      run.pendingRun?.startedAt ??
+      run.workflowResult?.startedAt ??
+      earliestJobTimestamp("startedAt"),
+    completedAt: run.pendingRun
+      ? undefined
+      : (run.workflowResult?.event.created_at ?? latestJobCompletionAt),
+    queuePosition: run.pendingRun?.queueRounds,
+  };
 }

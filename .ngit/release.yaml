@@ -1,0 +1,75 @@
+schema: 1
+
+# Keep this application definition aligned with zapstore.yaml so CI can create
+# or safely update the complete store listing from repository-owned sources.
+application: dev.gitworkshop
+pubkey: npub15qydau2hjma6ngxkl2cyar74wzyjshvl65za5k5rl69264ar2exs5cyejr
+name: GitWorkshop
+summary: Git collaboration, without the platform.
+description: |
+  GitWorkshop is a Nostr-native client for issues, pull requests, code review,
+  and Git repository exploration.
+
+  Built on NIP-34 and GRASP, it keeps repository state on Nostr and fetches
+  Git data from redundant servers on demand—without a central platform.
+tags:
+  - nostr
+  - git
+  - collaboration
+  - code-review
+  - development
+  - decentralized
+license: MIT
+website: https://gitworkshop.dev
+repository: naddr1qvzqqqrhnypzpgqgmmc409hm4xsdd74sf68a2uyf9pwel4g9mfdg8l5244t6x4jdqy2hwumn8ghj76twv3jhstnwva5hgtnyv4mz7qgwwaehxw309ahx7uewd3hkctcqpdnkjarhdaexkumgdacq04p0mt
+icon: public/icons/icon-512x512.png
+images:
+  - screenshots/landing-portrait.png
+  - screenshots/repository-overview-portrait.png
+  - screenshots/inline-code-review-portrait.png
+  - screenshots/profile-activity-portrait.png
+  - screenshots/repository-search-portrait.png
+  - screenshots/ci-artifacts-portrait.png
+communities:
+  - acfeaea6e51420e8068fac446ca9d17d7a9ef6a5d20d93894e50fee3d4902a84
+
+release_notes: CHANGELOG.md
+release_source: release-artifacts/gitworkshop-android-v{version}.apk
+
+supported_nips:
+  - "01"
+  - "05"
+  - "07"
+  - "09"
+  - "19"
+  - "21"
+  - "22"
+  - "25"
+  - "27"
+  - "31"
+  - "32"
+  - "34"
+  - "42"
+  - "44"
+  - "46"
+  - "47"
+  - "51"
+  - "57"
+  - "65"
+  - "78"
+  - "94"
+
+publication:
+  blossom_servers:
+    - https://blossom.primal.net
+    - https://blossom.ditto.pub
+    - https://haven.danconwaydev.com
+  # Zapstore must be a discovery relay as well as the catalog publication
+  # target so ngit finds and preserves the existing application event.
+  relays:
+    - wss://relay.zapstore.dev
+    - wss://relay.ditto.pub
+    - wss://relay.dreamith.to
+    - wss://relay.primal.net
+  zapstore_relay: true
+  strict_metadata: true

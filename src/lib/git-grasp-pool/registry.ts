@@ -18,9 +18,8 @@
  *   pool's URL set is a subset of the requested URLs
  */
 
-import type { Observable } from "rxjs";
-import type { StateEventInput } from "./types";
 import { GitGraspPool } from "./pool";
+import type { GitHttpAuthorizationProvider } from "@/lib/git-http-auth";
 
 // ---------------------------------------------------------------------------
 // Registry
@@ -33,8 +32,8 @@ const registry = new Map<string, GitGraspPool>();
  * Build a stable cache key from a set of clone URLs.
  * Sorted so different orderings of the same URLs map to the same key.
  */
-function makeKey(cloneUrls: string[]): string {
-  return [...cloneUrls].sort().join("\n");
+function makeKey(cloneUrls: string[], accessScope = "public"): string {
+  return `${accessScope}\0${[...cloneUrls].sort().join("\n")}`;
 }
 
 /**
@@ -47,6 +46,7 @@ function makeKey(cloneUrls: string[]): string {
  */
 function findOverlappingPool(
   cloneUrls: string[],
+  accessScope: string,
 ): { pool: GitGraspPool; key: string } | undefined {
   const requestedSet = new Set(cloneUrls);
 
@@ -56,7 +56,10 @@ function findOverlappingPool(
       continue;
     }
 
-    const existingUrls = key.split("\n");
+    const [keyScope, serializedUrls = ""] = key.split("\0", 2);
+    if (keyScope !== accessScope) continue;
+
+    const existingUrls = serializedUrls.split("\n");
     // Check if there's any overlap
     const hasOverlap = existingUrls.some((u) => requestedSet.has(u));
     if (hasOverlap) {
@@ -73,12 +76,12 @@ function findOverlappingPool(
 
 export interface GetPoolOptions {
   cloneUrls: string[];
-  stateEvent$?: Observable<StateEventInput>;
   corsProxyBase?: string | null;
   knownCorsBlockedOrigins?: string[];
   evictionGracePeriodMs?: number;
   infoRefsTtlMs?: number;
   expectRepositoryProvisioning?: boolean;
+  authorizationProvider?: GitHttpAuthorizationProvider;
 }
 
 /**
@@ -91,7 +94,8 @@ export interface GetPoolOptions {
  */
 export function getOrCreatePool(options: GetPoolOptions): GitGraspPool {
   const { cloneUrls, ...rest } = options;
-  const key = makeKey(cloneUrls);
+  const accessScope = rest.authorizationProvider?.accessScope ?? "public";
+  const key = makeKey(cloneUrls, accessScope);
 
   // Exact match
   const existing = registry.get(key);
@@ -101,12 +105,15 @@ export function getOrCreatePool(options: GetPoolOptions): GitGraspPool {
         rest.expectRepositoryProvisioning,
       );
     }
-    if (rest.stateEvent$) existing.setStateEventSource(rest.stateEvent$);
     return existing;
   }
 
   // Check for overlapping pool (URL list grew)
-  const overlapping = findOverlappingPool(cloneUrls);
+  // Private pools are exact repository/account sessions. They must never grow
+  // by overlap because that could attach a credential to a different root.
+  const overlapping = rest.authorizationProvider
+    ? undefined
+    : findOverlappingPool(cloneUrls, accessScope);
   if (overlapping) {
     // Add new URLs to the existing pool
     overlapping.pool.addUrls(cloneUrls);
@@ -115,9 +122,6 @@ export function getOrCreatePool(options: GetPoolOptions): GitGraspPool {
         rest.expectRepositoryProvisioning,
       );
     }
-    if (rest.stateEvent$)
-      overlapping.pool.setStateEventSource(rest.stateEvent$);
-
     // Re-key the registry if the key changed
     if (overlapping.key !== key) {
       registry.delete(overlapping.key);
@@ -142,13 +146,19 @@ export function getOrCreatePool(options: GetPoolOptions): GitGraspPool {
  * Get the current pool for a set of clone URLs without creating one.
  * Returns undefined if no pool exists.
  */
-export function peekPool(cloneUrls: string[]): GitGraspPool | undefined {
-  const key = makeKey(cloneUrls);
+export function peekPool(
+  cloneUrls: string[],
+  authorizationProvider?: GitHttpAuthorizationProvider,
+): GitGraspPool | undefined {
+  const accessScope = authorizationProvider?.accessScope ?? "public";
+  const key = makeKey(cloneUrls, accessScope);
   const pool = registry.get(key);
   if (pool && !pool.isDisposed) return pool;
 
   // Check for overlapping pool
-  const overlapping = findOverlappingPool(cloneUrls);
+  const overlapping = authorizationProvider
+    ? undefined
+    : findOverlappingPool(cloneUrls, accessScope);
   return overlapping?.pool;
 }
 
@@ -156,8 +166,14 @@ export function peekPool(cloneUrls: string[]): GitGraspPool | undefined {
  * Remove a disposed pool from the registry.
  * Called internally when a pool's eviction timer fires.
  */
-export function removePool(cloneUrls: string[]): void {
-  const key = makeKey(cloneUrls);
+export function removePool(
+  cloneUrls: string[],
+  authorizationProvider?: GitHttpAuthorizationProvider,
+): void {
+  const key = makeKey(
+    cloneUrls,
+    authorizationProvider?.accessScope ?? "public",
+  );
   const pool = registry.get(key);
   if (pool?.isDisposed) {
     registry.delete(key);
@@ -173,4 +189,14 @@ export function clearRegistry(): void {
     if (!pool.isDisposed) pool.dispose();
   }
   registry.clear();
+}
+
+/** Dispose authenticated pools before another account becomes active. */
+export function clearPrivateRegistry(pubkey: string): void {
+  const prefix = `private:${pubkey}:`;
+  for (const [key, pool] of registry) {
+    if (!key.startsWith(prefix)) continue;
+    if (!pool.isDisposed) pool.dispose();
+    registry.delete(key);
+  }
 }

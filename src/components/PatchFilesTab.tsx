@@ -13,6 +13,8 @@
  *     apply patches to generate the full combined diff.
  */
 
+import { useErrorRetry } from "@/hooks/useErrorRetry";
+import { ErrorRetryAction } from "@/components/ErrorRetryAction";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
@@ -365,6 +367,13 @@ export function PatchFilesTab({
 }: PatchFilesTabProps) {
   const [phase, setPhase] = useState<Phase>({ kind: "parsing" });
   const [activeFile, setActiveFile] = useState<string | null>(null);
+  const [retryVersion, setRetryVersion] = useState(0);
+  const recovery = useErrorRetry({
+    resourceKey: basePath,
+    failed: phase.kind === "error",
+    busy: phase.kind === "parsing" || phase.kind === "applying",
+    onRetry: () => setRetryVersion((n) => n + 1),
+  });
   const abortRef = useRef<AbortController | null>(null);
 
   const handleFileSelect = (path: string) => {
@@ -539,6 +548,7 @@ export function PatchFilesTab({
     defaultBranchHead,
     pool,
     fallbackUrlsKey,
+    retryVersion,
   ]);
 
   // --- Render ---
@@ -559,7 +569,10 @@ export function PatchFilesTab({
     return (
       <div className="flex items-start gap-3 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
         <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
-        <span>{phase.message}</span>
+        <div className="space-y-3">
+          <p>{phase.message}</p>
+          <ErrorRetryAction recovery={recovery} />
+        </div>
       </div>
     );
   }

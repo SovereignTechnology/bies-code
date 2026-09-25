@@ -6,7 +6,7 @@ import {
   repoCoordinate,
   type RepoUpstream,
 } from "@/lib/nip34";
-import { parseRepoRoute } from "@/lib/routeUtils";
+import { parseRepoRoute, repoToNostrCloneUrl } from "@/lib/routeUtils";
 
 export interface PendingNip05Upstream {
   nip05: string;
@@ -211,15 +211,12 @@ export function formatUpstreamInput(upstream: RepoUpstream): string {
   const parsed = parseRepoCoordinate(upstream.repository);
 
   if (parsed) {
-    const npub = nip19.npubEncode(parsed.pubkey);
-    const relayHint = upstream.relayHint
-      ?.replace(/^wss?:\/\//, "")
-      .replace(/\/$/, "");
-    const encodedIdentifier = encodeURIComponent(parsed.identifier);
     parts.push(
-      relayHint
-        ? `nostr://${npub}/${relayHint}/${encodedIdentifier}`
-        : `nostr://${npub}/${encodedIdentifier}`,
+      repoToNostrCloneUrl(
+        parsed.pubkey,
+        parsed.identifier,
+        upstream.relayHint ? [upstream.relayHint] : [],
+      ),
     );
   } else if (upstream.repository) {
     parts.push(upstream.repository);

@@ -6,7 +6,7 @@ import {
   useNavigate,
   useLocation,
 } from "react-router-dom";
-import { useEffect, useRef } from "react";
+import { lazy, Suspense, useEffect, useRef } from "react";
 import { App } from "@capacitor/app";
 import { Capacitor } from "@capacitor/core";
 import { nip19 } from "nostr-tools";
@@ -19,11 +19,11 @@ import { LandingPage } from "./pages/LandingPage";
 import RepositoriesPage from "./pages/RepositoriesPage";
 import NotificationsPage from "./pages/NotificationsPage";
 import RelayPage from "./pages/RelayPage";
-import RepoLayout from "./pages/repo/RepoLayout";
+import CICoordinatorPage from "./pages/CICoordinatorPage";
+import CIProviderPage from "./pages/CIProviderPage";
 import Settings from "./pages/Settings";
 import OutboxPage from "./pages/OutboxPage";
 import { NIP19Page } from "./pages/NIP19Page";
-import NgitPage from "./pages/NgitPage";
 import About from "./pages/About";
 import OgImagePreview from "./pages/OgImagePreview";
 import NotFound from "./pages/NotFound";
@@ -31,6 +31,169 @@ import { MaintainerAcceptanceMonitor } from "./components/MaintainerAcceptanceMo
 import { useRepoPath } from "./hooks/useRepoPath";
 import { REPO_KIND } from "./lib/nip34";
 import { getGitWorkshopPath } from "./lib/gitworkshopUrl";
+import { parseRepoRoute } from "./lib/routeUtils";
+import { preloadMarkdownContent } from "./lib/markdownContentLoader";
+import { DOCUMENTATION_URLS } from "./lib/documentation";
+
+interface DocumentationRedirect {
+  path: string;
+  destination: string;
+  fragmentDestinations?: Readonly<Record<string, string>>;
+}
+
+const DOCUMENTATION_REDIRECTS: readonly DocumentationRedirect[] = [
+  {
+    path: "/ngit",
+    destination: DOCUMENTATION_URLS.install,
+    // These are explicit compatibility IDs in ngit-docs/docs/quickstart.md,
+    // not heading-generated slugs. Keep the two sides in sync.
+    fragmentDestinations: {
+      "#contributor": `${DOCUMENTATION_URLS.quickstart}#contributor`,
+      "#maintainer": `${DOCUMENTATION_URLS.quickstart}#maintainer`,
+    },
+  },
+  { path: "/install", destination: DOCUMENTATION_URLS.install },
+  { path: "/quick-start", destination: DOCUMENTATION_URLS.quickstart },
+  { path: "/docs/*", destination: DOCUMENTATION_URLS.gitworkshop },
+] as const;
+
+let repositoryRoutePromise:
+  | Promise<typeof import("./pages/repo/RepoLayout")>
+  | undefined;
+
+function loadRepositoryRoute() {
+  repositoryRoutePromise ??= Promise.all([
+    import("./pages/repo/RepoLayout"),
+    preloadMarkdownContent(),
+  ]).then(([repoLayout]) => repoLayout);
+  return repositoryRoutePromise;
+}
+
+function ExternalRedirect({
+  destination,
+  fragmentDestinations,
+}: Omit<DocumentationRedirect, "path">) {
+  const location = useLocation();
+  const target = new URL(fragmentDestinations?.[location.hash] ?? destination);
+  target.search = location.search;
+  if (!target.hash) target.hash = location.hash;
+  const targetUrl = target.toString();
+
+  useEffect(() => {
+    window.location.replace(targetUrl);
+  }, [targetUrl]);
+
+  return (
+    <div className="container max-w-screen-md px-4 py-16 text-center md:px-8">
+      <h1 className="text-2xl font-semibold">Documentation has moved</h1>
+      <p className="mt-3 text-lg text-muted-foreground">
+        Taking you to{" "}
+        <a className="text-pink-500 hover:underline" href={targetUrl}>
+          ngit.dev
+        </a>
+        .
+      </p>
+    </div>
+  );
+}
+
+const RepoLayout = lazy(loadRepositoryRoute);
+
+/** Whether an internal link is likely to enter the multi-segment repo router. */
+function isRepositoryLink(anchor: HTMLAnchorElement): boolean {
+  const url = new URL(anchor.href, window.location.href);
+  if (url.origin !== window.location.origin) return false;
+  return parseRepoRoute(url.pathname.slice(1)) !== undefined;
+}
+
+/**
+ * Warm the repository route after the current page loads, or sooner when a
+ * repository link receives pointer/keyboard intent. This does not hold up the
+ * initial non-repository render, but makes the repository and dedicated
+ * Markdown bundles available before most navigations.
+ */
+function RepositoryRoutePreloader() {
+  useEffect(() => {
+    let idleHandle: number | undefined;
+    let fallbackHandle: ReturnType<typeof setTimeout> | undefined;
+
+    const preload = () => {
+      // A speculative failure should not become an unhandled rejection. The
+      // same rejected promise is still surfaced by React if navigation later
+      // needs the route, where the app-level error boundary can handle it.
+      void loadRepositoryRoute().catch(() => undefined);
+    };
+
+    const scheduleIdlePreload = () => {
+      if ("requestIdleCallback" in window) {
+        idleHandle = window.requestIdleCallback(preload);
+      } else {
+        fallbackHandle = setTimeout(preload);
+      }
+    };
+
+    const preloadFromIntent = (event: Event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const anchor = target.closest("a[href]");
+      if (anchor instanceof HTMLAnchorElement && isRepositoryLink(anchor)) {
+        preload();
+      }
+    };
+
+    document.addEventListener("pointerover", preloadFromIntent);
+    document.addEventListener("focusin", preloadFromIntent);
+
+    if (document.readyState === "complete") {
+      scheduleIdlePreload();
+    } else {
+      window.addEventListener("load", scheduleIdlePreload, { once: true });
+    }
+
+    return () => {
+      document.removeEventListener("pointerover", preloadFromIntent);
+      document.removeEventListener("focusin", preloadFromIntent);
+      window.removeEventListener("load", scheduleIdlePreload);
+      if (idleHandle !== undefined) window.cancelIdleCallback(idleHandle);
+      if (fallbackHandle !== undefined) clearTimeout(fallbackHandle);
+    };
+  }, []);
+
+  return null;
+}
+
+function RepositoryRouteFallback() {
+  return (
+    <div
+      className="container max-w-screen-xl flex-1 space-y-6 px-4 py-8 md:px-8"
+      role="status"
+      aria-label="Loading repository"
+    >
+      <div className="h-8 w-64 max-w-full animate-pulse rounded bg-muted" />
+      <div className="h-10 w-full animate-pulse rounded bg-muted" />
+      <div className="grid gap-6 lg:grid-cols-[1fr_280px]">
+        <div className="h-64 animate-pulse rounded-xl bg-muted" />
+        <div className="h-40 animate-pulse rounded-xl bg-muted" />
+      </div>
+      <span className="sr-only">Loading repository…</span>
+    </div>
+  );
+}
+
+function RepositoryRoute() {
+  return (
+    <Suspense fallback={<RepositoryRouteFallback />}>
+      <RepoLayout />
+    </Suspense>
+  );
+}
+
+/**
+ * A cold-start App Link stays in App.getLaunchUrl() for the lifetime of the
+ * activity, so it must be consumed at most once or later effect runs would
+ * navigate back to the launch page.
+ */
+let launchUrlConsumed = false;
 
 /**
  * Handles public GitWorkshop links in native builds. This stays inside the
@@ -39,13 +202,22 @@ import { getGitWorkshopPath } from "./lib/gitworkshopUrl";
  */
 function NativeGitWorkshopLinks() {
   const navigate = useNavigate();
+  // useNavigate returns a new identity after every route change; the listeners
+  // below must live for the whole session, so they read the latest navigate
+  // through a ref instead of re-running the effect.
+  const navigateRef = useRef(navigate);
+  navigateRef.current = navigate;
 
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) return;
 
     const navigateToGitWorkshopUrl = (url: string) => {
       const path = getGitWorkshopPath(url);
-      if (path) navigate(path);
+      if (!path) return;
+      // appUrlOpen and getLaunchUrl can both report the same cold-start link;
+      // pushing it twice would double the history entry and flash the page.
+      const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+      if (path !== current) navigateRef.current(path);
     };
 
     const getInternalAnchorPath = (
@@ -92,7 +264,7 @@ function NativeGitWorkshopLinks() {
       if (!path) return;
 
       event.preventDefault();
-      navigate(path);
+      navigateRef.current(path);
     };
 
     document.addEventListener("click", handleDocumentClick);
@@ -113,7 +285,9 @@ function NativeGitWorkshopLinks() {
     // App Links delivered while Android cold-starts the activity are available
     // here even if appUrlOpen fired before React completed mounting.
     void App.getLaunchUrl().then((launchUrl) => {
-      if (!disposed && launchUrl) navigateToGitWorkshopUrl(launchUrl.url);
+      if (disposed || !launchUrl || launchUrlConsumed) return;
+      launchUrlConsumed = true;
+      navigateToGitWorkshopUrl(launchUrl.url);
     });
 
     return () => {
@@ -121,7 +295,7 @@ function NativeGitWorkshopLinks() {
       document.removeEventListener("click", handleDocumentClick);
       if (appUrlListener) void appUrlListener.remove();
     };
-  }, [navigate]);
+  }, []);
 
   return null;
 }
@@ -134,6 +308,10 @@ function NativeGitWorkshopLinks() {
 function NativeAndroidBackButton() {
   const navigate = useNavigate();
   const location = useLocation();
+  // Same ref pattern as NativeGitWorkshopLinks: keep one listener for the
+  // whole session instead of re-registering on every route change.
+  const navigateRef = useRef(navigate);
+  navigateRef.current = navigate;
   const locationRef = useRef(location);
   locationRef.current = location;
 
@@ -163,14 +341,14 @@ function NativeAndroidBackButton() {
       }
 
       if (canGoBack) {
-        navigate(-1);
+        navigateRef.current(-1);
         return;
       }
 
       if (locationRef.current.pathname !== "/") {
         // A cold-start deep link can be the first WebView entry. Returning to
         // the app root is safer than closing the app from that content page.
-        navigate("/", { replace: true });
+        navigateRef.current("/", { replace: true });
         return;
       }
 
@@ -187,7 +365,7 @@ function NativeAndroidBackButton() {
       disposed = true;
       if (backButtonListener) void backButtonListener.remove();
     };
-  }, [navigate]);
+  }, []);
 
   return null;
 }
@@ -261,8 +439,6 @@ function NaddrSubPathRedirect({
 //   /repo/<identifier>     → /search?q=<identifier>
 //   /repos                 → /               (repo listing)
 //   /search/<identifier>   → /search?q=<identifier>
-//   /install[/]            → /ngit
-//   /quick-start[/]        → /ngit
 //   /naddr1.../<subpath>   → /<repoPath>/<subpath>  (naddr with sub-path)
 //   /<any>/.../proposals/  → /<any>/.../prs/  (old PR tab name)
 // ---------------------------------------------------------------------------
@@ -313,16 +489,6 @@ function LegacyRedirect() {
     }
   }
 
-  // /install[/] and /quick-start[/] — redirect to /ngit
-  if (
-    raw === "install" ||
-    raw === "install/" ||
-    raw === "quick-start" ||
-    raw === "quick-start/"
-  ) {
-    return <Navigate to="/ngit" replace />;
-  }
-
   // /naddr1.../<subpath> — naddr with a sub-path (e.g. /prs/note1..., /issues)
   // The bare /naddr1... case is already handled by the /:nip19 route above.
   if (raw.startsWith("naddr1")) {
@@ -362,7 +528,7 @@ function LegacyRedirect() {
   }
 
   // Not a legacy path — fall through to RepoLayout
-  return <RepoLayout />;
+  return <RepositoryRoute />;
 }
 
 function AppRouter() {
@@ -371,6 +537,7 @@ function AppRouter() {
       <NativeGitWorkshopLinks />
       <NativeAndroidBackButton />
       <ScrollToTop />
+      <RepositoryRoutePreloader />
       <MaintainerAcceptanceMonitor />
       <div className="flex flex-col min-h-screen">
         <AppHeader />
@@ -382,19 +549,22 @@ function AppRouter() {
             <Route path="/settings" element={<Settings />} />
             <Route path="/outbox" element={<OutboxPage />} />
             <Route path="/notifications" element={<NotificationsPage />} />
-            <Route path="/ngit" element={<NgitPage />} />
-            {/* Backwards-compat redirects — must be before /:nip19 */}
-            <Route path="/install" element={<Navigate to="/ngit" replace />} />
-            <Route
-              path="/quick-start"
-              element={
-                <Navigate
-                  to="/ngit"
-                  state={{ expandQuickStart: true }}
-                  replace
+            {/* Portable documentation redirects — these run in Netlify, static
+                builds, nsites, and native builds after the SPA fallback. */}
+            {DOCUMENTATION_REDIRECTS.map(
+              ({ path, destination, fragmentDestinations }) => (
+                <Route
+                  key={path}
+                  path={path}
+                  element={
+                    <ExternalRedirect
+                      destination={destination}
+                      fragmentDestinations={fragmentDestinations}
+                    />
+                  }
                 />
-              }
-            />
+              ),
+            )}
             <Route path="/about" element={<About />} />
             <Route path="/og-preview" element={<OgImagePreview />} />
             {/* /relay/:relaySegment — browse repos on a specific relay.
@@ -402,6 +572,16 @@ function AppRouter() {
                  ws:// uses a slash-free encoded scheme. e.g. /relay/relay.ngit.dev
                  Must be declared before /:nip19 to avoid being swallowed. */}
             <Route path="/relay/:relaySegment" element={<RelayPage />} />
+            {/* Coordinator service profiles use an explicit prefix so npub
+                identifiers remain distinct from ordinary user profiles. */}
+            <Route
+              path="/coordinator/:coordinatorIdentifier"
+              element={<CICoordinatorPage />}
+            />
+            <Route
+              path="/provider/:providerIdentifier"
+              element={<CIProviderPage />}
+            />
             {/* NIP-19 route for single-segment bech32 identifiers:
                 npub1…, nprofile1…, note1…, nevent1…, naddr1… */}
             <Route path="/:nip19" element={<NIP19Page />} />

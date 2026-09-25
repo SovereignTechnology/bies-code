@@ -195,6 +195,24 @@ const memCommitHistory = new Map<string, Commit[]>();
  */
 const memRawObjects = new Map<string, RawObjectsEntry>();
 
+/** Purge every in-memory Git object learned under one private account. */
+export function clearPrivateGitObjectCache(pubkey: string): void {
+  const prefix = `private:${pubkey}:`;
+  for (const cache of [
+    memCommits,
+    memBlobs,
+    memTexts,
+    memTrees,
+    memInfoRefs,
+    memCommitHistory,
+    memRawObjects,
+  ]) {
+    for (const key of cache.keys()) {
+      if (key.startsWith(prefix)) cache.delete(key);
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // GitObjectCache — the public API
 // ---------------------------------------------------------------------------
@@ -207,9 +225,20 @@ const memRawObjects = new Map<string, RawObjectsEntry>();
  */
 export class GitObjectCache {
   private infoRefsTtlMs: number;
+  private accessScope: string;
+  private persistent: boolean;
 
-  constructor(infoRefsTtlMs: number = DEFAULT_INFO_REFS_TTL_MS) {
+  constructor(
+    infoRefsTtlMs: number = DEFAULT_INFO_REFS_TTL_MS,
+    accessScope = "public",
+  ) {
     this.infoRefsTtlMs = infoRefsTtlMs;
+    this.accessScope = accessScope;
+    this.persistent = accessScope === "public";
+  }
+
+  private key(value: string): string {
+    return `${this.accessScope}:${value}`;
   }
 
   // -----------------------------------------------------------------------
@@ -218,16 +247,18 @@ export class GitObjectCache {
 
   /** Synchronous L1-only peek */
   peekCommit(hash: string): Commit | undefined {
-    return memCommits.get(hash);
+    return memCommits.get(this.key(hash));
   }
 
   /** L1 then L2 */
   async getCommit(hash: string): Promise<Commit | undefined> {
-    const mem = memCommits.get(hash);
+    const key = this.key(hash);
+    const mem = memCommits.get(key);
     if (mem) return mem;
+    if (!this.persistent) return undefined;
     const record = await idbGet<CommitRecord>(STORE_COMMITS, hash);
     if (record) {
-      memCommits.set(hash, record.commit);
+      memCommits.set(key, record.commit);
       return record.commit;
     }
     return undefined;
@@ -235,8 +266,10 @@ export class GitObjectCache {
 
   /** Store in both L1 and L2 */
   putCommit(commit: Commit): void {
-    memCommits.set(commit.hash, commit);
-    idbPut(STORE_COMMITS, { hash: commit.hash, commit }).catch(() => {});
+    memCommits.set(this.key(commit.hash), commit);
+    if (this.persistent) {
+      idbPut(STORE_COMMITS, { hash: commit.hash, commit }).catch(() => {});
+    }
   }
 
   // -----------------------------------------------------------------------
@@ -244,23 +277,27 @@ export class GitObjectCache {
   // -----------------------------------------------------------------------
 
   peekBlob(hash: string): Uint8Array | undefined {
-    return memBlobs.get(hash);
+    return memBlobs.get(this.key(hash));
   }
 
   async getBlob(hash: string): Promise<Uint8Array | undefined> {
-    const mem = memBlobs.get(hash);
+    const key = this.key(hash);
+    const mem = memBlobs.get(key);
     if (mem) return mem;
+    if (!this.persistent) return undefined;
     const record = await idbGet<BlobRecord>(STORE_BLOBS, hash);
     if (record) {
-      memBlobs.set(hash, record.data);
+      memBlobs.set(key, record.data);
       return record.data;
     }
     return undefined;
   }
 
   putBlob(hash: string, data: Uint8Array): void {
-    memBlobs.set(hash, data);
-    idbPut(STORE_BLOBS, { hash, data }).catch(() => {});
+    memBlobs.set(this.key(hash), data);
+    if (this.persistent) {
+      idbPut(STORE_BLOBS, { hash, data }).catch(() => {});
+    }
   }
 
   // -----------------------------------------------------------------------
@@ -268,11 +305,11 @@ export class GitObjectCache {
   // -----------------------------------------------------------------------
 
   getText(commitHash: string, path: string): string | undefined {
-    return memTexts.get(`${commitHash}:${path}`);
+    return memTexts.get(this.key(`${commitHash}:${path}`));
   }
 
   putText(commitHash: string, path: string, text: string): void {
-    memTexts.set(`${commitHash}:${path}`, text);
+    memTexts.set(this.key(`${commitHash}:${path}`), text);
   }
 
   // -----------------------------------------------------------------------
@@ -281,26 +318,28 @@ export class GitObjectCache {
 
   /** Synchronous L1-only peek, respecting TTL */
   peekInfoRefs(url: string): InfoRefsUploadPackResponse | undefined {
-    const mem = memInfoRefs.get(url);
+    const mem = memInfoRefs.get(this.key(url));
     if (mem && Date.now() - mem.fetchedAt < this.infoRefsTtlMs) return mem.info;
     return undefined;
   }
 
   /** Synchronous L1-only peek, ignoring TTL (for fast-path rendering) */
   peekInfoRefsStale(url: string): InfoRefsUploadPackResponse | undefined {
-    return memInfoRefs.get(url)?.info;
+    return memInfoRefs.get(this.key(url))?.info;
   }
 
   /** L1 then L2, respecting TTL */
   async getInfoRefs(
     url: string,
   ): Promise<InfoRefsUploadPackResponse | undefined> {
-    const mem = memInfoRefs.get(url);
+    const key = this.key(url);
+    const mem = memInfoRefs.get(key);
     if (mem && Date.now() - mem.fetchedAt < this.infoRefsTtlMs) return mem.info;
+    if (!this.persistent) return undefined;
     if (invalidatedInfoRefs.has(url)) return undefined;
     const record = await idbGet<InfoRefsRecord>(STORE_INFO_REFS, url);
     if (record && Date.now() - record.fetchedAt < this.infoRefsTtlMs) {
-      memInfoRefs.set(url, { info: record.info, fetchedAt: record.fetchedAt });
+      memInfoRefs.set(key, { info: record.info, fetchedAt: record.fetchedAt });
       return record.info;
     }
     return undefined;
@@ -308,16 +347,20 @@ export class GitObjectCache {
 
   putInfoRefs(url: string, info: InfoRefsUploadPackResponse): void {
     const fetchedAt = Date.now();
-    invalidatedInfoRefs.delete(url);
-    memInfoRefs.set(url, { info, fetchedAt });
-    idbPut(STORE_INFO_REFS, { url, info, fetchedAt }).catch(() => {});
+    memInfoRefs.set(this.key(url), { info, fetchedAt });
+    if (this.persistent) {
+      invalidatedInfoRefs.delete(url);
+      idbPut(STORE_INFO_REFS, { url, info, fetchedAt }).catch(() => {});
+    }
   }
 
   /** Invalidate a specific URL's infoRefs (e.g. after a known push) */
   invalidateInfoRefs(url: string): void {
-    memInfoRefs.delete(url);
-    invalidatedInfoRefs.add(url);
-    idbDelete(STORE_INFO_REFS, url).catch(() => {});
+    memInfoRefs.delete(this.key(url));
+    if (this.persistent) {
+      invalidatedInfoRefs.add(url);
+      idbDelete(STORE_INFO_REFS, url).catch(() => {});
+    }
   }
 
   // -----------------------------------------------------------------------
@@ -326,12 +369,12 @@ export class GitObjectCache {
 
   peekTree(commitHash: string, nestLimit: number): Tree | undefined {
     // Exact match (O(1) fast path)
-    const exact = memTrees.get(`${commitHash}:${nestLimit}`);
+    const exact = memTrees.get(this.key(`${commitHash}:${nestLimit}`));
     if (exact) return exact;
     // Scan for any entry with a deeper parse that satisfies this request.
     // The "full:${commitHash}" diff-cache entries use a different prefix and
     // are never matched here.
-    const prefix = `${commitHash}:`;
+    const prefix = this.key(`${commitHash}:`);
     for (const [key, tree] of memTrees) {
       if (!key.startsWith(prefix)) continue;
       const cachedLimit = parseInt(key.slice(prefix.length), 10);
@@ -350,9 +393,10 @@ export class GitObjectCache {
 
     // IDB exact key
     const exactKey = `${commitHash}:${nestLimit}`;
+    if (!this.persistent) return undefined;
     const exactRecord = await idbGet<TreeRecord>(STORE_TREES, exactKey);
     if (exactRecord) {
-      memTrees.set(exactKey, exactRecord.tree);
+      memTrees.set(this.key(exactKey), exactRecord.tree);
       return exactRecord.tree;
     }
 
@@ -361,7 +405,7 @@ export class GitObjectCache {
       const fullKey = `${commitHash}:${FULL_NEST_LIMIT}`;
       const fullRecord = await idbGet<TreeRecord>(STORE_TREES, fullKey);
       if (fullRecord) {
-        memTrees.set(fullKey, fullRecord.tree);
+        memTrees.set(this.key(fullKey), fullRecord.tree);
         return fullRecord.tree;
       }
     }
@@ -371,8 +415,10 @@ export class GitObjectCache {
 
   putTree(commitHash: string, nestLimit: number, tree: Tree): void {
     const k = `${commitHash}:${nestLimit}`;
-    memTrees.set(k, tree);
-    idbPut(STORE_TREES, { key: k, tree }).catch(() => {});
+    memTrees.set(this.key(k), tree);
+    if (this.persistent) {
+      idbPut(STORE_TREES, { key: k, tree }).catch(() => {});
+    }
   }
 
   // -----------------------------------------------------------------------
@@ -383,16 +429,17 @@ export class GitObjectCache {
   // -----------------------------------------------------------------------
 
   peekFullTree(commitHash: string): Tree | undefined {
-    return memTrees.get(`full:${commitHash}`);
+    return memTrees.get(this.key(`full:${commitHash}`));
   }
 
   async getFullTree(commitHash: string): Promise<Tree | undefined> {
     const k = `full:${commitHash}`;
-    const mem = memTrees.get(k);
+    const mem = memTrees.get(this.key(k));
     if (mem) return mem;
+    if (!this.persistent) return undefined;
     const record = await idbGet<TreeRecord>(STORE_TREES, k);
     if (record) {
-      memTrees.set(k, record.tree);
+      memTrees.set(this.key(k), record.tree);
       return record.tree;
     }
     return undefined;
@@ -400,8 +447,10 @@ export class GitObjectCache {
 
   putFullTree(commitHash: string, tree: Tree): void {
     const k = `full:${commitHash}`;
-    memTrees.set(k, tree);
-    idbPut(STORE_TREES, { key: k, tree }).catch(() => {});
+    memTrees.set(this.key(k), tree);
+    if (this.persistent) {
+      idbPut(STORE_TREES, { key: k, tree }).catch(() => {});
+    }
   }
 
   // -----------------------------------------------------------------------
@@ -414,12 +463,12 @@ export class GitObjectCache {
 
   /** Synchronous L1-only peek */
   peekRawObjects(commitHash: string): RawObjectsEntry | undefined {
-    return memRawObjects.get(commitHash);
+    return memRawObjects.get(this.key(commitHash));
   }
 
   /** Store raw objects for a commit (L1 only) */
   putRawObjects(commitHash: string, entry: RawObjectsEntry): void {
-    memRawObjects.set(commitHash, entry);
+    memRawObjects.set(this.key(commitHash), entry);
   }
 
   // -----------------------------------------------------------------------
@@ -430,7 +479,9 @@ export class GitObjectCache {
     commitHash: string,
     maxCommits: number,
   ): Commit[] | undefined {
-    return memCommitHistory.get(commitHistoryKey(commitHash, maxCommits));
+    return memCommitHistory.get(
+      this.key(commitHistoryKey(commitHash, maxCommits)),
+    );
   }
 
   async getCommitHistory(
@@ -438,11 +489,12 @@ export class GitObjectCache {
     maxCommits: number,
   ): Promise<Commit[] | undefined> {
     const k = commitHistoryKey(commitHash, maxCommits);
-    const mem = memCommitHistory.get(k);
+    const mem = memCommitHistory.get(this.key(k));
     if (mem) return mem;
+    if (!this.persistent) return undefined;
     const record = await idbGet<CommitHistoryRecord>(STORE_COMMIT_HISTORY, k);
     if (record) {
-      memCommitHistory.set(k, record.commits);
+      memCommitHistory.set(this.key(k), record.commits);
       return record.commits;
     }
     return undefined;
@@ -454,7 +506,9 @@ export class GitObjectCache {
     commits: Commit[],
   ): void {
     const k = commitHistoryKey(commitHash, maxCommits);
-    memCommitHistory.set(k, commits);
-    idbPut(STORE_COMMIT_HISTORY, { key: k, commits }).catch(() => {});
+    memCommitHistory.set(this.key(k), commits);
+    if (this.persistent) {
+      idbPut(STORE_COMMIT_HISTORY, { key: k, commits }).catch(() => {});
+    }
   }
 }

@@ -16,6 +16,7 @@
     "test": "tsc --noEmit && eslint && prettier --check --log-level warn . && vitest run --reporter=dot --silent && vite build -l error && cp dist/index.html dist/404.html && echo 'All tests passed!'",
     "pre-commit": "tsc --noEmit && eslint && prettier --write --log-level warn . && git update-index --again && vitest run --reporter=dot --silent && vite build -l error && cp dist/index.html dist/404.html && echo 'Pre-commit OK'",
     "format": "prettier -w .",
+    "bench": "node benchmarks/bench.mjs",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "test:e2e:if-available": "if [ -n \"$NGIT_GRASP_BIN\" ] || command -v ngit-grasp >/dev/null 2>&1; then NGIT_GRASP_BIN=\"${NGIT_GRASP_BIN:-$(command -v ngit-grasp)}\" vitest run --config vitest.e2e.config.ts; else echo 'Skipping e2e: ngit-grasp binary not found'; fi",
     "test:full": "pnpm test && pnpm test:e2e:if-available && pnpm android:lint",
@@ -81,6 +82,7 @@
     "highlight.js": "^11.11.1",
     "input-otp": "^1.4.2",
     "lucide-react": "^0.462.0",
+    "nostr-signer-capacitor-plugin": "https://codeload.github.com/chebizarro/nostr-signer-capacitor-plugin/tar.gz/68e3a285d3108025163d1125d50af74edc6a0da8",
     "nostr-tools": "^2.23.3",
     "parse-diff": "^0.11.1",
     "qrcode": "^1.5.4",
@@ -104,6 +106,7 @@
     "tailwindcss-animate": "^1.0.7",
     "vaul": "^0.9.9",
     "window.nostrdb.js": "^0.5.1",
+    "yet-another-react-lightbox": "^3.32.2",
     "zod": "^3.25.76"
   },
   "devDependencies": {
@@ -127,6 +130,7 @@
     "fake-indexeddb": "^6.2.5",
     "globals": "^15.15.0",
     "jsdom": "^26.1.0",
+    "playwright-core": "1.61.1",
     "postcss": "^8.5.8",
     "prettier": "^3.8.1",
     "tailwindcss": "^3.4.19",
@@ -135,5 +139,19 @@
     "vite": "^6.4.1",
     "vitest": "^3.2.4",
     "vitest-websocket-mock": "0.5.0"
+  },
+  "overrides": {
+    "nostr-signer-capacitor-plugin": "$nostr-signer-capacitor-plugin"
+  },
+  "pnpm": {
+    "overrides": {
+      "nostr-signer-capacitor-plugin": "https://codeload.github.com/chebizarro/nostr-signer-capacitor-plugin/tar.gz/68e3a285d3108025163d1125d50af74edc6a0da8"
+    },
+    "patchedDependencies": {
+      "applesauce-accounts@6.2.0": "patches/applesauce-accounts@6.2.0.patch",
+      "applesauce-signers@6.2.2": "patches/applesauce-signers@6.2.2.patch",
+      "applesauce-core@6.2.0": "patches/applesauce-core@6.2.0.patch",
+      "applesauce-relay@6.2.1": "patches/applesauce-relay@6.2.1.patch"
+    }
   }
 }

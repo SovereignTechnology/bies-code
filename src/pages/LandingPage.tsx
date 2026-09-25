@@ -9,6 +9,7 @@
  *   5. Footer CTA — repeat the two buttons
  */
 
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   GitBranch,
@@ -27,17 +28,18 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { useRepositorySearch } from "@/hooks/useRepositorySearch";
-import { useRepoPath } from "@/hooks/useRepoPath";
+import { useDefaultRepoPath } from "@/hooks/useRepoPath";
 import { UserLink } from "@/components/UserAvatar";
 import { formatDistanceToNow } from "date-fns";
 import type { ResolvedRepo } from "@/lib/nip34";
+import { DOCUMENTATION_URLS } from "@/lib/documentation";
 
 // ---------------------------------------------------------------------------
 // Featured repos strip
 // ---------------------------------------------------------------------------
 
 function FeaturedRepoCard({ repo }: { repo: ResolvedRepo }) {
-  const repoPath = useRepoPath(repo.selectedMaintainer, repo.dTag, repo.relays);
+  const repoPath = useDefaultRepoPath(repo);
   const timeAgo = formatDistanceToNow(new Date(repo.updatedAt * 1000), {
     addSuffix: true,
   });
@@ -109,9 +111,28 @@ function FeaturedReposSkeleton() {
 function FeaturedRepos() {
   const { repos, isLoading } = useRepositorySearch("");
 
-  const graspRepos = repos?.filter((r) => r.graspCloneUrls.length > 0);
+  const graspRepos = useMemo(
+    () => repos?.filter((r) => r.graspCloneUrls.length > 0),
+    [repos],
+  );
+  const [emptyGraspResultsSettled, setEmptyGraspResultsSettled] =
+    useState(false);
+
+  useEffect(() => {
+    if (graspRepos === undefined || graspRepos.length > 0 || isLoading) {
+      setEmptyGraspResultsSettled(false);
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      setEmptyGraspResultsSettled(true);
+    }, 2_000);
+    return () => clearTimeout(timer);
+  }, [graspRepos, isLoading]);
+
   const showSkeletons =
-    graspRepos === undefined || (isLoading && graspRepos.length === 0);
+    graspRepos === undefined ||
+    (graspRepos.length === 0 && (isLoading || !emptyGraspResultsSettled));
   const featured = graspRepos?.slice(0, 6) ?? [];
 
   return (
@@ -139,10 +160,7 @@ function FeaturedRepos() {
             <FeaturedReposSkeleton />
           ) : featured.length > 0 ? (
             featured.map((repo) => (
-              <FeaturedRepoCard
-                key={`${repo.selectedMaintainer}:${repo.dTag}`}
-                repo={repo}
-              />
+              <FeaturedRepoCard key={repo.componentId} repo={repo} />
             ))
           ) : (
             <div className="col-span-full text-center py-8 text-muted-foreground text-sm">
@@ -175,7 +193,7 @@ const HOW_IT_WORKS_STEPS = [
     title: "Install the ngit CLI",
     description:
       "One command installs both ngit and git-remote-nostr. Works on macOS, Linux, and Windows.",
-    cta: { label: "Install ngit", to: "/ngit" },
+    cta: { label: "Install ngit", href: DOCUMENTATION_URLS.install },
   },
   {
     number: "02",
@@ -235,10 +253,10 @@ function HowItWorks() {
                     asChild
                     className="self-start mt-auto border-primary/30 hover:border-primary/60 hover:bg-primary/5"
                   >
-                    <Link to={step.cta.to}>
+                    <a href={step.cta.href}>
                       {step.cta.label}
                       <ArrowRight className="h-3.5 w-3.5 ml-1.5" />
-                    </Link>
+                    </a>
                   </Button>
                 )}
               </div>
@@ -367,10 +385,10 @@ function FooterCTA() {
               asChild
               className="bg-primary hover:bg-primary/90 text-primary-foreground shadow-lg shadow-primary/20"
             >
-              <Link to="/ngit">
+              <a href={DOCUMENTATION_URLS.install}>
                 <Terminal className="h-5 w-5 mr-2" />
                 Install ngit CLI
-              </Link>
+              </a>
             </Button>
             <Button size="lg" variant="outline" asChild>
               <Link to="/search">
@@ -503,10 +521,10 @@ export function LandingPage() {
                 </Link>
               </Button>
               <Button size="lg" variant="outline" asChild className="text-base">
-                <Link to="/ngit">
+                <a href={DOCUMENTATION_URLS.install}>
                   <Terminal className="h-5 w-5 mr-2" />
                   Install ngit CLI
-                </Link>
+                </a>
               </Button>
             </div>
 

@@ -1,3 +1,4 @@
+import { ErrorRetryAction } from "@/components/ErrorRetryAction";
 import React, {
   useCallback,
   useEffect,
@@ -32,7 +33,8 @@ import type { RelayGroupSpec } from "@/hooks/useEventSearch";
 import { useRepoContext } from "@/pages/repo/RepoContext";
 import { gitIndexRelays, fallbackRelays } from "@/services/settings";
 import { useGitPool } from "@/hooks/useGitPool";
-import { useAuthoritativeDefaultBranch } from "@/hooks/useAuthoritativeDefaultBranch";
+import { useAuthoritativePRTargetBranch } from "@/hooks/useAuthoritativePRTargetBranch";
+import { useMergedInSourceBranches } from "@/hooks/useMergedInSourceBranches";
 import { UserAvatar, UserLink } from "@/components/UserAvatar";
 import {
   StatusDropdownBadge,
@@ -59,6 +61,7 @@ import {
   FileDiff,
   Loader2,
   Pin,
+  GitBranch,
 } from "lucide-react";
 import {
   PatchSetPushEvent,
@@ -67,7 +70,11 @@ import {
 import { cn, compactNumber } from "@/lib/utils";
 import { PRFilesTab } from "@/components/PRFilesTab";
 import { PatchFilesTab } from "@/components/PatchFilesTab";
-import { diffTrees, generateUnifiedDiff } from "@/lib/git-grasp-pool";
+import {
+  diffTrees,
+  generateUnifiedDiff,
+  selectCommitRange,
+} from "@/lib/git-grasp-pool";
 import { computePatchFileChanges } from "@/lib/patch-diff-merge";
 import parseDiff from "parse-diff";
 import {
@@ -81,8 +88,16 @@ import { useCommitHistory } from "@/hooks/useGitExplorer";
 import { usePRMergeBase } from "@/hooks/usePRMergeBase";
 import { usePatchMergeBase } from "@/hooks/usePatchMergeBase";
 import { MergePanel } from "@/components/MergePanel";
-import { CIChecksPanel } from "@/components/ci/CIChecksPanel";
+import { useMergeAnalysis } from "@/hooks/useMergeAnalysis";
+import { usePrefetchedMergePushObjects } from "@/hooks/usePrefetchedMergePushObjects";
+import {
+  CIChecksPanel,
+  type CIRunTrustContext,
+} from "@/components/ci/CIChecksPanel";
+import { PRNsitePreview } from "@/components/ci/PRNsitePreview";
+import { indexNsitePreviewsByCommit } from "@/lib/ciOutputs";
 import { useCIForPR } from "@/hooks/useCI";
+import { useRepositoryCITrust } from "@/hooks/useRepositoryCITrust";
 import { CommitDetailView } from "@/components/CommitDetailView";
 import { PatchCommitDetailView } from "@/components/PatchCommitDetailView";
 import { useEventStore } from "@/hooks/useEventStore";
@@ -97,7 +112,17 @@ import {
 } from "@/lib/nip34";
 import { eventIdToNevent } from "@/lib/routeUtils";
 import { nip19 } from "nostr-tools";
+import { EventShareButton } from "@/components/EventCardActions";
 import type { NostrEvent } from "nostr-tools";
+import { useInferredPRParents } from "@/hooks/useInferredPRParents";
+import { InferredPRStackMap } from "@/components/InferredPRParentLinks";
+import {
+  getOpenInferredPRParent,
+  getInferredPRAmbiguousChildren,
+  getInferredPRChildren,
+  getInferredPRStackItems,
+  getInferredPRStackLayer,
+} from "@/lib/inferredPRParents";
 import {
   buildSyntheticCommit,
   buildSyntheticCommitFallback,
@@ -242,6 +267,7 @@ export default function PRPage() {
     nip05,
     prCommitId,
     issues,
+    prs,
     basePath,
   } = useRepoContext();
   const location = useLocation();
@@ -252,10 +278,10 @@ export default function PRPage() {
   // All confirmed co-maintainer coordinates — gives the full union of relay
   // groups for publishing. Falls back to the PR's own `a` tag coords if the
   // resolved repo isn't available yet (shouldn't happen in practice).
-  // Using allCoordinates instead of pr.repoCoords ensures comments, status
+  // Use every confirmed member coordinate so collaboration events survive
   // changes, labels etc. reach every co-maintainer's relay set, not just the
   // single maintainer baked into the PR's `a` tag at creation time.
-  const repoAllCoords = repo?.allCoordinates;
+  const repoAllCoords = repo?.confirmedMemberCoordinates;
 
   const store = useEventStore();
 
@@ -302,8 +328,15 @@ export default function PRPage() {
 
   // Compute the effective maintainer set.
   const selectedMaintainers = useMemo(
-    () => (repo?.maintainerSet ? new Set(repo.maintainerSet) : undefined),
-    [repo?.maintainerSet],
+    () => (repo?.confirmedMembers ? new Set(repo.confirmedMembers) : undefined),
+    [repo?.confirmedMembers],
+  );
+  const confirmedMaintainers = useMemo(
+    () =>
+      repo?.confirmedMaintainers
+        ? new Set(repo.confirmedMaintainers)
+        : undefined,
+    [repo?.confirmedMaintainers],
   );
 
   // ── Retry search ─────────────────────────────────────────────────────────
@@ -314,12 +347,12 @@ export default function PRPage() {
   const [searchMoreActive, setSearchMoreActive] = useState(false);
 
   const extraSearchGroups = useMemo<RelayGroupSpec[]>(() => {
-    if (!searchMoreActive) return [];
+    if (!searchMoreActive || repo?.isPrivate) return [];
     return [
       { label: "git index", relays$: gitIndexRelays },
       { label: "fallback relays", relays$: fallbackRelays },
     ];
-  }, [searchMoreActive]);
+  }, [searchMoreActive, repo?.isPrivate]);
 
   const handleSearchMore = useCallback(() => {
     setSearchMoreActive(true);
@@ -331,9 +364,13 @@ export default function PRPage() {
     resolved?.repoRelayGroup,
     resolved?.extraRelaysForMaintainerMailboxCoverage,
     selectedMaintainers,
-    undefined, // options
-    extraSearchGroups,
-    retryKey,
+    confirmedMaintainers,
+    repo?.roleHistory,
+    {
+      extraSearchGroups,
+      retryKey,
+      privateRepository: repo?.isPrivate ?? false,
+    },
   );
   const mentionedItems = useMentionedNip34Items(pr?.rootEvent.id);
   const timelineEntries = useMemo(() => {
@@ -370,6 +407,27 @@ export default function PRPage() {
   // Store-read only — 9842 results arrive via the #E comments loader and
   // 9841 running markers via the repo-level #a meta subscription.
   const ciChecks = useCIForPR(pr?.rootEvent.id, pr?.tip.commitId);
+  const nsitePreviewsByCommit = useMemo(
+    () => indexNsitePreviewsByCommit(ciChecks?.runs ?? []),
+    [ciChecks?.runs],
+  );
+
+  // Coordinator relationships, infrastructure identities, network context,
+  // and immutable service-control history use the same trust model as the
+  // repository Actions page.
+  const hasCIRuns = !!ciChecks && ciChecks.runs.length > 0;
+  const { coordinatorState, trust } = useRepositoryCITrust(
+    hasCIRuns ? repo : undefined,
+    ciChecks?.runs,
+  );
+  const ciTrustContext = useMemo<CIRunTrustContext | undefined>(() => {
+    if (!repo) return undefined;
+    return {
+      repo,
+      trust,
+      serviceControls: coordinatorState?.serviceControls,
+    };
+  }, [repo, coordinatorState?.serviceControls, trust]);
 
   // Ordered priority pubkeys for @ mention autocomplete:
   // parent author first, then participants, then maintainers (deduped).
@@ -385,16 +443,50 @@ export default function PRPage() {
     };
     add(pr.pubkey);
     for (const pk of pr.participants) add(pk);
-    for (const pk of repo?.maintainerSet ?? []) add(pk);
+    for (const pk of repo?.confirmedMembers ?? []) add(pk);
     return out;
-  }, [pr, repo?.maintainerSet]);
+  }, [pr, repo?.confirmedMembers]);
 
   // Git pool — uses the repo's clone URLs (same as RepoCodePage).
   const { pool: gitPool, poolState: gitPoolState } = useGitPool(cloneUrls, {
-    knownHeadCommit: repoState?.headCommitId,
-    stateRefs: repoState?.refs,
-    stateCreatedAt: repoState ? repoState.event.created_at : undefined,
+    private: repo?.isPrivate,
   });
+  const inferredParents = useInferredPRParents(
+    repoAllCoords,
+    gitPool,
+    gitPoolState,
+    repoState,
+    prs,
+    repo?.roleHistory,
+  );
+  const inferredParent = prId ? inferredParents?.get(prId) : undefined;
+  const openStackParent = getOpenInferredPRParent(inferredParent, prs);
+  const inferredStackItems =
+    prId && inferredParents
+      ? getInferredPRStackItems(inferredParents, prId)
+      : [];
+  const inferredAmbiguousChildren =
+    prId && inferredParents
+      ? getInferredPRAmbiguousChildren(inferredParents, prId)
+      : [];
+  const inferredBranchedChildren =
+    prId && inferredParents ? getInferredPRChildren(inferredParents, prId) : [];
+
+  // A PR's optional `b` tag replaces the repository default as the base for
+  // comparisons and merge pushes. Non-default refs are lazily ancestry-
+  // verified by the shared git pool before they become authoritative.
+  const {
+    targetBranchName,
+    targetBranchHead,
+    defaultBranchName,
+    targetIsDefaultBranch,
+    targetBranchValid,
+  } = useAuthoritativePRTargetBranch(
+    gitPool,
+    gitPoolState,
+    repoState,
+    pr?.itemType === "pr" ? pr.targetBranch : undefined,
+  );
 
   // Derive the active tab from the URL.
   // Also returns "commits" when on a commit detail sub-path.
@@ -423,14 +515,20 @@ export default function PRPage() {
   }, [pr?.tip.cloneUrls?.join(","), cloneUrls.join(",")]);
 
   // Merge-base: use explicit tag when available, otherwise derive via git
-  const { mergeBase: effectiveMergeBase, computing: computingMergeBase } =
-    usePRMergeBase(
-      gitPool,
-      gitPoolState,
-      pr?.tip.commitId,
-      pr?.tip.explicitMergeBase,
-      effectiveCloneUrls,
-    );
+  const {
+    mergeBase: effectiveMergeBase,
+    computing: computingMergeBase,
+    recovery: mergeBaseRecovery,
+  } = usePRMergeBase(
+    gitPool,
+    gitPoolState,
+    pr?.tip.commitId,
+    pr?.tip.explicitMergeBase,
+    effectiveCloneUrls,
+    targetBranchHead,
+    gitPoolState.loading,
+    !!pr?.targetBranch,
+  );
 
   // Commit history for the PR commits tab — fetches from the effective tip.
   const prCommitHistory = useCommitHistory(
@@ -442,20 +540,23 @@ export default function PRPage() {
     effectiveMergeBase ?? undefined,
   );
   const prCommits = useMemo(() => {
-    const trimmed = (() => {
-      if (!effectiveMergeBase || !prCommitHistory.commits.length)
-        return prCommitHistory.commits;
-      const idx = prCommitHistory.commits.findIndex(
-        (c) => c.hash === effectiveMergeBase,
-      );
-      return idx === -1
-        ? prCommitHistory.commits
-        : prCommitHistory.commits.slice(0, idx);
-    })();
+    const range = selectCommitRange(
+      prCommitHistory.commits,
+      effectiveMergeBase,
+    );
     // Reverse to oldest-first (git walks newest-first from tip).
     // Matches GitHub's PR commits tab convention and the patch body card order.
-    return [...trimmed].reverse();
+    return range.reverse();
   }, [prCommitHistory.commits, effectiveMergeBase]);
+
+  // Graph-resolved source branches for the commits tab's collapsed
+  // merged-in groups (ancestry against current branch heads).
+  const mergeSourceNames = useMergedInSourceBranches(
+    gitPool,
+    gitPoolState,
+    prCommits,
+    targetBranchName,
+  );
 
   // Use a deeper history walk for retained-commit checks than the visible
   // commits tab. Large PRs with merge commits can easily exceed the display
@@ -521,23 +622,19 @@ export default function PRPage() {
   const originalPRCommits = useMemo(() => {
     if (!hasRevisions) return [];
     const base = originalPRMergeBase ?? effectiveMergeBase;
-    const trimmed = (() => {
-      if (!base || !originalPRCommitHistory.commits.length)
-        return originalPRCommitHistory.commits;
-      const idx = originalPRCommitHistory.commits.findIndex(
-        (c) => c.hash === base,
-      );
-      return idx === -1
-        ? originalPRCommitHistory.commits
-        : originalPRCommitHistory.commits.slice(0, idx);
-    })();
-    return [...trimmed].reverse();
+    return selectCommitRange(originalPRCommitHistory.commits, base).reverse();
   }, [
     hasRevisions,
     originalPRCommitHistory.commits,
     originalPRMergeBase,
     effectiveMergeBase,
   ]);
+  const originalMergeSourceNames = useMergedInSourceBranches(
+    gitPool,
+    gitPoolState,
+    hasRevisions ? originalPRCommits : [],
+    targetBranchName,
+  );
 
   // ── Fast-forward detection (for body card "outdated" badge) ──────────
   // If the latest PR update's tip includes the original PR tip in its history,
@@ -549,27 +646,19 @@ export default function PRPage() {
     );
   }, [hasRevisions, originalPRTipCommitId, prCommitHistory.commits]);
 
-  // Mergeability evaluation and merge pushes must target the authoritative
-  // default-branch tip — resolved by the pool (`PoolState.authoritativeHead`):
-  // the signed Nostr state head, unless a git server is verifiably ahead of
-  // it. Never `gitPoolState.latestCommit`, which can point at whichever
-  // server won the git-info race while mirrors converge after a push.
-  const { defaultBranchName, defaultBranchHead } =
-    useAuthoritativeDefaultBranch(gitPoolState, repoState);
-
   const [behindCount, setBehindCount] = useState<number | undefined>(undefined);
-  // false = merge base is not on the default branch (no shared ancestor)
-  const [baseOnDefaultBranch, setBaseOnDefaultBranch] = useState<
+  // false = merge base is not on the target branch (no shared ancestor)
+  const [baseOnTargetBranch, setBaseOnTargetBranch] = useState<
     boolean | undefined
   >(undefined);
   const behindAbortRef = useRef<AbortController | null>(null);
 
   // ── Ahead / behind counts ─────────────────────────────────────────────
   // Suppress the "ahead" count when we know the base commit has no shared
-  // ancestor with the default branch — "N commits ahead" is meaningless
+  // ancestor with the target branch — "N commits ahead" is meaningless
   // without a common history.
   const aheadCount =
-    baseOnDefaultBranch === false
+    baseOnTargetBranch === false
       ? undefined
       : pr?.itemType === "pr"
         ? prCommits.length > 0
@@ -582,9 +671,9 @@ export default function PRPage() {
           : undefined;
 
   useEffect(() => {
-    if (!gitPool || !effectiveMergeBase) {
+    if (!gitPool || !effectiveMergeBase || !targetBranchHead) {
       setBehindCount(undefined);
-      setBaseOnDefaultBranch(undefined);
+      setBaseOnTargetBranch(undefined);
       return;
     }
 
@@ -593,23 +682,29 @@ export default function PRPage() {
     behindAbortRef.current = abort;
 
     gitPool
-      .countCommitsBehind(effectiveMergeBase, abort.signal)
+      .countCommitsBehind(
+        effectiveMergeBase,
+        abort.signal,
+        200,
+        5000,
+        targetBranchHead,
+      )
       .then((result) => {
         if (abort.signal.aborted) return;
-        // result === null means the merge base was not found in the default
+        // result === null means the merge base was not found in the target
         // branch history — no shared ancestor with the current codebase.
-        setBaseOnDefaultBranch(result !== null);
+        setBaseOnTargetBranch(result !== null);
         setBehindCount(result ?? undefined);
       })
       .catch(() => {
         if (!abort.signal.aborted) {
           setBehindCount(undefined);
-          setBaseOnDefaultBranch(undefined);
+          setBaseOnTargetBranch(undefined);
         }
       });
 
     return () => abort.abort();
-  }, [gitPool, effectiveMergeBase, defaultBranchHead]);
+  }, [gitPool, effectiveMergeBase, targetBranchHead]);
 
   // Patch chain — needed for both file count and Commits tab.
   // Cover-letter patches (t:cover-letter) are excluded — they carry no diff
@@ -802,6 +897,94 @@ export default function PRPage() {
     return repo.confirmedMaintainers.includes(activeAccount.pubkey);
   }, [activeAccount, repo]);
 
+  // ── Merge analysis — page-level so results survive tab switches ─────────
+  // MergePanel (inside the conversation tab's TabsContent) unmounts whenever
+  // the user visits Commits or Files Changed; the mergeability checks and
+  // already-merged scan therefore run here and are handed down as a prop.
+  const prNeventForMerge = useMemo(() => {
+    if (pr?.itemType !== "pr") return undefined;
+    return nip19.neventEncode({
+      id: pr.rootEvent.id,
+      author: pr.pubkey,
+      relays: resolved?.repo?.relays?.slice(0, 3) ?? [],
+    });
+  }, [pr, resolved?.repo?.relays]);
+
+  const guessedBaseCommitId =
+    pr?.itemType === "patch" && patchMergeBase.isGuessed
+      ? patchMergeBase.baseCommitId
+      : undefined;
+
+  // Mirrors the MergePanel render condition below.
+  const showMergePanel = !!(
+    pr &&
+    repo &&
+    !repo.isBuzz &&
+    (repo.graspCloneUrls.length > 0 ||
+      repo.additionalGitServerUrls.length > 0) &&
+    isMaintainer &&
+    (pr.status === "open" || pr.status === "draft" || keepMergePanelVisible) &&
+    (pr.itemType === "pr"
+      ? !!pr.tip.commitId
+      : patchChain && patchChain.length > 0)
+  );
+
+  const mergeAnalysis = useMergeAnalysis({
+    pr,
+    repo,
+    patchChain,
+    gitPool,
+    effectiveCloneUrls,
+    defaultBranchHead: targetBranchHead,
+    guessedBaseCommitId,
+    prNevent: prNeventForMerge,
+    enabled: showMergePanel,
+    suppressDetection: keepMergePanelVisible,
+  });
+
+  // ── Merge push-object prefetch ───────────────────────────────────────────
+  // Once the merge button is on offer, fetch the objects the push will need
+  // in the background so clicking Merge is near-instant. Deferred while other
+  // page loads are in flight so the prefetch never competes with them.
+  const mergePrefetchBusy =
+    gitPoolState.loading ||
+    gitPoolState.pulling ||
+    computingMergeBase ||
+    prCommitHistory.loading ||
+    mergeAnalysis.detectingMergeCommit;
+
+  const issueScanNeeded =
+    targetIsDefaultBranch &&
+    (issues ?? []).some(
+      (issue) => issue.status === "open" || issue.status === "draft",
+    );
+
+  const mergeStatusReady =
+    pr?.itemType === "pr"
+      ? mergeAnalysis.prMergeability.status === "ready"
+      : mergeAnalysis.patchMergeability.status === "ready" ||
+        mergeAnalysis.patchMergeability.status === "ready-apply-only";
+
+  const prefetchedMergeObjects = usePrefetchedMergePushObjects({
+    gitPool,
+    effectiveCloneUrls,
+    enabled:
+      showMergePanel &&
+      // Browser merges are only offered on pure-Grasp repos.
+      !!repo &&
+      repo.graspCloneUrls.length > 0 &&
+      repo.additionalGitServerUrls.length === 0 &&
+      !mergeAnalysis.detectedMergeCommit &&
+      mergeStatusReady,
+    busy: mergePrefetchBusy,
+    prTipCommitId: pr?.itemType === "pr" ? pr.tip.commitId : undefined,
+    mergeBase: mergeAnalysis.prMergeability.result?.mergeBase,
+    issueScanNeeded,
+    currentStateEvent: repoState?.event ?? null,
+    defaultBranchName: targetBranchName ?? "main",
+    defaultBranchHead: targetBranchHead,
+  });
+
   const prStatusOptions = useMemo<StatusOption[]>(() => {
     const options: StatusOption[] = [
       { value: "open", label: "Open" },
@@ -964,7 +1147,7 @@ export default function PRPage() {
 
   // ── Tab bar (Link-based so it works from any sub-path) ────────────────
   const tabBar = (
-    <div className="flex gap-0">
+    <div className="flex w-full gap-0 sm:w-auto">
       <TabBarLink
         to={prBasePath ?? ""}
         active={activeTab === "conversation"}
@@ -1050,7 +1233,7 @@ export default function PRPage() {
           backLabel="PR commits"
           hasCommitId={patchMatch.hasCommitId}
           patchChain={commitDetailPatchChain.chain}
-          defaultBranchHead={defaultBranchHead}
+          defaultBranchHead={targetBranchHead}
           superseded={patchMatch.superseded}
           isBaseGuessed={commitDetailPatchMergeBase.isGuessed}
           guessedBaseCommitId={
@@ -1088,22 +1271,48 @@ export default function PRPage() {
     if (!gitPool) return null;
 
     return (
-      <CommitDetailView
-        commitId={prCommitId}
-        pool={gitPool}
-        basePath={prBasePath ?? ""}
-        backTo={prBasePath ? `${prBasePath}/commits` : ".."}
-        backLabel="PR commits"
-        fallbackUrls={prCloneUrls}
-        rootEvent={pr?.rootEvent}
-        commentMap={inlineCommentMap}
-        repoCoords={repoAllCoords ?? pr?.repoCoords}
-        relayHint={repoRelayHints[0]}
-        authorizedPubkeys={pr?.authorisedUsers}
-      />
+      <div className="space-y-4">
+        {!prRetainedCommitHistory.loading &&
+          !prRetainedCommitHistory.error &&
+          latestPRCommitIds !== undefined &&
+          !latestPRCommitIds.has(prCommitId) && (
+            <div
+              role="status"
+              className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-4 text-sm"
+            >
+              <AlertCircle className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+              <span>
+                This commit is outdated and is no longer part of the latest PR
+                revision.
+              </span>
+              <Link
+                to={prBasePath ? `${prBasePath}/commits` : ".."}
+                className="underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                View latest commits
+              </Link>
+            </div>
+          )}
+        <CommitDetailView
+          commitId={prCommitId}
+          pool={gitPool}
+          basePath={prBasePath ?? ""}
+          backTo={prBasePath ? `${prBasePath}/commits` : ".."}
+          backLabel="PR commits"
+          fallbackUrls={prCloneUrls}
+          rootEvent={pr?.rootEvent}
+          commentMap={inlineCommentMap}
+          repoCoords={repoAllCoords ?? pr?.repoCoords}
+          relayHint={repoRelayHints[0]}
+          authorizedPubkeys={pr?.authorisedUsers}
+        />
+      </div>
     );
   }, [
     prCommitId,
+    latestPRCommitIds,
+    prRetainedCommitHistory.loading,
+    prRetainedCommitHistory.error,
     rootEventLoaded,
     isPatch,
     commitDetailPatchChain.loading,
@@ -1111,7 +1320,7 @@ export default function PRPage() {
     patchMatch,
     gitPool,
     gitPoolState.winnerUrl,
-    defaultBranchHead,
+    targetBranchHead,
     cloneUrls,
     prCloneUrls,
     prBasePath,
@@ -1162,7 +1371,9 @@ export default function PRPage() {
         backPath={`${repoBasePath}/prs`}
         backLabel="Back to PRs"
         onSearchMore={
-          !searchMoreActive && search.settled ? handleSearchMore : undefined
+          !repo?.isPrivate && !searchMoreActive && search.settled
+            ? handleSearchMore
+            : undefined
         }
         searchMoreActive={searchMoreActive}
         onRetry={handleRetry}
@@ -1200,9 +1411,16 @@ export default function PRPage() {
                 </div>
 
                 <div className="flex items-center gap-4 flex-wrap text-sm text-muted-foreground ml-[calc(theme(spacing.3)+4.5rem-3.5rem)]">
-                  <code className="font-mono text-xs text-muted-foreground/80">
-                    #{pr.rootEvent.id.slice(0, 8)}
-                  </code>
+                  <div className="flex items-center gap-1.5">
+                    <code className="font-mono text-xs text-muted-foreground/80">
+                      #{pr.rootEvent.id.slice(0, 8)}
+                    </code>
+                    <EventShareButton
+                      event={pr.rootEvent}
+                      label="Copy link"
+                      dialogTitle={`Copy link to ${pr.itemType === "patch" ? "patch" : "pull request"}`}
+                    />
+                  </div>
                   <div className="flex items-center gap-1">
                     <TypeIcon className="h-3.5 w-3.5" />
                     <span className="text-xs capitalize">{pr.itemType}</span>
@@ -1239,11 +1457,81 @@ export default function PRPage() {
               </div>
 
               {/* Right: tabs */}
-              <div className="shrink-0">{tabBar}</div>
+              <div className="w-full min-w-0 sm:w-auto sm:shrink-0">
+                {tabBar}
+              </div>
             </div>
           ) : null}
         </div>
       </div>
+
+      {pr?.itemType === "pr" && pr.targetBranch && (
+        <div className="container max-w-screen-xl px-4 pt-4 md:px-8">
+          <div
+            role={
+              !targetBranchValid ||
+              (!gitPoolState.loading && !targetBranchHead) ||
+              (!targetIsDefaultBranch && repoState === null)
+                ? "alert"
+                : undefined
+            }
+            className={cn(
+              "flex items-start gap-2 rounded-lg border px-3 py-2.5 text-sm",
+              !targetBranchValid ||
+                (!gitPoolState.loading && !targetBranchHead) ||
+                (!targetIsDefaultBranch && repoState === null)
+                ? "border-amber-500/40 bg-amber-500/5 text-amber-800 dark:text-amber-300"
+                : "border-border/60 bg-muted/30 text-muted-foreground",
+            )}
+          >
+            <GitBranch className="mt-0.5 h-4 w-4 shrink-0" />
+            <p>
+              This pull request targets{" "}
+              <code className="rounded bg-background px-1 py-0.5 font-mono text-xs text-foreground">
+                {pr.targetBranch}
+              </code>
+              {defaultBranchName && (
+                <>
+                  {" "}
+                  instead of the default{" "}
+                  <code className="rounded bg-background px-1 py-0.5 font-mono text-xs text-foreground">
+                    {defaultBranchName}
+                  </code>
+                </>
+              )}
+              .{" "}
+              {!targetBranchValid
+                ? "This is not a valid Git branch name, so comparison and merge actions are unavailable."
+                : !targetIsDefaultBranch && repoState === null
+                  ? "The current repository state is unavailable, so this branch cannot be updated safely in the browser."
+                  : !gitPoolState.loading && !targetBranchHead
+                    ? "The target branch could not be found, so comparison and browser merge actions are unavailable."
+                    : "Comparisons and merges use this branch."}
+            </p>
+          </div>
+        </div>
+      )}
+
+      {pr &&
+        (inferredParent ||
+          inferredStackItems.length > 1 ||
+          inferredAmbiguousChildren.length > 0 ||
+          inferredBranchedChildren.length > 1) && (
+          <InferredPRStackMap
+            relation={inferredParent}
+            items={inferredStackItems}
+            currentRootId={pr.rootEvent.id}
+            ambiguousChildren={inferredAmbiguousChildren}
+            branchedChildren={inferredBranchedChildren}
+            repoPath={repoBasePath}
+            relayHints={repoRelayHints}
+            layer={
+              inferredParents
+                ? getInferredPRStackLayer(inferredParents, pr.rootEvent.id)
+                : undefined
+            }
+          />
+        )}
 
       {/* Content */}
       <div className="container max-w-screen-xl px-4 md:px-8 py-6">
@@ -1280,6 +1568,9 @@ export default function PRPage() {
             <div className="space-y-4 min-w-0">
               {/* Conversation tab */}
               <TabsContent value="conversation" className="space-y-4 mt-0">
+                {/* The current-tip preview is the primary review artifact. */}
+                {ciChecks && <PRNsitePreview checks={ciChecks} trust={trust} />}
+
                 {/* Cover note — pinned note from author/maintainer */}
                 {coverNoteEditing && pr ? (
                   <CoverNoteBox
@@ -1324,9 +1615,9 @@ export default function PRPage() {
                           ? originalPRCommits.map((c) => ({
                               hash: c.hash,
                               subject: c.message.split("\n")[0],
-                              // Don't link to commit pages for superseded commits
-                              // since those commits may not be on the current branch.
-                              href: undefined,
+                              href: prBasePath
+                                ? `${prBasePath}/commit/${c.hash}`
+                                : undefined,
                               superseded:
                                 latestPRCommitIds !== undefined
                                   ? !latestPRCommitIds.has(c.hash)
@@ -1339,7 +1630,9 @@ export default function PRPage() {
                                   subject: originalPRCommitHistory.loading
                                     ? "Loading commits…"
                                     : "(commits not available)",
-                                  href: undefined,
+                                  href: prBasePath
+                                    ? `${prBasePath}/commit/${originalPRTipCommitId}`
+                                    : undefined,
                                   superseded:
                                     latestPRCommitIds !== undefined
                                       ? !latestPRCommitIds.has(
@@ -1371,6 +1664,26 @@ export default function PRPage() {
                           }))
                         : undefined
                   }
+                  commitGraphCommits={
+                    pr.itemType === "pr"
+                      ? hasRevisions
+                        ? originalPRCommits.length > 0
+                          ? originalPRCommits
+                          : undefined
+                        : prCommits.length > 0
+                          ? prCommits
+                          : undefined
+                      : undefined
+                  }
+                  commitsContinueAbove={
+                    pr.itemType === "pr" &&
+                    hasRevisions &&
+                    isLatestFastForwardFromOriginal
+                  }
+                  collapseMergedCommits={pr.itemType === "pr"}
+                  mergeSourceNames={
+                    hasRevisions ? originalMergeSourceNames : mergeSourceNames
+                  }
                   commitsSuperseded={
                     // PR: superseded only when there are updates AND the latest
                     // update is not simply a fast-forward of the original commit
@@ -1383,6 +1696,11 @@ export default function PRPage() {
                     (pr.itemType === "patch" &&
                       pr.firstRevisionInlined === true &&
                       pr.revisions.length > 1)
+                  }
+                  commitPreview={
+                    originalPRTipCommitId
+                      ? nsitePreviewsByCommit.get(originalPRTipCommitId)
+                      : undefined
                   }
                   commitsLatestHref={
                     (pr.itemType === "pr" && hasRevisions && prBasePath
@@ -1501,6 +1819,14 @@ export default function PRPage() {
                                   repoCoords={repoAllCoords ?? pr.repoCoords}
                                   previousTipCommitId={prevTip}
                                   latestCommitIds={latestPRCommitIds}
+                                  nsitePreview={
+                                    node.revision.tipCommitId
+                                      ? nsitePreviewsByCommit.get(
+                                          node.revision.tipCommitId,
+                                        )
+                                      : undefined
+                                  }
+                                  mergeSourceNames={mergeSourceNames}
                                 />
                               );
                             }
@@ -1584,54 +1910,41 @@ export default function PRPage() {
                 {/* CI checks — shown to everyone whenever any CI runner has
                     published workflow runs/results for this PR */}
                 {pr && ciChecks && ciChecks.runs.length > 0 && (
-                  <CIChecksPanel checks={ciChecks} canRetry={isMaintainer} />
+                  <CIChecksPanel
+                    checks={ciChecks}
+                    canRetry={isMaintainer}
+                    trustContext={ciTrustContext}
+                  />
                 )}
 
                 {/* Merge panel — shown for PRs and patches on git-backed repos, for maintainers */}
-                {pr &&
-                  repo &&
-                  (repo.graspCloneUrls.length > 0 ||
-                    repo.additionalGitServerUrls.length > 0) &&
-                  isMaintainer &&
-                  (pr.status === "open" ||
-                    pr.status === "draft" ||
-                    keepMergePanelVisible) &&
-                  (pr.itemType === "pr"
-                    ? !!pr.tip.commitId
-                    : patchChain && patchChain.length > 0) && (
-                    <MergePanel
-                      pr={pr}
-                      repo={repo}
-                      patchChain={
-                        pr.itemType === "patch" ? patchChain : undefined
-                      }
-                      gitPool={gitPool}
-                      effectiveCloneUrls={effectiveCloneUrls}
-                      behindCount={behindCount}
-                      defaultBranchName={defaultBranchName ?? "main"}
-                      defaultBranchHead={defaultBranchHead}
-                      currentStateEvent={repoState?.event}
-                      guessedBaseCommitId={
-                        pr.itemType === "patch" && patchMergeBase.isGuessed
-                          ? patchMergeBase.baseCommitId
-                          : undefined
-                      }
-                      prNevent={
-                        pr.itemType === "pr"
-                          ? nip19.neventEncode({
-                              id: pr.rootEvent.id,
-                              author: pr.pubkey,
-                              relays: resolved?.repo?.relays?.slice(0, 3) ?? [],
-                            })
-                          : undefined
-                      }
-                      issues={issues}
-                      onSuccessfulPush={handleSuccessfulPush}
-                    />
-                  )}
+                {pr && repo && resolved && showMergePanel && (
+                  <MergePanel
+                    resolved={resolved}
+                    pr={pr}
+                    repo={repo}
+                    patchChain={
+                      pr.itemType === "patch" ? patchChain : undefined
+                    }
+                    gitPool={gitPool}
+                    effectiveCloneUrls={effectiveCloneUrls}
+                    behindCount={behindCount}
+                    defaultBranchName={targetBranchName ?? "main"}
+                    defaultBranchHead={targetBranchHead}
+                    targetIsDefaultBranch={targetIsDefaultBranch}
+                    currentStateEvent={repoState?.event}
+                    prs={prs}
+                    openStackParent={openStackParent}
+                    guessedBaseCommitId={guessedBaseCommitId}
+                    analysis={mergeAnalysis}
+                    prefetched={prefetchedMergeObjects}
+                    issues={issues}
+                    onSuccessfulPush={handleSuccessfulPush}
+                  />
+                )}
 
                 {/* Reply box — always shown; anonymous posting handled inside */}
-                {pr && (
+                {pr && !repo?.isBuzz && (
                   <ReplyBox
                     rootEvent={
                       // For patches with multiple revisions, comments go to the
@@ -1670,7 +1983,7 @@ export default function PRPage() {
                       chain={patchChain}
                       baseCommitId={patchMergeBase.baseCommitId}
                       isBaseGuessed={patchMergeBase.isGuessed}
-                      defaultBranchHead={defaultBranchHead}
+                      defaultBranchHead={targetBranchHead}
                       pool={gitPool}
                       onFileCountChange={(count) => {
                         if (pr?.itemType === "patch") setFileCount(count);
@@ -1697,6 +2010,9 @@ export default function PRPage() {
                       {computingMergeBase
                         ? "Determining base commit..."
                         : "Could not determine the base commit."}
+                      {!computingMergeBase && (
+                        <ErrorRetryAction recovery={mergeBaseRecovery} />
+                      )}
                     </div>
                   ) : !gitPool ? (
                     <div className="rounded-lg border border-dashed border-border/60 px-6 py-10 text-center text-sm text-muted-foreground">
@@ -1729,9 +2045,15 @@ export default function PRPage() {
                         {computingMergeBase
                           ? "Determining base commit..."
                           : "Could not determine the base commit for this PR."}
+                        {!computingMergeBase && (
+                          <ErrorRetryAction recovery={mergeBaseRecovery} />
+                        )}
                       </div>
                     ) : prCommitHistory.error ? (
-                      <CommitListError message={prCommitHistory.error} />
+                      <CommitListError
+                        message={prCommitHistory.error}
+                        recovery={prCommitHistory.recovery}
+                      />
                     ) : prCommitHistory.loading ? (
                       <CommitListLoading count={4} />
                     ) : prCommits.length === 0 ? (
@@ -1739,6 +2061,9 @@ export default function PRPage() {
                     ) : (
                       <CommitList
                         commits={prCommits}
+                        direction="oldest-first"
+                        collapseMergedCommits
+                        mergeSourceNames={mergeSourceNames}
                         basePath={
                           prBasePath ??
                           repoToPath(pubkey, repoId, repo?.relays ?? [], nip05)
@@ -1805,11 +2130,11 @@ export default function PRPage() {
                               </span>
                             </p>
                           )}
-                          {defaultBranchName && (
+                          {targetBranchName && (
                             <p className="text-xs text-muted-foreground">
                               vs{" "}
                               <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">
-                                {defaultBranchName}
+                                {targetBranchName}
                               </code>
                             </p>
                           )}
@@ -1932,16 +2257,16 @@ function TabBarLink({
     <Link
       to={to}
       className={cn(
-        "inline-flex items-center gap-1.5 text-sm rounded-none px-3 pb-2 pt-1 border-b-2 transition-colors",
+        "flex min-w-0 flex-1 items-center justify-center gap-1 rounded-none border-b-2 px-1 pb-2 pt-1 text-xs transition-colors sm:inline-flex sm:flex-none sm:gap-1.5 sm:px-3 sm:text-sm",
         active
           ? "border-foreground text-foreground"
           : "border-transparent text-muted-foreground hover:text-foreground",
       )}
     >
-      {icon}
-      {label}
+      <span className="hidden shrink-0 sm:inline-flex">{icon}</span>
+      <span className="truncate">{label}</span>
       {badge !== undefined && (
-        <span className="ml-1 rounded-full bg-muted-foreground/20 px-1.5 py-0.5 text-xs font-medium leading-none">
+        <span className="hidden shrink-0 rounded-full bg-muted-foreground/20 px-1.5 py-0.5 text-xs font-medium leading-none sm:ml-1 sm:inline-flex">
           {badge}
         </span>
       )}

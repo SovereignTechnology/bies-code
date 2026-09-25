@@ -3,14 +3,13 @@
  *
  * Desktop layout (md+):
  *   Left column (~65%):  Greeting → Notifications → Continue where you left off
- *   Right column (~35%): My repositories → Followed repositories
+ *   Right column (~35%): My repositories → Accessible private repositories → Followed repositories
  *
  * Mobile layout (< md):
- *   Single column: Greeting → My repos → Followed repos → Notifications → Activity
+ *   Single column: Greeting → My repos → Accessible private repos → Followed repos → Notifications → Activity
  */
 
 import { Link } from "react-router-dom";
-import { nip19 } from "nostr-tools";
 import {
   Bell,
   Plus,
@@ -23,6 +22,10 @@ import {
   ChevronUp,
   Pin,
   Search,
+  Lock,
+  Settings2,
+  AlertTriangle,
+  RotateCcw,
 } from "lucide-react";
 import { CreateRepoDialog } from "@/components/CreateRepoDialog";
 import { Button } from "@/components/ui/button";
@@ -35,16 +38,21 @@ import { ActivityFeed } from "@/components/ActivityFeed";
 import { useUserActivity } from "@/hooks/useUserActivity";
 import { useUserRepositories } from "@/hooks/useUserRepositories";
 import { useUserFollowedRepos } from "@/hooks/useUserFollowedRepos";
+import { useAccessiblePrivateRepositories } from "@/hooks/useAccessiblePrivateRepositories";
 import { useUserPinnedCoords } from "@/hooks/useUserPinnedRepos";
+import { DOCUMENTATION_URLS } from "@/lib/documentation";
 import { useNotifications } from "@/hooks/useNotifications";
 import { useUserProfileSubscription } from "@/hooks/useUserProfileSubscription";
 import { useUserPath } from "@/hooks/useUserPath";
 import { useActiveAccount } from "applesauce-react/hooks";
 import { useProfile } from "@/hooks/useProfile";
+import { useDefaultRepoPath } from "@/hooks/useRepoPath";
 
 import { useState, useMemo } from "react";
 import type { ResolvedRepo } from "@/lib/nip34";
 import { NotificationRow } from "@/components/NotificationRow";
+import { isPrivateRepositoryCoordinate } from "@/services/privateRepositoryScope";
+import { retryPrivateGitRelayList } from "@/services/privateGitRelays";
 
 // ---------------------------------------------------------------------------
 // Greeting header
@@ -88,9 +96,10 @@ function RepoListItem({
   isPinned?: boolean;
   hideAuthor?: boolean;
 }) {
-  const npub = nip19.npubEncode(repo.selectedMaintainer);
-  const repoPath = `/${npub}/${repo.dTag}`;
+  const repoPath = useDefaultRepoPath(repo);
   const name = repo.name || repo.dTag;
+  const isPrivate =
+    repo.isPrivate || isPrivateRepositoryCoordinate(repo.selectedCoordinate);
 
   return (
     <Link
@@ -117,6 +126,12 @@ function RepoListItem({
       <span className="text-sm font-medium truncate min-w-0 flex-1 group-hover:text-primary transition-colors">
         {name}
       </span>
+      {isPrivate && (
+        <Lock
+          className="h-3 w-3 shrink-0 text-muted-foreground/70"
+          aria-label="Private repository"
+        />
+      )}
     </Link>
   );
 }
@@ -230,7 +245,7 @@ function MyRepositoriesPanel({ pubkey }: { pubkey: string }) {
                 const coord = `30617:${repo.selectedMaintainer}:${repo.dTag}`;
                 return (
                   <RepoListItem
-                    key={coord}
+                    key={repo.componentId}
                     repo={repo}
                     isPinned={pinnedSet.has(coord)}
                     hideAuthor
@@ -273,10 +288,10 @@ function MyRepositoriesPanel({ pubkey }: { pubkey: string }) {
               No repositories yet
             </p>
             <Button size="sm" variant="outline" asChild className="text-xs">
-              <Link to="/ngit">
+              <a href={DOCUMENTATION_URLS.install}>
                 <Plus className="h-3.5 w-3.5 mr-1.5" />
                 Publish with ngit
-              </Link>
+              </a>
             </Button>
           </div>
         )}
@@ -360,8 +375,7 @@ function FollowedReposPanel({ pubkey }: { pubkey: string }) {
           <>
             <div className="space-y-0.5">
               {displayRepos.map((repo) => {
-                const coord = `30617:${repo.selectedMaintainer}:${repo.dTag}`;
-                return <RepoListItem key={coord} repo={repo} />;
+                return <RepoListItem key={repo.componentId} repo={repo} />;
               })}
             </div>
             {hasMore && (
@@ -406,6 +420,183 @@ function FollowedReposPanel({ pubkey }: { pubkey: string }) {
         )}
       </div>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Accessible private repositories panel
+// ---------------------------------------------------------------------------
+
+function AccessiblePrivateRepositoriesPanel({ pubkey }: { pubkey: string }) {
+  const { repos, state } = useAccessiblePrivateRepositories(pubkey);
+  const [expanded, setExpanded] = useState(false);
+  const [search, setSearch] = useState("");
+
+  const sorted = useMemo(
+    () =>
+      repos ? [...repos].sort((a, b) => b.updatedAt - a.updatedAt) : undefined,
+    [repos],
+  );
+
+  const trimmed = search.trim().toLowerCase();
+  const filtered = useMemo(() => {
+    if (!sorted) return undefined;
+    if (!trimmed) return sorted;
+    return sorted.filter(
+      (repo) =>
+        repo.name.toLowerCase().includes(trimmed) ||
+        repo.dTag.toLowerCase().includes(trimmed) ||
+        repo.description.toLowerCase().includes(trimmed),
+    );
+  }, [sorted, trimmed]);
+
+  const isFiltering = trimmed.length > 0;
+  const displayRepos =
+    isFiltering || expanded ? filtered : filtered?.slice(0, INITIAL_VISIBLE);
+  const hasMore = !isFiltering && (filtered?.length ?? 0) > INITIAL_VISIBLE;
+  const isCurrentAccount = state.pubkey === pubkey;
+  const serviceCount = isCurrentAccount ? state.relayUrls.length : 0;
+  const isUnavailable = isCurrentAccount && state.status === "unavailable";
+  const serviceLabel = serviceCount === 1 ? "service" : "services";
+
+  if (serviceCount === 0 && !isUnavailable) return null;
+
+  return (
+    <>
+      <div className="h-fit">
+        <div className="pb-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <h3 className="flex items-center gap-2 text-base font-semibold">
+                <Lock className="h-4 w-4 shrink-0 text-muted-foreground" />
+                <span className="leading-tight">
+                  Accessible private repositories
+                </span>
+              </h3>
+              <p className="ml-6 mt-1 text-xs text-muted-foreground">
+                {isUnavailable
+                  ? serviceCount > 0
+                    ? `Using ${serviceCount} last decrypted ${serviceLabel}`
+                    : "Encrypted service list unavailable"
+                  : `Querying ${serviceCount} private ${serviceLabel}`}
+              </p>
+            </div>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 shrink-0 px-2 text-xs text-muted-foreground hover:text-foreground"
+              asChild
+            >
+              <Link to="/settings#private-git-services">
+                <Settings2 className="mr-1 h-3.5 w-3.5" />
+                Configure
+              </Link>
+            </Button>
+          </div>
+        </div>
+
+        {isUnavailable && (
+          <div
+            className="mb-3 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2.5"
+            role="alert"
+          >
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
+              <div className="min-w-0">
+                <p className="text-xs font-medium">
+                  Current private service list could not be decrypted
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {serviceCount > 0
+                    ? "Repositories from the last decrypted list remain available."
+                    : "Retry decryption to restore private repository discovery."}
+                </p>
+              </div>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="mt-2 h-7 text-xs"
+              onClick={() => retryPrivateGitRelayList(state.generation)}
+            >
+              <RotateCcw className="mr-1.5 h-3 w-3" />
+              Retry decryption
+            </Button>
+          </div>
+        )}
+
+        {sorted && sorted.length > 0 && (
+          <div className="relative mb-3">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              placeholder="Filter private repositories..."
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              className="h-8 bg-background/60 pl-8 text-sm focus-visible:ring-pink-500/30"
+            />
+          </div>
+        )}
+
+        <div>
+          {repos === undefined &&
+          isUnavailable &&
+          serviceCount === 0 ? null : repos === undefined ? (
+            <div className="space-y-1">
+              {Array.from({ length: 3 }).map((_, index) => (
+                <RepoRowSkeleton key={index} />
+              ))}
+            </div>
+          ) : displayRepos && displayRepos.length > 0 ? (
+            <>
+              <div className="space-y-0.5">
+                {displayRepos.map((repo) => (
+                  <RepoListItem key={repo.componentId} repo={repo} />
+                ))}
+              </div>
+              {hasMore && (
+                <div className="mt-3 border-t border-border/40 pt-2">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 w-full text-xs text-muted-foreground"
+                    onClick={() => setExpanded((value) => !value)}
+                  >
+                    {expanded ? (
+                      <>
+                        Show less
+                        <ChevronUp className="ml-1.5 h-3 w-3" />
+                      </>
+                    ) : (
+                      <>
+                        Show all {filtered?.length} repositories
+                        <ChevronDown className="ml-1.5 h-3 w-3" />
+                      </>
+                    )}
+                  </Button>
+                </div>
+              )}
+            </>
+          ) : isFiltering ? (
+            <div className="py-6 text-center">
+              <p className="text-sm text-muted-foreground">
+                No private repositories match "{search}"
+              </p>
+            </div>
+          ) : (
+            <div className="rounded-lg border border-dashed px-4 py-6 text-center">
+              <p className="text-sm text-muted-foreground">
+                No accessible private repositories
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground/60">
+                Repositories shared through your services will appear here.
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
+      <Separator className="opacity-40" />
+    </>
   );
 }
 
@@ -590,6 +781,7 @@ export function Dashboard() {
           <div className="order-1 md:order-2 w-full md:w-80 lg:w-96 md:max-w-sm shrink-0 space-y-6">
             <MyRepositoriesPanel pubkey={pubkey} />
             <Separator className="opacity-40" />
+            <AccessiblePrivateRepositoriesPanel pubkey={pubkey} />
             <FollowedReposPanel pubkey={pubkey} />
           </div>
         </div>

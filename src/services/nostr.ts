@@ -1,5 +1,5 @@
 import { EventStore, mapEventsToStore } from "applesauce-core";
-import { persistEventsToCache } from "applesauce-core/helpers";
+import { fakeVerifyEvent, persistEventsToCache } from "applesauce-core/helpers";
 import type { Filter } from "applesauce-core/helpers";
 import {
   createAddressLoader,
@@ -14,17 +14,36 @@ import { NostrConnectSigner } from "applesauce-signers";
 import type { NostrEvent } from "nostr-tools";
 import { verifyEvent } from "nostr-tools";
 import {
+  BehaviorSubject,
   Observable,
+  Subject,
   Subscription,
+  combineLatest,
   merge,
   distinctUntilChanged,
   firstValueFrom,
+  from,
   of,
   timer,
+  EMPTY,
 } from "rxjs";
-import { filter, map, take, timeout } from "rxjs/operators";
+import {
+  catchError,
+  filter,
+  map,
+  mergeMap,
+  switchMap,
+  take,
+  timeout,
+} from "rxjs/operators";
 import { MailboxesModel } from "applesauce-core/models";
-import { cacheRequest, saveEvents } from "./cache";
+import {
+  cacheRequest,
+  loadDeletionEvents,
+  saveDeletionEvent,
+  saveEvents,
+} from "./cache";
+import { PersistentDeleteManager } from "./persistentDeleteManager";
 import { nip05IdbCache, loadAllNip05FromIdb } from "./nip05IdbCache";
 import { setHintEventStore } from "@/factories/hints";
 import {
@@ -35,37 +54,90 @@ import {
 } from "./settings";
 import {
   ISSUE_KIND,
-  PATCH_KIND,
+  REPO_KIND,
   PR_ROOT_KINDS,
   LEGACY_REPLY_KINDS,
   COVER_NOTE_KIND,
+  parseRepoCoordinate,
+  isRepositoryRootItem,
+  resolveChain,
+  getRepoIsPrivate,
+  roleHistoryCacheKey,
+  type RepositoryRoleHistory,
 } from "@/lib/nip34";
 import { CI_EVENT_KINDS, CI_RUN_KIND } from "@/lib/ci";
-import { Repository, isValidRepository } from "@/casts/Repository";
+import { SOFTWARE_APPLICATION_KIND } from "@/casts/Software";
 import {
   createPaginatedTagValueLoader,
   type PaginatedTagValueResponse,
 } from "@/lib/tagValuePaginatedLoader";
-import { resilientSubscription } from "@/lib/resilientSubscription";
-import { outboxStore, type RelayGroupResolver } from "./outbox";
+import {
+  resilientAdditiveSubscription,
+  type AdditiveFilterChunk,
+} from "@/lib/resilientSubscription";
+import {
+  bestEffortRelayGroupId,
+  fixedRelayGroupUrls,
+  outboxStore,
+  type RelayGroupResolver,
+  unwrapRelayGroupId,
+} from "./outbox";
 import { normalizeUrl } from "@/lib/url";
+import { isPersonalSingletonKind } from "@/lib/personalSingletons";
 import { relayGroupUrls$ } from "@/models/RepositoryRelayGroup";
+import {
+  buildStackCandidateFilter,
+  getEffectivePRMergeBases,
+} from "@/lib/inferredPRParents";
+import { loadEventReferenceClosure } from "@/lib/eventReferenceClosure";
+import {
+  getPrivateRepositoryRelays,
+  getPrivateRelayTrustSession,
+  isPrivateRepositoryCoordinate,
+  isTrustedPrivateRepositoryRelay,
+  markPrivateRelayEvent,
+} from "@/services/privateRepositoryScope";
 
 /**
  * Global EventStore instance for all Nostr events.
  * This is the central state container for the application.
  */
+const deleteManager = new PersistentDeleteManager({
+  load: loadDeletionEvents,
+  save: saveDeletionEvent,
+  verify: verifyEvent,
+  onError: (operation, error) => {
+    console.warn(`[cache] Failed to ${operation} deletion tombstones:`, error);
+  },
+});
+
 export const eventStore = new EventStore({
   keepDeleted: false, // Don't keep deleted events
   keepExpired: false, // Don't keep expired events
   keepOldVersions: false, // Only keep latest version of replaceable events
+  deleteManager,
 });
 
-// Verify events when they are added to the store
-eventStore.verifyEvent = verifyEvent;
+// Signature verification is intentionally disabled for the EventStore:
+// relay-delivered events are trusted without hash or schnorr checks. The
+// EventStore verifies by default, so this must be an explicit override.
+// See docs/signature-verification.md for the rationale and the planned
+// relay-trust spot-check model that will replace blanket verification.
+// The delete manager above keeps its own real verifier — rehydrated
+// deletion tombstones are always fully verified.
+eventStore.verifyEvent = fakeVerifyEvent;
 
 // Persist events to the local nostrdb
 persistEventsToCache(eventStore, saveEvents);
+
+/**
+ * Resolves after durable deletion state has been restored. main.tsx waits for
+ * this before rendering so a stale cached original cannot precede its
+ * tombstone into the EventStore.
+ */
+export const deletionCacheReady = deleteManager.hydrate();
+/** Verified signed deletion evidence retained outside the deleting EventStore. */
+export const deletionEvents$ = deleteManager.evidence$;
 
 // Register this store as the source for factory relay-hint resolution. Done
 // here (rather than `hints.ts` importing this module) so the factory layer has
@@ -113,9 +185,9 @@ liveness.connectToPool(pool);
 // While a caller is subscribed, capping at 30min gives auto-revival probes
 // for relays that have come back without manual intervention.
 //
-// Requires the patches/applesauce-relay@6.0.0.patch which makes
-// RelayPool.relay() emit on pool.add$ — without that, this subscribe never
-// fires for newly-created relays.
+// Requires patches/applesauce-relay@6.2.1.patch: count failures when arming
+// recovery, including WebSocket errors without a close event. Otherwise
+// attempts can stay at zero and every retry uses the first 1s delay.
 const RECONNECT_PHASES_MS: number[] = [
   // Phase 1 — burst (attempts 1-3)
   1_000,
@@ -143,6 +215,31 @@ function reconnectDelayMs(attempts: number): number {
 pool.add$.subscribe((relay) => {
   relay.reconnectTimer = (_error, attempts) =>
     timer(reconnectDelayMs(attempts));
+
+  // Mark private-relay provenance before EventStore consumers observe the
+  // event. Cache persistence consults this synchronous quarantine. A private
+  // service may also mirror public repository announcements, so kind:30617
+  // needs an explicit ngit/Buzz private marker; coordinate-specific legacy
+  // discovery marks its stronger evidence before EventStore insertion.
+  relay.message$.subscribe((message: unknown) => {
+    if (
+      !isTrustedPrivateRepositoryRelay(relay.url) ||
+      !Array.isArray(message) ||
+      message[0] !== "EVENT"
+    ) {
+      return;
+    }
+    const event = message[2];
+    if (event && typeof event === "object") {
+      const nostrEvent = event as NostrEvent;
+      if (
+        verifyEvent(nostrEvent) &&
+        (nostrEvent.kind !== REPO_KIND || getRepoIsPrivate(nostrEvent))
+      ) {
+        markPrivateRelayEvent(nostrEvent);
+      }
+    }
+  });
 });
 
 /**
@@ -183,6 +280,33 @@ pool.add$.subscribe((relay) => {
       const { accounts } = await import("./accounts");
       const account = accounts.active$.getValue();
       if (!account) return;
+
+      const privateTrust = getPrivateRelayTrustSession(relay.url);
+      if (
+        privateTrust &&
+        privateTrust.accountId === account.id &&
+        privateTrust.pubkey === account.pubkey
+      ) {
+        try {
+          await relay.authenticate(account.signer);
+          const currentAccount = accounts.active$.getValue();
+          const currentTrust = getPrivateRelayTrustSession(relay.url);
+          if (
+            currentAccount?.id !== account.id ||
+            currentAccount.pubkey !== account.pubkey ||
+            currentTrust?.generation !== privateTrust.generation ||
+            currentTrust.accountId !== privateTrust.accountId
+          ) {
+            pool.remove(relay.url);
+          }
+        } catch (err) {
+          console.warn(
+            `[auth] Private relay auth failed for ${relay.url}:`,
+            err,
+          );
+        }
+        return;
+      }
 
       // Synchronous cache check — kind:10002 is kept live by
       // userIdentitySubscription so this will almost always be populated.
@@ -260,6 +384,8 @@ async function resolveMailboxes(pubkey: string) {
  *   - "index-relays"         → lookup/user-index relays (lookupRelays setting)
  *   - "git-index"            → git index relay (wss://index.ngit.dev)
  *   - "bootstrap-relays"     → hardcoded new-account bootstrap relays
+ *   - "best-effort:<group>"  → attempted without blocking broad delivery
+ *   - "fixed-relays:<...>"   → immutable relay URLs encoded by the writer
  *
  * When the kind:10002 is not yet in the EventStore, addressLoader is used to
  * fetch it. The outbox store calls this again via reResolveRelayGroups()
@@ -267,9 +393,13 @@ async function resolveMailboxes(pubkey: string) {
  * relays automatically.
  */
 const relayGroupResolver: RelayGroupResolver = async (groupId) => {
+  const targetGroupId = unwrapRelayGroupId(groupId).groupId;
+  const fixedRelays = fixedRelayGroupUrls(targetGroupId);
+  if (fixedRelays !== undefined) return fixedRelays;
+
   // "outbox:<pubkey>" → NIP-65 write relays
-  if (groupId.startsWith("outbox:")) {
-    const pubkey = groupId.slice(7);
+  if (targetGroupId.startsWith("outbox:")) {
+    const pubkey = targetGroupId.slice(7);
     if (!/^[0-9a-f]{64}$/.test(pubkey)) return [];
     try {
       const mailboxes = await resolveMailboxes(pubkey);
@@ -280,8 +410,8 @@ const relayGroupResolver: RelayGroupResolver = async (groupId) => {
   }
 
   // "inbox:<pubkey>" → NIP-65 read relays
-  if (groupId.startsWith("inbox:")) {
-    const pubkey = groupId.slice(6);
+  if (targetGroupId.startsWith("inbox:")) {
+    const pubkey = targetGroupId.slice(6);
     if (!/^[0-9a-f]{64}$/.test(pubkey)) return [];
     try {
       const mailboxes = await resolveMailboxes(pubkey);
@@ -293,51 +423,31 @@ const relayGroupResolver: RelayGroupResolver = async (groupId) => {
 
   // Repo coord: "30617:<pubkey>:<d>"
   //
-  // BFS through the full recursive maintainer chain so that ALL relay URLs
-  // declared in any announcement in the chain are returned, not just the
-  // relays from the single entry-point announcement. This mirrors the
-  // RepositoryRelayGroup model (which is the reactive/additive counterpart
-  // used for READ subscriptions). At publish-time all announcements that
-  // have arrived in the EventStore are used; any that arrive later will be
-  // picked up by outboxStore.reResolveRelayGroups() when triggered.
-  if (groupId.startsWith("30617:")) {
-    const parts = groupId.split(":");
+  // Resolve the reciprocal component before accepting shared relay metadata.
+  // Directionally discovered invitation announcements never widen a publish
+  // target. Any announcements arriving later are picked up when the outbox
+  // re-resolves relay groups.
+  if (targetGroupId.startsWith("30617:")) {
+    if (isPrivateRepositoryCoordinate(targetGroupId)) {
+      return getPrivateRepositoryRelays(targetGroupId) ?? [];
+    }
+    const parts = targetGroupId.split(":");
     const pubkey = parts[1];
-    const d = parts[2];
+    const d = parts.slice(2).join(":");
     if (!pubkey || !d) return [];
 
-    const allRelays = new Set<string>();
-    const visited = new Set<string>();
-    const queue = [pubkey];
-
-    while (queue.length > 0) {
-      const pk = queue.shift()!;
-      if (visited.has(pk)) continue;
-      visited.add(pk);
-
-      const events = eventStore.getByFilters({
-        kinds: [30617],
-        authors: [pk],
-        "#d": [d],
-      } as Filter);
-      const ev = events[0];
-      if (!ev || !isValidRepository(ev)) continue;
-
-      const repo = new Repository(ev, eventStore);
-      for (const relay of repo.relays) allRelays.add(relay);
-      for (const maintainer of repo.maintainers) {
-        if (!visited.has(maintainer)) queue.push(maintainer);
-      }
-    }
-
-    return [...allRelays];
+    const events = eventStore.getByFilters({
+      kinds: [30617],
+      "#d": [d],
+    } as Filter);
+    return resolveChain(events, pubkey, d)?.relays ?? [];
   }
 
   // Static settings-based groups
-  if (groupId === "fallback-relays") return fallbackRelays.getValue();
-  if (groupId === "index-relays") return lookupRelays.getValue();
-  if (groupId === "git-index") return gitIndexRelays.getValue();
-  if (groupId === "bootstrap-relays") {
+  if (targetGroupId === "fallback-relays") return fallbackRelays.getValue();
+  if (targetGroupId === "index-relays") return lookupRelays.getValue();
+  if (targetGroupId === "git-index") return gitIndexRelays.getValue();
+  if (targetGroupId === "bootstrap-relays") {
     const { ACCOUNT_BOOTSTRAP_RELAYS } = await import("@/actions/account");
     return ACCOUNT_BOOTSTRAP_RELAYS;
   }
@@ -409,6 +519,9 @@ const GIT_INDEX_KINDS = new Set([
   10317, // User GRASP server lists
 ]);
 
+/** User-index kinds whose acceptance was already required before Phase 2. */
+const REQUIRED_USER_INDEX_KINDS = new Set([0, 3, 10002, 10017, 10018, 10317]);
+
 /**
  * Publish an event to the configured relays.
  *
@@ -421,6 +534,9 @@ const GIT_INDEX_KINDS = new Set([
  * Action functions in src/actions/nip34.ts which resolve the correct relay
  * groups (user outbox + repo relays + notification inboxes) automatically.
  *
+ * Every personal singleton is also published to configured user-index relays.
+ * Existing index kinds retain required delivery; newly routed application
+ * lists are best-effort because generic index acceptance is not established.
  * Kind:30617 (repo announcements) and kind:10317 (GRASP lists) are
  * automatically also published to "git-index" — the git index relay only
  * accepts these two kinds, so only they should ever be sent there.
@@ -428,16 +544,33 @@ const GIT_INDEX_KINDS = new Set([
  * @param event          - The signed Nostr event to publish
  * @param extraGroupIds  - Additional group IDs to publish to alongside the
  *                         user's outbox (e.g. "index-relays").
+ * @param options        - Set optimistic to false when local insertion must
+ *                         wait for independent relay verification.
  */
 export async function publish(
   event: NostrEvent,
   extraGroupIds?: string[],
+  options?: { optimistic?: boolean },
 ): Promise<void> {
-  // Add to local store immediately for optimistic updates
-  eventStore.add(event);
+  // Safety-sensitive callers can defer local insertion until a relay has
+  // acknowledged and returned the exact event.
+  if (options?.optimistic !== false) eventStore.add(event);
 
   const groupIds = [`outbox:${event.pubkey}`, "fallback-relays"];
   if (extraGroupIds) groupIds.push(...extraGroupIds);
+
+  if (
+    isPersonalSingletonKind(event.kind) &&
+    !groupIds.some(
+      (groupId) => unwrapRelayGroupId(groupId).groupId === "index-relays",
+    )
+  ) {
+    groupIds.push(
+      REQUIRED_USER_INDEX_KINDS.has(event.kind)
+        ? "index-relays"
+        : bestEffortRelayGroupId("index-relays"),
+    );
+  }
 
   // Automatically include "git-index" for kinds it accepts, deduplicating
   // in case the caller already added it explicitly.
@@ -812,6 +945,74 @@ export function nip34ListLoader(
 const MAX_AUTHOR_INBOX_RELAYS = 3;
 
 /**
+ * Reactive inputs for nip34RepoLoader.
+ *
+ * Emitted whenever the resolver's confirmed member coordinate set or role
+ * history changes. Coordinate growth folds into the live subscription as
+ * delta REQs; re-presenting an unchanged set is a strict no-op. Coordinate
+ * removal is deliberately ignored — a removed coordinate's REQs stay live
+ * until the loader unsubscribes. A repository identity change (different
+ * selected pubkey/dTag) must be a new loader subscription, not an emission.
+ */
+export interface Nip34RepoLoaderInputs {
+  /** Confirmed member coordinate strings for the repository. */
+  coords: string[];
+  /** Role history used to authorise PR updates for merge-base inference. */
+  roleHistory?: RepositoryRoleHistory;
+}
+
+/** One immutable additive chunk: all root item kinds for one coordinate. */
+function repoItemChunk(coord: string): AdditiveFilterChunk {
+  return {
+    key: `item:${coord}`,
+    filters: [{ kinds: [...REPO_ITEM_KINDS], "#a": [coord] } as Filter],
+    deltaSafe: true,
+  };
+}
+
+/** One immutable additive chunk: repo meta kinds for one coordinate. */
+function repoMetaChunk(coord: string): AdditiveFilterChunk {
+  return {
+    key: `meta:${coord}`,
+    // Reactions (stars), follow lists, zaps — plus kind:39842 CI workflow
+    // progress markers. The markers carry a NIP-40 expiration so the live
+    // set for a repo stays small; fetching them repo-wide via #a keeps
+    // pending indicators available everywhere (PR lists, PR pages) without
+    // per-item subscriptions.
+    filters: [
+      {
+        kinds: [REACTION_KIND, GIT_REPOS_FOLLOW_KIND, 9735, CI_RUN_KIND],
+        "#a": [coord],
+      } as Filter,
+    ],
+    deltaSafe: true,
+  };
+}
+
+/**
+ * One immutable additive chunk: software applications by one maintainer
+ * pubkey tagging one coordinate. Keyed per (author, coordinate) pair so both
+ * dimensions can grow additively without ever reusing a chunk key with
+ * different clauses.
+ */
+function softwareApplicationChunk(
+  pubkey: string,
+  coord: string,
+): AdditiveFilterChunk {
+  return {
+    key: `app:${pubkey}:${coord}`,
+    filters: [
+      {
+        kinds: [SOFTWARE_APPLICATION_KIND],
+        authors: [pubkey],
+        "#a": [coord],
+      } as Filter,
+    ],
+    deltaSafe: true,
+  };
+}
+
+/**
  * Supplemental relay loader for outbox/uncensored mode.
  *
  * Mirrors nip34RepoLoader but targets the extra maintainer mailbox relay group
@@ -824,11 +1025,18 @@ const MAX_AUTHOR_INBOX_RELAYS = 3;
  * Does NOT subscribe to meta events (reactions, follow lists) — those are
  * covered by nip34RepoLoader against the base relay group.
  *
- * @param coords     - Sorted array of repo coordinate strings
+ * Coordinates arrive reactively: a coordinate confirmed after subscribe
+ * joins the live item subscription as one delta REQ per relay (the
+ * per-coordinate keyed chunks below); an unchanged coordinate list is a
+ * strict no-op; removal is ignored until unsubscribe. seenIds and
+ * knownRelayUrls persist across growth, so already-seen items never re-fire
+ * their loaders.
+ *
+ * @param coords$    - Reactive array of repo coordinate strings (grow-only)
  * @param relayGroup - The supplemental RelayGroup (extra maintainer mailboxes)
  */
 export function nip34SupplementalRelayLoader(
-  coords: string[],
+  coords$: Observable<string[]>,
   relayGroup: RelayGroup,
 ): Observable<NostrEvent> {
   const resolveAuthorInbox = relayCurationMode.getValue() === "outbox";
@@ -837,6 +1045,8 @@ export function nip34SupplementalRelayLoader(
     const seenIds = new Set<string>();
     const knownRelayUrls = new Set<string>();
     const inboxSubs = new Subscription();
+    const coordinateSet = new Set<string>();
+    const itemAdditions = new Subject<AdditiveFilterChunk>();
 
     function fireLoaders(id: string, relays: string[]): void {
       nip34ListLoader(id, relays).subscribe({
@@ -889,18 +1099,17 @@ export function nip34SupplementalRelayLoader(
         }
       });
 
-    const filters = [{ kinds: [...REPO_ITEM_KINDS], "#a": coords } as Filter];
-    const itemSub = resilientSubscription(
+    const itemSub = resilientAdditiveSubscription(
       pool,
       relayGroupUrls$(relayGroup),
-      filters,
-      {
-        reconnect: true,
-        gapFill: true,
-        settle: false,
-      },
+      { initial: [], additions$: itemAdditions },
+      { reconnect: true, gapFill: true, settle: false },
     )
-      .pipe(onlyEvents(), mapEventsToStore(eventStore))
+      .pipe(
+        onlyEvents(),
+        filter((event) => isRepositoryRootItem(event, coordinateSet)),
+        mapEventsToStore(eventStore),
+      )
       .subscribe({
         next: (event) => {
           const ev = event as NostrEvent;
@@ -910,12 +1119,29 @@ export function nip34SupplementalRelayLoader(
             if (resolveAuthorInbox) fireAuthorInboxLoaders(ev);
           }
         },
-        complete: () => subscriber.complete(),
+        error: (err) => subscriber.error(err),
       });
+
+    // Subscribed after the additive subscription above so a synchronous
+    // first emission (BehaviorSubject) reaches a live additions$ consumer.
+    // Only genuinely new coordinates emit chunks — an unchanged list is a
+    // strict no-op (zero REQs).
+    const coordsSub = coords$.subscribe({
+      next: (coords) => {
+        for (const coord of new Set(coords)) {
+          if (coordinateSet.has(coord)) continue;
+          coordinateSet.add(coord);
+          itemAdditions.next(repoItemChunk(coord));
+        }
+      },
+      error: (err) => subscriber.error(err),
+      // Completion means no further growth — the subscription lives on.
+    });
 
     return () => {
       relaySub.unsubscribe();
       itemSub.unsubscribe();
+      coordsSub.unsubscribe();
       inboxSubs.unsubscribe();
     };
   });
@@ -924,9 +1150,28 @@ export function nip34SupplementalRelayLoader(
 /**
  * Repo-level observable factory.
  *
- * Subscribes to all NIP-34 root items (issues + PR/patch roots) for the given
- * repository coordinates via the relay group. For each newly discovered item
- * ID, calls nip34ListLoader so essentials and comments are fetched.
+ * Subscribes to all NIP-34 root items (issues + PR/patch roots) and trusted
+ * software applications for the repository's confirmed coordinates via the
+ * relay group. For each newly discovered root item ID, calls nip34ListLoader
+ * so essentials and comments are fetched. Software applications are written
+ * to the EventStore as priority repository data but do not fire item loaders.
+ *
+ * Inputs are reactive: the confirmed coordinate set and role history arrive
+ * via inputs$ and may change while the subscription is live.
+ *
+ *   - Coordinate growth (a maintainer confirming later) folds into the live
+ *     relay subscriptions as content-keyed additive chunks — one delta REQ
+ *     per relay carrying only the new coordinate's filters. Existing REQs,
+ *     seenIds, and knownRelayUrls are untouched, so already-seen items never
+ *     re-fire their essentials/comments loaders.
+ *   - Re-presenting an unchanged coordinate set and role history is a strict
+ *     no-op: zero REQs, zero loader re-fires.
+ *   - Coordinate removal is ignored: the removed coordinate's REQs stay live
+ *     until the subscription ends. Authority is enforced by the list models
+ *     reading the store, never by what this loader fetched.
+ *   - A repository identity change (different selected pubkey/dTag) must be
+ *     a new subscription — callers key their use$ on the relay group, which
+ *     is model-cached per (pubkey, dTag).
  *
  * Deduplication: a seenIds Set in the closure ensures each item ID is
  * submitted to the loaders exactly once, regardless of how many times the
@@ -939,19 +1184,37 @@ export function nip34SupplementalRelayLoader(
  * bufferTime window are collapsed into a single relay subscription — so N
  * items produce one essentials REQ and one comments REQ, not 2N REQs.
  *
- * @param coords     - Sorted array of repo coordinate strings
+ * @param inputs$    - Reactive coordinates + role history (grow-only coords)
  * @param relayGroup - Relay group from useResolvedRepository
  */
 export function nip34RepoLoader(
-  coords: string[],
+  inputs$: Observable<Nip34RepoLoaderInputs>,
   relayGroup: RelayGroup,
+  privateRepository = false,
 ): Observable<NostrEvent> {
-  const resolveAuthorInbox = relayCurationMode.getValue() === "outbox";
+  const resolveAuthorInbox =
+    !privateRepository && relayCurationMode.getValue() === "outbox";
 
   return new Observable<NostrEvent>((subscriber) => {
     const seenIds = new Set<string>();
     const knownRelayUrls = new Set<string>();
     const inboxSubs = new Subscription();
+
+    // Grow-only coordinate state shared by every subscription below.
+    // coordinateSet is read by isRepositoryRootItem at delivery time, so
+    // items tagged only with a late coordinate pass once it has joined.
+    const coordinateSet = new Set<string>();
+    const maintainerPubkeys = new Set<string>();
+    const emittedAppChunkKeys = new Set<string>();
+    const coordsList$ = new BehaviorSubject<string[]>([]);
+    const roleHistory$ = new BehaviorSubject<RepositoryRoleHistory | undefined>(
+      undefined,
+    );
+    let lastRoleHistoryKey = roleHistoryCacheKey(undefined);
+
+    const itemAdditions = new Subject<AdditiveFilterChunk>();
+    const appAdditions = new Subject<AdditiveFilterChunk>();
+    const metaAdditions = new Subject<AdditiveFilterChunk>();
 
     function fireLoaders(id: string, relays: string[]): void {
       nip34ListLoader(id, relays).subscribe({
@@ -1005,19 +1268,38 @@ export function nip34RepoLoader(
         }
       });
 
-    const itemFilters = [
-      { kinds: [...REPO_ITEM_KINDS], "#a": coords } as Filter,
-    ];
-    const itemSub = resilientSubscription(
+    // Fetch software applications in their own REQ, separate from the
+    // potentially large issue/PR query. Some relays merge and
+    // chronologically order all filters in a single REQ before sending any
+    // events, which can leave an older application event behind the
+    // repository's item backlog. Chunks are keyed per (author, coordinate)
+    // pair so a maintainer confirmed later adds delta REQs only.
+    const softwareApplicationSub = privateRepository
+      ? new Subscription()
+      : resilientAdditiveSubscription(
+          pool,
+          relayGroupUrls$(relayGroup),
+          { initial: [], additions$: appAdditions },
+          { reconnect: true, gapFill: true, settle: false },
+        )
+          .pipe(onlyEvents(), mapEventsToStore(eventStore))
+          .subscribe({ error: (err) => subscriber.error(err) });
+
+    const itemSub = resilientAdditiveSubscription(
       pool,
       relayGroupUrls$(relayGroup),
-      itemFilters,
+      { initial: [], additions$: itemAdditions },
       { reconnect: true, gapFill: true, settle: false },
     )
-      .pipe(onlyEvents(), mapEventsToStore(eventStore))
+      .pipe(
+        onlyEvents(),
+        filter((event) => isRepositoryRootItem(event, coordinateSet)),
+        mapEventsToStore(eventStore),
+      )
       .subscribe({
         next: (event) => {
           const ev = event as NostrEvent;
+          if (!REPO_ITEM_KINDS.some((kind) => kind === ev.kind)) return;
           if (!seenIds.has(ev.id)) {
             seenIds.add(ev.id);
             // knownRelayUrls is already populated by relaySub above
@@ -1027,33 +1309,141 @@ export function nip34RepoLoader(
             if (resolveAuthorInbox) fireAuthorInboxLoaders(ev);
           }
         },
-        complete: () => subscriber.complete(),
+        error: (err) => subscriber.error(err),
       });
 
-    const repoMetaFilters = [
-      {
-        // Reactions (stars), follow lists, zaps — plus kind:39842 CI
-        // workflow progress markers. The markers carry a NIP-40
-        // expiration so the live set for a repo stays small; fetching them
-        // repo-wide via #a keeps pending indicators available everywhere
-        // (PR lists, PR pages) without per-item subscriptions.
-        kinds: [REACTION_KIND, GIT_REPOS_FOLLOW_KIND, 9735, CI_RUN_KIND],
-        "#a": coords,
-      } as Filter,
-    ];
-    const repoMetaSub = resilientSubscription(
+    const repoMetaSub = privateRepository
+      ? new Subscription()
+      : resilientAdditiveSubscription(
+          pool,
+          relayGroupUrls$(relayGroup),
+          { initial: [], additions$: metaAdditions },
+          { reconnect: true, gapFill: true, settle: false },
+        )
+          .pipe(onlyEvents(), mapEventsToStore(eventStore))
+          .subscribe({ error: (err) => subscriber.error(err) });
+
+    // Discover inferred stack parents via repository-scoped #c queries.
+    // Historical PR updates loaded by the list loaders participate too.
+    // Each (coordinate, merge base) pair is one immutable keyed chunk: a
+    // commit or coordinate discovered later (a merge base arriving
+    // asynchronously, a maintainer confirming late) opens a single delta
+    // REQ per relay instead of restarting the whole subscription.
+    const emittedStackChunkKeys = new Set<string>();
+    const stackCandidateChunks$ = combineLatest([
+      coordsList$,
+      roleHistory$,
+    ]).pipe(
+      switchMap(([coords, roleHistory]) => {
+        if (coords.length === 0) return EMPTY;
+        return eventStore
+          .timeline([{ kinds: [1618, 1619], "#a": coords } as Filter])
+          .pipe(
+            map((events) => {
+              const repositoryEvents = events as NostrEvent[];
+              return [
+                ...new Set(
+                  getEffectivePRMergeBases(
+                    repositoryEvents.filter((event) => event.kind === 1618),
+                    repositoryEvents.filter((event) => event.kind === 1619),
+                    coords,
+                    roleHistory,
+                  ).values(),
+                ),
+              ].sort();
+            }),
+            // Scoped inside switchMap so every coordinate/role-history
+            // epoch re-presents its merge bases once; emittedStackChunkKeys
+            // keeps that re-presentation a no-op for known pairs.
+            distinctUntilChanged(
+              (a, b) =>
+                a.length === b.length &&
+                a.every((value, index) => b[index] === value),
+            ),
+            map((mergeBases) => ({ coords, mergeBases })),
+          );
+      }),
+      mergeMap(({ coords, mergeBases }) =>
+        from(
+          mergeBases.flatMap((mergeBase) =>
+            coords.flatMap((coord): AdditiveFilterChunk[] => {
+              const key = `${coord}|${mergeBase}`;
+              if (emittedStackChunkKeys.has(key)) return [];
+              const candidateFilter = buildStackCandidateFilter(
+                [coord],
+                [mergeBase],
+              );
+              if (!candidateFilter) return [];
+              emittedStackChunkKeys.add(key);
+              return [{ key, filters: [candidateFilter], deltaSafe: true }];
+            }),
+          ),
+        ),
+      ),
+    );
+    const stackCandidateSub = resilientAdditiveSubscription(
       pool,
       relayGroupUrls$(relayGroup),
-      repoMetaFilters,
+      { initial: [], additions$: stackCandidateChunks$ },
       { reconnect: true, gapFill: true, settle: false },
     )
-      .pipe(onlyEvents(), mapEventsToStore(eventStore))
+      .pipe(
+        onlyEvents(),
+        mapEventsToStore(eventStore),
+        catchError(() => EMPTY),
+      )
       .subscribe();
+
+    // Subscribed after every consumer above so a synchronous first emission
+    // (BehaviorSubject) reaches the live additive subscriptions. Growth is
+    // content-keyed: only genuinely new coordinates or changed role-history
+    // content produce chunk emissions; anything else is a strict no-op.
+    const inputsSub = inputs$.subscribe({
+      next: ({ coords, roleHistory }) => {
+        const newCoords = [...new Set(coords)].filter(
+          (coord) => !coordinateSet.has(coord),
+        );
+        const roleHistoryKey = roleHistoryCacheKey(roleHistory);
+        const roleHistoryChanged = roleHistoryKey !== lastRoleHistoryKey;
+        if (newCoords.length === 0 && !roleHistoryChanged) return;
+        for (const coord of newCoords) {
+          coordinateSet.add(coord);
+          const parsed = parseRepoCoordinate(coord);
+          if (parsed) maintainerPubkeys.add(parsed.pubkey);
+        }
+        // Software applications span authors × coordinates; emit the pairs
+        // not yet covered (new author × all coordinates, all authors × new
+        // coordinates), pushed before the item chunks so the small
+        // application REQ is not queued behind the item backlog.
+        for (const pubkey of maintainerPubkeys) {
+          for (const coord of coordinateSet) {
+            const chunk = softwareApplicationChunk(pubkey, coord);
+            if (emittedAppChunkKeys.has(chunk.key)) continue;
+            emittedAppChunkKeys.add(chunk.key);
+            appAdditions.next(chunk);
+          }
+        }
+        for (const coord of newCoords) {
+          itemAdditions.next(repoItemChunk(coord));
+          metaAdditions.next(repoMetaChunk(coord));
+        }
+        if (newCoords.length > 0) coordsList$.next([...coordinateSet].sort());
+        if (roleHistoryChanged) {
+          lastRoleHistoryKey = roleHistoryKey;
+          roleHistory$.next(roleHistory);
+        }
+      },
+      error: (err) => subscriber.error(err),
+      // Completion means no further growth — the subscription lives on.
+    });
 
     return () => {
       relaySub.unsubscribe();
+      softwareApplicationSub.unsubscribe();
       itemSub.unsubscribe();
       repoMetaSub.unsubscribe();
+      stackCandidateSub.unsubscribe();
+      inputsSub.unsubscribe();
       inboxSubs.unsubscribe();
     };
   });
@@ -1077,33 +1467,25 @@ function nip34ThreadLoadAll(
 /**
  * Thread-level loader for a single item (detail pages only).
  *
- * Fetches ALL events that reference the root item or any of its comments
- * via #e, #E, or #q tags — no kind restriction. This includes reactions,
- * zaps, deletions, quotes, and any other referencing events.
+ * Fetches the complete closure of events that reference the root item or any
+ * event discovered beneath it via #e, #E, or #q tags — no kind restriction.
+ * This includes comments, reactions, zaps, deletions, quotes, revisions, and
+ * events that target any of those descendants.
  *
  * Does NOT re-fire essentials or comments — those are handled separately
  * by nip34ListLoader (already called at the repo/list level). The no-kind
  * thread loaders will return some of the same events (the EventStore
  * deduplicates on receipt).
  *
- * For each comment discovered by nip34CommentsLoader, all three thread
- * loaders are fired recursively so child events on individual comments
- * (reactions, zaps, deletions, etc.) are also fetched.
- *
- * For each revision root patch (kind:1617 with t:root-revision) discovered
- * by nip34ThreadReplyLoader on the root item, all three thread loaders are
- * also fired so the individual commit patches in the revision (which reference
- * the revision root via #e, not the original root) are fetched.
- *
- * A seenIds set prevents duplicate loader calls within the same subscription
- * lifetime across both recursion paths. Because the thread loaders are
- * singleton batching loaders, all per-comment/per-revision calls within their
- * bufferTime window are collapsed into a single relay subscription per tag name.
+ * Every discovered event ID is queued exactly once per relay. This makes the
+ * traversal insensitive to relay delivery order (for example, a parent
+ * comment arriving after its reaction) while the singleton tag loaders still
+ * collapse each discovery wave into one subscription per tag and relay.
  *
  * Reactive relay list: accepts Observable<string[]> | string[]. When the
  * observable emits new relay URLs, loaders are re-fired for all already-seen
- * comment IDs against only the new relays — existing subscriptions are
- * untouched. New comments are always fetched against all current relays.
+ * event IDs against only the new relays — existing subscriptions are
+ * untouched. New descendants are always fetched against all current relays.
  *
  * @param itemId - The event ID of the issue / patch / PR
  * @param relays - Relay URLs to query (reactive or static)
@@ -1112,106 +1494,5 @@ export function nip34ThreadItemLoader(
   itemId: string,
   relays: Observable<string[]> | string[],
 ): Observable<PaginatedTagValueResponse> {
-  return new Observable<PaginatedTagValueResponse>((subscriber) => {
-    // seenIds: all comment IDs discovered so far (root item + comments)
-    const seenIds = new Set<string>();
-    // knownRelayUrls: relay URLs we have already fired loaders against
-    const knownRelayUrls = new Set<string>();
-
-    // Fire all three thread loaders for an item against a specific relay list.
-    // Results are forwarded to the outer subscriber and also inspected by
-    // handleRevisionRootEvent so revision root patches trigger recursion.
-    function fireThreadLoaders(id: string, relayList: string[]): void {
-      nip34ThreadLoadAll(id, relayList).subscribe({
-        next: (msg) => {
-          subscriber.next(msg);
-          handleRevisionRootEvent(msg);
-        },
-      });
-    }
-
-    // Subscribe to relay list changes. When new relay URLs appear, re-fire
-    // loaders for all already-seen IDs against only the new relays.
-    const relays$ = Array.isArray(relays)
-      ? (new Observable<string[]>((sub) => {
-          sub.next(relays);
-          sub.complete();
-        }) as Observable<string[]>)
-      : relays;
-
-    // Shared handler: when a comment (kind:1111/1619) is discovered, fire
-    // thread loaders for it recursively so its own children are fetched.
-    function handleCommentEvent(msg: PaginatedTagValueResponse): void {
-      if (msg === "EOSE") return;
-      const event = msg as NostrEvent;
-      if (!seenIds.has(event.id)) {
-        seenIds.add(event.id);
-        fireThreadLoaders(event.id, [...knownRelayUrls]);
-      }
-    }
-
-    // Shared handler: when a revision root patch (kind:1617 with
-    // t:root-revision / t:revision-root) is discovered via #e, fire thread
-    // loaders for it so its child commit patches are fetched.
-    function handleRevisionRootEvent(msg: PaginatedTagValueResponse): void {
-      if (msg === "EOSE") return;
-      const event = msg as NostrEvent;
-      if (event.kind !== PATCH_KIND) return;
-      const isRevisionRoot = event.tags.some(
-        ([name, val]) =>
-          name === "t" && (val === "root-revision" || val === "revision-root"),
-      );
-      if (!isRevisionRoot) return;
-      if (!seenIds.has(event.id)) {
-        seenIds.add(event.id);
-        fireThreadLoaders(event.id, [...knownRelayUrls]);
-      }
-    }
-
-    // Fire recursive loaders (comments only) for a given item ID against a
-    // specific relay list. nip34ThreadReplyLoader is NOT called here — it is
-    // already called inside fireThreadLoaders (via nip34ThreadLoadAll) and its
-    // results are piped through handleRevisionRootEvent there. Calling it again
-    // here would duplicate relay requests.
-    function fireRecursiveLoaders(id: string, relayList: string[]): void {
-      nip34CommentsLoader({ value: id, relays: relayList }).subscribe({
-        next: handleCommentEvent,
-      });
-    }
-
-    const relaySub = relays$
-      .pipe(
-        map((urls) => urls.map(normalizeUrl)),
-        distinctUntilChanged(
-          (a, b) =>
-            a.length === b.length && a.every((url) => knownRelayUrls.has(url)),
-        ),
-      )
-      .subscribe((currentUrls) => {
-        const newUrls = currentUrls.filter((url) => !knownRelayUrls.has(url));
-        for (const url of newUrls) knownRelayUrls.add(url);
-        if (newUrls.length === 0) return;
-
-        // Re-fire thread loaders and recursive loaders for all already-seen
-        // IDs against only the new relays.
-        // createPaginatedTagValueLoader batches these into one REQ per relay.
-        for (const id of seenIds) {
-          fireThreadLoaders(id, newUrls);
-          fireRecursiveLoaders(id, newUrls);
-        }
-      });
-
-    // Fire thread loaders for the root item — uses all currently known relays
-    // (relaySub fires synchronously above since relays$ emits immediately).
-    seenIds.add(itemId);
-    fireThreadLoaders(itemId, [...knownRelayUrls]);
-
-    // Fire recursive loaders for the root item against the initial relay set.
-    // New relays arriving later are handled in relaySub above.
-    fireRecursiveLoaders(itemId, [...knownRelayUrls]);
-
-    return () => {
-      relaySub.unsubscribe();
-    };
-  });
+  return loadEventReferenceClosure(itemId, relays, nip34ThreadLoadAll);
 }

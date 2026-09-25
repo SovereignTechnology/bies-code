@@ -1,3 +1,4 @@
+import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
 /**
  * CommitDetailView — shared commit detail UI used by RepoCommitPage and
  * PRCommitPage.
@@ -14,7 +15,9 @@
  *   backLabel  — label for the "back" link (default: "All commits")
  */
 
-import { useState, useEffect } from "react";
+import { useErrorRetry } from "@/hooks/useErrorRetry";
+import { ErrorRetryAction } from "@/components/ErrorRetryAction";
+import { useState, useEffect, useMemo } from "react";
 import { Link } from "react-router-dom";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
@@ -101,6 +104,20 @@ export function CommitDetailView({
   const [commit, setCommit] = useState<Commit | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [retryVersion, setRetryVersion] = useState(0);
+  const recoveryKey = useMemo(() => ({ pool, commitId }), [pool, commitId]);
+  const recovery = useErrorRetry({
+    resourceKey: recoveryKey,
+    failed: !!error,
+    busy: loading,
+    onRetry: async (signal) => {
+      await pool.retryReads({ refreshRefs: false });
+      if (!signal.aborted) setRetryVersion((n) => n + 1);
+    },
+    policy: pool.requiresSigningForReads
+      ? { mode: "manual" }
+      : { mode: "read", requiresSigning: false, context: "availability" },
+  });
 
   useEffect(() => {
     const abort = new AbortController();
@@ -128,7 +145,7 @@ export function CommitDetailView({
 
     return () => abort.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pool, commitId, fallbackUrls?.join(",")]);
+  }, [pool, commitId, fallbackUrls?.join(","), retryVersion]);
 
   return (
     <div className="space-y-4">
@@ -148,6 +165,9 @@ export function CommitDetailView({
             <div className="flex items-center gap-2 text-sm text-destructive">
               <AlertCircle className="h-4 w-4 shrink-0" />
               <span>Failed to load commit: {error}</span>
+            </div>
+            <div className="mt-4">
+              <ErrorRetryAction recovery={recovery} />
             </div>
           </CardContent>
         </Card>
@@ -205,6 +225,7 @@ function CommitDetail({
   relayHint?: string;
   authorizedPubkeys?: Set<string>;
 }) {
+  const copyToClipboard = useCopyToClipboard();
   const [copied, setCopied] = useState(false);
 
   const authorTs = commit.author.timestamp * 1000;
@@ -215,9 +236,10 @@ function CommitDetail({
   const parentHash = commit.parents?.[0] ?? null;
 
   const handleCopy = async () => {
-    await navigator.clipboard.writeText(commit.hash);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    await copyToClipboard(commit.hash, () => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
   };
 
   return (

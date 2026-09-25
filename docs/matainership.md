@@ -1,383 +1,335 @@
-# Selected Maintainer Model for Web Clients
+# Repository Maintainership
 
-**Purpose:** Reference document for web client developers displaying ngit repositories  
-**Audience:** Client developers who need to understand how to discover, validate, and display multi-maintainer repositories
+**Audience:** Client developers implementing NIP-34 repository discovery,
+authorization, and presentation.
 
----
+The cross-project behavior is defined by the
+[maintainer protocol for AI implementers](https://ngit.dev/protocol/nip-34/maintainers/ai-implementers),
+maintained in `nostr://danconwaydev.com/relay.ngit.dev/ngit-docs` at
+`docs/protocol/nip-34/maintainers/ai-implementers.md`. The concise wire format
+is in the published
+[NIP-34 specification](https://ngit.dev/protocol/nip-34/specification). This
+document describes GitWorkshop's implementation of that model.
 
-## What Is a Repository?
+## Repository identity
 
-A repository in the ngit model is **not** simply a pubkey + identifier pair. A repository is:
+A NIP-34 repository is an identifier plus a reciprocally confirmed component
+of kind `30617` announcements. A selected `30617:<pubkey>:<identifier>`
+coordinate is the discovery anchor; selecting or directionally reaching a
+pubkey does not itself grant that pubkey authority.
 
-> **An identifier string plus the directional maintainer graph rooted at a selected maintainer.**
-> Following each `maintainers` tag recursively defines who is authorized for
-> that selected repository coordinate.
+Two people may publish the same identifier without describing the same
+repository. Their announcements join one virtual repository only through the
+reciprocal membership rules below. Invitation edges are discovery
+relationships and do not merge components.
 
-Authorization and public identity are deliberately separate. A listed pubkey is
-authorized immediately, matching ngit and ngit-grasp, while the UI presents that
-relationship as an invitation until the listed maintainer links their own
-announcement back into the accepted group.
+GitWorkshop indexes all currently known announcements for an identifier before
+presenting repositories. It reduces replacements per author, resolves every
+coordinate-rooted view, unions overlapping confirmed maintainer sets, and then
+assigns each announcement coordinate to at most one component. An explicit
+component uses its deterministic terminal lead as the discovery-card anchor;
+legacy and leadless components use the lexicographically stable confirmed
+membership set. `repo.componentId` encodes that identifier plus sorted
+maintainer set and is the UI identity used to deduplicate cards.
 
-## Repository Announcements (NIP-34 Kind 30617)
+Search, browse, profile repositories, stars, pins, follows, and NIP-19
+repository redirects all consume this component index. A hit for any confirmed
+member returns the same component. A unilateral same-identifier invitation may
+be shown as a relationship, but it cannot absorb the invitee's existing
+component or contribute its metadata, infrastructure, or privacy.
 
-Each participant in a repository publishes a **repository announcement event** (kind 30617), signed by their Nostr keypair, containing:
+Repository-card readers do not expose the first cached graph they can build.
+Each explicit coordinate settles once over a monotonic initial snapshot: one
+identifier-scoped announcement wave over the relays known at the start of
+resolution, followed by one bounded deletion follow-up, with relay failures
+counting toward completion so settlement is always finite. Only a settled
+result becomes eligible for browse, search, profile, pin, follow, star, or
+NIP-19 presentation. Announcements, authors, and relays discovered after the
+snapshot are progressive enrichment: they update presentation and the
+confirmed authority sets as they arrive, but they never re-arm the settled
+snapshot and never re-gate routing or eligibility. Action-time authority
+keeps its own stricter snapshot (§Browser mutation safety).
 
-- `d` tag: the repository identifier (e.g. `my-project`)
-- `name` tag: human-readable name
-- `description` / content: description text
-- `clone` tag: git clone URLs for their copy
-- `relays` tag: Nostr relays where events for this repo are published
-- `maintainers` tag: zero or more pubkeys they recognize as co-maintainers
-- `r` tag: earliest unique commit (root commit for original repos, a later commit for forks)
-- `web` tag: web URLs (e.g. gitworkshop.dev link)
+## Current role records
 
----
+Indexed role tags have the form:
 
-## The Maintainer Chain
-
-### Direct Maintainers
-
-An announcement can list additional maintainers:
-
-```
-Alice's announcement for "my-project":
-  maintainers: [Bob, Carol]
-```
-
-Bob and Carol are authorized to push state events for Alice's copy of `my-project`.
-
-### Recursive Maintainers
-
-Any listed maintainer can themselves publish an announcement for the same identifier, listing further maintainers:
-
-```
-Bob's announcement for "my-project":
-  maintainers: [Dave]
-```
-
-Dave is now a **recursive maintainer** — authorized because Alice lists Bob, and Bob lists Dave. Alice's full authorized set = {Alice, Bob, Dave}.
-The chain can be arbitrarily deep. The relay computes the full transitive closure via `get_maintainers_recursive()` (`src/git/authorization.rs:386`) with cycle detection to prevent infinite loops.
-
-### Reciprocal Listing = Accepted Membership
-
-When two pubkeys list each other (directly or transitively), they form a single repository unit:
-
-```
-Alice's announcement for "my-project": maintainers: [Bob]
-Bob's announcement for "my-project":   maintainers: [Alice]
+```text
+["M"|"m"|"o", "<pubkey>", <start>, <end>, <start>, <end>, ...]
 ```
 
-These announcements form an accepted repository group. State events from either
-were already authoritative from Alice's directional graph; reciprocation is the
-signed acknowledgement that makes Bob safe to present publicly as an accepted
-co-maintainer and enables maintainer publishing controls.
-
-### Splitting: When the Chain Breaks
-
-The repository unit **splits** when the maintainer chain is severed — i.e. when one party removes the other and the transitive connection no longer exists.
-Example: Alice removes Bob from her maintainers list:
-
-```
-Alice's new announcement for "my-project": maintainers: []
-Bob's announcement for "my-project":       maintainers: [Alice]
-```
-
-Alice no longer authorizes Bob from Alice's coordinate. Bob still reaches and
-authorizes Alice, so the split is intentionally asymmetric until Bob also
-removes Alice.
-
----
-
-## What the Maintainer Set Makes Authoritative
-
-When a set of pubkeys forms a connected repository unit, **all of them are authoritative** for that repository. Specifically, clients SHOULD treat events from the recursive maintainer set as authoritative:
-
-### State Events (Kind 30618)
-
-A state event declares the current branch/tag heads of the repository. State events from **any pubkey in the recursive maintainer set** are authoritative for the repository. The latest state event (by timestamp) from any authorized maintainer defines the canonical state.
-
-### Issue, PR, and Patch Status Events
-
-Status updates on issues (kind 1621), pull requests (kind 1618/1619), and patches are authoritative when authored by any member of the recursive maintainer set. A maintainer closing an issue or merging a PR carries the same weight regardless of which specific maintainer in the set authored the event.
-
-### NIP-32 Labels
-
-NIP-32 labels (kind 1985) applied to repository content (commits, issues, PRs) by members of the recursive maintainer set are **authoritative**. Labels from outside the maintainer set are **helpful suggestions** — they may be displayed but should be visually distinguished from maintainer-authored labels.
-
-> Clients SHOULD treat labels from the recursive maintainer set as authoritative, and non-maintainer-provided labels as helpful suggestions.
-
-## This distinction is important: a random user labeling an issue "bug" is a suggestion. A maintainer labeling it "bug" is a definitive classification.
-
-## The `RepoRef`: How a Client Resolves a Repository
-
-The ngit CLI's `RepoRef` struct (`src/lib/repo_ref.rs:34`) is the canonical in-memory representation of a resolved repository. Understanding how it is built is essential for client implementors.
-
-### The `selected_maintainer` Field
-
-`RepoRef` has a `selected_maintainer: PublicKey` field — the single pubkey that was the starting point for resolution. This is the npub the user navigated to (e.g. from a nostr URL or a link). It anchors the coordinate used to reference the repository: `naddr` coordinates always point to the selected maintainer's pubkey + identifier.
-This is distinct from the full `maintainers` list, which contains all pubkeys in the connected chain.
-
-### Recursive Discovery in `get_repo_ref_from_cache`
-
-The function `get_repo_ref_from_cache` (`src/lib/client.rs:1428`) shows exactly how a client should resolve a repository from a starting coordinate:
-
-```
-1. Start with the selected maintainer's pubkey in a set
-2. Fetch all kind 30617 events for (pubkey, identifier) for every pubkey in the set
-3. For each event found, add all listed maintainers to the set
-4. If any new pubkeys were added, loop back to step 2
-5. Continue until no new pubkeys are discovered (fixed point)
-```
-
-This is the recursive chain resolution. The loop terminates because the set only grows and pubkeys are only added once.
-
-### Field Merging: Latest vs Union
-
-Once all maintainer announcement events are collected, fields are merged with two different strategies:
-**Fields taken from the latest event (by `created_at`) across all maintainers:**
-
-- `name`
-- `description`
-- `web`
-  These are "shared metadata" — the most recently updated version wins, regardless of which maintainer published it. This reflects that any maintainer can update the project's display name or description.
-  **Fields unioned across all maintainer events:**
-- `relays` — all relays from all announcements, deduplicated
-- `git_server` (clone URLs) — all clone URLs from all announcements, deduplicated
-- `blossoms` — all blossom server URLs, deduplicated
-  These are "infrastructure" — each maintainer hosts their own copy, and clients should know about all of them.
-  **Fields taken from the selected maintainer's own event:**
-- `identifier`
-- `root_commit` (earliest unique commit)
-- `selected_maintainer` (always the starting pubkey)
-  **The full maintainer set:**
-- `maintainers` — the complete set of all pubkeys discovered through the recursive chain, not just those listed in the selected maintainer's own event
-  The `maintainers_without_announcement` field tracks pubkeys that are listed as maintainers but have not yet published their own announcement event for this identifier.
-
----
-
-## How Issues, PRs, and Patches Reference the Repository
-
-Issues, PRs (pull requests), and patches all tag **every maintainer's announcement** using NIP-01 `a` tags (addressable event coordinates). This is the mechanism that ties these events to the full repository unit rather than to a single pubkey's copy.
-From `src/lib/git_events.rs`, when generating a patch, PR, or cover letter event.
-This means every patch/PR/issue event contains `a` tags of the form:
-
-```
-["a", "30617:<maintainer-pubkey>:<identifier>", "<relay-hint>"]
-```
-
-— one for each maintainer in the connected set.
-
-### Why This Matters for Clients
-
-A client querying for issues/PRs/patches for a repository should **filter by any of the maintainer coordinates**, not just the selected maintainer's coordinate. An issue tagged with Bob's coordinate is just as much a part of the repository as one tagged with Alice's coordinate, provided Alice and Bob are in the same maintainer chain.
-Practically: to fetch all issues for a repository, query for kind 1621 events that have an `a` tag matching `30617:<any-maintainer-pubkey>:<identifier>`.
-Also note: maintainer pubkeys are also added as `p` tags on patches/PRs (for notification routing), but the `a` tags are the authoritative repository reference.
-
-### Confirming Item Attribution
-
-The broad recursive query is a discovery boundary, not sufficient proof that
-every returned item belongs to the accepted repository group. For each issue,
-PR, or patch, intersect its `a` coordinates with the selected maintainer and
-the reciprocally confirmed maintainer coordinates.
-
-- If the intersection is non-empty, display the item normally.
-- If the item references only requested/unreciprocated coordinates, keep it
-  discoverable but show a prominent unconfirmed-attribution warning on list and
-  detail views.
-- Explain that the item may belong to another repository with the same
-  identifier. Its maintainers can resolve this by accepting the
-  relationship; an unintended invitation should be removed by the selected
-  maintainer.
-
----
-
-## The Selected Maintainer: A User's Starting Anchor
-
-### The Problem
-
-A web client cannot independently verify every repository on the network. Anyone can publish a kind 30617 announcement claiming to maintain any project. The client needs a starting point for resolution.
-
-### The Solution: One Selected Maintainer Per User
-
-Each user configures **a single selected maintainer** — one npub they have chosen (e.g. a developer whose identity they have verified out-of-band). This is the root of their discovery graph.
-From that single anchor, the client discovers repositories and other maintainers by following the maintainer chain recursively. This mirrors how discovery works in practice: you select specific people, and through them you discover others.
-This is a deliberate design constraint. Multiple roots would complicate the model significantly and are not needed — the recursive chain handles the multi-maintainer case naturally.
-
-### Discovery Flow
-
-Given a user's selected maintainer T:
-
-1. Fetch T's announcements (kind 30617 authored by T)
-2. For each announcement, resolve the full recursive maintainer chain (as above)
-3. The resulting interconnected set of pubkeys + identifier = one repository to display
-   Different users with different selected maintainers may arrive at the same repository from different directions. User 1 selects Alice, User 2 selects Bob — if Alice and Bob are in the same maintainer chain for `my-project`, both users see the same repository. The `selected_maintainer` field in each user's resolved `RepoRef` will differ (Alice vs Bob), but the underlying repository — its name, description, git data, issues, PRs — is the same.
-
----
-
-## The Scam: Unilateral Listing
-
-### The Attack
-
-Eve wants her repository to appear legitimate. She publishes:
-
-```
-Eve's announcement for "my-project":
-  maintainers: [Alice]   ← Alice is a well-known developer
-```
-
-Alice has never heard of Eve's project. But if a client naively displays "Alice is a maintainer of this repository", users may trust Eve's repo because of Alice's reputation.
-
-### Authorization Is Directional
-
-From Eve's selected coordinate, Alice is in the recursive authorization set.
-This permissive read model is required for interoperability and matches
-ngit-grasp push authorization. It does not mean Alice accepted the association.
-
-### Why It IS a Display Problem
-
-A client that shows Alice as a maintainer of Eve's repo is misleading users. It could be used to lend false legitimacy to a scam project, a malicious fork, or a phishing repository.
-
-### The Solution: Distinguish Authorized from Accepted
-
-A client uses every reachable pubkey for state, issue, PR, patch, and label
-authorization, but shows only reciprocally connected pubkeys as accepted
-maintainers. Present every directly listed, unreciprocated pubkey under the
-familiar **Invited maintainers** heading:
-
-- Present every invitation the same way unless the invitee has authored a
-  repository state event that requires explicit reconciliation.
-
-Keep the invited-maintainers list compact. Show who sent an invitation only
-when fewer than all confirmed maintainers listed that recipient. Do not expose
-whether the recipient already has an announcement for the identifier.
-
-Repository-wide warnings should combine related join requests into one
-sentence: list all direct recipients, then list the requested repository groups
-as natural-language links rather than rendering one warning row per group.
-
-Derive the direction of every invitation from the direct announcement edge:
-the confirmed maintainer who lists another pubkey sent the invitation, and the
-maintainer they directly listed received it. A lead maintainer may represent
-the recipient's existing repository group, but must not be presented as the
-invitation recipient unless the direct edge names them.
-
-If the logged-in account is requested, the repository page should offer an
-explicit acceptance flow that publishes the account's own updated announcement.
-The flow preserves the account's existing maintainer relationships and lets the
-account choose which accepted maintainers in the joining repository to list. It
-defaults to the sole maintainer when there is only one option, or the unique
-lead maintainer when one exists. When multiple maintainers have ambiguous
-leadership, it defaults to no selection and requires the invitee to choose one
-or more lead maintainers explicitly.
-
-For a safe invitation, the client publishes a reciprocal announcement to the
-invitee's selected GRASP servers. Server choices default, in order, to the
-invitee's existing repository announcement, their kind:10317 User Grasp List,
-or the other maintainers' servers. The client backfills from its default server
-list until three choices are selected. Existing non-GRASP clone URLs in the
-invitee's announcement are preserved.
-
-The selected servers MUST advertise GRASP-02. They discover the canonical state
-event from the relays and fetch its missing Git data from the other maintainers'
-clone URLs. Relay delivery and Git readiness are tracked independently. Once
-one selected relay accepts the announcement, the client polls all selected Git
-endpoints in the background. The UI shows a successful acceptance as soon as
-the first endpoint advertises every canonical ref, while a subtle progress
-indicator and bounded retries continue for the remaining destinations across
-internal navigation.
-
-The in-app flow is safe when the invitee has no state, when the invitee's state
-is newer or tied, or when a newer non-invitee state preserves all invitee refs.
-It refuses only the destructive case: a strictly newer state from another
-maintainer would change or omit refs that exist in the invitee's state. That
-case recommends accepting with ngit CLI until an interactive ref-combination
-flow can let the user choose exactly which branches and tags to retain.
-
-Infrastructure and metadata from directionally authorized invited repositories
-remain active consumption inputs. Detailed provenance views must label those
-sources as invited repositories rather than presenting them as accepted
-co-maintainers.
-
----
-
-## Practical Display Guidelines
-
-### Defining a Repository for Display
-
-A repository shown to the user is:
-
-- A single identifier string
-- Plus the full directional recursive authorization set reachable from the
-  selected maintainer.
-- Plus an accepted subset used for maintainer identity and publishing controls.
-
-### Displaying Repository Metadata
-
-| Field       | Source                                                             |
-| ----------- | ------------------------------------------------------------------ |
-| Name        | Latest event (by `created_at`) across all maintainer announcements |
-| Description | Latest event across all maintainer announcements                   |
-| Web URLs    | Latest event across all maintainer announcements                   |
-| Clone URLs  | Union of all maintainer announcements (all copies available)       |
-| Relays      | Union of all maintainer announcements                              |
-| Maintainers | Reciprocally confirmed subset; group the remainder by repository   |
-
-### Authoritative vs Suggestive Content
-
-| Content type                    | Authoritative if authored by | Otherwise             |
-| ------------------------------- | ---------------------------- | --------------------- |
-| State events (branch/tag heads) | Any recursive maintainer     | Ignore                |
-| Issue/PR/patch status           | Any recursive maintainer     | Ignore                |
-| NIP-32 labels                   | Any recursive maintainer     | Display as suggestion |
-| General comments/reactions      | Any participant              | Display as-is         |
-
-### Querying Issues, PRs, and Patches
-
-To fetch all issues/PRs/patches for a repository, query for the relevant kinds with an `a` tag matching any of the maintainer coordinates:
-
-```
-kinds: [1621]  (issues)
-#a: ["30617:<alice-pubkey>:<identifier>", "30617:<bob-pubkey>:<identifier>", ...]
-```
-
-Include all maintainer pubkeys in the filter, not just the selected maintainer's.
-
-### Handling Forks / Splits
-
-When two announcements share an identifier but are **not** connected through the maintainer chain:
-
-- Treat them as separate repositories
-- The user will see only the one(s) reachable from their selected maintainer
-- If both are reachable (e.g. the user trusts someone in each chain), display them distinctly — they are different projects that share a name
-- Consider a "related repositories" note if they share git history (same `r` root commit tag)
-
-### The No-Trusted-Maintainer Case
-
-Without a trust anchor the client has no basis for filtering. Options:
-
-- Prompt the user to configure a selected maintainer before showing repositories
-- Show all repositories with a clear "unverified" warning
-- Default to showing only repositories where the logged-in user is in the maintainer chain
-
----
-
-## Summary
-
-| Concept                        | Definition                                                                                |
-| ------------------------------ | ----------------------------------------------------------------------------------------- |
-| Repository identity            | An identifier + a directional graph rooted at the selected maintainer                     |
-| Maintainer chain               | Recursive: owner lists maintainers, who list their own maintainers, etc.                  |
-| Accepted maintainer            | A reachable pubkey whose announcement links back to the accepted component                |
-| Invited maintainer             | A directly listed pubkey that has not reciprocated the listing                            |
-| Existing-repository invitation | An invitation whose recipient already maintains a repository with the same identifier     |
-| Split                          | Directional authorization ends when an upstream maintainer removes the outgoing path      |
-| Selected maintainer            | The single user-chosen npub that anchors all discovery                                    |
-| `selected_maintainer` field    | The starting pubkey for resolution; used in naddr coordinates                             |
-| Name / description / web       | Taken from the latest announcement event across all maintainers                           |
-| Clone URLs / relays            | Unioned across all maintainer announcements                                               |
-| Authoritative events           | State, issue/PR/patch status, and NIP-32 labels from any recursive maintainer             |
-| Suggestive events              | NIP-32 labels from outside the maintainer set                                             |
-| `a` tags on issues/PRs/patches | One per maintainer — all maintainer coordinates tagged, not just the selected one         |
-| Scam prevention                | Use unilateral listings for authorization, but distinguish invitations from join requests |
-
----
+- `M` is a signed lead-forwarding relationship.
+- `m` assigns or acknowledges co-maintainership.
+- `o` assigns or acknowledges moderatorship.
+- With numeric boundaries, an empty history or an odd number of boundaries is
+  active. An even number is ended.
+- `defer` is valid only as the final end value on copied third-party history.
+  A self-authored role cannot defer its own boundary: it must use a numeric end
+  or remain active with an open interval. Deferred history is inactive for
+  current authority and routing, and a self-`defer` is a repository-health
+  error.
+- Malformed and conflicting role records cannot grant authority.
+
+When any `M`, `m`, or `o` tag is present, indexed roles are authoritative and
+the deprecated `maintainers` tag is only a compatibility projection. A
+contradictory projection is a health error and never broadens authority.
+
+On a role-free announcement, `maintainers` supplies legacy co-maintainer
+assignments. With no role or legacy membership tags, the author is the
+implicit sole maintainer. An indexed-role author absent from every self-role
+is also an implicit maintainer; an author with self-role records but no active
+self-`M` or self-`m` has explicitly declined or left maintainership.
+
+## Discovery is not authority
+
+Starting at the selected coordinate, GitWorkshop recursively fetches the
+latest announcement for every active maintainer or moderator subject. Latest
+replacement selection uses greatest `created_at`, then the lexicographically
+lowest event ID at equal timestamps.
+
+This produces `repo.discoveryPubkeys` and `repo.discoveredAnnouncements`.
+These fields exist to fetch acknowledgements, show invitations, and diagnose
+the graph. They must never be used as author filters for trusted repository
+state or as sources of shared metadata and infrastructure.
+
+## Reciprocal maintainer confirmation
+
+For a normal lead-shaped repository, the selected announcement's single active
+`M` path must terminate at a non-departed author with an active self-`M`.
+Incomplete, cyclic, and conflicting paths seed no authority. The terminal lead
+seeds a fixed point:
+
+1. A confirmed maintainer actively assigns a candidate through `M` or `m` (or
+   the legacy fallback).
+2. The candidate's latest announcement acknowledges an already-confirmed
+   maintainer and has not ended its own maintainer role.
+3. The candidate becomes confirmed and can extend the same fixed point.
+
+Legacy and deliberately leadless repositories seed the reciprocal fixed point
+at the selected maintainer. A cycle made only of unconfirmed invitees cannot
+bootstrap itself into authority. A self-role end takes precedence over active
+assignments in other announcements.
+
+The resulting authority set is `repo.confirmedMaintainers`. Only this set may:
+
+- publish authoritative kind `30618` repository state;
+- create or push merges;
+- edit repository settings or publish state replacements;
+- mutate CI service, trigger, and secret controls; and
+- publish maintainer-only release or repository operations.
+
+`repo.invitedMaintainers` remains discovery and presentation state only.
+
+## Moderator confirmation
+
+An active `o` assignment from a confirmed maintainer is a moderator
+invitation. It becomes confirmed only when the candidate publishes an active
+self-`o` and an active role relationship naming an existing confirmed member.
+Moderator announcements never assign roles to third parties.
+
+`repo.confirmedMembers` is the union of `repo.confirmedMaintainers` and
+`repo.confirmedModerators`. Confirmed moderators may author member actions such
+as status, label, subject, and cover-note events. They may not publish kind
+`30618` state, push or create merges, change repository settings, or operate
+maintainer-only CI controls.
+
+## Coordinates and collaboration events
+
+New issues, PRs, patches, comments, and related collaboration events reference
+`repo.confirmedMemberCoordinates`. Invitations are never included. Queries for
+open collaboration data use every confirmed member coordinate because content
+may have been filed against any accepted member's announcement.
+
+Authority remains separate from discovery:
+
+| Data or operation                                | Accepted authors                                                         |
+| ------------------------------------------------ | ------------------------------------------------------------------------ |
+| Kind `30618` state, merge, settings, CI controls | `confirmedMaintainers` only                                              |
+| Status, labels, subjects, cover notes            | Root author plus the resolved member set at the event's publication time |
+| Shared metadata, clone URLs, relays, privacy     | `confirmedAnnouncements` only                                            |
+| Issues, PRs, comments, reactions                 | Open protocol participation; no author filter                            |
+
+Current controls never use historical membership. Immutable collaboration
+events instead use `repo.roleHistory` to resolve the author's role at the
+event's `created_at`. History records are selected deterministically from the
+selected maintainer, then shortest current graph distance, then lowest pubkey.
+Malformed, duplicated, deferred-open, or historically ambiguous records fail
+closed for the affected past action without weakening current authority.
+
+`repo.historyPubkeys` and `repo.historicalAnnouncements` are fetch inputs and
+audit data, not authority sets. They include ended role subjects needed to
+verify past reciprocity after those subjects leave the active discovery graph.
+
+## Merged repository fields
+
+Only confirmed member announcements contribute trusted repository fields:
+
+- One NIP-01-latest confirmed-member announcement supplies name, description,
+  web URLs, upstreams, and hashtags together. Empty or absent values in that
+  event do not fall back to an older member's metadata.
+- Clone URLs, relays, and Blossom servers are unioned across
+  `repo.confirmedAnnouncements`.
+- Privacy is true when any confirmed-member announcement carries
+  `["private", "true"]` or the private `buzz-channel` transport marker.
+- Invited, departed, malformed-role, and unconfirmed moderator announcements
+  contribute nothing to those fields.
+
+Every replacement announcement for a private repository must carry at least
+one non-empty `relays` hint. Membership mutation preflight refuses to sign a
+replacement without one rather than relying on the relay that happened to
+index or deliver the existing event.
+
+One narrow presentation exception keeps direct historical routes useful. When
+the selected coordinate is archived, deleted, or carries an invalid
+self-`defer` and has no current authority component, GitWorkshop may show that
+author's final signed name, description, Git URLs, relay hints, and open
+collaboration history addressed to that coordinate. This is a read-only
+snapshot of that coordinate, never shared component metadata and never
+evidence of current authority. In particular, a private historical snapshot
+retains its signed relay hint so the repository is not stranded.
+
+The selected coordinate remains a permanent signed discovery perspective.
+Direct routes retain that perspective while following a complete explicit lead
+path or unique legacy lead; discovery cards use the component's deterministic
+anchor.
+
+## Repository lifecycle presentation
+
+Lifecycle evidence changes what the direct route explains, not whether the
+repository can be inspected:
+
+- A valid kind `5` deletion shows who deleted the selected repository
+  coordinate and when. Its final signed snapshot remains readable.
+- A numeric end to the selected author's self-role without a lead redirect is
+  presented as an archive, including the actor and signed end time. Its final
+  signed snapshot remains readable.
+- A self-led interval reopened after a real timestamp gap is presented as a
+  restart. The current repository remains available and the earlier interval
+  stays visible as prior lifecycle history.
+- Malformed or inconsistent role history, including self-`defer`, produces a
+  repair warning. The invalid interval cannot grant authority. A strictly later
+  active self-role with a signed start supersedes it for current authority but
+  leaves the historical interval unresolved; an untimed, equal, or older role
+  does not. The warning does not replace the repository with a terminal error
+  page.
+
+Self-`defer` health is author-scoped. Without a superseding role, GitWorkshop
+gates only the affected signer's announcement mutations and role-dependent
+writes; reads and other maintainers' operations continue. Duplicate role
+records are author-scoped in the same way: another author's duplicated
+history never blocks an actor's membership operations, while the affected
+author's own mutations remain fail-closed until their duplicate is
+reconciled. One narrow duplicate shape is repairable: exactly one invalid
+self-`defer` beside one valid same-role record holding a single strictly
+later signed start. There the affected signer's explicit repair and
+invitation acceptance proceed, and the sanctioned repair closes the invalid
+interval at the successor's signed start and merges it with the successor
+into one multi-interval record — one record per role and subject — so the
+repaired announcement parses clean. Genuinely duplicated valid records
+remain a hard conflict and hide the repair controls. With a superseding
+role, the warning is non-blocking. An invalid self-`M` or self-`m` is not signed
+maintainer-departure evidence, including when a valid self-`o` supersedes it; a
+valid numeric-ended self-maintainer record remains departure evidence. Only the
+affected logged-in signer sees repair controls. An unambiguous signed successor
+supplies a proposed numeric end that still requires explicit approval. Otherwise
+the signer chooses whether the interval remains active or supplies its numeric
+end. Unrelated edits retain the invalid tag unchanged. Accepting a new role may
+repair only a simple self-`defer` record containing exactly its signed start and
+`defer`; records containing earlier intervals require the dedicated repair flow
+so the signer explicitly reviews the history that becomes authoritative. For a
+simple record, acceptance closes an unsuperseded invalid interval at the
+acceptance boundary. When exactly one signed successor already superseded it,
+acceptance instead closes the invalid interval at that successor boundary and
+opens the newly accepted role at the acceptance boundary.
+Any additional invalid self-`defer` must already be superseded or have a signed
+start strictly earlier than the acceptance boundary, allowing the newly opened
+self-role to supersede it.
+
+Deletion, archive, and restart notices require a complete initial relay
+snapshot. Progressive snapshots continue rendering repository content but do
+not make an absence-based lifecycle claim.
+
+## Browser mutation safety
+
+GitWorkshop repository settings stage any number of maintainer invitations and
+direct lead-authored removals, then publish the exact roster diff with the
+other edited announcement fields in one replacement when the user saves.
+Invitation acceptance, leaving a lead-shaped repository, and explicitly
+repairing one invalid self-`defer` remain dedicated signer actions. Lead
+selection, arbitrary topology rewriting, and every force path remain
+unavailable.
+
+Each roster or dedicated action first looks up the affected authors' mailbox
+lists through the configured discovery relays, then refreshes those lists,
+announcements, and state events across the resulting safety set. Discovery-only
+lookup relays do not become safety authorities merely because they helped
+locate a NIP-65 list; the safety set consists of repository relays, discovered
+mailbox relays, configured Git indexes, and fallback publication relays. The
+client constructs the replacement in memory, simulates its exact member,
+moderator, invitation, and lead result, then repeats the settled fetch and
+compares every announcement, state, deletion, mailbox, and relay frontier
+immediately before signing. Every relay in that recursively discovered safety
+set must return a real EOSE for both bounded snapshots. Every branch and tag OID
+in the current signed state must also be fetched from the simulated post-change
+component's advertised Git servers without using the local object cache as
+evidence.
+
+After signing, the replacement is saved as durable delivery work without an
+optimistic EventStore insertion. At least one settled repository or configured
+Git-index relay from the frozen preflight set must acknowledge it. GitWorkshop
+then refetches
+the exact event from an acknowledging relay and resolves the graph again; only
+a result identical to the preflighted effect is reported as successful. A
+signed event that has not passed those checks remains visibly queued or
+quarantined and blocks a competing membership replacement.
+
+The normal lead-shaped cases are intentionally narrow. Component joins, lead
+changes, leadless edits, additional membership side effects, invitation
+withdrawals, state or identity differences, disputed/deferred history,
+incomplete relay views, concurrent replacements, and unavailable Git objects
+return a stable refusal code and publish nothing. Those cases move forward one
+workflow at a time in Wave 5 rather than through a browser force switch.
+
+Metadata-only edits still preserve every existing `M`, `m`, `o`, and
+`maintainers` tag byte-for-byte. Persisted v2 jobs are never hydrated and
+pre-stabilization v3 jobs remain quarantined; only fully preflighted v4 jobs
+resume delivery after reload.
+
+## Advanced repair
+
+For announcement histories none of the guided flows can fix — multiple
+invalid self-`defer` records of one role, unparseable role tags, genuinely
+duplicated valid records, or an inconsistent `maintainers` projection — the
+settings danger zone exposes an advanced-repair editor over the signer's own
+raw `M`/`m`/`o` role records. It is the explicit signer-reviewed repair the
+model mandates for complex history: before signing, the edited announcement
+is re-analysed with the production parser and re-resolved through the pure
+component resolver so the signer sees the resulting record classification,
+health warnings, and confirmed-membership delta. Every non-membership tag is
+carried over byte-for-byte, the deprecated `maintainers` projection is
+regenerated from the edited active records, `created_at` is bumped strictly
+past the current announcement, and a replacement without its own relay hint is
+refused when either the current or post-edit resolved component is private.
+Advanced repair grants no authority a keyholder does
+not already have — anyone can publish any event — and its published output
+still resolves through the normal reciprocal authorization model.
+
+## Resolver contract
+
+Callers consume the pure resolver through `useResolvedRepository` and must
+choose the narrowest explicit field:
+
+- `componentId` for repository-card and component identity
+- `confirmedMaintainers` / `confirmedMaintainerCoordinates`
+- `confirmedModerators`
+- `confirmedMembers` / `confirmedMemberCoordinates`
+- `invitedMaintainers` / `invitedModerators`
+- `discoveryPubkeys` / `discoveredAnnouncements`
+- `confirmedAnnouncements`
+- `maintainerEdges` / `moderatorEdges`
+- `repositoryHealth`
+
+Do not recreate membership checks in components and do not treat a fetched
+announcement, matching identifier, or repository coordinate as proof of
+authority. Discovery lists must use the shared component index rather than
+grouping announcements in relay arrival order.

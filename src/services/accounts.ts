@@ -1,8 +1,9 @@
 import { AccountManager } from "applesauce-accounts";
 import {
+  AmberClipboardAccount,
   NostrConnectAccount,
-  registerCommonAccountTypes,
 } from "applesauce-accounts/accounts";
+import { registerAndroidAccounts } from "applesauce-accounts/accounts/android-native-account";
 import { applySignerNudge } from "@/hooks/useLoginActions";
 import { switchMap, distinctUntilChanged, map } from "rxjs/operators";
 import { of } from "rxjs";
@@ -13,6 +14,7 @@ import {
   eventStore,
 } from "@/services/nostr";
 import { startUserIdentitySubscription } from "@/services/userIdentitySubscription";
+import { startPrivateGitRelaySession } from "@/services/privateGitRelays";
 import { MailboxesModel } from "applesauce-core/models";
 
 /**
@@ -21,8 +23,9 @@ import { MailboxesModel } from "applesauce-core/models";
  */
 export const accounts = new AccountManager();
 
-// Register common account types (Extension, PrivateKey, NostrConnect, etc.)
-registerCommonAccountTypes(accounts);
+// Register the common web accounts plus persisted native Android signers.
+registerAndroidAccounts(accounts);
+accounts.registerType(AmberClipboardAccount);
 
 // Suppresses local localStorage writes during a cross-tab sync so the
 // persistence subscriptions below do not echo the incoming state back to
@@ -95,7 +98,7 @@ let isApplyingCrossTabSync = false;
   });
 
   // Keep a persistent subscription open for the active user's replaceable
-  // events (kinds 0, 3, 10002, 10017, 10018, 10317) on the union of their
+  // personal-singleton events on the union of their
   // outbox relays and lookup/index relays.
   //
   // Strategy: whenever the active account changes OR their NIP-65 outbox relay
@@ -103,6 +106,7 @@ let isApplyingCrossTabSync = false;
   // the updated relay set. This ensures all user replaceable events are always
   // as fresh as possible — the prerequisite for safe replaceable event edits.
   let stopIdentitySub: (() => void) | null = null;
+  let stopPrivateGitRelays: (() => void) | null = null;
 
   accounts.active$
     .pipe(
@@ -110,11 +114,14 @@ let isApplyingCrossTabSync = false;
         if (!account?.pubkey) return of(null);
         const pubkey = account.pubkey;
         return eventStore.model(MailboxesModel, pubkey).pipe(
-          map((mailboxes) => ({ pubkey, outboxes: mailboxes?.outboxes ?? [] })),
+          map((mailboxes) => ({
+            account,
+            outboxes: mailboxes?.outboxes ?? [],
+          })),
           // Only restart when the serialised outbox list actually changes
           distinctUntilChanged(
             (a, b) =>
-              a.pubkey === b.pubkey &&
+              a.account.id === b.account.id &&
               JSON.stringify([...a.outboxes].sort()) ===
                 JSON.stringify([...b.outboxes].sort()),
           ),
@@ -125,9 +132,15 @@ let isApplyingCrossTabSync = false;
       // Tear down the previous identity subscription before starting a new one
       stopIdentitySub?.();
       stopIdentitySub = null;
+      stopPrivateGitRelays?.();
+      stopPrivateGitRelays = null;
       if (value) {
         stopIdentitySub = startUserIdentitySubscription(
-          value.pubkey,
+          value.account.pubkey,
+          value.outboxes,
+        );
+        stopPrivateGitRelays = startPrivateGitRelaySession(
+          value.account,
           value.outboxes,
         );
       }

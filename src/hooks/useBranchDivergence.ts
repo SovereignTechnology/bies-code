@@ -90,7 +90,7 @@ export function useBranchDivergence(
   // infoRefs presence has to be part of the key — otherwise the hook would
   // latch into "loading" the first time it runs and never re-fire when the
   // pool finally publishes its initial infoRefs response.
-  const hasInfoRefs = pool ? !!pool.getInfoRefs() : false;
+  const hasInfoRefs = pool ? !!pool.getEffectiveInfoRefs() : false;
   const depKey = `${pool ? "p" : "n"}|${hasInfoRefs ? "r" : "-"}|${defaultBranch?.hash ?? ""}|${targetsKey}`;
 
   useEffect(() => {
@@ -121,10 +121,22 @@ export function useBranchDivergence(
         async (branch): Promise<[string, BranchDivergence] | null> => {
           const fullRefName = `refs/heads/${branch.name}`;
           try {
+            await Promise.all([
+              pool.resolveRef(fullRefName),
+              pool.resolveRef(`refs/heads/${defaultBranch.name}`),
+            ]);
+            if (abort.signal.aborted) return null;
+            const effectiveRefs = pool.getState().effectiveRefs;
+            const branchHash =
+              effectiveRefs[fullRefName]?.commitId ?? branch.hash;
+            const defaultBranchHash =
+              effectiveRefs[`refs/heads/${defaultBranch.name}`]?.commitId ??
+              defaultBranch.hash;
+
             // Fast path: identical to the default branch.
-            if (branch.hash === defaultBranch.hash) {
+            if (branchHash === defaultBranchHash) {
               const latestCommit = await pool.getSingleCommit(
-                branch.hash,
+                branchHash,
                 abort.signal,
               );
               if (abort.signal.aborted) return null;
@@ -143,8 +155,12 @@ export function useBranchDivergence(
             // populates the branch's 200-commit history in the cache as a
             // side effect, which step 4 below relies on.
             const [mergeBase, latestCommit] = await Promise.all([
-              pool.findMergeBase(branch.hash, abort.signal),
-              pool.getSingleCommit(branch.hash, abort.signal),
+              pool.findMergeBaseBetween(
+                defaultBranchHash,
+                branchHash,
+                abort.signal,
+              ),
+              pool.getSingleCommit(branchHash, abort.signal),
             ]);
             if (abort.signal.aborted) return null;
 
@@ -167,16 +183,22 @@ export function useBranchDivergence(
             let behind: number | null = null;
 
             // Step 3: how far the default branch is past the merge base.
-            behind = await pool.countCommitsBehind(mergeBase, abort.signal);
+            behind = await pool.countCommitsBehind(
+              mergeBase,
+              abort.signal,
+              200,
+              5000,
+              defaultBranchHash,
+            );
             if (abort.signal.aborted) return null;
 
             // Step 4: how far this branch is past the merge base. Served
             // from the cache populated by findMergeBase above.
-            if (mergeBase === branch.hash) {
+            if (mergeBase === branchHash) {
               ahead = 0;
             } else {
               const chain = await pool.getCommitHistory(
-                branch.hash,
+                branchHash,
                 200,
                 abort.signal,
               );

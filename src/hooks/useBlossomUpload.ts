@@ -7,7 +7,7 @@
  * Features (matching ditto's useUploadFile):
  *   - Uploads to all configured servers simultaneously (Promise.any — fastest wins)
  *   - Mirrors the blob to remaining servers in the background (BUD-04)
- *   - 30-second per-server timeout
+ *   - Progress-based stall reporting without a fixed upload timeout
  *   - Returns full NIP-94 tags (url, x, ox, size, m, dim, blurhash) for imeta injection
  *   - Appends file extension to content-addressed URLs if missing
  *
@@ -27,6 +27,7 @@ import {
   DEFAULT_BLOSSOM_SERVERS,
   type Nip94Tags,
   type BlossomSigner,
+  type BlossomUploadOptions,
 } from "@/lib/blossom";
 import type { EventTemplate } from "nostr-tools";
 
@@ -37,6 +38,7 @@ export function useBlossomUpload() {
   const store = useEventStore();
   const { toast } = useToast();
   const [isUploading, setIsUploading] = useState(false);
+  const [error, setError] = useState<string>();
 
   // Reactively subscribe to the user's blossom server list (kind 10063)
   const blossomServers = use$(
@@ -48,8 +50,13 @@ export function useBlossomUpload() {
   );
 
   const uploadFile = useCallback(
-    async (file: File): Promise<Nip94Tags | null> => {
+    async (
+      file: File,
+      options?: BlossomUploadOptions,
+    ): Promise<Nip94Tags | null> => {
+      setError(undefined);
       if (!account) {
+        setError("Log in before uploading an attachment.");
         toast({
           title: "Not logged in",
           description: "You must be logged in to upload files.",
@@ -76,9 +83,11 @@ export function useBlossomUpload() {
 
       setIsUploading(true);
       try {
-        return await blossomUpload(file, servers, signer);
+        return await blossomUpload(file, servers, signer, options);
       } catch (err) {
+        if (options?.signal?.aborted) return null;
         const message = err instanceof Error ? err.message : "Upload failed";
+        setError(message);
         toast({
           title: "Upload failed",
           description: message,
@@ -92,5 +101,5 @@ export function useBlossomUpload() {
     [account, blossomServers, toast],
   );
 
-  return { uploadFile, isUploading };
+  return { uploadFile, isUploading, error };
 }

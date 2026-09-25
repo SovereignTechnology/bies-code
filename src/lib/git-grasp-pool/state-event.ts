@@ -10,7 +10,7 @@
  * - Recency guard (only backoff-poll for recently-published state events)
  */
 
-import type { StateEventInput } from "./types";
+import type { StateEventInput, StateEventRef } from "./types";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -20,6 +20,33 @@ import type { StateEventInput } from "./types";
 const BACKOFF_INITIAL_MS = 2_000;
 const BACKOFF_MAX_MS = 5 * 60_000;
 export const PROVISIONING_BACKOFF_MAX_MS = 10_000;
+
+function canonicalRefs(refs: StateEventRef[]): string[] {
+  return refs
+    .map((ref) => `${ref.name}\0${ref.commitId}`)
+    .sort((left, right) => left.localeCompare(right));
+}
+
+/** Compare state inputs without depending on object or ref-array identity. */
+export function stateEventInputsEqual(
+  left: StateEventInput,
+  right: StateEventInput,
+): boolean {
+  if (left === right) return true;
+  if (!left || !right) return false;
+  if (
+    left.headRef !== right.headRef ||
+    left.headCommitId !== right.headCommitId ||
+    left.createdAt !== right.createdAt ||
+    left.refs.length !== right.refs.length
+  ) {
+    return false;
+  }
+
+  const leftRefs = canonicalRefs(left.refs);
+  const rightRefs = canonicalRefs(right.refs);
+  return leftRefs.every((ref, index) => ref === rightRefs[index]);
+}
 
 /**
  * A state event is considered "recent" if its created_at is within this
@@ -35,7 +62,7 @@ const RECENT_STATE_EVENT_MAX_AGE_S = 5 * 60; // 5 minutes
 /**
  * Manages the Nostr state event lifecycle for a pool.
  *
- * The pool calls update() whenever the stateEvent$ observable emits.
+ * The pool calls update() whenever an authoritative state input changes.
  * The manager tracks the current state, detects changes, and manages
  * the backoff timer for re-fetching.
  */
@@ -67,8 +94,8 @@ export class StateEventManager {
   }
 
   /**
-   * Update the current state event. Called by the pool when the
-   * stateEvent$ observable emits.
+   * Update the current state event. Called by the pool when authoritative
+   * repository-state knowledge changes.
    */
   update(stateEvent: StateEventInput): void {
     this._currentState = stateEvent;
@@ -112,6 +139,15 @@ export class StateEventManager {
    * delay. Each call doubles the delay up to BACKOFF_MAX_MS.
    */
   scheduleBackoffFetch(callback: () => void): void {
+    // Backoff polling exists to bridge the short window between publishing a
+    // state event and Git servers applying it. Once that window has passed,
+    // automatic retries only churn the network and repeatedly disturb the UI;
+    // the user can still request an explicit refresh from the error state.
+    if (!this.isRecent()) {
+      this.cancelBackoff();
+      return;
+    }
+
     this.cancelBackoff();
     this._retryAt = Date.now() + this.backoffDelay;
     this.backoffTimer = setTimeout(() => {

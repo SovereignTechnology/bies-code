@@ -1,4 +1,5 @@
-import { useMemo, useCallback } from "react";
+import { useErrorRetry } from "@/hooks/useErrorRetry";
+import { useMemo, useCallback, useEffect } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useSeoMeta } from "@unhead/react";
 import { useRepoContext } from "./RepoContext";
@@ -21,12 +22,9 @@ import {
 import { useCIForCommits } from "@/hooks/useCI";
 import { AlertCircle, GitCommit, Loader2 } from "lucide-react";
 import { safeFormatDistanceToNow } from "@/lib/utils";
-import {
-  deriveEffectiveHeadCommit,
-  deriveEffectiveSource,
-} from "@/lib/sourceUtils";
 import { isNonHttpUrl } from "@/lib/git-grasp-pool";
 import { IncompatibleProtocolError } from "@/components/IncompatibleProtocolError";
+import { useRepositoryCITrust } from "@/hooks/useRepositoryCITrust";
 
 export default function RepoCommitsPage() {
   const {
@@ -44,32 +42,9 @@ export default function RepoCommitsPage() {
   const repo = resolved?.repo;
   const repoOwnerProfile = useProfile(pubkey);
 
-  // "source" query param drives which server's commit history is shown.
-  const selectedSource = searchParams.get("source") ?? "default";
-
-  const handleSourceChange = useCallback(
-    (src: string) => {
-      setSearchParams(
-        (prev) => {
-          const next = new URLSearchParams(prev);
-          if (src === "default") {
-            next.delete("source");
-          } else {
-            next.set("source", src);
-          }
-          return next;
-        },
-        { replace: false },
-      );
-    },
-    [setSearchParams],
-  );
-
   // Pool must come before explorer since pool is passed to explorer.
   const { pool, poolState } = useGitPool(cloneUrls, {
-    knownHeadCommit: repoState?.headCommitId,
-    stateRefs: repoState?.refs,
-    stateCreatedAt: repoState ? repoState.event.created_at : undefined,
+    private: repo?.isPrivate,
   });
 
   const pulling =
@@ -78,101 +53,62 @@ export default function RepoCommitsPage() {
   const stateBehindGit =
     !gitPulling && poolState.warning?.kind === "state-behind-git";
 
-  // Bootstrap explorer: resolves refs and the current ref name.
-  const bootstrapHeadCommit = stateBehindGit
-    ? undefined
-    : repoState?.headCommitId;
-  const explorer = useGitExplorer(pool, poolState, {
-    refAndPath: commitsRef,
-    knownHeadCommit: bootstrapHeadCommit,
-    stateRefs: repoState?.refs,
-  });
+  const sourceParam = searchParams.get("source");
+  const selectedSource =
+    sourceParam ??
+    (poolState.viewSource === "authoritative"
+      ? "default"
+      : poolState.viewSource);
 
-  const resolvedRef = explorer.resolvedRef ?? undefined;
-  const resolvedRefIsBranch =
-    explorer.refs.find((r) => r.name === resolvedRef)?.isBranch ?? true;
+  useEffect(() => {
+    if (pool && sourceParam) pool.setViewSource(sourceParam);
+  }, [pool, sourceParam]);
 
-  // Resolve "default" → "nostr" or a concrete git server URL.
-  const isNoState = repoRelayEose && repoState === null;
-  const aheadServerUrl =
-    poolState.warning?.kind === "state-behind-git"
-      ? poolState.warning.gitServerUrl
-      : null;
-  const effectiveSource = useMemo(
-    () =>
-      deriveEffectiveSource(
-        selectedSource,
-        stateBehindGit,
-        isNoState,
-        poolState.winnerUrl,
-        aheadServerUrl,
-      ),
-    [
-      selectedSource,
-      stateBehindGit,
-      isNoState,
-      poolState.winnerUrl,
-      aheadServerUrl,
-    ],
+  const handleSourceChange = useCallback(
+    (src: string) => {
+      pool?.setViewSource(src);
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          if (src === "default") next.delete("source");
+          else next.set("source", src);
+          return next;
+        },
+        { replace: false },
+      );
+    },
+    [pool, setSearchParams],
   );
 
-  // Derive the effective HEAD commit from the effective source.
-  const effectiveHeadCommit = useMemo(() => {
-    return deriveEffectiveHeadCommit(
-      effectiveSource,
-      poolState.urls,
-      repoState ?? null,
-      // When the user explicitly chose "nostr", treat stateBehindGit as false
-      // so the explorer uses the Nostr state commit rather than the git server's.
-      stateBehindGit && selectedSource !== "nostr",
-      resolvedRef ?? null,
-      resolvedRefIsBranch,
-    );
-  }, [
-    effectiveSource,
-    poolState.urls,
-    repoState,
-    stateBehindGit,
-    selectedSource,
-    resolvedRef,
-    resolvedRefIsBranch,
-  ]);
-
-  // When the effective commit differs from the bootstrap, run a second explorer
-  // to fetch the source-specific tree (needed to get the right commitHash for
-  // the history hook below).
-  const explorerForSource = useGitExplorer(pool, poolState, {
+  const activeExplorer = useGitExplorer(pool, poolState, {
     refAndPath: commitsRef,
-    knownHeadCommit: effectiveHeadCommit,
     stateRefs: repoState?.refs,
   });
-
-  const useSourceExplorer =
-    effectiveSource !== "nostr" && effectiveHeadCommit !== bootstrapHeadCommit;
-  const activeExplorer = useSourceExplorer ? explorerForSource : explorer;
-
-  // Derive the commit hash to use for history.
-  // When the effective source is a git server, use that server's commit directly.
-  // When nostr and git is ahead, use the pool's authoritative commit.
-  const historyCommit: string | undefined = useMemo(() => {
-    if (effectiveSource !== "nostr" && effectiveHeadCommit) {
-      return effectiveHeadCommit;
-    }
-    if (stateBehindGit) {
-      return poolState.warning?.kind === "state-behind-git"
-        ? poolState.warning.gitCommitId
-        : (activeExplorer.commitHash ?? undefined);
-    }
-    return activeExplorer.commitHash ?? undefined;
-  }, [
-    effectiveSource,
-    effectiveHeadCommit,
-    stateBehindGit,
-    poolState.warning,
-    activeExplorer.commitHash,
-  ]);
+  const resolvedRef = activeExplorer.resolvedRef ?? undefined;
+  const historyCommit = activeExplorer.commitHash ?? undefined;
 
   const history = useInfiniteCommitHistory(pool, poolState, historyCommit);
+  const recoveryKey = useMemo(
+    () => ({ pool, historyCommit }),
+    [pool, historyCommit],
+  );
+  const recovery = useErrorRetry({
+    resourceKey: recoveryKey,
+    failed: !!history.error,
+    busy:
+      history.loading ||
+      history.loadingMore ||
+      poolState.loading ||
+      poolState.pulling,
+    onRetry: async (signal) => {
+      await pool?.retryReads();
+      if (!signal.aborted) history.reload();
+    },
+    policy:
+      pool && !pool.requiresSigningForReads
+        ? { mode: "read", requiresSigning: false, context: "availability" }
+        : { mode: "manual" },
+  });
 
   // CI checks (ngit-ci kinds 9841/9842) for the commits being displayed —
   // the singleton #c loader batches the whole page into one REQ per relay.
@@ -180,7 +116,37 @@ export default function RepoCommitsPage() {
     () => history.commits.map((c) => c.hash),
     [history.commits],
   );
-  const ciChecks = useCIForCommits(commitIds, resolved?.repoRelayGroup);
+  const ciChecks = useCIForCommits(
+    commitIds,
+    repo?.isPrivate ? undefined : resolved?.repoRelayGroup,
+  );
+  // Branch/tag badges for the graph — group refs by the commit they point at.
+  const refLabels = useMemo(() => {
+    const map = new Map<
+      string,
+      { name: string; isBranch: boolean; isTag: boolean; isDefault?: boolean }[]
+    >();
+    for (const ref of activeExplorer.refs) {
+      const list = map.get(ref.hash) ?? [];
+      list.push(ref);
+      map.set(ref.hash, list);
+    }
+    for (const list of map.values()) {
+      list.sort(
+        (a, b) =>
+          Number(b.isDefault ?? false) - Number(a.isDefault ?? false) ||
+          Number(b.isBranch) - Number(a.isBranch),
+      );
+    }
+    return map;
+  }, [activeExplorer.refs]);
+
+  const ciRuns = useMemo(
+    () =>
+      ciChecks ? [...ciChecks.values()].flatMap((checks) => checks.runs) : [],
+    [ciChecks],
+  );
+  const { coordinatorState, trust } = useRepositoryCITrust(repo, ciRuns);
 
   useSeoMeta({
     title: repo
@@ -198,15 +164,14 @@ export default function RepoCommitsPage() {
   // source isn't silently reverted to default.
   const handleRefChange = useCallback(
     (newRef: string) => {
-      const source = searchParams.get("source");
       const base = `${basePath}/commits/${newRef}`;
-      if (source) {
-        navigate(`${base}?source=${encodeURIComponent(source)}`);
+      if (selectedSource !== "default") {
+        navigate(`${base}?source=${encodeURIComponent(selectedSource)}`);
       } else {
         navigate(base);
       }
     },
-    [navigate, searchParams, basePath],
+    [navigate, selectedSource, basePath],
   );
 
   const handleRefAndSourceChange = useCallback(
@@ -271,6 +236,8 @@ export default function RepoCommitsPage() {
             stateBehindGit={stateBehindGit}
             poolWarning={poolState.warning}
             winnerUrl={poolState.winnerUrl}
+            viewSource={poolState.viewSource}
+            effectiveRefs={poolState.effectiveRefs}
             stateCreatedAt={repoState?.event.created_at}
             urlStates={poolState.urls}
             cloneUrls={cloneUrls}
@@ -332,7 +299,9 @@ export default function RepoCommitsPage() {
         )}
       </div>
 
-      {history.error && <CommitListError message={history.error} />}
+      {history.error && (
+        <CommitListError message={history.error} recovery={recovery} />
+      )}
 
       {history.loading && <CommitListLoading count={8} />}
 
@@ -340,10 +309,14 @@ export default function RepoCommitsPage() {
         <CommitList
           commits={history.commits}
           basePath={basePath}
+          refLabels={refLabels}
           hasMore={history.hasMore}
           loadingMore={history.loadingMore}
           onLoadMore={history.loadMore}
           ciChecks={ciChecks}
+          ciTrust={trust}
+          ciRepo={repo}
+          ciServiceControls={coordinatorState?.serviceControls}
         />
       )}
 

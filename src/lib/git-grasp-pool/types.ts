@@ -5,7 +5,7 @@
  * (or from the barrel index.ts).
  */
 
-import type { Observable } from "rxjs";
+import type { GitHttpAuthorizationProvider } from "@/lib/git-http-auth";
 import type {
   Commit,
   Tree,
@@ -45,6 +45,21 @@ export interface CommitRangeData {
    * file.content is always null (blob:none fetch — no file data).
    */
   baseTree: Tree;
+}
+
+/**
+ * Commit graph data for comparing two explicit refs.
+ *
+ * The exclusive commit arrays contain every commit reachable from one tip
+ * before entering ancestry shared with the other tip. They are ordered newest
+ * first, matching the commit history UI.
+ */
+export interface CommitComparisonData {
+  mergeBaseId: string;
+  baseCommit: Commit;
+  headCommit: Commit;
+  baseOnlyCommits: Commit[];
+  headOnlyCommits: Commit[];
 }
 
 // ---------------------------------------------------------------------------
@@ -128,11 +143,10 @@ export interface UrlState {
    * (tree/packfile) from this server, recorded independently of the
    * infoRefs-based connection `status`.
    *
-   * This lets the UI distinguish a server that returned a valid response
-   * genuinely lacking the requested commit's objects ("object-missing")
-   * from one where the git-upload-pack call or packfile transport/parse
-   * itself failed ("fetch-error") — the latter is NOT evidence that the
-   * server lacks the objects. null until an object fetch is attempted.
+   * This lets the UI distinguish an explicit upload-pack ref rejection
+   * ("object-missing") from a request or parsing failure ("fetch-error").
+   * The latter is not evidence that the server lacks the objects.
+   * null until an object fetch is attempted.
    */
   lastObjectFetch: ObjectFetchOutcome | null;
 }
@@ -141,9 +155,9 @@ export interface UrlState {
  * Result of attempting to fetch a commit's git objects from a single server.
  *
  * - "ok"             : the objects were fetched successfully.
- * - "object-missing" : the server returned a valid response (or explicitly
- *                      said "not our ref") but did not have the commit/tree
- *                      objects. Genuine missing-objects evidence.
+ * - "object-missing" : upload-pack explicitly rejected the requested ref
+ *                      ("not our ref"). This describes what the server served,
+ *                      not whether the object exists in its storage.
  * - "fetch-error"    : the git-upload-pack request or packfile transport/parse
  *                      failed before a valid response could be read. NOT
  *                      evidence the server lacks the objects.
@@ -181,6 +195,8 @@ export interface StateEventRef {
  * `StateEvent`= have a state event
  */
 export interface StateEvent {
+  /** Full ref name that HEAD points to (e.g. "refs/heads/main"). */
+  headRef?: string;
   /** HEAD commit declared by the state event */
   headCommitId: string;
   /** All refs declared by the state event */
@@ -220,38 +236,47 @@ export type PoolWarning =
     };
 
 // ---------------------------------------------------------------------------
-// Authoritative head
+// Authoritative refs and view selection
 // ---------------------------------------------------------------------------
 
 /**
- * The pool's resolved authoritative default-branch tip.
+ * The pool's resolved authoritative value for a ref.
  *
- * This is the single commit that mergeability evaluation, merge pushes,
- * apply-to-tip and any other *acting* consumer must target. It is NOT always
- * the signed state head, and it is NOT `latestCommit` (which is a display
- * value picked by committer-date race and can briefly point at a lagging
- * server head while mirrors converge after a push):
+ * Acting consumers must use this protocol-truth layer. A display source
+ * override never changes it.
  *
  * - `source: "state"` — the signed kind:30618 state head. Used whenever a
- *   state event exists, including while mirrors are still converging towards
- *   it and when a differing git head has NOT been verified as a descendant
+ *   state ref exists, including while mirrors are still converging towards
+ *   it and when a differing git ref has NOT been verified as a descendant
  *   (a rewritten/divergent server must not become the merge target — the
  *   signed state stays the trust anchor).
- * - `source: "git"`  — a git server head verified to be strictly ahead of
- *   the state head (the state head is reachable from it). This happens when
+ * - `source: "git"` — a git server ref verified to be strictly ahead of
+ *   the state ref (the state commit is reachable from it). This happens when
  *   a maintainer pushes without updating the state event; merging against
  *   the stale state head would fail the push's compare-and-swap and sign a
- *   state update that orphans the newer commits. Also used when no state
- *   event exists at all.
- *
- * `null` while nothing is known yet (no state event and no git result).
+ *   state update that orphans the newer commits. Also used for refs absent
+ *   from the state event, where the majority server value wins.
  */
-export interface AuthoritativeHead {
-  /** The authoritative tip commit of the default branch. */
+export interface AuthoritativeRef {
+  /** The authoritative commit for the full ref name. */
   commitId: string;
   /** Where the commit came from (see above). */
   source: "state" | "git";
+  /** Git server supplying the value when source is "git". */
+  sourceUrl?: string;
 }
+
+/** Backward-compatible name for the authoritative default-branch value. */
+export type AuthoritativeHead = AuthoritativeRef;
+
+/** Full-ref-name map (e.g. "refs/heads/main" → resolved value). */
+export type ResolvedRefMap = Record<string, AuthoritativeRef>;
+
+/**
+ * User-selected display source. "authoritative" means the protocol-truth
+ * layer; "nostr" forces signed state; any other value is a clone URL.
+ */
+export type ViewSource = "authoritative" | "nostr" | (string & {});
 
 // ---------------------------------------------------------------------------
 // Cross-ref discrepancy
@@ -324,12 +349,24 @@ export interface PoolState {
   /** Warning from state event vs git server comparison */
   warning: PoolWarning | null;
   /**
+   * Protocol-truth values for every known branch and tag. Signed state wins
+   * until a differing server value is ancestry-verified as a descendant.
+   */
+  authoritativeRefs: ResolvedRefMap;
+  /**
    * The resolved authoritative default-branch tip — see {@link AuthoritativeHead}.
    * Recomputed on every state emission; anything that acts on the default
    * branch (mergeability, merge pushes, apply-to-tip) must use this rather
    * than `latestCommit` or the raw state head.
    */
   authoritativeHead: AuthoritativeHead | null;
+  /** Shared display preference. It never changes authoritativeRefs. */
+  viewSource: ViewSource;
+  /**
+   * Per-ref values after applying viewSource. Missing refs on an explicitly
+   * selected source fall back to authoritativeRefs.
+   */
+  effectiveRefs: ResolvedRefMap;
   /** Error message when all URLs have failed */
   error: string | null;
   /**
@@ -361,13 +398,8 @@ export interface PoolState {
 export interface PoolOptions {
   /** Initial set of clone URLs. More can be added later via addUrls(). */
   cloneUrls: string[];
-  /**
-   * Observable that emits the current Nostr state event for this repo.
-   * - undefined = still loading
-   * - null = confirmed no state event
-   * - StateEvent = have state event data
-   */
-  stateEvent$?: Observable<StateEventInput>;
+  /** Account/repository-scoped NIP-98 authorization for private Git HTTP. */
+  authorizationProvider?: GitHttpAuthorizationProvider;
   /**
    * CORS proxy base URL. Defaults to "https://cors.isomorphic-git.org".
    * Set to null to disable CORS proxy entirely.
@@ -431,6 +463,7 @@ export type ErrorClass = "permanent" | "transient";
  * - "transient"        : temporary failure, will be retried
  */
 export type UrlErrorKind =
+  | "unauthorized"
   | "not-git"
   | "cors-blocked"
   | "proxy-error"

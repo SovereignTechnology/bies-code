@@ -49,6 +49,7 @@ export class RepoAnnouncementFactory extends EventFactory<
     cloneUrls: string[],
     relayUrls: string[],
     eucCommitHash: string,
+    privateRepository: boolean = false,
   ): RepoAnnouncementFactory {
     return (
       new RepoAnnouncementFactory((resolve) =>
@@ -69,6 +70,7 @@ export class RepoAnnouncementFactory extends EventFactory<
           ["relays", ...relayUrls],
           // r tag with EUC marker — earliest unique commit
           ["r", eucCommitHash, "euc"],
+          ...(privateRepository ? [["private", "true"]] : []),
         ])
         .alt(`git repository: ${name}`)
     );

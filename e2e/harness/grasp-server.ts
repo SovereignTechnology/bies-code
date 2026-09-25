@@ -60,6 +60,8 @@ const READY_GRACE_MS = 150;
 export interface GraspServerOptions {
   /** Role label for debugging (e.g. "repo", "fork"). Default: "grasp". */
   role?: string;
+  /** Public service mount path. Default: "/". */
+  basePath?: string;
   /** Enable the GRASP-06 `/prs/` endpoint (NGIT_GRASP06_ENABLE=true). */
   grasp06?: boolean;
 }
@@ -70,16 +72,19 @@ export class GraspServer {
     readonly port: number,
     private readonly process: ChildProcess,
     private readonly gitDataPath: string,
+    readonly basePath: string,
   ) {}
 
-  /** `http://127.0.0.1:<port>` — used as a clone URL base. */
+  /** Public HTTP service URL, including any configured mount path. */
   get httpUrl(): string {
-    return `http://127.0.0.1:${this.port}`;
+    const path = this.basePath === "/" ? "" : this.basePath;
+    return `http://127.0.0.1:${this.port}${path}`;
   }
 
-  /** `ws://127.0.0.1:<port>` — the Nostr relay endpoint. */
+  /** Public Nostr relay URL, including any configured mount path. */
   get relayUrl(): string {
-    return `ws://127.0.0.1:${this.port}`;
+    const path = this.basePath === "/" ? "" : this.basePath;
+    return `ws://127.0.0.1:${this.port}${path}`;
   }
 
   /** Hostname:port form — matches what announcements embed for grasp domains. */
@@ -109,22 +114,30 @@ export class GraspServer {
    */
   static async start(options: GraspServerOptions = {}): Promise<GraspServer> {
     const role = options.role ?? "grasp";
+    const basePath = options.basePath ?? "/";
     const binary = locateBinary();
     const port = await reservePort();
     const bind = `127.0.0.1:${port}`;
     const gitDataDir = mkdtempSync(join(tmpdir(), `grasp-${role}-`));
 
-    const env: NodeJS.ProcessEnv = {
-      ...process.env,
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    // Git exports repository-context variables (GIT_DIR etc.) when it runs
+    // hooks; a grasp server inheriting them operates on the invoking
+    // repository instead of its own bare repos and rejects every push.
+    for (const key of Object.keys(env)) {
+      if (key.startsWith("GIT_")) delete env[key];
+    }
+    Object.assign(env, {
       NGIT_BIND_ADDRESS: bind,
       NGIT_DOMAIN: bind,
+      NGIT_BASE_PATH: basePath,
       NGIT_GIT_DATA_PATH: gitDataDir,
       NGIT_DATABASE_BACKEND: "memory",
       NGIT_TEST: "1",
       NGIT_SYNC_STARTUP_DELAY_SECS: "0",
       NGIT_SYNC_STARTUP_JITTER_MS: "0",
       NGIT_SYNC_DISCONNECT_CHECK_INTERVAL_SECS: "1",
-    };
+    });
     if (options.grasp06) env.NGIT_GRASP06_ENABLE = "true";
 
     const child = spawn(binary, [], {
@@ -137,7 +150,7 @@ export class GraspServer {
         : "ignore",
     });
 
-    const server = new GraspServer(role, port, child, gitDataDir);
+    const server = new GraspServer(role, port, child, gitDataDir, basePath);
 
     let exited: number | null = null;
     child.once("exit", (code) => {

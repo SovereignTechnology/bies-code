@@ -236,9 +236,9 @@ const diffStringCache = new Map<string, string>();
  *   - Text files are decoded as UTF-8 and diffed with 3 lines of context,
  *     matching standard `git diff` output.
  *
- * Blob fetches for all changed files run in parallel. The pool's cache
- * means blobs that were already fetched (e.g. during file browsing) are
- * returned instantly without a network request.
+ * Changed blobs are fetched as one batch. The pool's cache means blobs that
+ * were already fetched (e.g. during file browsing) are returned instantly,
+ * while its per-object fallback preserves split-mirror behavior.
  *
  * The resulting diff string is cached in memory keyed by tipHash:baseHash so
  * that repeated calls (e.g. switching tabs) are instant.
@@ -278,19 +278,13 @@ export async function generateUnifiedDiff(
     if (change.baseHash) hashesToFetch.add(change.baseHash);
   }
 
-  // Fetch all blobs in parallel
-  const blobResults = await Promise.all(
-    Array.from(hashesToFetch).map(async (hash) => {
-      const data = await pool.getBlob(hash, signal, fallbackUrls);
-      return [hash, data] as const;
-    }),
+  const blobs = await pool.getBlobs(
+    Array.from(hashesToFetch),
+    signal,
+    fallbackUrls,
   );
 
   if (signal.aborted) return "";
-
-  const blobs = new Map<string, Uint8Array>(
-    blobResults.filter((r): r is [string, Uint8Array] => r[1] !== null),
-  );
 
   // Generate diff hunks for each changed file
   const hunks: string[] = [];

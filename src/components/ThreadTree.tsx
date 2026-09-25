@@ -1,3 +1,8 @@
+import {
+  useComposerDraft,
+  useHasComposerDraft,
+} from "@/hooks/useComposerDraft";
+import { useRecoveryToast } from "@/hooks/useRecoveryToast";
 /**
  * Recursive thread tree renderer.
  *
@@ -65,6 +70,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
+import { useIsBuzzRepository } from "@/contexts/BuzzRepositoryContext";
 
 // ---------------------------------------------------------------------------
 // Thread context — passes root info down without prop-drilling
@@ -119,6 +125,13 @@ interface ThreadTreeProps {
   threadContext?: ThreadContext;
 }
 
+function getMobileThreadIndent(depth: number) {
+  if (depth <= 1) return "pl-1";
+  if (depth === 2) return "pl-[3px]";
+  if (depth === 3) return "pl-0.5";
+  return "pl-px";
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -144,6 +157,14 @@ export function ThreadTree({
   const resolutionChild = visibleChildren.find((c) =>
     isResolutionEvent(c.event),
   );
+  const draftScopes: string[] = [];
+  const pendingNodes = resolutionChild ? [node] : [];
+  while (pendingNodes.length) {
+    const current = pendingNodes.pop()!;
+    draftScopes.push(`comment:${current.event.id}`);
+    pendingNodes.push(...current.children);
+  }
+  const hasDraft = useHasComposerDraft(draftScopes);
   const nonResolutionChildren = resolutionChild
     ? visibleChildren.filter((c) => !isResolutionEvent(c.event))
     : visibleChildren;
@@ -197,6 +218,7 @@ export function ThreadTree({
       style={{ borderLeftColor: "rgb(59 130 246 / 0.5)" }}
     >
       <ResolvedThreadCard
+        keepExpanded={hasDraft}
         event={resolutionChild.event}
         rootCommentEvent={node.event}
         authorised={authorised}
@@ -492,18 +514,21 @@ export function ThreadComment({
   const elRef = ref as RefObject<HTMLDivElement>;
 
   const [replying, setReplying] = useState(false);
+  const { hasDraft: hasReplyDraft } = useComposerDraft(`comment:${event.id}`);
+  const { toast: deletionToast } = useRecoveryToast();
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteReason, setDeleteReason] = useState("");
   const [deleting, setDeleting] = useState(false);
 
   const ctx = useContext(ThreadCtx);
+  const isBuzz = useIsBuzzRepository();
   // canReply defaults to true when ctx is present (backward compat), but can
   // be explicitly disabled via ctx.canReply = false (e.g. for logged-out users
   // where we still want the context for inline comment links).
-  const canReply = !!ctx && ctx.canReply !== false;
+  const canReply = !isBuzz && !!ctx && ctx.canReply !== false;
   // onReply callback: when provided by the context, show a Reply button in the
   // header even if canReply is false (e.g. diff view uses its own reply UI).
-  const onReplyCallback = ctx?.onReply;
+  const onReplyCallback = isBuzz ? undefined : ctx?.onReply;
   const activeAccount = useActiveAccount();
   const isOwn = !!activeAccount && activeAccount.pubkey === event.pubkey;
 
@@ -518,13 +543,24 @@ export function ThreadComment({
         deleteReason.trim() || undefined,
       );
     } catch (err) {
-      console.error("[ThreadComment] failed to delete comment:", err);
+      deletionToast({
+        title: "Could not delete event",
+        description: err instanceof Error ? err.message : "Request failed",
+        variant: "destructive",
+        recovery: {
+          label: "Review deletion",
+          action: () => {
+            setDeleteReason(deleteReason);
+            setDeleteOpen(true);
+          },
+        },
+      });
     } finally {
       setDeleting(false);
       setDeleteOpen(false);
       setDeleteReason("");
     }
-  }, [deleting, ctx, event, deleteReason]);
+  }, [deletionToast, deleting, ctx, event, deleteReason]);
 
   const isInline = isInlineComment(event);
 
@@ -551,11 +587,12 @@ export function ThreadComment({
 
       {/* Header row */}
       <div className="flex items-center justify-between gap-2 mb-1.5">
-        <div className="flex items-center gap-2">
+        <div className="flex min-w-0 flex-1 items-center gap-2">
           <UserLink
             pubkey={event.pubkey}
             avatarSize="md"
-            nameClassName="text-sm"
+            className="min-w-0"
+            nameClassName="truncate text-sm"
           />
           <span className="inline-flex items-center gap-1.5 flex-wrap">
             <span className="text-xs text-muted-foreground/60 flex items-center gap-1">
@@ -565,7 +602,7 @@ export function ThreadComment({
             <OutboxStatusBadge event={event} />
           </span>
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex shrink-0 items-center gap-1">
           {(canReply || onReplyCallback) && (
             <button
               type="button"
@@ -582,7 +619,7 @@ export function ThreadComment({
               <Reply className="h-3.5 w-3.5" />
             </button>
           )}
-          {isOwn && ctx && (
+          {!isBuzz && isOwn && ctx && (
             <button
               type="button"
               onClick={() => setDeleteOpen(true)}
@@ -599,7 +636,7 @@ export function ThreadComment({
           UserLink uses w-8 avatar + gap-1.5 = 38px before the name text. */}
       <div className="sm:ml-[38px]">
         <CommentContent content={event.content} />
-        {ctx && (
+        {ctx && !isBuzz && (
           <div className="flex flex-wrap items-center gap-3 pt-2 empty:hidden">
             <ZapsBar event={event} />
             <ReactionsBar
@@ -612,16 +649,21 @@ export function ThreadComment({
       </div>
 
       {/* Inline reply composer */}
-      {replying && ctx && (
-        <div className="mt-3 sm:ml-[38px]">
-          <ReplyBox
-            rootEvent={ctx.rootEvent}
-            parentEvent={event}
-            onSubmitted={() => setReplying(false)}
-            priorityPubkeys={ctx.priorityPubkeys}
-          />
-        </div>
-      )}
+      {!isBuzz &&
+        (replying ||
+          ((canReply || !!onReplyCallback) &&
+            hasReplyDraft &&
+            ctx?.activeReplyId !== event.id)) &&
+        ctx && (
+          <div className="mt-3 sm:ml-[38px]">
+            <ReplyBox
+              rootEvent={ctx.rootEvent}
+              parentEvent={event}
+              onSubmitted={() => setReplying(false)}
+              priorityPubkeys={ctx.priorityPubkeys}
+            />
+          </div>
+        )}
 
       {/* Delete comment dialog */}
       <AlertDialog
@@ -765,7 +807,7 @@ function ThreadChildren({
 
   return (
     <div
-      className="min-w-0 border-l pl-1"
+      className={`min-w-0 border-l ${getMobileThreadIndent(depth)} sm:pl-1`}
       style={{ borderLeftColor: `rgb(59 130 246 / ${lineOpacity})` }}
     >
       {/* Collapse / expand toggle */}

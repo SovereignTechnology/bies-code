@@ -1,18 +1,19 @@
+import { useRecoveryToast } from "@/hooks/useRecoveryToast";
 /**
  * Shared components used in both IssuePage and PRPage thread views.
  */
 import React, {
-  lazy,
   Suspense,
   useState,
   useCallback,
+  useMemo,
   type RefObject,
 } from "react";
 import { formatDistanceToNow, format } from "date-fns";
 import type { NostrEvent } from "nostr-tools";
 import { Link } from "react-router-dom";
 import { diffLines, type Change } from "diff";
-import { UserLink } from "@/components/UserAvatar";
+import { UserLink, UserName } from "@/components/UserAvatar";
 import { useUnreadHighlight } from "@/hooks/useUnreadHighlight";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -40,7 +41,16 @@ import { cn } from "@/lib/utils";
 import { OutboxStatusBadge } from "@/components/OutboxStatusStrip";
 import { StatusBadge, StatusIcon } from "@/components/StatusBadge";
 import { LabelBadge } from "@/components/LabelBadge";
-import type { IssueStatus } from "@/lib/nip34";
+import { CommitLink } from "@/components/CommitLink";
+import { useEmbeddedEventById } from "@/hooks/useEmbeddedEvent";
+import {
+  extractSubject,
+  ISSUE_KIND,
+  PATCH_KIND,
+  PR_KIND,
+  type IssueStatus,
+} from "@/lib/nip34";
+import { eventIdToNevent } from "@/lib/routeUtils";
 import { Button } from "@/components/ui/button";
 import {
   AlertDialog,
@@ -73,8 +83,15 @@ import { runner } from "@/services/actions";
 import { parseInlineCommentLocation } from "@/lib/inlineComment";
 import { ReactionsBar } from "@/components/ReactionsBar";
 import { ZapsBar } from "@/components/zap/ZapsBar";
-
-const MarkdownContent = lazy(() => import("@/components/MarkdownContent"));
+import { NsitePreviewLink } from "@/components/ci/PRNsitePreview";
+import type { NsitePreview } from "@/lib/ciOutputs";
+import MarkdownContent from "@/components/DeferredMarkdownContent";
+import {
+  CompactCommitGraphList,
+  type CompactCommitGraphRowData,
+} from "@/components/CommitList";
+import { buildLinearGraphCommits } from "@/lib/commit-graph";
+import type { Commit } from "@/lib/git-grasp-pool";
 
 // ---------------------------------------------------------------------------
 // EventBodyCard — the main body card for an issue or PR/patch
@@ -96,6 +113,16 @@ interface EventBodyCardProps {
   content?: string;
   /** Optional list of commits to display below the body (for PRs). */
   commits?: CommitEntry[];
+  /** Real git topology for `commits`; falls back to a synthetic linear chain. */
+  commitGraphCommits?: Commit[];
+  /** The displayed tip has later descendants outside this original push. */
+  commitsContinueAbove?: boolean;
+  /** Condense commits introduced by merges into expandable group rows. */
+  collapseMergedCommits?: boolean;
+  /** Graph-resolved source branch per merge commit hash. */
+  mergeSourceNames?: Map<string, string>;
+  /** Successful nsite preview produced for the last commit in this revision. */
+  commitPreview?: NsitePreview;
   /**
    * When true, the commits section is dimmed and labelled "outdated" to
    * indicate that a later revision has replaced this patch set.
@@ -123,6 +150,11 @@ export function EventBodyCard({
   event,
   content,
   commits,
+  commitGraphCommits,
+  commitsContinueAbove,
+  collapseMergedCommits,
+  mergeSourceNames,
+  commitPreview,
   commitsSuperseded,
   commitsLatestHref,
   hasCoverLetter,
@@ -134,9 +166,32 @@ export function EventBodyCard({
   const activeAccount = useActiveAccount();
   const isOwn = !!activeAccount && activeAccount.pubkey === event.pubkey;
 
+  const { toast: deletionToast } = useRecoveryToast();
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteReason, setDeleteReason] = useState("");
   const [deleting, setDeleting] = useState(false);
+
+  const commitRows = useMemo<CompactCommitGraphRowData[]>(
+    () =>
+      commits?.map((commit) => ({
+        key: commit.hash,
+        hash: commit.hash,
+        shortHash: commit.noCommitId ? "[unknown]" : commit.hash.slice(0, 7),
+        subject: commit.subject,
+        href: commit.href,
+        superseded: commit.superseded ?? commitsSuperseded,
+      })) ?? [],
+    [commits, commitsSuperseded],
+  );
+  const commitGraph = useMemo(
+    () =>
+      commitGraphCommits && commitGraphCommits.length > 0
+        ? commitGraphCommits
+        : buildLinearGraphCommits(commitRows),
+    [commitGraphCommits, commitRows],
+  );
+  const usesSyntheticCommitGraph =
+    !commitGraphCommits || commitGraphCommits.length === 0;
 
   const confirmDelete = useCallback(async () => {
     if (deleting || !repoCoords) return;
@@ -149,13 +204,24 @@ export function EventBodyCard({
         deleteReason.trim() || undefined,
       );
     } catch (err) {
-      console.error("[EventBodyCard] failed to delete event:", err);
+      deletionToast({
+        title: "Could not delete event",
+        description: err instanceof Error ? err.message : "Request failed",
+        variant: "destructive",
+        recovery: {
+          label: "Review deletion",
+          action: () => {
+            setDeleteReason(deleteReason);
+            setDeleteOpen(true);
+          },
+        },
+      });
     } finally {
       setDeleting(false);
       setDeleteOpen(false);
       setDeleteReason("");
     }
-  }, [deleting, event, repoCoords, deleteReason]);
+  }, [deletionToast, deleting, event, repoCoords, deleteReason]);
 
   return (
     <>
@@ -192,7 +258,7 @@ export function EventBodyCard({
                   <Trash2 className="h-3.5 w-3.5" />
                 </button>
               )}
-              <EventCardActions event={event} />
+              <EventCardActions event={event} hideShare />
             </div>
           </div>
         </CardHeader>
@@ -232,54 +298,19 @@ export function EventBodyCard({
                   </>
                 )}
               </div>
-              <div className="rounded-md border border-border/50 bg-muted/20 px-3 py-1.5 divide-y divide-border/30">
-                {commits.map((c) => {
-                  const commitSuperseded = c.superseded ?? commitsSuperseded;
-                  const inner = (
-                    <>
-                      <span
-                        className={cn(
-                          "text-[11px] shrink-0",
-                          c.noCommitId ? "" : "font-mono",
-                          commitSuperseded
-                            ? "line-through text-muted-foreground/50"
-                            : c.noCommitId
-                              ? "text-muted-foreground/50 italic"
-                              : "text-muted-foreground/70",
-                        )}
-                      >
-                        {c.noCommitId ? "[unknown]" : c.hash.slice(0, 7)}
-                      </span>
-                      <span
-                        className={cn(
-                          "text-sm truncate",
-                          commitSuperseded
-                            ? "line-through text-foreground/40"
-                            : "text-foreground/80",
-                        )}
-                      >
-                        {c.subject}
-                      </span>
-                    </>
-                  );
-                  return c.href ? (
-                    <Link
-                      key={c.hash}
-                      to={c.href}
-                      className="flex items-center gap-2 py-0.5 min-w-0 rounded px-1 -mx-1 transition-colors hover:bg-muted/40"
-                    >
-                      {inner}
-                    </Link>
-                  ) : (
-                    <div
-                      key={c.hash}
-                      className="flex items-center gap-2 py-0.5 min-w-0 rounded px-1 -mx-1"
-                    >
-                      {inner}
-                    </div>
-                  );
-                })}
-              </div>
+              <CompactCommitGraphList
+                rows={commitRows}
+                graphCommits={commitGraph}
+                continuesAbove={commitsContinueAbove}
+                // Real commits carry their boundary parent. Bare patch/hash
+                // rows need an explicit signal that their base lies below.
+                continuesBelow={usesSyntheticCommitGraph}
+                collapseMergedCommits={collapseMergedCommits}
+                mergeSourceNames={mergeSourceNames}
+              />
+              {commitPreview && (
+                <NsitePreviewLink preview={commitPreview} className="mt-2" />
+              )}
             </div>
           )}
           <div className="flex flex-wrap items-center gap-3 pt-1 empty:hidden">
@@ -447,6 +478,7 @@ function DeleteEventButton({
   repoCoords: string[];
   label?: string;
 }) {
+  const { toast: deletionToast } = useRecoveryToast();
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteReason, setDeleteReason] = useState("");
   const [deleting, setDeleting] = useState(false);
@@ -462,13 +494,24 @@ function DeleteEventButton({
         deleteReason.trim() || undefined,
       );
     } catch (err) {
-      console.error("[DeleteEventButton] failed to delete:", err);
+      deletionToast({
+        title: "Could not delete event",
+        description: err instanceof Error ? err.message : "Request failed",
+        variant: "destructive",
+        recovery: {
+          label: "Review deletion",
+          action: () => {
+            setDeleteReason(deleteReason);
+            setDeleteOpen(true);
+          },
+        },
+      });
     } finally {
       setDeleting(false);
       setDeleteOpen(false);
       setDeleteReason("");
     }
-  }, [deleting, event, repoCoords, deleteReason]);
+  }, [deletionToast, deleting, event, repoCoords, deleteReason]);
 
   const reasonId = `delete-${event.id.slice(0, 8)}-reason`;
 
@@ -602,6 +645,25 @@ export function SubjectRenameCard({
 // StatusChangeCard
 // ---------------------------------------------------------------------------
 
+const HEX_EVENT_ID = /^[0-9a-f]{64}$/;
+const AUTO_RESOLUTION_ALT = "issue resolved from commit message";
+const GENERATED_RESOLUTION_SUFFIX =
+  /(?:^|\n\n)resolved by commit ([0-9a-f]{40})(?:, when merged in commit ([0-9a-f]{40}))?\s*$/i;
+
+function statusCommitContext(event: NostrEvent): {
+  triggeringCommit?: string;
+  mergeCommit?: string;
+} {
+  const generatedContext = event.content.match(GENERATED_RESOLUTION_SUFFIX);
+  return {
+    triggeringCommit:
+      event.tags.find(([name]) => name === "c")?.[1] ?? generatedContext?.[1],
+    mergeCommit:
+      event.tags.find(([name]) => name === "merge-commit")?.[1] ??
+      generatedContext?.[2],
+  };
+}
+
 export function StatusChangeCard({
   event,
   status,
@@ -622,6 +684,122 @@ export function StatusChangeCard({
 
   const activeAccount = useActiveAccount();
   const isOwn = !!activeAccount && activeAccount.pubkey === event.pubkey;
+  const relatedTag = event.tags.find(
+    ([name, value]) => name === "q" && HEX_EVENT_ID.test(value),
+  );
+  const relatedPointer = relatedTag
+    ? {
+        id: relatedTag[1],
+        relays: relatedTag[2] ? [relatedTag[2]] : undefined,
+        author: relatedTag[3] || undefined,
+      }
+    : undefined;
+  const relatedEvent = useEmbeddedEventById(relatedPointer);
+  const isAutomaticResolution =
+    event.tags.find(([name]) => name === "alt")?.[1] === AUTO_RESOLUTION_ALT;
+  const { triggeringCommit, mergeCommit } = statusCommitContext(event);
+
+  const relatedLabel = relatedEvent
+    ? relatedEvent.kind === PR_KIND
+      ? "PR"
+      : relatedEvent.kind === PATCH_KIND
+        ? "patch"
+        : relatedEvent.kind === ISSUE_KIND
+          ? "issue"
+          : "event"
+    : "event";
+  const relatedSubject = relatedEvent
+    ? extractSubject(relatedEvent) || `#${relatedEvent.id.slice(0, 8)}`
+    : relatedPointer
+      ? `#${relatedPointer.id.slice(0, 8)}`
+      : undefined;
+
+  const actions = (
+    <div className="flex items-center gap-0.5 shrink-0">
+      {isOwn && repoCoords && (
+        <DeleteEventButton
+          event={event}
+          repoCoords={repoCoords}
+          label="status change"
+        />
+      )}
+      <EventCardActions event={event} />
+    </div>
+  );
+
+  if (isAutomaticResolution) {
+    return (
+      <div className="relative my-2 ml-1 flex gap-3 rounded-lg border bg-muted/30 p-3">
+        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border bg-background shadow-sm">
+          {authorised ? (
+            <StatusIcon status={status} variant={variant} />
+          ) : (
+            <ShieldAlert className="h-3.5 w-3.5 text-muted-foreground" />
+          )}
+        </div>
+
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm text-muted-foreground">
+            <StatusBadge status={status} variant={variant} />
+            <span>
+              {authorised ? "automatically" : "proposed automatically"}
+            </span>
+            {triggeringCommit && (
+              <span className="inline-flex items-center gap-1">
+                by commit{" "}
+                <CommitLink
+                  hash={triggeringCommit}
+                  displayHash={triggeringCommit.slice(0, 7)}
+                />
+              </span>
+            )}
+            {relatedPointer && relatedSubject && (
+              <span>
+                via{" "}
+                <Link
+                  to={`/${eventIdToNevent(relatedPointer.id, relatedPointer.relays)}`}
+                  className="font-medium text-foreground hover:underline"
+                >
+                  {relatedLabel} {relatedSubject}
+                </Link>
+              </span>
+            )}
+            {mergeCommit && mergeCommit !== triggeringCommit && (
+              <span className="inline-flex items-center gap-1">
+                merged as{" "}
+                <CommitLink
+                  hash={mergeCommit}
+                  displayHash={mergeCommit.slice(0, 7)}
+                />
+              </span>
+            )}
+          </div>
+
+          {!authorised && (
+            <p className="mt-1 text-xs text-muted-foreground/60">
+              User is not a maintainer — status change not applied
+            </p>
+          )}
+
+          <div className="mt-2 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-muted-foreground/60">
+            <span>Status event signed by</span>
+            <UserName
+              pubkey={event.pubkey}
+              linkToProfile
+              className="font-medium text-muted-foreground"
+            />
+            <span aria-hidden="true">·</span>
+            <span className="inline-flex items-center gap-1">
+              <Clock className="h-3 w-3" />
+              {timeAgo}
+            </span>
+          </div>
+        </div>
+
+        {actions}
+      </div>
+    );
+  }
 
   return (
     <div className="relative flex gap-3 py-1.5 pl-1">
@@ -654,18 +832,40 @@ export function StatusChangeCard({
             User is not a maintainer — status change not applied
           </p>
         )}
-      </div>
-
-      <div className="flex items-center gap-0.5 shrink-0 pt-0.5">
-        {isOwn && repoCoords && (
-          <DeleteEventButton
-            event={event}
-            repoCoords={repoCoords}
-            label="status change"
+        {(relatedPointer || triggeringCommit || mergeCommit) && (
+          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground/80">
+            {relatedPointer && relatedSubject && (
+              <span>
+                via{" "}
+                <Link
+                  to={`/${eventIdToNevent(relatedPointer.id, relatedPointer.relays)}`}
+                  className="font-medium text-foreground hover:underline"
+                >
+                  {relatedLabel} {relatedSubject}
+                </Link>
+              </span>
+            )}
+            {triggeringCommit && (
+              <span className="inline-flex items-center gap-1">
+                triggered by commit <CommitLink hash={triggeringCommit} />
+              </span>
+            )}
+            {mergeCommit && mergeCommit !== triggeringCommit && (
+              <span className="inline-flex items-center gap-1">
+                merged as <CommitLink hash={mergeCommit} />
+              </span>
+            )}
+          </div>
+        )}
+        {event.content.trim() && (
+          <CommentContent
+            content={event.content.trim()}
+            className="mt-1.5 text-sm text-foreground/80 break-words"
           />
         )}
-        <EventCardActions event={event} />
       </div>
+
+      <div className="pt-0.5">{actions}</div>
     </div>
   );
 }
@@ -833,12 +1033,14 @@ export function ZapMessageCard({
  * Includes JSON view and delete buttons.
  */
 export function ResolvedThreadCard({
+  keepExpanded = false,
   event,
   rootCommentEvent,
   authorised,
   repoCoords,
   children,
 }: {
+  keepExpanded?: boolean;
   event: NostrEvent;
   /**
    * The root inline comment event (the one being resolved). Used to extract
@@ -879,6 +1081,7 @@ export function ResolvedThreadCard({
   // Authorised resolvers collapse the thread by default
   const [expanded, setExpanded] = useState(!authorised);
   const [jsonOpen, setJsonOpen] = useState(false);
+  const { toast: deletionToast } = useRecoveryToast();
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteReason, setDeleteReason] = useState("");
   const [deleting, setDeleting] = useState(false);
@@ -894,19 +1097,30 @@ export function ResolvedThreadCard({
         deleteReason.trim() || undefined,
       );
     } catch (err) {
-      console.error("[ResolvedThreadCard] failed to delete:", err);
+      deletionToast({
+        title: "Could not delete event",
+        description: err instanceof Error ? err.message : "Request failed",
+        variant: "destructive",
+        recovery: {
+          label: "Review deletion",
+          action: () => {
+            setDeleteReason(deleteReason);
+            setDeleteOpen(true);
+          },
+        },
+      });
     } finally {
       setDeleting(false);
       setDeleteOpen(false);
       setDeleteReason("");
     }
-  }, [deleting, event, repoCoords, deleteReason]);
+  }, [deletionToast, deleting, event, repoCoords, deleteReason]);
 
   const reasonId = `delete-resolve-${event.id.slice(0, 8)}-reason`;
 
   return (
     <>
-      {expanded ? (
+      {expanded || keepExpanded ? (
         <>
           {/* Thread content */}
           {children && <div className="mb-0">{children}</div>}
@@ -1077,6 +1291,8 @@ export interface RenameItem {
 }
 
 export interface ThreadContext {
+  /** A separate composer currently owns this reply; avoid duplicating its draft. */
+  activeReplyId?: string;
   rootEvent: NostrEvent;
   /** Repo coordinate strings (e.g. "30617:<pubkey>:<d>") for relay group keying */
   repoCoords?: string[];
@@ -1225,11 +1441,11 @@ export function CoverNoteCard({
 
   return (
     <>
-      <div className="border-l-4 border-blue-500/60 bg-muted/30 rounded-r-md px-4 py-3 mb-4">
+      <div className="mb-4 rounded-r-md border-l-4 border-blue-500/60 bg-muted/30 px-3 py-3 sm:px-4">
         <div className="flex items-start gap-2">
-          {/* Left: metadata + content */}
+          {/* Left: metadata */}
           <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 flex-wrap text-xs text-muted-foreground mb-2">
+            <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
               <Pin className="h-3.5 w-3.5 shrink-0 text-blue-500/70" />
               <span className="font-medium uppercase tracking-wide text-blue-500/80">
                 Cover note
@@ -1250,15 +1466,6 @@ export function CoverNoteCard({
                 <Clock className="h-3 w-3" />
                 {timeAgo}
               </span>
-            </div>
-            <div className="prose prose-sm dark:prose-invert max-w-none text-sm">
-              <Suspense
-                fallback={
-                  <div className="h-8 animate-pulse bg-muted rounded" />
-                }
-              >
-                <MarkdownContent content={event.content} />
-              </Suspense>
             </div>
           </div>
 
@@ -1344,6 +1551,14 @@ export function CoverNoteCard({
               </DropdownMenu>
             )}
           </div>
+        </div>
+
+        <div className="prose prose-sm mt-2 max-w-none text-sm dark:prose-invert">
+          <Suspense
+            fallback={<div className="h-8 animate-pulse rounded bg-muted" />}
+          >
+            <MarkdownContent content={event.content} />
+          </Suspense>
         </div>
       </div>
 

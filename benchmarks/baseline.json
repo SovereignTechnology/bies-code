@@ -1,0 +1,753 @@
+{
+  "meta": {
+    "timestamp": "2026-08-31T19:40:48.060Z",
+    "commit": "a6ca0d37",
+    "repo": "nostr://danconwaydev.com/gitworkshop",
+    "repoPath": "/danconwaydev.com/gitworkshop",
+    "chromiumVersion": "149.0.7827.55"
+  },
+  "coldLoad": {
+    "reqFrames": 1601,
+    "reqFilterBytes": 2227716,
+    "closeFrames": 547,
+    "eventFramesSent": 0,
+    "otherFramesSent": 0,
+    "eventFramesReceived": 19514,
+    "eoseFrames": 1338,
+    "socketsOpened": 120,
+    "distinctRelays": 54,
+    "perRelay": {
+      "wss://relay.damus.io": {
+        "sockets": 1,
+        "reqFrames": 62,
+        "reqFilterBytes": 114524,
+        "closeFrames": 15,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 1403,
+        "eoseFrames": 61
+      },
+      "wss://nos.lol": {
+        "sockets": 1,
+        "reqFrames": 175,
+        "reqFilterBytes": 188396,
+        "closeFrames": 113,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 2003,
+        "eoseFrames": 175
+      },
+      "wss://index.ngit.dev": {
+        "sockets": 1,
+        "reqFrames": 5,
+        "reqFilterBytes": 752,
+        "closeFrames": 3,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 15,
+        "eoseFrames": 5
+      },
+      "wss://gitnostr.com": {
+        "sockets": 1,
+        "reqFrames": 83,
+        "reqFilterBytes": 220003,
+        "closeFrames": 3,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 1580,
+        "eoseFrames": 26
+      },
+      "wss://relay.ngit.dev": {
+        "sockets": 1,
+        "reqFrames": 83,
+        "reqFilterBytes": 220003,
+        "closeFrames": 2,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 729,
+        "eoseFrames": 10
+      },
+      "wss://ngit.danconwaydev.com": {
+        "sockets": 1,
+        "reqFrames": 83,
+        "reqFilterBytes": 220003,
+        "closeFrames": 3,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 1423,
+        "eoseFrames": 22
+      },
+      "wss://git.shakespeare.diy": {
+        "sockets": 1,
+        "reqFrames": 83,
+        "reqFilterBytes": 220003,
+        "closeFrames": 3,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 4083,
+        "eoseFrames": 82
+      },
+      "wss://git.nostrhub.io": {
+        "sockets": 1,
+        "reqFrames": 83,
+        "reqFilterBytes": 220003,
+        "closeFrames": 3,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 4087,
+        "eoseFrames": 82
+      },
+      "wss://purplepag.es": {
+        "sockets": 1,
+        "reqFrames": 20,
+        "reqFilterBytes": 4493,
+        "closeFrames": 14,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 35,
+        "eoseFrames": 20
+      },
+      "wss://index.hzrd149.com": {
+        "sockets": 4,
+        "reqFrames": 0,
+        "reqFilterBytes": 0,
+        "closeFrames": 0,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 0,
+        "eoseFrames": 0
+      },
+      "wss://indexer.coracle.social": {
+        "sockets": 1,
+        "reqFrames": 14,
+        "reqFilterBytes": 3636,
+        "closeFrames": 14,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 6,
+        "eoseFrames": 14
+      },
+      "wss://relay.ditto.pub": {
+        "sockets": 1,
+        "reqFrames": 97,
+        "reqFilterBytes": 82958,
+        "closeFrames": 68,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 492,
+        "eoseFrames": 31
+      },
+      "wss://relay.primal.net": {
+        "sockets": 1,
+        "reqFrames": 51,
+        "reqFilterBytes": 55552,
+        "closeFrames": 12,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 14,
+        "eoseFrames": 51
+      },
+      "wss://haven.danconwaydev.com": {
+        "sockets": 1,
+        "reqFrames": 127,
+        "reqFilterBytes": 113052,
+        "closeFrames": 98,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 557,
+        "eoseFrames": 127
+      },
+      "wss://relay.nostr.net": {
+        "sockets": 1,
+        "reqFrames": 155,
+        "reqFilterBytes": 151652,
+        "closeFrames": 98,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 863,
+        "eoseFrames": 155
+      },
+      "wss://haven.danconwaydev.com/inbox": {
+        "sockets": 1,
+        "reqFrames": 151,
+        "reqFilterBytes": 150111,
+        "closeFrames": 96,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 709,
+        "eoseFrames": 151
+      },
+      "wss://relay.zapstore.dev": {
+        "sockets": 1,
+        "reqFrames": 2,
+        "reqFilterBytes": 558,
+        "closeFrames": 2,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 3,
+        "eoseFrames": 2
+      },
+      "wss://relay.dreamith.to": {
+        "sockets": 1,
+        "reqFrames": 9,
+        "reqFilterBytes": 984,
+        "closeFrames": 0,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 0,
+        "eoseFrames": 9
+      },
+      "wss://nostr.land": {
+        "sockets": 1,
+        "reqFrames": 38,
+        "reqFilterBytes": 66655,
+        "closeFrames": 0,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 322,
+        "eoseFrames": 38
+      },
+      "wss://theforest.nostr1.com": {
+        "sockets": 1,
+        "reqFrames": 38,
+        "reqFilterBytes": 79543,
+        "closeFrames": 0,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 888,
+        "eoseFrames": 38
+      },
+      "ws://cwx3zhyyu3x64b7u5xj63toy56eyo35ohzsaxjs5ko2ackpapqi3qhyd.onion:7778": {
+        "sockets": 15,
+        "reqFrames": 0,
+        "reqFilterBytes": 0,
+        "closeFrames": 0,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 0,
+        "eoseFrames": 0
+      },
+      "wss://k6dpciogx4fabnipku6wlce4rjv3ffjhv6gcundcxvxn6poeq2hcn3id.onion": {
+        "sockets": 5,
+        "reqFrames": 0,
+        "reqFilterBytes": 0,
+        "closeFrames": 0,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 0,
+        "eoseFrames": 0
+      },
+      "wss://nostr21.com": {
+        "sockets": 1,
+        "reqFrames": 13,
+        "reqFilterBytes": 1998,
+        "closeFrames": 0,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 9,
+        "eoseFrames": 13
+      },
+      "wss://relay.nostr.wirednet.jp": {
+        "sockets": 1,
+        "reqFrames": 15,
+        "reqFilterBytes": 3991,
+        "closeFrames": 0,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 34,
+        "eoseFrames": 15
+      },
+      "wss://nostr.oxtr.dev": {
+        "sockets": 1,
+        "reqFrames": 28,
+        "reqFilterBytes": 15113,
+        "closeFrames": 0,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 54,
+        "eoseFrames": 28
+      },
+      "wss://nostr.wine": {
+        "sockets": 1,
+        "reqFrames": 10,
+        "reqFilterBytes": 7073,
+        "closeFrames": 0,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 12,
+        "eoseFrames": 10
+      },
+      "wss://nostr.mom": {
+        "sockets": 1,
+        "reqFrames": 20,
+        "reqFilterBytes": 8706,
+        "closeFrames": 0,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 96,
+        "eoseFrames": 20
+      },
+      "wss://relay.snort.social": {
+        "sockets": 5,
+        "reqFrames": 0,
+        "reqFilterBytes": 0,
+        "closeFrames": 0,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 0,
+        "eoseFrames": 0
+      },
+      "ws://hfv334dgnndidbgdi2rbbvrtimp2fqy5unpys5tumixhrr7gi2sa.b32.i2p:7778": {
+        "sockets": 15,
+        "reqFrames": 0,
+        "reqFilterBytes": 0,
+        "closeFrames": 0,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 0,
+        "eoseFrames": 0
+      },
+      "wss://yabu.me": {
+        "sockets": 1,
+        "reqFrames": 9,
+        "reqFilterBytes": 984,
+        "closeFrames": 0,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 0,
+        "eoseFrames": 9
+      },
+      "wss://relay.cyberguy.fyi": {
+        "sockets": 5,
+        "reqFrames": 0,
+        "reqFilterBytes": 0,
+        "closeFrames": 0,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 0,
+        "eoseFrames": 0
+      },
+      "wss://h.codingarena.top/inbox": {
+        "sockets": 1,
+        "reqFrames": 11,
+        "reqFilterBytes": 5286,
+        "closeFrames": 0,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 0,
+        "eoseFrames": 11
+      },
+      "wss://nostr.einundzwanzig.space": {
+        "sockets": 1,
+        "reqFrames": 11,
+        "reqFilterBytes": 5286,
+        "closeFrames": 0,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 0,
+        "eoseFrames": 11
+      },
+      "wss://wot.codingarena.top": {
+        "sockets": 1,
+        "reqFrames": 11,
+        "reqFilterBytes": 5286,
+        "closeFrames": 0,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 0,
+        "eoseFrames": 11
+      },
+      "wss://inbox.relays.land": {
+        "sockets": 1,
+        "reqFrames": 9,
+        "reqFilterBytes": 14695,
+        "closeFrames": 0,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 0,
+        "eoseFrames": 9
+      },
+      "wss://pyramid.fiatjaf.com/inbox": {
+        "sockets": 1,
+        "reqFrames": 4,
+        "reqFilterBytes": 612,
+        "closeFrames": 0,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 9,
+        "eoseFrames": 4
+      },
+      "wss://spatia-arcana.com/inbox": {
+        "sockets": 1,
+        "reqFrames": 4,
+        "reqFilterBytes": 612,
+        "closeFrames": 0,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 9,
+        "eoseFrames": 4
+      },
+      "wss://bostr.bitcointxoko.com": {
+        "sockets": 5,
+        "reqFrames": 0,
+        "reqFilterBytes": 0,
+        "closeFrames": 0,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 0,
+        "eoseFrames": 0
+      },
+      "wss://eden.nostr.land": {
+        "sockets": 1,
+        "reqFrames": 4,
+        "reqFilterBytes": 612,
+        "closeFrames": 0,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 0,
+        "eoseFrames": 4
+      },
+      "wss://no.str.cr": {
+        "sockets": 1,
+        "reqFrames": 4,
+        "reqFilterBytes": 612,
+        "closeFrames": 0,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 0,
+        "eoseFrames": 4
+      },
+      "wss://relay.nostr.band": {
+        "sockets": 1,
+        "reqFrames": 0,
+        "reqFilterBytes": 0,
+        "closeFrames": 0,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 0,
+        "eoseFrames": 0
+      },
+      "wss://nostr-01.yakihonne.com": {
+        "sockets": 1,
+        "reqFrames": 9,
+        "reqFilterBytes": 1587,
+        "closeFrames": 0,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 18,
+        "eoseFrames": 9
+      },
+      "wss://relayable.org": {
+        "sockets": 5,
+        "reqFrames": 0,
+        "reqFilterBytes": 0,
+        "closeFrames": 0,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 0,
+        "eoseFrames": 0
+      },
+      "wss://xmr.ithurtswhenip.ee/juliet": {
+        "sockets": 1,
+        "reqFrames": 9,
+        "reqFilterBytes": 2458,
+        "closeFrames": 0,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 0,
+        "eoseFrames": 9
+      },
+      "wss://vitor.nostr1.com": {
+        "sockets": 1,
+        "reqFrames": 4,
+        "reqFilterBytes": 612,
+        "closeFrames": 0,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 4,
+        "eoseFrames": 4
+      },
+      "wss://npub1spxdug4m3y24hpx5crm0el4zhkk0wafs8kp6m0xu0wecygqej2xqq8gyhx.fips.network": {
+        "sockets": 5,
+        "reqFrames": 0,
+        "reqFilterBytes": 0,
+        "closeFrames": 0,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 0,
+        "eoseFrames": 0
+      },
+      "wss://pyramid.fiatjaf.com": {
+        "sockets": 1,
+        "reqFrames": 30,
+        "reqFilterBytes": 20462,
+        "closeFrames": 0,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 15,
+        "eoseFrames": 30
+      },
+      "wss://nostr.bitcoiner.social": {
+        "sockets": 1,
+        "reqFrames": 12,
+        "reqFilterBytes": 3261,
+        "closeFrames": 0,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 0,
+        "eoseFrames": 12
+      },
+      "wss://nostr.sprovoost.nl": {
+        "sockets": 1,
+        "reqFrames": 14,
+        "reqFilterBytes": 12149,
+        "closeFrames": 0,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 42,
+        "eoseFrames": 11
+      },
+      "wss://christpill.nostr1.com": {
+        "sockets": 1,
+        "reqFrames": 11,
+        "reqFilterBytes": 3440,
+        "closeFrames": 0,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 0,
+        "eoseFrames": 11
+      },
+      "wss://deschooling.us": {
+        "sockets": 4,
+        "reqFrames": 0,
+        "reqFilterBytes": 0,
+        "closeFrames": 0,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 0,
+        "eoseFrames": 0
+      },
+      "wss://nostr.cercatrova.me": {
+        "sockets": 5,
+        "reqFrames": 0,
+        "reqFilterBytes": 0,
+        "closeFrames": 0,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 0,
+        "eoseFrames": 0
+      },
+      "wss://nostr.cheeserobot.org": {
+        "sockets": 5,
+        "reqFrames": 0,
+        "reqFilterBytes": 0,
+        "closeFrames": 0,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 0,
+        "eoseFrames": 0
+      },
+      "wss://orangesync.tech": {
+        "sockets": 1,
+        "reqFrames": 0,
+        "reqFilterBytes": 0,
+        "closeFrames": 0,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 0,
+        "eoseFrames": 0
+      }
+    },
+    "navToTabsVisibleMs": 1824,
+    "timeToStableMs": 23567,
+    "stable": true,
+    "tabText": "Issues 31 | PRs 3"
+  },
+  "warmSwitch": {
+    "reqFrames": 9,
+    "reqFilterBytes": 3196,
+    "closeFrames": 7,
+    "eventFramesSent": 0,
+    "otherFramesSent": 0,
+    "eventFramesReceived": 3729,
+    "eoseFrames": 79,
+    "socketsOpened": 12,
+    "distinctRelays": 17,
+    "perRelay": {
+      "wss://relay.damus.io": {
+        "sockets": 0,
+        "reqFrames": 1,
+        "reqFilterBytes": 496,
+        "closeFrames": 1,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 6,
+        "eoseFrames": 2
+      },
+      "wss://nos.lol": {
+        "sockets": 0,
+        "reqFrames": 1,
+        "reqFilterBytes": 496,
+        "closeFrames": 1,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 6,
+        "eoseFrames": 1
+      },
+      "wss://index.ngit.dev": {
+        "sockets": 0,
+        "reqFrames": 1,
+        "reqFilterBytes": 118,
+        "closeFrames": 0,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 3,
+        "eoseFrames": 1
+      },
+      "wss://gitnostr.com": {
+        "sockets": 0,
+        "reqFrames": 0,
+        "reqFilterBytes": 0,
+        "closeFrames": 0,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 1525,
+        "eoseFrames": 25
+      },
+      "wss://relay.ngit.dev": {
+        "sockets": 0,
+        "reqFrames": 0,
+        "reqFilterBytes": 0,
+        "closeFrames": 1,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 693,
+        "eoseFrames": 12
+      },
+      "wss://ngit.danconwaydev.com": {
+        "sockets": 0,
+        "reqFrames": 0,
+        "reqFilterBytes": 0,
+        "closeFrames": 0,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 1479,
+        "eoseFrames": 29
+      },
+      "wss://git.shakespeare.diy": {
+        "sockets": 0,
+        "reqFrames": 0,
+        "reqFilterBytes": 0,
+        "closeFrames": 0,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 0,
+        "eoseFrames": 1
+      },
+      "wss://git.nostrhub.io": {
+        "sockets": 0,
+        "reqFrames": 0,
+        "reqFilterBytes": 0,
+        "closeFrames": 0,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 0,
+        "eoseFrames": 1
+      },
+      "wss://purplepag.es": {
+        "sockets": 0,
+        "reqFrames": 2,
+        "reqFilterBytes": 547,
+        "closeFrames": 1,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 8,
+        "eoseFrames": 2
+      },
+      "wss://index.hzrd149.com": {
+        "sockets": 1,
+        "reqFrames": 0,
+        "reqFilterBytes": 0,
+        "closeFrames": 0,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 0,
+        "eoseFrames": 0
+      },
+      "wss://indexer.coracle.social": {
+        "sockets": 0,
+        "reqFrames": 2,
+        "reqFilterBytes": 547,
+        "closeFrames": 1,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 1,
+        "eoseFrames": 2
+      },
+      "wss://relay.ditto.pub": {
+        "sockets": 0,
+        "reqFrames": 1,
+        "reqFilterBytes": 496,
+        "closeFrames": 1,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 7,
+        "eoseFrames": 1
+      },
+      "wss://relay.primal.net": {
+        "sockets": 0,
+        "reqFrames": 1,
+        "reqFilterBytes": 496,
+        "closeFrames": 1,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 1,
+        "eoseFrames": 1
+      },
+      "ws://cwx3zhyyu3x64b7u5xj63toy56eyo35ohzsaxjs5ko2ackpapqi3qhyd.onion:7778": {
+        "sockets": 5,
+        "reqFrames": 0,
+        "reqFilterBytes": 0,
+        "closeFrames": 0,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 0,
+        "eoseFrames": 0
+      },
+      "ws://hfv334dgnndidbgdi2rbbvrtimp2fqy5unpys5tumixhrr7gi2sa.b32.i2p:7778": {
+        "sockets": 5,
+        "reqFrames": 0,
+        "reqFilterBytes": 0,
+        "closeFrames": 0,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 0,
+        "eoseFrames": 0
+      },
+      "wss://nostr.sprovoost.nl": {
+        "sockets": 0,
+        "reqFrames": 0,
+        "reqFilterBytes": 0,
+        "closeFrames": 0,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 0,
+        "eoseFrames": 1
+      },
+      "wss://deschooling.us": {
+        "sockets": 1,
+        "reqFrames": 0,
+        "reqFilterBytes": 0,
+        "closeFrames": 0,
+        "eventFramesSent": 0,
+        "otherFramesSent": 0,
+        "eventFramesReceived": 0,
+        "eoseFrames": 0
+      }
+    },
+    "tabSwitchMs": 401,
+    "timeToStableMs": 417,
+    "stable": true,
+    "tabText": "Issues 31 | PRs 3"
+  }
+}

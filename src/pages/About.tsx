@@ -1,5 +1,6 @@
 import { Link } from "react-router-dom";
 import { useSeoMeta } from "@unhead/react";
+import { DOCUMENTATION_URLS } from "@/lib/documentation";
 
 // Praying-hands SVG from Phosphor Icons (MIT licence)
 // https://icon-sets.iconify.design/ph/hands-praying-fill/
@@ -86,20 +87,23 @@ export default function About() {
           and{" "}
           <a
             className="text-primary hover:underline"
-            href="https://ngit.dev/grasp"
+            href={DOCUMENTATION_URLS.grasp}
           >
             GRASP
           </a>
           . gitworkshop.dev,{" "}
-          <Link className="text-primary hover:underline" to="/ngit">
+          <a
+            className="text-primary hover:underline"
+            href={DOCUMENTATION_URLS.home}
+          >
             ngit
-          </Link>{" "}
+          </a>{" "}
           and{" "}
           <a
             className="text-primary hover:underline"
-            href="https://ngit.dev/relay"
+            href={DOCUMENTATION_URLS.selfHostGrasp}
           >
-            ngit-relay
+            ngit-grasp
           </a>{" "}
           are tightly coupled examples maintained by{" "}
           <Link
@@ -310,16 +314,16 @@ export default function About() {
           learn more at{" "}
           <a
             className="text-primary hover:underline"
-            href="https://ngit.dev/grasp"
+            href={DOCUMENTATION_URLS.grasp}
           >
-            ngit.dev/grasp
+            the GRASP protocol overview
           </a>{" "}
           and see the reference implementation{" "}
           <a
             className="text-primary hover:underline"
-            href="https://ngit.dev/relay"
+            href={DOCUMENTATION_URLS.selfHostGrasp}
           >
-            ngit-relay
+            ngit-grasp
           </a>
         </p>
 

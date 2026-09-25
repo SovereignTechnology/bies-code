@@ -1,4 +1,11 @@
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
+import {
+  Link,
+  Navigate,
+  useLocation,
+  useNavigate,
+  useSearchParams,
+} from "react-router-dom";
 import { useSeoMeta } from "@unhead/react";
 import { nip19 } from "nostr-tools";
 import type { NostrEvent } from "nostr-tools";
@@ -13,7 +20,9 @@ import { useUserGitAuthorFollows } from "@/hooks/useUserGitAuthorFollows";
 import { useUserStarredRepos } from "@/hooks/useUserStarredRepos";
 import { useUserActivity } from "@/hooks/useUserActivity";
 import { usePrefetchNip05 } from "@/hooks/usePrefetchNip05";
-import { useRepoPath } from "@/hooks/useRepoPath";
+import { useStoredCICoordinatorAdvertisement } from "@/hooks/useCICoordinatorProfile";
+import { useStoredCIProviderAdvertisement } from "@/hooks/useCIProviderAdvertisement";
+import { useDefaultRepoPath } from "@/hooks/useRepoPath";
 import { ActivityFeed } from "@/components/ActivityFeed";
 import { useIsFollowing } from "@/hooks/useIsFollowing";
 import { useIsGitAuthorFollowing } from "@/hooks/useIsGitAuthorFollowing";
@@ -24,7 +33,7 @@ import {
   useUserPinnedRepos,
   useUserPinnedCoords,
 } from "@/hooks/useUserPinnedRepos";
-import { useToast } from "@/hooks/useToast";
+import { useRecoveryToast as useToast } from "@/hooks/useRecoveryToast";
 import { UserAvatar, UserLink, UserName } from "@/components/UserAvatar";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Card, CardContent } from "@/components/ui/card";
@@ -52,6 +61,7 @@ import {
   GripVertical,
   ChevronDown,
   ChevronRight,
+  Cpu,
 } from "lucide-react";
 import { useState, useCallback, type ReactNode } from "react";
 import {
@@ -136,6 +146,7 @@ const TABS: { id: TabId; label: string; icon: ReactNode }[] = [
 ];
 
 export default function UserPage({ pubkey }: UserPageProps) {
+  const location = useLocation();
   useLoadProfile(pubkey);
   const profile = useProfile(pubkey);
   const repos = useUserRepositories(pubkey);
@@ -146,9 +157,8 @@ export default function UserPage({ pubkey }: UserPageProps) {
     setSearchParams(tab === "overview" ? {} : { tab });
   };
 
-  // Subscribe to this user's replaceable events (kind 0, 3, 10002, 10017,
-  // 10018) for the duration of the profile page visit. No-op for own profile.
-  useUserProfileSubscription(pubkey);
+  // Load profile data and both CI advertisements together for this visit.
+  useUserProfileSubscription(pubkey, { includeCIAdvertisements: true });
 
   // Reactive data for tabs
   const activity = useUserActivity(pubkey);
@@ -157,6 +167,8 @@ export default function UserPage({ pubkey }: UserPageProps) {
   const starredRepos = useUserStarredRepos(pubkey);
   const pinnedCoords = useUserPinnedCoords(pubkey);
   const pinnedRepos = useUserPinnedRepos(pubkey);
+  const coordinatorAdvertisement = useStoredCICoordinatorAdvertisement(pubkey);
+  const providerAdvertisement = useStoredCIProviderAdvertisement(pubkey);
 
   // Prefetch NIP-05 identity so useRepoPath resolves it from IDB on next visit
   usePrefetchNip05([pubkey]);
@@ -174,6 +186,19 @@ export default function UserPage({ pubkey }: UserPageProps) {
     ogImageAlt: displayName,
     twitterCard: profile?.picture ? "summary" : "summary_large_image",
   });
+
+  if (coordinatorAdvertisement?.event.pubkey === pubkey) {
+    return (
+      <Navigate
+        to={{
+          pathname: `/coordinator/${npub}`,
+          search: location.search,
+          hash: location.hash,
+        }}
+        replace
+      />
+    );
+  }
 
   return (
     <div className="min-h-full">
@@ -241,7 +266,9 @@ export default function UserPage({ pubkey }: UserPageProps) {
                   <div className="flex items-center gap-4 flex-wrap">
                     {profile.nip05 && (
                       <span className="text-sm text-primary font-medium">
-                        {profile.nip05}
+                        {profile.nip05.startsWith("_@")
+                          ? profile.nip05.slice(2)
+                          : profile.nip05}
                       </span>
                     )}
 
@@ -275,7 +302,7 @@ export default function UserPage({ pubkey }: UserPageProps) {
                 <div className="space-y-3">
                   <Skeleton className="h-8 w-64" />
                   <Skeleton className="h-4 w-48" />
-                  <Skeleton className="h-4 w-96" />
+                  <Skeleton className="h-4 w-96 max-w-full" />
                   <div className="flex gap-4">
                     <Skeleton className="h-4 w-32" />
                     <Skeleton className="h-4 w-24" />
@@ -286,6 +313,19 @@ export default function UserPage({ pubkey }: UserPageProps) {
               {/* Npub copy + follow buttons */}
               <div className="mt-4 flex items-center gap-2 flex-wrap">
                 <CopyNpub npub={npub} />
+                {providerAdvertisement && (
+                  <Button
+                    asChild
+                    variant="outline"
+                    size="sm"
+                    className="gap-1.5"
+                  >
+                    <Link to={`/provider/${npub}`}>
+                      <Cpu className="h-3.5 w-3.5" />
+                      CI provider
+                    </Link>
+                  </Button>
+                )}
                 <GitAuthorFollowButton pubkey={pubkey} />
                 <FollowButton pubkey={pubkey} />
               </div>
@@ -359,10 +399,7 @@ export default function UserPage({ pubkey }: UserPageProps) {
             ) : (
               <div className="grid gap-3">
                 {followedRepos.map((repo) => (
-                  <UserRepoCard
-                    key={`${repo.selectedMaintainer}:${repo.dTag}`}
-                    repo={repo}
-                  />
+                  <UserRepoCard key={repo.componentId} repo={repo} />
                 ))}
               </div>
             )}
@@ -392,10 +429,7 @@ export default function UserPage({ pubkey }: UserPageProps) {
             ) : (
               <div className="grid gap-3">
                 {starredRepos.map((repo) => (
-                  <UserRepoCard
-                    key={`${repo.selectedMaintainer}:${repo.dTag}`}
-                    repo={repo}
-                  />
+                  <UserRepoCard key={repo.componentId} repo={repo} />
                 ))}
               </div>
             )}
@@ -682,10 +716,9 @@ function OverviewTab({
           <>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {featuredRepos.map((repo) => {
-                const coord = `30617:${repo.selectedMaintainer}:${repo.dTag}`;
                 return (
                   <PinnedRepoCard
-                    key={coord}
+                    key={repo.componentId}
                     repo={repo}
                     isDraggable={false}
                     isDragging={false}
@@ -805,11 +838,7 @@ function RepositoriesTab({
     return (
       <div className="grid gap-2">
         {repos.map((repo) => (
-          <UserRepoCard
-            key={`${repo.selectedMaintainer}:${repo.dTag}`}
-            repo={repo}
-            compact
-          />
+          <UserRepoCard key={repo.componentId} repo={repo} compact />
         ))}
       </div>
     );
@@ -884,6 +913,7 @@ function PinnedReposSection({
       } catch (err) {
         setLocalOrder(null); // revert
         toast({
+          recovery: { action: () => handleDragEnd(event) },
           title: "Failed to reorder pinned repositories",
           description:
             err instanceof Error
@@ -1008,7 +1038,7 @@ function OtherReposSection({
         <div className="grid gap-2">
           {repos.map((repo) => (
             <UserRepoCard
-              key={`${repo.selectedMaintainer}:${repo.dTag}`}
+              key={repo.componentId}
               repo={repo}
               pinnedCoords={pinnedCoords}
               showPinControl={isOwnProfile}
@@ -1079,7 +1109,7 @@ function PinnedRepoCard({
   isDragging,
   dragHandleProps,
 }: PinnedRepoCardProps) {
-  const repoPath = useRepoPath(repo.selectedMaintainer, repo.dTag, repo.relays);
+  const repoPath = useDefaultRepoPath(repo);
   const navigate = useNavigate();
   const { pinRepo, unpinRepo, pending } = useRobustPinnedRepoActions();
   const { toast } = useToast();
@@ -1088,12 +1118,13 @@ function PinnedRepoCard({
   });
   const coord = `30617:${repo.selectedMaintainer}:${repo.dTag}`;
 
-  const handleUnpin = async (e: React.MouseEvent) => {
-    e.stopPropagation();
+  const handleUnpin = async (e?: React.MouseEvent) => {
+    e?.stopPropagation();
     try {
       await unpinRepo(coord);
     } catch (err) {
       toast({
+        recovery: { action: () => handleUnpin() },
         title: "Failed to unpin repository",
         description:
           err instanceof Error ? err.message : "An unexpected error occurred.",
@@ -1242,7 +1273,7 @@ function UserRepoCard({
   showPinControl = false,
   compact = false,
 }: UserRepoCardProps) {
-  const repoPath = useRepoPath(repo.selectedMaintainer, repo.dTag, repo.relays);
+  const repoPath = useDefaultRepoPath(repo);
   const navigate = useNavigate();
   const timeAgo = formatDistanceToNow(new Date(repo.updatedAt * 1000), {
     addSuffix: true,
@@ -1401,8 +1432,8 @@ function PinButton({ coord, isPinned }: { coord: string; isPinned: boolean }) {
   const { pinRepo, unpinRepo, pending } = useRobustPinnedRepoActions();
   const { toast } = useToast();
 
-  const handleClick = async (e: React.MouseEvent) => {
-    e.stopPropagation();
+  const handleClick = async (e?: React.MouseEvent) => {
+    e?.stopPropagation();
     try {
       if (isPinned) {
         await unpinRepo(coord);
@@ -1411,6 +1442,7 @@ function PinButton({ coord, isPinned }: { coord: string; isPinned: boolean }) {
       }
     } catch (err) {
       toast({
+        recovery: { action: () => handleClick() },
         title: isPinned
           ? "Failed to unpin repository"
           : "Failed to pin repository",
@@ -1445,16 +1477,14 @@ function PinButton({ coord, isPinned }: { coord: string; isPinned: boolean }) {
 }
 
 function CopyNpub({ npub }: { npub: string }) {
+  const copyToClipboard = useCopyToClipboard();
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(npub);
+    await copyToClipboard(npub, () => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // Clipboard API not available
-    }
+    });
   };
 
   return (
@@ -1506,6 +1536,7 @@ function FollowButton({ pubkey }: { pubkey: string }) {
       await follow(pubkey);
     } catch (err) {
       toast({
+        recovery: { action: () => doFollow() },
         title: "Failed to follow",
         description:
           err instanceof Error ? err.message : "An unexpected error occurred.",
@@ -1520,6 +1551,7 @@ function FollowButton({ pubkey }: { pubkey: string }) {
         await unfollow(pubkey);
       } catch (err) {
         toast({
+          recovery: { action: () => handleClick() },
           title: "Failed to unfollow",
           description:
             err instanceof Error
@@ -1627,6 +1659,7 @@ function GitAuthorFollowButton({ pubkey }: { pubkey: string }) {
         await removeGitAuthor(pubkey);
       } catch (err) {
         toast({
+          recovery: { action: () => handleClick() },
           title: "Failed to remove git author",
           description:
             err instanceof Error
@@ -1640,6 +1673,7 @@ function GitAuthorFollowButton({ pubkey }: { pubkey: string }) {
         await addGitAuthor(pubkey);
       } catch (err) {
         toast({
+          recovery: { action: () => handleClick() },
           title: "Failed to add git author",
           description:
             err instanceof Error

@@ -13,6 +13,7 @@ export {
   peekPool,
   removePool,
   clearRegistry,
+  clearPrivateRegistry,
 } from "./registry";
 export type { GetPoolOptions } from "./registry";
 
@@ -24,7 +25,10 @@ export type {
   PoolOptions,
   PoolSubscriber,
   PoolWarning,
+  AuthoritativeRef,
   AuthoritativeHead,
+  ResolvedRefMap,
+  ViewSource,
   RefDiscrepancy,
   // URL state
   UrlState,
@@ -45,13 +49,17 @@ export type {
   InfoRefsUploadPackResponse,
   // Diff data
   CommitRangeData,
+  CommitComparisonData,
 } from "./types";
+
+// --- Commit range selection ---
+export { selectCommitRange } from "./commit-range";
 
 // --- CORS proxy (for UI components that need to display proxy status) ---
 export { CorsProxyManager, DEFAULT_CORS_PROXY_BASE } from "./cors-proxy";
 
 // --- Cache (for advanced consumers that need direct cache access) ---
-export { GitObjectCache } from "./cache";
+export { GitObjectCache, clearPrivateGitObjectCache } from "./cache";
 
 // --- Git HTTP (for advanced consumers) ---
 export {

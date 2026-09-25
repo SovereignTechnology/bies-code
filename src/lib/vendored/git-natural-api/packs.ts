@@ -10,6 +10,8 @@
  *    be cancelled by callers instead of leaving UI flows waiting forever.
  *  - fetchPackfile: parses upload-pack responses as pkt-lines so shallow
  *    response flush packets before NAK/ACK negotiation do not hide the pack.
+ *  - fetchPackfile: joins side-band pack chunks into one typed array without
+ *    first expanding every byte into a JavaScript number array.
  */
 
 import { type PackfileResult, parsePackfile } from "./parse-packfile.ts";
@@ -59,18 +61,27 @@ export async function fetchPackfile(
   url: string,
   want: string,
   signal?: AbortSignal,
+  authorizationHeaders?: Record<string, string>,
 ): Promise<PackfileResult> {
   const resp = await fetch(`${url}/git-upload-pack`, {
     method: "POST",
     headers: {
       "Content-Type": "application/x-git-upload-pack-request",
       Accept: "application/x-git-upload-pack-result",
+      ...authorizationHeaders,
     },
     body: want,
     signal,
   });
 
   if (resp.status !== 200) {
+    if (resp.status === 401 || resp.status === 403) {
+      throw new Response(null, {
+        status: resp.status,
+        statusText: resp.statusText,
+        headers: resp.headers,
+      });
+    }
     throw new Error(`failed to call git-upload-pack: ${await resp.text()}`);
   }
 
@@ -122,7 +133,8 @@ export async function fetchPackfile(
     offset += len;
   }
 
-  const packfileData: number[] = [];
+  const packfileChunks: Uint8Array[] = [];
+  let packfileLength = 0;
   while (offset < data.length) {
     const len = readPktLen(data, offset);
     if (len === 0) break;
@@ -134,7 +146,9 @@ export async function fetchPackfile(
     if (data[offset + 4] === 2) {
       // just a message, ignore
     } else if (data[offset + 4] === 1) {
-      packfileData.push(...data.subarray(offset + 4 + 1, offset + len));
+      const chunk = data.subarray(offset + 4 + 1, offset + len);
+      packfileChunks.push(chunk);
+      packfileLength += chunk.length;
     } else if (data[offset + 4] === 3) {
       throw new Error(
         decodeAscii(data.subarray(offset + 4 + 1, offset + len)).trim(),
@@ -143,7 +157,14 @@ export async function fetchPackfile(
     offset += len;
   }
 
-  return parsePackfile(new Uint8Array(packfileData));
+  const packfileData = new Uint8Array(packfileLength);
+  let packfileOffset = 0;
+  for (const chunk of packfileChunks) {
+    packfileData.set(chunk, packfileOffset);
+    packfileOffset += chunk.length;
+  }
+
+  return parsePackfile(packfileData);
 }
 
 function pktEncode(data: string): string {

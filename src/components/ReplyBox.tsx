@@ -1,3 +1,5 @@
+import { useComposerDraft } from "@/hooks/useComposerDraft";
+import { DraftStatus } from "@/components/DraftStatus";
 /**
  * ReplyBox — NIP-22 comment composer for NIP-34 issues and PRs.
  *
@@ -15,17 +17,19 @@ import type { NostrEvent } from "nostr-tools";
 import { useActiveAccount } from "applesauce-react/hooks";
 import { runner } from "@/services/actions";
 import { createAnonRunner } from "@/lib/anonPublish";
-import { useToast } from "@/hooks/useToast";
+import { useRecoveryToast as useToast } from "@/hooks/useRecoveryToast";
 import { useProfile } from "@/hooks/useProfile";
 import { useUserDisplayName } from "@/hooks/useUserDisplayName";
 import { ChangeIssueStatus, CreateComment } from "@/actions/nip34";
 import type { IssueStatus } from "@/lib/nip34";
 import {
+  ComposerModeToggle,
   NostrComposer,
+  type ComposerTab,
   type NostrComposerHandle,
 } from "@/components/NostrComposer";
 import type { Nip94Tags } from "@/hooks/useBlossomUpload";
-import { composerHasNsec, hasPreviewableContent } from "@/lib/composerUtils";
+import { composerHasNsec } from "@/lib/composerUtils";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -88,13 +92,26 @@ export function ReplyBox({
   statusActions,
 }: ReplyBoxProps) {
   const composerRef = useRef<NostrComposerHandle>(null);
-  const [body, setBody] = useState("");
-  const [activeTab, setActiveTab] = useState<"write" | "preview">("write");
+  const {
+    key: draftKey,
+    draft,
+    update,
+    clear,
+    hasDraft,
+    saved,
+  } = useComposerDraft(`comment:${(parentEvent ?? rootEvent).id}`);
+  const body = draft.body;
+  const setBody = useCallback(
+    (value: string) => update("body", value),
+    [update],
+  );
+  const [activeTab, setActiveTab] = useState<ComposerTab>("write");
   const [focused, setFocused] = useState(false);
   const [isPending, setIsPending] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
   const [anonMode, setAnonMode] = useState(false);
-  /** NIP-94 tag groups accumulated from Blossom uploads in this session */
-  const [uploadedTagGroups, setUploadedTagGroups] = useState<Nip94Tags[]>([]);
+  /** Upload metadata is retained with the local draft. */
+  const uploadedTagGroups = draft.uploadedTagGroups;
   const { toast } = useToast();
   const { openAuthModal } = useAuthModal();
 
@@ -106,15 +123,19 @@ export function ReplyBox({
 
   const initials = displayName.slice(0, 2).toUpperCase() || "?";
 
-  const showToggle = focused || hasPreviewableContent(body);
+  const showAttach =
+    focused || activeTab === "preview" || body.trim().length > 0;
 
   // The applesauce CommentBlueprint takes the immediate parent event.
   // For a top-level comment that's the root; for a reply it's the comment.
   const parent = parentEvent ?? rootEvent;
 
-  const handleUploadedTags = useCallback((tags: Nip94Tags) => {
-    setUploadedTagGroups((prev) => [...prev, tags]);
-  }, []);
+  const handleUploadedTags = useCallback(
+    (tags: Nip94Tags) => {
+      update("uploadedTagGroups", (prev) => [...prev, tags]);
+    },
+    [update],
+  );
 
   const submitComment = useCallback(
     async (
@@ -163,14 +184,25 @@ export function ReplyBox({
             : "Your comment has been published.",
         });
 
-        setBody("");
+        clear();
         setActiveTab("write");
-        setUploadedTagGroups([]);
         onSubmitted?.();
       } catch (err) {
         const message =
           err instanceof Error ? err.message : "Failed to post comment";
         toast({
+          recovery: {
+            action: () =>
+              commentPosted && nextStatus && statusActions
+                ? activeRunner.run(
+                    ChangeIssueStatus,
+                    statusActions.itemId,
+                    statusActions.itemAuthorPubkey,
+                    statusActions.repoCoords,
+                    nextStatus,
+                  )
+                : submitComment(trimmed, useAnonMode, nextStatus),
+          },
           title: commentPosted
             ? "Comment posted, but status unchanged"
             : "Failed to post comment",
@@ -178,9 +210,8 @@ export function ReplyBox({
           variant: "destructive",
         });
         if (commentPosted) {
-          setBody("");
+          clear();
           setActiveTab("write");
-          setUploadedTagGroups([]);
           onSubmitted?.();
         }
       } finally {
@@ -195,6 +226,7 @@ export function ReplyBox({
       isLoggedIn,
       uploadedTagGroups,
       statusActions,
+      clear,
     ],
   );
 
@@ -224,7 +256,8 @@ export function ReplyBox({
     [requestSubmit],
   );
 
-  const submitDisabled = isPending || !body.trim() || composerHasNsec(body);
+  const submitDisabled =
+    isPending || isUploading || !body.trim() || composerHasNsec(body);
 
   return (
     <div className="flex gap-3 items-start">
@@ -241,12 +274,13 @@ export function ReplyBox({
       {/* Composer */}
       <form
         onSubmit={handleSubmit}
-        className="flex-1 space-y-2"
+        className="min-w-0 flex-1 space-y-2"
         onBlur={(e) => {
           if (!e.currentTarget.contains(e.relatedTarget)) setFocused(false);
         }}
       >
         <NostrComposer
+          key={draftKey}
           ref={composerRef}
           value={body}
           onChange={setBody}
@@ -261,46 +295,31 @@ export function ReplyBox({
           }}
           priorityPubkeys={priorityPubkeys}
           onUploadedTags={handleUploadedTags}
+          onUploadingChange={setIsUploading}
         />
 
-        <div className="flex flex-wrap items-center gap-2">
-          {/* Attach + Write/Preview — visible on focus or when there is content */}
-          {showToggle && (
-            <>
-              <button
-                type="button"
-                title="Attach image or video (Blossom)"
-                disabled={isPending || composerRef.current?.isUploading}
-                onClick={() => composerRef.current?.triggerAttach()}
-                className="rounded p-1 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                {composerRef.current?.isUploading ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Paperclip className="h-4 w-4" />
-                )}
-              </button>
+        <DraftStatus saved={saved} />
 
-              <div className="flex items-center gap-0.5">
-                {(["write", "preview"] as const).map((tab) => (
-                  <button
-                    key={tab}
-                    type="button"
-                    onClick={() => setActiveTab(tab)}
-                    className={`rounded px-2 py-0.5 text-xs font-medium capitalize transition-colors ${
-                      activeTab === tab
-                        ? "bg-muted text-foreground"
-                        : "text-muted-foreground hover:text-foreground"
-                    }`}
-                  >
-                    {tab}
-                  </button>
-                ))}
-              </div>
-            </>
+        <div className="flex flex-wrap items-center gap-2">
+          {showAttach && (
+            <button
+              type="button"
+              title="Attach image or video (Blossom)"
+              disabled={isPending || isUploading}
+              onClick={() => composerRef.current?.triggerAttach()}
+              className="rounded p-1 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <Paperclip className="h-4 w-4" />
+            </button>
           )}
 
-          <div className="flex items-center gap-3 ml-auto">
+          <ComposerModeToggle
+            value={body}
+            activeTab={activeTab}
+            onTabChange={setActiveTab}
+          />
+
+          <div className="flex flex-wrap items-center justify-end gap-2 ml-auto">
             {/* Anonymous checkbox — only shown when not logged in */}
             {!isLoggedIn && (
               <div className="flex items-center gap-1.5">
@@ -320,6 +339,18 @@ export function ReplyBox({
               </div>
             )}
 
+            {hasDraft && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="px-2 text-xs"
+                onClick={clear}
+                disabled={isPending || isUploading}
+              >
+                Discard
+              </Button>
+            )}
             <div className="flex">
               <Button
                 type="submit"

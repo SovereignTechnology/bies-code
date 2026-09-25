@@ -1,3 +1,5 @@
+import { useErrorRetry } from "@/hooks/useErrorRetry";
+import { ErrorRetryAction } from "@/components/ErrorRetryAction";
 /**
  * BlossomMedia — thin wrappers around <img> and <video> that use
  * useBlossomFallback to automatically try alternative Blossom servers when
@@ -40,7 +42,20 @@ export function BlossomImage({
   style,
   ...rest
 }: BlossomImageProps) {
-  const { src: resolvedSrc, onError } = useBlossomFallback(src);
+  const { src: resolvedSrc, onError, failed, retry } = useBlossomFallback(src);
+  const recovery = useErrorRetry({
+    resourceKey: src,
+    failed,
+    busy: false,
+    onRetry: retry,
+  });
+  if (failed)
+    return (
+      <span className="inline-flex flex-wrap items-center gap-3 rounded border p-3 text-sm">
+        <span>Could not load media.</span>
+        <ErrorRetryAction recovery={recovery} />
+      </span>
+    );
 
   // Build merged inline styles so that explicit width/height values from HTML
   // attributes override Tailwind's preflight `height: auto` rule.
@@ -71,7 +86,20 @@ interface BlossomVideoProps {
 }
 
 export function BlossomVideo({ src, className }: BlossomVideoProps) {
-  const { src: resolvedSrc, onError } = useBlossomFallback(src);
+  const { src: resolvedSrc, onError, failed, retry } = useBlossomFallback(src);
+  const recovery = useErrorRetry({
+    resourceKey: src,
+    failed,
+    busy: false,
+    onRetry: retry,
+  });
+  if (failed)
+    return (
+      <span className="inline-flex flex-wrap items-center gap-3 rounded border p-3 text-sm">
+        <span>Could not load media.</span>
+        <ErrorRetryAction recovery={recovery} />
+      </span>
+    );
   return (
     <video
       src={resolvedSrc}

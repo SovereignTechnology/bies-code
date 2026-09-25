@@ -11,7 +11,8 @@
  *   2. Extract the `a` tag coordinates (in order).
  *   3. Fetch the actual kind:30617 repo announcements for those coordinates
  *      from the git index relays.
- *   4. Return resolved repos via groupIntoResolvedRepos, in pin order.
+ *   4. Resolve those coordinates through the shared component index, in pin
+ *      order with duplicate component references collapsed.
  */
 
 import { use$ } from "./use$";
@@ -21,16 +22,15 @@ import { gitIndexRelays } from "@/services/settings";
 import { mapEventsToStore } from "applesauce-core";
 import { onlyEvents } from "applesauce-relay";
 import { resilientSubscription } from "@/lib/resilientSubscription";
-import {
-  REPO_KIND,
-  groupIntoResolvedRepos,
-  type ResolvedRepo,
-} from "@/lib/nip34";
+import { type ResolvedRepo } from "@/lib/nip34";
 import { PINNED_REPOS_KIND } from "@/actions/pinnedRepoActions";
-import type { Filter } from "applesauce-core/helpers";
-import type { NostrEvent } from "nostr-tools";
 import type { Observable } from "rxjs";
 import { switchMap, map, of } from "rxjs";
+import {
+  RepositorySelectionModel,
+  repositoryCoordinateFilters,
+  repositorySelectionKey,
+} from "@/models/RepositorySelectionModel";
 
 /**
  * Return the ordered list of repositories pinned by the given user.
@@ -59,12 +59,10 @@ export function useUserPinnedRepos(
       switchMap((coords) => {
         if (coords.length === 0) return of(undefined);
 
-        const filter = {
-          kinds: [REPO_KIND],
-          "#d": coords.map((c) => c.split(":")[2]).filter(Boolean),
-        } as Filter;
+        const filters = repositoryCoordinateFilters(coords);
+        if (filters.length === 0) return of(undefined);
 
-        return resilientSubscription(pool, gitIndexRelays, [filter]).pipe(
+        return resilientSubscription(pool, gitIndexRelays, filters).pipe(
           onlyEvents(),
           mapEventsToStore(store),
         );
@@ -89,47 +87,12 @@ export function useUserPinnedRepos(
       }),
       switchMap((coords) => {
         if (coords.length === 0) return of([] as ResolvedRepo[]);
-
-        const coordPubkeys = [
-          ...new Set(
-            coords
-              .map((c) => c.split(":")[1])
-              .filter((pk): pk is string => !!pk),
-          ),
-        ];
-
-        const filter: Filter = {
-          kinds: [REPO_KIND],
-          authors: coordPubkeys,
-        };
-
-        return (
-          store.timeline([filter]) as unknown as Observable<NostrEvent[]>
-        ).pipe(
-          map((events) => {
-            const coordSet = new Set(coords);
-            // Only include repo events whose coordinate is in the pin list
-            const relevant = events.filter((ev) => {
-              const d = ev.tags.find(([t]) => t === "d")?.[1];
-              if (!d) return false;
-              return coordSet.has(`${REPO_KIND}:${ev.pubkey}:${d}`);
-            });
-            const resolved = groupIntoResolvedRepos(relevant);
-            // Restore pin order
-            const indexByCoord = new Map(coords.map((c, i) => [c, i]));
-            return resolved.sort((a, b) => {
-              const ia =
-                indexByCoord.get(
-                  `${REPO_KIND}:${a.selectedMaintainer}:${a.dTag}`,
-                ) ?? Infinity;
-              const ib =
-                indexByCoord.get(
-                  `${REPO_KIND}:${b.selectedMaintainer}:${b.dTag}`,
-                ) ?? Infinity;
-              return ia - ib;
-            });
-          }),
-        );
+        return store.model(
+          RepositorySelectionModel,
+          repositorySelectionKey(coords),
+          undefined,
+          false,
+        ) as unknown as Observable<ResolvedRepo[]>;
       }),
     );
   }, [pubkey, store]);

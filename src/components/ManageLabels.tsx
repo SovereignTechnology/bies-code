@@ -2,7 +2,7 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import type { NostrEvent } from "nostr-tools";
 import { runner } from "@/services/actions";
 import { AttachIssueLabels, DeleteEvent } from "@/actions/nip34";
-import { useToast } from "@/hooks/useToast";
+import { useRecoveryToast as useToast } from "@/hooks/useRecoveryToast";
 import { useActiveAccount } from "applesauce-react/hooks";
 import { labelColor } from "@/lib/labelColor";
 import { Input } from "@/components/ui/input";
@@ -183,6 +183,7 @@ export function ManageLabels({
     } catch (err) {
       toast({
         title: "Failed to add label",
+        recovery: { action: () => applyLabel() },
         description: err instanceof Error ? err.message : undefined,
         variant: "destructive",
       });
@@ -229,6 +230,13 @@ export function ManageLabels({
     } catch (err) {
       toast({
         title: "Failed to remove label",
+        recovery: {
+          label: "Review removal",
+          action: () => {
+            setSingleDeleteEntry(singleDeleteEntry);
+            setSingleDeleteLabel(singleDeleteEntry.eventLabels[0] ?? "");
+          },
+        },
         description: err instanceof Error ? err.message : undefined,
         variant: "destructive",
       });
@@ -247,8 +255,10 @@ export function ManageLabels({
     if (!multiEntry || multiDeleting) return;
     setMultiDeleting(true);
     const remaining = multiEntry.eventLabels.filter((l) => l !== multiLabel);
+    let deleted = false;
     try {
       await runner.run(DeleteEvent, [multiEntry.event], repoCoords);
+      deleted = true;
       if (remaining.length > 0) {
         await runner.run(
           AttachIssueLabels,
@@ -260,7 +270,25 @@ export function ManageLabels({
       }
     } catch (err) {
       toast({
-        title: "Failed to remove label",
+        title: deleted
+          ? "Label removed, but remaining labels were not restored"
+          : "Failed to remove label",
+        recovery: {
+          label: deleted ? "Retry remaining labels" : "Review removal",
+          action: () => {
+            if (deleted)
+              return runner.run(
+                AttachIssueLabels,
+                itemId,
+                remaining,
+                repoCoords,
+                issueAuthorPubkey,
+              );
+            setMultiEntry(multiEntry);
+            setMultiLabel(multiLabel);
+            setMultiOpen(true);
+          },
+        },
         description: err instanceof Error ? err.message : undefined,
         variant: "destructive",
       });
@@ -292,6 +320,13 @@ export function ManageLabels({
     } catch (err) {
       toast({
         title: "Failed to remove labels",
+        recovery: {
+          label: "Review removal",
+          action: () => {
+            setMultiEntry(multiEntry);
+            setMultiOpen(true);
+          },
+        },
         description: err instanceof Error ? err.message : undefined,
         variant: "destructive",
       });

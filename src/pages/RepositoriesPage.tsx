@@ -1,21 +1,30 @@
+import { useErrorRetry } from "@/hooks/useErrorRetry";
+import { ErrorRetryAction } from "@/components/ErrorRetryAction";
 import { useEffect, useRef, useCallback, useState } from "react";
 import type React from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useSeoMeta } from "@unhead/react";
 import { useRepositorySearch } from "@/hooks/useRepositorySearch";
 import type { RelayQueryStatus } from "@/hooks/useRepositorySearch";
-import { useRepoPath } from "@/hooks/useRepoPath";
+import { useDefaultRepoPath } from "@/hooks/useRepoPath";
 import { usePrefetchNip05 } from "@/hooks/usePrefetchNip05";
 import { UserLink } from "@/components/UserAvatar";
+import { NamecoinResolutionBanner } from "@/components/namecoin/NamecoinResolutionBanner";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { GitBranch, Search, ExternalLink, Loader2, User } from "lucide-react";
+import {
+  GitBranch,
+  Search,
+  ExternalLink,
+  Loader2,
+  Lock,
+  User,
+} from "lucide-react";
 import type { ResolvedRepo } from "@/lib/nip34";
 import { formatDistanceToNow } from "date-fns";
-import { use$ } from "@/hooks/use$";
-import { gitIndexRelays } from "@/services/settings";
+import { isPrivateRepositoryCoordinate } from "@/services/privateRepositoryScope";
 
 interface RepositoriesPageProps {
   /** When set, query this relay instead of the user's configured git index relays. */
@@ -77,6 +86,7 @@ export default function RepositoriesPage({
     }
   }, [committedQuery]);
 
+  const [retryVersion, setRetryVersion] = useState(0);
   const {
     repos,
     isLoading,
@@ -84,7 +94,9 @@ export default function RepositoriesPage({
     loadMore,
     matchedUserPubkeys,
     relayStatuses,
-  } = useRepositorySearch(committedQuery, relayOverride);
+    profileRelayStatuses,
+    namecoin,
+  } = useRepositorySearch(committedQuery, relayOverride, retryVersion);
 
   const title =
     seoTitle ??
@@ -148,6 +160,19 @@ export default function RepositoriesPage({
     repos === undefined || (isLoading && repos.length === 0);
   const showEmpty = !showSkeletons && repos !== undefined && repos.length === 0;
   const showList = !showSkeletons && repos !== undefined && repos.length > 0;
+  const relevantRelayStatuses = committedQuery
+    ? [...Object.values(relayStatuses), ...Object.values(profileRelayStatuses)]
+    : Object.values(relayStatuses);
+  const relayViewIncomplete = relevantRelayStatuses.some(
+    (status) => status !== "success",
+  );
+
+  const recovery = useErrorRetry({
+    resourceKey: `${committedQuery}:${relayOverride?.join(",") ?? ""}`,
+    failed: relevantRelayStatuses.includes("error"),
+    busy: isLoading,
+    onRetry: () => setRetryVersion((version) => version + 1),
+  });
 
   return (
     <div className="min-h-full">
@@ -162,6 +187,9 @@ export default function RepositoriesPage({
 
           {/* Relay status banner (connection state, repo count, etc.) */}
           {relayStatusBanner && <div>{relayStatusBanner}</div>}
+          {relevantRelayStatuses.includes("error") && (
+            <ErrorRetryAction recovery={recovery} />
+          )}
 
           <div className="flex items-center gap-4">
             <div className="relative max-w-md flex-1">
@@ -186,10 +214,28 @@ export default function RepositoriesPage({
           </div>
 
           {/* Relay pills — show which relays are being searched */}
-          <RelayPillsRow
-            relayOverride={relayOverride}
-            relayStatuses={relayStatuses}
-          />
+          <div className="space-y-1.5">
+            <RelayPillsRow relayStatuses={relayStatuses} />
+            {Object.keys(profileRelayStatuses).length > 0 && (
+              <RelayStatusPillsRow
+                label="User Profile Search:"
+                relays={Object.keys(profileRelayStatuses)}
+                relayStatuses={profileRelayStatuses}
+              />
+            )}
+          </div>
+
+          {/* Namecoin `.bit` / `d/` / `id/` resolution banner. Only
+              rendered for identifier-shape queries; non-Namecoin
+              searches see nothing extra. */}
+          {namecoin.isNamecoinQuery && (
+            <NamecoinResolutionBanner
+              status={namecoin.status}
+              query={committedQuery}
+              pubkey={namecoin.pubkey}
+              recovery={namecoin.recovery}
+            />
+          )}
         </div>
       </div>
 
@@ -206,12 +252,20 @@ export default function RepositoriesPage({
             <CardContent className="py-16 text-center">
               <GitBranch className="h-12 w-12 mx-auto text-muted-foreground/40 mb-4" />
               <p className="text-muted-foreground text-lg">
-                {committedQuery
-                  ? "No repositories match your search"
-                  : "No repositories found on this relay"}
+                {relayViewIncomplete
+                  ? "No repositories found in the available responses"
+                  : committedQuery
+                    ? "No repositories match your search"
+                    : relayOverride
+                      ? "Search repositories on this relay"
+                      : "No repositories found"}
               </p>
               <p className="text-muted-foreground/60 text-sm mt-1">
-                Try a different search or check back later
+                {relayViewIncomplete
+                  ? "Some configured relays are unavailable or still searching"
+                  : !committedQuery && relayOverride
+                    ? "Enter a repository or maintainer name above"
+                    : "Try a different search or check back later"}
               </p>
             </CardContent>
           </Card>
@@ -220,7 +274,7 @@ export default function RepositoriesPage({
             <div className="grid gap-3">
               {repos!.map((repo) => (
                 <RepoCard
-                  key={`${repo.selectedMaintainer}:${repo.dTag}`}
+                  key={repo.componentId}
                   repo={repo}
                   isUserMatch={getVisibleMaintainers(repo).some((pk) =>
                     matchedUserPubkeys.has(pk),
@@ -257,8 +311,10 @@ function getVisibleMaintainers(repo: ResolvedRepo): string[] {
 }
 
 function RepoCard({ repo, isUserMatch }: RepoCardProps) {
-  const repoPath = useRepoPath(repo.selectedMaintainer, repo.dTag, repo.relays);
+  const repoPath = useDefaultRepoPath(repo);
   const visibleMaintainers = getVisibleMaintainers(repo);
+  const isPrivate =
+    repo.isPrivate || isPrivateRepositoryCoordinate(repo.selectedCoordinate);
   const timeAgo = formatDistanceToNow(new Date(repo.updatedAt * 1000), {
     addSuffix: true,
   });
@@ -280,6 +336,15 @@ function RepoCard({ repo, isUserMatch }: RepoCardProps) {
                 <h3 className="font-semibold text-base truncate group-hover:text-primary transition-colors">
                   {repo.name}
                 </h3>
+                {isPrivate && (
+                  <span
+                    className="inline-flex items-center gap-1 rounded-full border border-border/60 bg-muted/60 px-1.5 py-0.5 text-[10px] text-muted-foreground shrink-0"
+                    title="Discovered through your private Git services"
+                  >
+                    <Lock className="h-2.5 w-2.5" />
+                    private
+                  </span>
+                )}
                 {isUserMatch && (
                   <span
                     className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-blue-500/10 text-blue-500 border border-blue-500/20 shrink-0"
@@ -386,15 +451,11 @@ function RelayPill({
 
 /** Row of relay pills shown below the search box. */
 function RelayPillsRow({
-  relayOverride,
   relayStatuses,
 }: {
-  relayOverride?: string[];
   relayStatuses: Record<string, RelayQueryStatus>;
 }) {
-  const liveGitIndexRelays =
-    use$(() => gitIndexRelays, []) ?? gitIndexRelays.getValue();
-  const relays = relayOverride ?? liveGitIndexRelays;
+  const relays = Object.keys(relayStatuses);
 
   if (relays.length === 0) return null;
 
@@ -403,10 +464,26 @@ function RelayPillsRow({
   );
 
   return (
+    <RelayStatusPillsRow
+      label={isSearching ? "Searching:" : "Searched:"}
+      relays={relays}
+      relayStatuses={relayStatuses}
+    />
+  );
+}
+
+function RelayStatusPillsRow({
+  label,
+  relays,
+  relayStatuses,
+}: {
+  label: string;
+  relays: string[];
+  relayStatuses: Record<string, RelayQueryStatus>;
+}) {
+  return (
     <div className="flex flex-wrap items-center gap-1.5">
-      <span className="text-xs text-muted-foreground/60 mr-0.5">
-        {isSearching ? "Searching:" : "Searched:"}
-      </span>
+      <span className="text-xs text-muted-foreground/60 mr-0.5">{label}</span>
       {relays.map((url) => (
         <RelayPill
           key={url}

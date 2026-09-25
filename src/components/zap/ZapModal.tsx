@@ -1,3 +1,6 @@
+import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
+import { useErrorRetry } from "@/hooks/useErrorRetry";
+import { ErrorRetryAction } from "@/components/ErrorRetryAction";
 /**
  * ZapModal — multi-step NIP-57 zap flow.
  *
@@ -117,6 +120,7 @@ function describeWalletError(err: unknown): {
 }
 
 export function ZapModal({ open, onOpenChange, event, lnurl }: ZapModalProps) {
+  const copyToClipboard = useCopyToClipboard();
   const account = useActiveAccount();
   useLoadProfile(event.pubkey);
   const recipient = useUser(event.pubkey);
@@ -191,6 +195,14 @@ export function ZapModal({ open, onOpenChange, event, lnurl }: ZapModalProps) {
     return () => clearTimeout(t);
   }, [open, abort]);
 
+  const [endpointRetryVersion, setEndpointRetryVersion] = useState(0);
+  const endpointRecovery = useErrorRetry({
+    resourceKey: lnurl,
+    failed: !!endpointError && !endpoint,
+    busy: endpointLoading,
+    onRetry: () => setEndpointRetryVersion((version) => version + 1),
+  });
+
   // --- fetch LNURL endpoint on first open ---
   // Deps are intentionally just [open, lnurl]. Including `endpoint` or
   // `endpointLoading` causes the effect to cancel itself: `setEndpointLoading
@@ -229,7 +241,7 @@ export function ZapModal({ open, onOpenChange, event, lnurl }: ZapModalProps) {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, lnurl]);
+  }, [open, lnurl, endpointRetryVersion]);
 
   // --- abort on unmount ---
   useEffect(() => {
@@ -439,10 +451,10 @@ export function ZapModal({ open, onOpenChange, event, lnurl }: ZapModalProps) {
   // --- copy invoice ---
   const copyInvoice = useCallback(() => {
     if (!invoice) return;
-    navigator.clipboard.writeText(invoice).then(() => {
+    void copyToClipboard(invoice, () => {
       toast({ title: "Invoice copied" });
     });
-  }, [invoice]);
+  }, [invoice, copyToClipboard]);
 
   // ---------------------------------------------------------------------------
   // Render
@@ -471,6 +483,7 @@ export function ZapModal({ open, onOpenChange, event, lnurl }: ZapModalProps) {
           <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive flex items-start gap-2">
             <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
             <span>{endpointError}</span>
+            {!endpoint && <ErrorRetryAction recovery={endpointRecovery} />}
           </div>
         )}
 

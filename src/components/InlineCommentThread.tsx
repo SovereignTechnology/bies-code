@@ -1,3 +1,10 @@
+import {
+  useComposerDraft,
+  useHasComposerDraft,
+} from "@/hooks/useComposerDraft";
+import { inlineDraftScope } from "@/lib/inlineDraft";
+import { DraftStatus } from "@/components/DraftStatus";
+import { useRecoveryToast } from "@/hooks/useRecoveryToast";
 /**
  * InlineCommentThread — GitHub-style inline code review comment thread.
  *
@@ -15,7 +22,9 @@ import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import type { NostrEvent } from "nostr-tools";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import {
+  ComposerModeToggle,
   NostrComposer,
+  type ComposerTab,
   type NostrComposerHandle,
 } from "@/components/NostrComposer";
 import { Button } from "@/components/ui/button";
@@ -30,7 +39,7 @@ import {
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { composerHasNsec, hasPreviewableContent } from "@/lib/composerUtils";
+import { composerHasNsec } from "@/lib/composerUtils";
 import { runner } from "@/services/actions";
 import {
   CreateInlineComment,
@@ -46,7 +55,7 @@ import {
 import { useActiveAccount } from "applesauce-react/hooks";
 import { useProfile } from "@/hooks/useProfile";
 import { useUserDisplayName } from "@/hooks/useUserDisplayName";
-import { useToast } from "@/hooks/useToast";
+import { useRecoveryToast as useToast } from "@/hooks/useRecoveryToast";
 import { useAuthModal } from "@/contexts/AuthModalContext";
 import { ThreadComment, ThreadCtx } from "@/components/ThreadTree";
 import { formatDistanceToNow } from "date-fns";
@@ -63,6 +72,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { useIsBuzzRepository } from "@/contexts/BuzzRepositoryContext";
 
 // ---------------------------------------------------------------------------
 // Props
@@ -130,9 +140,23 @@ function InlineComposer({
   replyToComment,
 }: InlineComposerProps) {
   const composerRef = useRef<NostrComposerHandle>(null);
-  const [body, setBody] = useState("");
-  const [activeTab, setActiveTab] = useState<"write" | "preview">("write");
+  const {
+    key: draftKey,
+    draft,
+    update,
+    clear,
+    hasDraft,
+    saved,
+  } = useComposerDraft(
+    replyToComment
+      ? `comment:${replyToComment.id}`
+      : inlineDraftScope(rootEvent.id, parentEvent.id, commentOptions),
+  );
+  const body = draft.body;
+  const setBody = (value: string) => update("body", value);
+  const [activeTab, setActiveTab] = useState<ComposerTab>("write");
   const [isPending, setIsPending] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
   const { toast } = useToast();
   const { openAuthModal } = useAuthModal();
 
@@ -140,8 +164,6 @@ function InlineComposer({
   const profile = useProfile(account?.pubkey);
   const { name: displayName } = useUserDisplayName(account?.pubkey ?? "");
   const initials = displayName.slice(0, 2).toUpperCase() || "?";
-
-  const showToggle = hasPreviewableContent(body);
 
   const submitComment = useCallback(async () => {
     const trimmed = body.trim();
@@ -163,11 +185,12 @@ function InlineComposer({
         );
       }
       toast({ title: "Comment posted" });
-      setBody("");
+      clear();
       setActiveTab("write");
       onSubmitted(!!replyToComment);
     } catch (err) {
       toast({
+        recovery: { action: () => submitComment() },
         title: "Failed to post comment",
         description: err instanceof Error ? err.message : "Unknown error",
         variant: "destructive",
@@ -183,6 +206,7 @@ function InlineComposer({
     replyToComment,
     onSubmitted,
     toast,
+    clear,
   ]);
 
   const handleSubmit = useCallback(
@@ -209,8 +233,9 @@ function InlineComposer({
           </AvatarFallback>
         </Avatar>
 
-        <form onSubmit={handleSubmit} className="flex-1 space-y-2">
+        <form onSubmit={handleSubmit} className="min-w-0 flex-1 space-y-2">
           <NostrComposer
+            key={draftKey}
             ref={composerRef}
             value={body}
             onChange={setBody}
@@ -222,44 +247,42 @@ function InlineComposer({
             onTabChange={setActiveTab}
             disabled={isPending}
             autoFocus={autoFocus}
+            onUploadingChange={setIsUploading}
           />
 
-          <div className="flex items-center gap-2">
-            {/* Write / Preview toggle — only when there's previewable content */}
-            {showToggle && (
-              <div className="flex items-center gap-0.5">
-                {(["write", "preview"] as const).map((tab) => (
-                  <button
-                    key={tab}
-                    type="button"
-                    onClick={() => setActiveTab(tab)}
-                    className={`rounded px-2 py-0.5 text-xs font-medium capitalize transition-colors ${
-                      activeTab === tab
-                        ? "bg-muted text-foreground"
-                        : "text-muted-foreground hover:text-foreground"
-                    }`}
-                  >
-                    {tab}
-                  </button>
-                ))}
-              </div>
-            )}
+          <DraftStatus saved={saved} />
+          <div className="flex flex-wrap items-center gap-2">
+            <ComposerModeToggle
+              value={body}
+              activeTab={activeTab}
+              onTabChange={setActiveTab}
+            />
 
             <div className="flex items-center gap-2 ml-auto">
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={onCancel}
-                disabled={isPending}
-                className="h-7 text-xs"
-              >
-                Cancel
-              </Button>
+              {hasDraft && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    clear();
+                    onCancel();
+                  }}
+                  disabled={isPending || isUploading}
+                  className="h-7 text-xs"
+                >
+                  Discard
+                </Button>
+              )}
               <Button
                 type="submit"
                 size="sm"
-                disabled={isPending || !body.trim() || composerHasNsec(body)}
+                disabled={
+                  isPending ||
+                  isUploading ||
+                  !body.trim() ||
+                  composerHasNsec(body)
+                }
                 className="h-7 text-xs bg-primary hover:bg-primary/90 text-primary-foreground"
               >
                 {isPending ? (
@@ -305,6 +328,7 @@ function ResolvedFooter({
     { addSuffix: true },
   );
 
+  const { toast: deletionToast } = useRecoveryToast();
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteReason, setDeleteReason] = useState("");
   const [deleting, setDeleting] = useState(false);
@@ -322,13 +346,24 @@ function ResolvedFooter({
         deleteReason.trim() || undefined,
       );
     } catch (err) {
-      console.error("[ResolvedFooter] failed to delete:", err);
+      deletionToast({
+        title: "Could not delete event",
+        description: err instanceof Error ? err.message : "Request failed",
+        variant: "destructive",
+        recovery: {
+          label: "Review deletion",
+          action: () => {
+            setDeleteReason(deleteReason);
+            setDeleteOpen(true);
+          },
+        },
+      });
     } finally {
       setDeleting(false);
       setDeleteOpen(false);
       setDeleteReason("");
     }
-  }, [deleting, resolveEvent, repoCoords, deleteReason]);
+  }, [deletionToast, deleting, resolveEvent, repoCoords, deleteReason]);
 
   return (
     <>
@@ -430,7 +465,8 @@ export function InlineCommentThread({
   repoCoords,
   className,
 }: InlineCommentThreadProps) {
-  const [composerOpen, setComposerOpen] = useState(autoFocus);
+  const isBuzz = useIsBuzzRepository();
+  const [composerOpen, setComposerOpen] = useState(autoFocus && !isBuzz);
   /**
    * Whether the thread body (comments + composer) is collapsed.
    * Resolved threads start collapsed; unresolved threads start expanded.
@@ -451,6 +487,16 @@ export function InlineCommentThread({
    */
   const [composerKey, setComposerKey] = useState(0);
   const effectiveParent = parentEvent ?? rootEvent;
+  const hasInlineDraft = useHasComposerDraft(
+    comments.length === 0
+      ? [inlineDraftScope(rootEvent.id, effectiveParent.id, commentOptions)]
+      : [],
+  );
+  const hasReplyDraft = useHasComposerDraft(
+    comments.map((comment) => `comment:${comment.id}`),
+  );
+  const showComposer = composerOpen || hasInlineDraft;
+  const bodyCollapsed = collapsed && !hasInlineDraft && !hasReplyDraft;
   const { toast } = useToast();
   const activeAccount = useActiveAccount();
 
@@ -483,9 +529,17 @@ export function InlineCommentThread({
       repoCoords,
       canReply: false as const,
       hideInlineCommentBanner: true,
-      onReply: handleReplyFromComment,
+      activeReplyId: composerOpen ? replyToComment?.id : undefined,
+      onReply: isBuzz ? undefined : handleReplyFromComment,
     }),
-    [rootEvent, repoCoords, handleReplyFromComment],
+    [
+      rootEvent,
+      repoCoords,
+      handleReplyFromComment,
+      isBuzz,
+      composerOpen,
+      replyToComment,
+    ],
   );
 
   // The thread root is the first inline comment — used as the parent for the resolve event.
@@ -493,6 +547,7 @@ export function InlineCommentThread({
 
   // Can the current user resolve this thread?
   const canResolve =
+    !isBuzz &&
     !isResolved &&
     !!activeAccount &&
     !!authorizedPubkeys &&
@@ -503,12 +558,12 @@ export function InlineCommentThread({
   // already has comments and the thread is already mounted), open the composer
   // as a new inline code comment (not a reply) and expand if collapsed.
   useEffect(() => {
-    if (autoFocus) {
+    if (autoFocus && !isBuzz) {
       setReplyToComment(null);
       setComposerOpen(true);
       setCollapsed(false);
     }
-  }, [autoFocus]);
+  }, [autoFocus, isBuzz]);
 
   // When isResolved changes (e.g. resolution event arrives from relay),
   // collapse the thread automatically.
@@ -547,6 +602,7 @@ export function InlineCommentThread({
       toast({ title: "Thread resolved" });
     } catch (err) {
       toast({
+        recovery: { action: () => handleResolve() },
         title: "Failed to resolve thread",
         description: err instanceof Error ? err.message : "Unknown error",
         variant: "destructive",
@@ -556,7 +612,7 @@ export function InlineCommentThread({
     }
   }, [threadRootComment, resolving, rootEvent, repoCoords, toast]);
 
-  if (comments.length === 0 && !composerOpen && !autoFocus) {
+  if (comments.length === 0 && !showComposer && !autoFocus) {
     return null;
   }
 
@@ -587,9 +643,9 @@ export function InlineCommentThread({
           type="button"
           onClick={() => setCollapsed((c) => !c)}
           className="flex items-center gap-1.5 min-w-0 flex-1 text-left"
-          aria-label={collapsed ? "Expand thread" : "Collapse thread"}
+          aria-label={bodyCollapsed ? "Expand thread" : "Collapse thread"}
         >
-          {collapsed ? (
+          {bodyCollapsed ? (
             <ChevronRight
               className={cn(
                 "h-3.5 w-3.5 shrink-0",
@@ -642,7 +698,7 @@ export function InlineCommentThread({
       </div>
 
       {/* Thread body — hidden when collapsed */}
-      {!collapsed && (
+      {!bodyCollapsed && (
         <ThreadCtx.Provider value={threadCtxValue}>
           {/* Root inline comments (have "f" tag) */}
           {rootComments.map((comment) => (
@@ -662,15 +718,15 @@ export function InlineCommentThread({
           )}
 
           {/* Footer: resolved indicator, composer, or reply/resolve actions */}
-          {isResolved && resolveEvent ? (
+          {isBuzz ? null : isResolved && resolveEvent ? (
             <ResolvedFooter
               resolveEvent={resolveEvent}
               authorizedPubkeys={authorizedPubkeys}
               repoCoords={repoCoords}
             />
-          ) : composerOpen ? (
+          ) : showComposer ? (
             <InlineComposer
-              key={composerKey}
+              key={`${activeAccount?.pubkey ?? "anonymous"}:${replyToComment?.id ?? "inline"}:${composerKey}`}
               rootEvent={rootEvent}
               parentEvent={effectiveParent}
               commentOptions={commentOptions}

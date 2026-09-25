@@ -2,10 +2,15 @@ import { describe, it, expect } from "vitest";
 import { matchRoutes } from "react-router-dom";
 import {
   parseRepoRoute,
+  repoToNostrCloneUrl,
   repoToPath,
   relayUrlToSegment,
   parseRelayUrl,
 } from "@/lib/routeUtils";
+import {
+  formatUpstreamInput,
+  parseUpstreamInput,
+} from "@/lib/repoUpstreamInput";
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -204,6 +209,14 @@ describe("parseRepoRoute — relay hints with special encoding", () => {
       expect(parsed.relayHints).toEqual(["ws://relay.example.com"]);
     }
   });
+
+  it("parses a percent-encoded relay mount path as one hint", () => {
+    const parsed = parseRepoRoute(`${NPUB}/relay.example.com%2Fgrasp/my-repo`);
+    expect(parsed?.repoId).toBe("my-repo");
+    if (parsed?.type === "npub") {
+      expect(parsed.relayHints).toEqual(["wss://relay.example.com/grasp"]);
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -367,6 +380,18 @@ describe("round-trip: repoToPath → parseRepoRoute", () => {
       expect(parsed.relayHints).toEqual(["ws://relay.example.com"]);
     }
   });
+
+  it("round-trips a relay mounted below the domain root", () => {
+    const { path, parsed } = roundTrip(HEX_PUBKEY, "my-repo", [
+      "wss://relay.example.com/services/grasp",
+    ]);
+    expect(path).toContain("relay.example.com%2Fservices%2Fgrasp");
+    if (parsed?.type === "npub") {
+      expect(parsed.relayHints).toEqual([
+        "wss://relay.example.com/services/grasp",
+      ]);
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -445,6 +470,12 @@ describe("relayUrlToSegment", () => {
       "ws%3Arelay.example.com",
     );
   });
+
+  it("percent-encodes relay mount paths into one route segment", () => {
+    expect(relayUrlToSegment("wss://relay.example.com/grasp")).toBe(
+      "relay.example.com%2Fgrasp",
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -485,5 +516,37 @@ describe("relayUrlToSegment → parseRelayUrl round-trip", () => {
   it("round-trips ws://relay.example.com preserving the ws:// scheme", () => {
     const seg = relayUrlToSegment("ws://relay.example.com");
     expect(parseRelayUrl(seg)).toBe("ws://relay.example.com");
+  });
+
+  it("round-trips a relay mount path", () => {
+    const segment = relayUrlToSegment("wss://relay.example.com/grasp");
+    expect(parseRelayUrl(segment)).toBe("wss://relay.example.com/grasp");
+  });
+});
+
+describe("repoToNostrCloneUrl", () => {
+  it("encodes a path-mounted relay hint for ngit", () => {
+    expect(
+      repoToNostrCloneUrl(HEX_PUBKEY, "my repo", [
+        "wss://relay.example.com/services/grasp",
+      ]),
+    ).toBe(`nostr://${NPUB}/relay.example.com%2Fservices%2Fgrasp/my%20repo`);
+  });
+
+  it("preserves a plaintext relay scheme", () => {
+    expect(
+      repoToNostrCloneUrl(HEX_PUBKEY, "my-repo", ["ws://127.0.0.1:7334/grasp"]),
+    ).toBe(`nostr://${NPUB}/ws%3A%2F%2F127.0.0.1%3A7334%2Fgrasp/my-repo`);
+  });
+
+  it("round-trips path-mounted hints through repository upstream input", () => {
+    const cloneUrl = repoToNostrCloneUrl(HEX_PUBKEY, "my repo", [
+      "wss://relay.example.com/services/grasp",
+    ]);
+    const parsed = parseUpstreamInput(cloneUrl).upstream;
+
+    expect(parsed.repository).toBe(`30617:${HEX_PUBKEY}:my repo`);
+    expect(parsed.relayHint).toBe("wss://relay.example.com/services/grasp");
+    expect(formatUpstreamInput(parsed)).toBe(cloneUrl);
   });
 });

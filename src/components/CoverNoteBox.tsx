@@ -17,16 +17,18 @@ import { useCallback, useRef, useState } from "react";
 import type { NostrEvent } from "nostr-tools";
 import { useActiveAccount } from "applesauce-react/hooks";
 import { runner } from "@/services/actions";
-import { useToast } from "@/hooks/useToast";
+import { useRecoveryToast as useToast } from "@/hooks/useRecoveryToast";
 import { useProfile } from "@/hooks/useProfile";
 import { useUserDisplayName } from "@/hooks/useUserDisplayName";
 import { CreateCoverNote } from "@/actions/nip34";
 import {
+  ComposerModeToggle,
   NostrComposer,
+  type ComposerTab,
   type NostrComposerHandle,
 } from "@/components/NostrComposer";
 import type { Nip94Tags } from "@/hooks/useBlossomUpload";
-import { composerHasNsec, hasPreviewableContent } from "@/lib/composerUtils";
+import { composerHasNsec } from "@/lib/composerUtils";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Pin, Loader2, Paperclip, X } from "lucide-react";
@@ -62,9 +64,10 @@ export function CoverNoteBox({
 }: CoverNoteBoxProps) {
   const composerRef = useRef<NostrComposerHandle>(null);
   const [body, setBody] = useState(initialContent);
-  const [activeTab, setActiveTab] = useState<"write" | "preview">("write");
+  const [activeTab, setActiveTab] = useState<ComposerTab>("write");
   const [focused, setFocused] = useState(false);
   const [isPending, setIsPending] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
   /** NIP-94 tag groups accumulated from Blossom uploads in this session */
   const [uploadedTagGroups, setUploadedTagGroups] = useState<Nip94Tags[]>([]);
   const { toast } = useToast();
@@ -74,15 +77,16 @@ export function CoverNoteBox({
   const { name: displayName } = useUserDisplayName(account?.pubkey ?? "");
   const initials = displayName.slice(0, 2).toUpperCase() || "?";
 
-  const showToggle = focused || hasPreviewableContent(body);
+  const showAttach =
+    focused || activeTab === "preview" || body.trim().length > 0;
 
   const handleUploadedTags = useCallback((tags: Nip94Tags) => {
     setUploadedTagGroups((prev) => [...prev, tags]);
   }, []);
 
   const handleSubmit = useCallback(
-    async (e: React.FormEvent) => {
-      e.preventDefault();
+    async (e?: React.FormEvent) => {
+      e?.preventDefault();
 
       const trimmed = body.trim();
       if (!trimmed) return;
@@ -115,6 +119,7 @@ export function CoverNoteBox({
         const message =
           err instanceof Error ? err.message : "Failed to save cover note";
         toast({
+          recovery: { action: () => handleSubmit() },
           title: "Failed to save cover note",
           description: message,
           variant: "destructive",
@@ -169,44 +174,27 @@ export function CoverNoteBox({
             }}
             priorityPubkeys={priorityPubkeys}
             onUploadedTags={handleUploadedTags}
+            onUploadingChange={setIsUploading}
           />
 
           <div className="flex items-center gap-2">
-            {/* Attach + Write/Preview — visible on focus or when there is content */}
-            {showToggle && (
-              <>
-                <button
-                  type="button"
-                  title="Attach image or video (Blossom)"
-                  disabled={isPending || composerRef.current?.isUploading}
-                  onClick={() => composerRef.current?.triggerAttach()}
-                  className="rounded p-1 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                >
-                  {composerRef.current?.isUploading ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <Paperclip className="h-4 w-4" />
-                  )}
-                </button>
-
-                <div className="flex items-center gap-0.5">
-                  {(["write", "preview"] as const).map((tab) => (
-                    <button
-                      key={tab}
-                      type="button"
-                      onClick={() => setActiveTab(tab)}
-                      className={`rounded px-2 py-0.5 text-xs font-medium capitalize transition-colors ${
-                        activeTab === tab
-                          ? "bg-muted text-foreground"
-                          : "text-muted-foreground hover:text-foreground"
-                      }`}
-                    >
-                      {tab}
-                    </button>
-                  ))}
-                </div>
-              </>
+            {showAttach && (
+              <button
+                type="button"
+                title="Attach image or video (Blossom)"
+                disabled={isPending || isUploading}
+                onClick={() => composerRef.current?.triggerAttach()}
+                className="rounded p-1 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <Paperclip className="h-4 w-4" />
+              </button>
             )}
+
+            <ComposerModeToggle
+              value={body}
+              activeTab={activeTab}
+              onTabChange={setActiveTab}
+            />
 
             <div className="flex items-center gap-2 ml-auto">
               <Button
@@ -224,7 +212,12 @@ export function CoverNoteBox({
               <Button
                 type="submit"
                 size="sm"
-                disabled={isPending || !body.trim() || composerHasNsec(body)}
+                disabled={
+                  isPending ||
+                  isUploading ||
+                  !body.trim() ||
+                  composerHasNsec(body)
+                }
                 className="gap-1.5 bg-blue-600 hover:bg-blue-700 text-white"
               >
                 {isPending ? (

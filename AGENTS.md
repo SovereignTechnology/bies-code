@@ -65,7 +65,19 @@ Android builds and the branding-regeneration script are documented in `docs/andr
 
 ## Changelog
 
-Update `CHANGELOG.md` for significant changes only; keep its `Unreleased` section current and NEVER remove it during release so it remains as a placeholder.
+Update `CHANGELOG.md` for significant changes only, following
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Keep `Unreleased`
+current and never remove it during release. Give each release a short descriptive
+title, followed by categorized changes. For larger releases, add a short summary
+between the title and the changes to explain the main themes.
+
+## Releases
+
+For every stable release, the `stable` branch and matching `v<version>` tag
+MUST both point to the same approved release commit and MUST both be pushed to
+`origin`. Release candidates and other prereleases do not advance `stable`
+unless the user explicitly requests it. Never create or push the release tag
+before the user has reviewed the release commit.
 
 ## Pre-commit and Test Scripts
 
@@ -94,7 +106,20 @@ fi
 
 [grasp]: https://github.com/ — see `../ngit-grasp`
 
+### Benchmarks (`benchmarks/`) — manual only
+
+`pnpm bench` runs the browser-driven relay query-budget benchmark. It drives a production build in headless Playwright Chromium, measures REQ frames / filter bytes / relay connections against the committed `benchmarks/baseline.json` (`--compare`), and is never part of pre-commit, `pnpm test`, or CI. The default devShell deliberately omits the ~1 GB browser bundle — run it via `nix develop .#bench --command pnpm bench`, or outside Nix provision a browser once with `npx playwright-core install chromium`. The `playwright-core` devDependency must stay pinned to the exact version of `pkgs.playwright-driver` in `flake.nix`; see `benchmarks/README.md`.
+
 ## Nostr Protocol Integration
+
+### Maintainer Protocol
+
+The cross-project implementation guide is maintained in the repository
+`nostr://danconwaydev.com/relay.ngit.dev/ngit-docs` at
+`docs/protocol/nip-34/maintainers/ai-implementers.md`. It is published as the
+[maintainer protocol for AI implementers](https://ngit.dev/protocol/nip-34/maintainers/ai-implementers).
+Check it when changing maintainer-role parsing, graph resolution, authority, or
+repository membership workflows.
 
 ### Choosing kinds, designing tags, content vs. tags
 
@@ -124,13 +149,13 @@ fi
 
 ### Repository authorization model — non-negotiable
 
-Nostr is permissionless: **anyone can publish any event.** A NIP-34 repository is _not_ a single pubkey + identifier; it's an identifier plus the **transitive maintainer chain** of pubkeys that mutually list each other in their kind:30617 announcements. Any event that participates in repo state (issues, patches, PRs, status events, labels, repo state kind:30618, repo announcements themselves) is only authoritative if its author is in that maintainer set — or, for issue/PR comments and statuses, the author of the root item.
+Nostr is permissionless: **anyone can publish any event.** A NIP-34 repository is _not_ a single pubkey + identifier; it is an identifier plus a **reciprocally confirmed component** of kind:30617 announcements. Directional listings are invitations and grant no authority. Kind:30618 state and maintainer-only operations require a current confirmed maintainer. Status, label, subject, and cover-note events accept the root author or a maintainer/moderator confirmed by resolved role history at the event's publication time.
 
 **Rules:**
 
-- **Always filter by `authors`** when fetching anything trust-bearing for a repo. Never trust an event because its `#a` / `#d` matches.
+- **Always filter by `authors`** when fetching anything trust-bearing for a repo. Never trust an event because its `#a` / `#d` matches. **One carve-out:** kind:30617 announcement _discovery_ fetches MAY be identifier-scoped (`{kinds: [30617], "#d": [id]}` with no `authors`) because announcement authority is never derived from the fetch filter — it is established exclusively by reciprocal resolution (`resolveChain`) rooted at the route's pubkey. Every other trust-bearing fetch keeps the authors-filter rule.
 - **URLs for addressable events include the author**: `/:npub/:repoId/...`, never `/:repoId/...`. (See §"Routing" — multi-segment repo routes must be declared above the `/:nip19` catch-all.)
-- **Don't roll your own author check.** The maintainer set is computed (with cycle detection) by the `Repository` cast in `src/casts/Repository.ts` and surfaced as `repo.maintainerSet` / `repo.allCoordinates` via `useResolvedRepository`. Pass those into any new query or status check; copy the pattern from `src/hooks/useIssues.ts`, `src/hooks/usePRs.ts`, or `src/hooks/useRepositoryState.ts`.
+- **Don't roll your own author check or repository grouping.** The pure resolver is surfaced through `useResolvedRepository`, while discovery surfaces use the shared repository-component index. Use `repo.componentId` for card/component identity; `repo.confirmedMaintainers` / `repo.confirmedMaintainerCoordinates` for state, merges, settings, releases, and CI controls; and `repo.confirmedMembers` / `repo.confirmedMemberCoordinates` for member actions and collaboration tags. `repo.discoveryPubkeys`, `repo.discoveredAnnouncements`, and invitations are never authority sets. Copy the pattern from `src/hooks/useIssues.ts`, `src/hooks/usePRs.ts`, or `src/hooks/useRepositoryState.ts`.
 - **Background:** see `docs/matainership.md` for the full multi-maintainer model (recursive maintainers, mutual listing = one repo, splits when the chain breaks).
 
 For events that are intentionally open (kind:1 notes, kind:7 reactions, follower kind:10018 lists, public discovery feeds), filtering by author defeats the point — don't.
@@ -158,6 +183,18 @@ Relay fetching for the main collaboration surfaces is already invoked at the pag
 - **`IssuePage` / `PRPage`** — go through `useResolvedIssue` / `useResolvedPR` → `useNip34ItemDetailLoader`, which fires `nip34ListLoader` + `nip34ThreadItemLoader` for the item. The thread loader recursively pulls every event referencing the root or any comment via `#e` / `#E` / `#q` (reactions, zaps, deletions, quotes, child comments) — no kind restriction.
 
 Inside any component or hook on those pages, the right move is `store.getByFilters(...)` / `store.timeline(...)` / `store.model(...)` (see `src/hooks/useInlineComments.ts` for an example). Only reach for `resilientSubscription` or a new `createPaginatedTagValueLoader` instance when the data isn't already in scope of one of the pre-wired loaders.
+
+### Replaceable and Addressable Event Preflight
+
+Before adding or changing a writer for a replaceable or addressable event, read
+[`docs/replaceable-preflight.md`](docs/replaceable-preflight.md). Classify the
+writer by its ownership category and modifiers, reuse session- or page-owned
+warm evidence where the documented coverage semantics apply, and keep relay
+lifecycle facts separate from the category's sufficiency policy. An open relay
+connection alone is not query coverage. Adoption is deliberately staged; do
+not extend stable-filter coverage claims to additive filters without supplying
+the stronger per-revision semantics described there. Document new categories
+or exceptions in the same change.
 
 ### Custom Event Kinds — Factory + Cast + Hook
 
@@ -208,6 +245,16 @@ Routes live in `AppRouter.tsx`. To add one:
 3. Place it **above** the `/:nip19` catch-all and the `*` 404 route.
 
 The router auto-scrolls to top on navigation.
+
+## Error Recovery
+
+Use the shared `useErrorRetry` / `ErrorRetryAction` pattern for recoverable
+errors. Read [docs/error-recovery.md](docs/error-recovery.md) before adding retry
+behavior. Offer a visible manual retry; automatic retries require an explicitly
+audited read-only path that cannot request a signature. Keep the retry owner
+mounted during loading, use context-specific bounded delays, and cancel on
+navigation. Signing/authentication, mutations, and deterministic errors stay
+manual. Never add an independent error-component timer.
 
 ## Loading and Empty States
 

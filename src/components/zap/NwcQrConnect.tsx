@@ -1,3 +1,4 @@
+import { ManualRetryAction } from "@/components/ErrorRetryAction";
 /**
  * NwcQrConnect — NIP-47 wallet pairing via auth URI + QR code.
  *
@@ -34,19 +35,22 @@ export function NwcQrConnect({
   appName = "gitworkshop",
   size = 224,
 }: NwcQrConnectProps) {
+  const [retryVersion, setRetryVersion] = useState(0);
   const [relay, setRelay] = useState(DEFAULT_NWC_AUTH_RELAY);
   const [error, setError] = useState<string | null>(null);
 
   // Fresh ephemeral client per relay change. Not stored — only the resolved
   // connectURI is persisted once the service pairs.
   const ephemeralWallet = useMemo(() => {
+    // A manual retry needs a fresh pairing client on the same relay.
+    void retryVersion;
     setError(null);
     return new WalletConnect({
       pool,
       relays: [relay],
       secret: generateSecretKey(),
     });
-  }, [relay]);
+  }, [relay, retryVersion]);
 
   const authUri = useMemo(() => {
     return ephemeralWallet.getAuthURI({
@@ -134,7 +138,16 @@ export function NwcQrConnect({
         </p>
       </div>
 
-      {error && <p className="text-xs text-destructive">{error}</p>}
+      {error && (
+        <div className="space-y-2">
+          <p role="alert" className="text-xs text-destructive">
+            {error}
+          </p>
+          <ManualRetryAction
+            onRetry={() => setRetryVersion((version) => version + 1)}
+          />
+        </div>
+      )}
 
       <p className="text-xs text-muted-foreground flex items-center gap-2">
         <Loader2 className="h-3 w-3 animate-spin" />

@@ -8,6 +8,7 @@ import {
   cycleThemeMode,
   type ThemeMode,
 } from "@/services/settings";
+import { DOCUMENTATION_URLS } from "@/lib/documentation";
 
 const THEME_ICON: Record<ThemeMode, typeof Sun> = {
   light: Sun,
@@ -29,8 +30,12 @@ const NAV_SECTIONS = [
   {
     heading: "Get started",
     links: [
-      { label: "Install ngit", to: "/ngit" },
-      { label: "Quick start", to: "/ngit", state: { expandQuickStart: true } },
+      { label: "Install ngit", to: DOCUMENTATION_URLS.install, external: true },
+      {
+        label: "Quick start",
+        to: DOCUMENTATION_URLS.quickstart,
+        external: true,
+      },
       { label: "About", to: "/about" },
     ],
   },
@@ -87,16 +92,19 @@ export function AppFooter() {
                 <p className="text-xs font-semibold text-foreground/70 uppercase tracking-wider mb-1">
                   {section.heading}
                 </p>
-                {section.links.map((link) => (
-                  <Link
-                    key={link.label}
-                    to={link.to}
-                    state={"state" in link ? link.state : undefined}
-                    className="text-sm text-muted-foreground hover:text-foreground transition-colors"
-                  >
-                    {link.label}
-                  </Link>
-                ))}
+                {section.links.map((link) => {
+                  const className =
+                    "text-sm text-muted-foreground hover:text-foreground transition-colors";
+                  return "external" in link ? (
+                    <a key={link.label} href={link.to} className={className}>
+                      {link.label}
+                    </a>
+                  ) : (
+                    <Link key={link.label} to={link.to} className={className}>
+                      {link.label}
+                    </Link>
+                  );
+                })}
               </div>
             ))}
           </div>

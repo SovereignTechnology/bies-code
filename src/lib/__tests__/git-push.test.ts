@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import {
   pktLineEncode,
   pktLineFlush,
@@ -7,9 +7,12 @@ import {
   parseInfoRefsResponse,
   parseReportStatus,
   buildReceivePackRequest,
+  pushToGitServer,
   ZERO_HASH,
   type RefUpdate,
 } from "@/lib/git-push";
+
+afterEach(() => vi.unstubAllGlobals());
 
 // ---------------------------------------------------------------------------
 // 1. pkt-line encoding
@@ -594,5 +597,54 @@ describe("ZERO_HASH", () => {
   it("is 40 zero characters", () => {
     expect(ZERO_HASH).toBe("0000000000000000000000000000000000000000");
     expect(ZERO_HASH.length).toBe(40);
+  });
+});
+
+describe("pushToGitServer idempotent result mapping", () => {
+  it("fails a pending ref omitted from report-status", async () => {
+    const appliedHash = "1".repeat(40);
+    const pendingOldHash = "2".repeat(40);
+    const pendingNewHash = "3".repeat(40);
+    const infoRefs = [
+      pktLineEncode("# service=git-receive-pack\n"),
+      pktLineFlush(),
+      pktLineEncode(
+        `${appliedHash} refs/heads/main\0report-status delete-refs\n`,
+      ),
+      pktLineEncode(`${pendingOldHash} refs/heads/feature\n`),
+      pktLineFlush(),
+    ].join("");
+    const reportStatus = pktLineEncode("unpack ok\n") + pktLineFlush();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(infoRefs, { status: 200 }))
+      .mockResolvedValueOnce(new Response(reportStatus, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await pushToGitServer(
+      "https://git.example/repo",
+      [
+        {
+          oldHash: ZERO_HASH,
+          newHash: appliedHash,
+          refName: "refs/heads/main",
+        },
+        {
+          oldHash: pendingOldHash,
+          newHash: pendingNewHash,
+          refName: "refs/heads/feature",
+        },
+      ],
+      new Uint8Array(),
+    );
+
+    expect(result.refResults).toEqual([
+      { refName: "refs/heads/main", ok: true },
+      {
+        refName: "refs/heads/feature",
+        ok: false,
+        reason: "server omitted this ref from report-status",
+      },
+    ]);
   });
 });

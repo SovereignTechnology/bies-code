@@ -1,3 +1,4 @@
+import { useRecoveryToast } from "@/hooks/useRecoveryToast";
 /**
  * StarButton — star / unstar a repository, with a stargazers popover.
  *
@@ -58,6 +59,7 @@ export function StarButton({
   repoCoords,
   className,
 }: StarButtonProps) {
+  const { toast } = useRecoveryToast();
   const account = useActiveAccount();
   const { openAuthModal } = useAuthModal();
   const { count, isStarred, myStarEvent, stargazers } =
@@ -114,11 +116,17 @@ export function StarButton({
         await runner.run(CreateReaction, targetAnnouncement, "+", repoCoords);
       }
     } catch (err) {
-      console.error("[StarButton] failed:", err);
+      toast({
+        title: "Could not update repository star",
+        description: err instanceof Error ? err.message : "Request failed",
+        variant: "destructive",
+        recovery: { action: () => handleStarClick() },
+      });
     } finally {
       setPending(false);
     }
   }, [
+    toast,
     account,
     openAuthModal,
     targetAnnouncement,

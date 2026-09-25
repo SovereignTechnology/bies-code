@@ -11,7 +11,9 @@ import {
   COMMENT_KIND,
   LEGACY_REPLY_KINDS,
   pubkeyFromCoordinate,
+  isRepositoryRootItem,
   buildResolvedPRs,
+  type RepositoryRoleHistory,
   type ResolvedPRLite,
 } from "@/lib/nip34";
 import { hasNameValueTag, type Filter } from "applesauce-core/helpers";
@@ -28,21 +30,24 @@ const ESSENTIALS_KINDS = [...STATUS_KINDS, LABEL_KIND, DELETION_KIND] as const;
  * Structurally identical to IssueListModel but:
  * - Queries kinds [1617, 1618] instead of [1621]
  * - Filters patches to root-only (t:root tag) in the final build step
- * - Passes mergeStatusRequiresMaintainer=true via buildResolvedPRLites
  *
  * Cache key: the sorted, comma-joined coordinate string (same as IssueListModel).
  *
  * @param coordsCacheKey - Sorted, comma-joined coordinate string (cache key)
  */
-export function PRListModel(coordsCacheKey: string): Model<ResolvedPRLite[]> {
+export function PRListModel(
+  coordsCacheKey: string,
+  roleHistory?: RepositoryRoleHistory,
+): Model<ResolvedPRLite[]> {
   return (store) => {
     const coords = coordsCacheKey ? coordsCacheKey.split(",") : [];
-    const maintainerSet = new Set<string>(
+    const memberSet = new Set<string>(
       coords.flatMap((c) => {
         const pk = pubkeyFromCoordinate(c);
         return pk ? [pk] : [];
       }),
     );
+    const coordinateSet = new Set(coords);
 
     const prFilter: Filter[] = [
       { kinds: [PATCH_KIND, PR_KIND], "#a": coords } as Filter,
@@ -58,11 +63,12 @@ export function PRListModel(coordsCacheKey: string): Model<ResolvedPRLite[]> {
         // belong to the original root patch's thread, not as separate list entries.
         const events = (prEvents as NostrEvent[]).filter(
           (ev) =>
-            ev.kind === PR_KIND ||
-            (ev.kind === PATCH_KIND &&
-              hasNameValueTag(ev, "t", "root") &&
-              !hasNameValueTag(ev, "t", "root-revision") &&
-              !hasNameValueTag(ev, "t", "revision-root")),
+            isRepositoryRootItem(ev, coordinateSet) &&
+            (ev.kind === PR_KIND ||
+              (ev.kind === PATCH_KIND &&
+                hasNameValueTag(ev, "t", "root") &&
+                !hasNameValueTag(ev, "t", "root-revision") &&
+                !hasNameValueTag(ev, "t", "revision-root"))),
         );
         if (events.length === 0) return of([] as ResolvedPRLite[]);
 
@@ -109,8 +115,9 @@ export function PRListModel(coordsCacheKey: string): Model<ResolvedPRLite[]> {
                 essentialEvents as NostrEvent[],
                 commentEvents,
                 zapEvents as NostrEvent[],
-                maintainerSet,
+                memberSet,
                 prUpdateEvents,
+                roleHistory,
               );
             },
           ),

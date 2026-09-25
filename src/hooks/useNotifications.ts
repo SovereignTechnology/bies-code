@@ -25,6 +25,7 @@ import {
   NOTIFICATION_PAGE_LIMIT,
   type NotificationStoreEntry,
 } from "@/services/notificationStore";
+import type { NotificationSyncState } from "@/services/notificationSync";
 import {
   actionMarkAsRead,
   actionMarkAsUnread,
@@ -33,6 +34,10 @@ import {
   actionMarkEventAsRead,
   actionMarkEventAsArchived,
   actionMarkEventAsUnarchived,
+  actionMarkEventsAsRead,
+  actionMarkEventsAsUnread,
+  actionMarkEventsAsArchived,
+  actionMarkEventsAsUnarchived,
   actionMarkAllAsRead,
   actionMarkAllAsArchived,
 } from "@/services/notificationActions";
@@ -54,6 +59,10 @@ export interface NotificationActions {
   markEventAsRead: (eventId: string) => void;
   markEventAsArchived: (eventId: string) => void;
   markEventAsUnarchived: (eventId: string) => void;
+  markEventsAsRead: (eventIds: string[]) => void;
+  markEventsAsUnread: (eventIds: string[]) => void;
+  markEventsAsArchived: (eventIds: string[]) => void;
+  markEventsAsUnarchived: (eventIds: string[]) => void;
   markAllAsRead: () => void;
   markAllAsArchived: () => void;
 }
@@ -144,6 +153,8 @@ export function useNotifications(): {
   unreadCount: number;
   actions: NotificationActions;
   history: NotificationHistoryState;
+  sync: NotificationSyncState | undefined;
+  retrySync: () => void;
 } {
   const store = useEventStore();
   const entry = useNotificationStoreEntry();
@@ -151,6 +162,10 @@ export function useNotifications(): {
   const readState$ = entry?.readState$;
   const repoCoords$ = entry?.repoCoords$;
   const nonGitEventIds$ = entry?.nonGitEventIds$;
+  const sync = use$(
+    () => entry?.notificationSync?.state$,
+    [entry?.notificationSync],
+  );
 
   // Activate the full history fetch on mount. activateFullFetch is idempotent —
   // it creates the loader and fires the first page only once per store entry.
@@ -209,6 +224,14 @@ export function useNotifications(): {
         entry && actionMarkEventAsArchived(entry, eventId),
       markEventAsUnarchived: (eventId) =>
         entry && actionMarkEventAsUnarchived(entry, eventId),
+      markEventsAsRead: (eventIds) =>
+        entry && actionMarkEventsAsRead(entry, eventIds),
+      markEventsAsUnread: (eventIds) =>
+        entry && actionMarkEventsAsUnread(entry, eventIds),
+      markEventsAsArchived: (eventIds) =>
+        entry && actionMarkEventsAsArchived(entry, eventIds),
+      markEventsAsUnarchived: (eventIds) =>
+        entry && actionMarkEventsAsUnarchived(entry, eventIds),
       markAllAsRead: () => entry && actionMarkAllAsRead(entry),
       markAllAsArchived: () => entry && actionMarkAllAsArchived(entry),
     }),
@@ -228,6 +251,8 @@ export function useNotifications(): {
     unreadCount: output?.unreadCount ?? 0,
     actions,
     history,
+    sync,
+    retrySync: () => entry?.notificationSync?.retry(),
   };
 }
 

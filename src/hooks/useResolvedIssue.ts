@@ -16,7 +16,7 @@ import { useEventStore } from "./useEventStore";
 import { useNip34ItemDetailLoader } from "./useNip34Loaders";
 import type { EventSearchState, RelayGroupSpec } from "./useEventSearch";
 import { IssueDetailModel } from "@/models/IssueDetailModel";
-import { type ResolvedIssue } from "@/lib/nip34";
+import { type RepositoryRoleHistory, type ResolvedIssue } from "@/lib/nip34";
 import type { RelayGroup } from "applesauce-relay";
 import type { Observable } from "rxjs";
 
@@ -26,6 +26,12 @@ export interface ResolvedIssueResult {
   search: EventSearchState | undefined;
 }
 
+export interface UseResolvedIssueOptions {
+  extraSearchGroups?: RelayGroupSpec[];
+  retryKey?: number;
+  privateRepository?: boolean;
+}
+
 /**
  * Unified hook for the issue detail page.
  *
@@ -33,18 +39,18 @@ export interface ResolvedIssueResult {
  * @param repoRelayGroup  - Base relay group from useResolvedRepository
  * @param extraRelaysForMaintainerMailboxCoverage - Delta relay group for outbox mode
  * @param maintainers     - Effective maintainer set from repo resolution
- * @param extraSearchGroups - Additional relay groups for user-triggered expansion
- * @param retryKey        - Increment to force a fresh search across all relays
+ * @param options         - Search expansion, retry, and private transport flags
  */
 export function useResolvedIssue(
   issueId: string | undefined,
   repoRelayGroup: RelayGroup | undefined,
   extraRelaysForMaintainerMailboxCoverage: RelayGroup | undefined,
   maintainers: Set<string> | undefined,
-  extraSearchGroups?: RelayGroupSpec[],
-  retryKey?: number,
+  roleHistory?: RepositoryRoleHistory,
+  options: UseResolvedIssueOptions = {},
 ): ResolvedIssueResult {
   const store = useEventStore();
+  const { extraSearchGroups, retryKey, privateRepository = false } = options;
 
   const { maintainerKey, search } = useNip34ItemDetailLoader(
     issueId,
@@ -53,6 +59,7 @@ export function useResolvedIssue(
     maintainers,
     extraSearchGroups,
     retryKey,
+    privateRepository,
   );
 
   const issue = use$(() => {
@@ -61,8 +68,9 @@ export function useResolvedIssue(
       IssueDetailModel,
       issueId,
       maintainers,
+      roleHistory,
     ) as unknown as Observable<ResolvedIssue | undefined>;
-  }, [issueId, maintainerKey, store]);
+  }, [issueId, maintainerKey, roleHistory, store]);
 
   return { issue, search };
 }

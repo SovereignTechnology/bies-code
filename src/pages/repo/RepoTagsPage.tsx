@@ -1,18 +1,20 @@
+import { useErrorRetry } from "@/hooks/useErrorRetry";
+import { CommitListError } from "@/components/CommitList";
 /**
  * RepoTagsPage — full-page expansion of the popover ref selector's tags list.
  * Shows every tag in the merged ref view (across all configured git servers
  * + Nostr state) with:
  *
  *   - target commit hash + first-line message + committer timestamp
- *   - annotated/lightweight indicator (annotated = `rawTagOid !== undefined`,
+ *   - annotation disclosure (annotated = `rawTagOid !== undefined`,
  *     per `parseRefs` in `useGitExplorer.ts`)
  *   - per-ref status vs the Nostr-signed state
  *
  * Tags are sorted newest-version-first via `compareTagsNewestFirst`. There is
  * no ahead/behind computation — that's specific to branches.
  */
-import { useCallback, useMemo } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { useCallback, useEffect, useMemo } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useSeoMeta } from "@unhead/react";
 import { useRepoContext } from "./RepoContext";
 import { useProfile } from "@/hooks/useProfile";
@@ -20,6 +22,7 @@ import { useGitPool } from "@/hooks/useGitPool";
 import { useGitExplorer } from "@/hooks/useGitExplorer";
 import { useRefsWithStatus } from "@/hooks/useRefsWithStatus";
 import { SourceSelectorDropdown } from "@/components/SourceSelector";
+import { TagListRow } from "@/components/TagListRow";
 import { RefRow } from "@/components/RefRow";
 import { compareTagsNewestFirst } from "@/lib/refStatus";
 import { Card, CardContent } from "@/components/ui/card";
@@ -28,6 +31,14 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tag, AlertCircle } from "lucide-react";
 import { isNonHttpUrl } from "@/lib/git-grasp-pool";
 import { IncompatibleProtocolError } from "@/components/IncompatibleProtocolError";
+import { useCIForCommits } from "@/hooks/useCI";
+import { useRepositoryCITrust } from "@/hooks/useRepositoryCITrust";
+import { CIStatusTrustIcon } from "@/components/ci/CIStatusTrustIcon";
+import { summarizeRuns } from "@/lib/ci";
+import {
+  getCIRunTrustResolution,
+  summarizeCIRunTrust,
+} from "@/lib/ciTrustContext";
 
 export default function RepoTagsPage() {
   const {
@@ -44,30 +55,8 @@ export default function RepoTagsPage() {
   const repo = resolved?.repo;
   const repoOwnerProfile = useProfile(pubkey);
 
-  const selectedSource = searchParams.get("source") ?? "default";
-
-  const handleSourceChange = useCallback(
-    (src: string) => {
-      setSearchParams(
-        (prev) => {
-          const next = new URLSearchParams(prev);
-          if (src === "default") {
-            next.delete("source");
-          } else {
-            next.set("source", src);
-          }
-          return next;
-        },
-        { replace: false },
-      );
-    },
-    [setSearchParams],
-  );
-
   const { pool, poolState } = useGitPool(cloneUrls, {
-    knownHeadCommit: repoState?.headCommitId,
-    stateRefs: repoState?.refs,
-    stateCreatedAt: repoState ? repoState.event.created_at : undefined,
+    private: repo?.isPrivate,
   });
 
   const stateBehindGit =
@@ -75,25 +64,45 @@ export default function RepoTagsPage() {
     !poolState.pulling &&
     poolState.warning?.kind === "state-behind-git";
 
-  // Mirror RepoCodePage's bootstrap-head-commit logic so the merged ref view
-  // is consistent with the /code page even when the Nostr state is ahead.
-  const userChoseNostr = selectedSource === "nostr";
-  const bootstrapHeadCommit =
-    stateBehindGit && !userChoseNostr ? undefined : repoState?.headCommitId;
+  const sourceParam = searchParams.get("source");
+  const selectedSource =
+    sourceParam ??
+    (poolState.viewSource === "authoritative"
+      ? "default"
+      : poolState.viewSource);
+
+  useEffect(() => {
+    if (pool && sourceParam) pool.setViewSource(sourceParam);
+  }, [pool, sourceParam]);
+
+  const handleSourceChange = useCallback(
+    (src: string) => {
+      pool?.setViewSource(src);
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          if (src === "default") next.delete("source");
+          else next.set("source", src);
+          return next;
+        },
+        { replace: false },
+      );
+    },
+    [pool, setSearchParams],
+  );
 
   const explorer = useGitExplorer(pool, poolState, {
-    knownHeadCommit: bootstrapHeadCommit,
     stateRefs: repoState?.refs,
   });
 
   const { tags, mismatchCount, effectiveSource } = useRefsWithStatus({
     refs: explorer.refs,
-    selectedSource,
     repoState,
     repoRelayEose,
     relayStateMap,
     stateBehindGit,
-    poolWarning: poolState.warning,
+    viewSource: poolState.viewSource,
+    effectiveRefs: poolState.effectiveRefs,
     winnerUrl: poolState.winnerUrl,
     urlStates: poolState.urls,
     cloneUrls,
@@ -103,6 +112,20 @@ export default function RepoTagsPage() {
     () => [...tags].sort((a, b) => compareTagsNewestFirst(a.name, b.name)),
     [tags],
   );
+  const tagCommitIds = useMemo(
+    () => sortedTags.map((tag) => tag.hash),
+    [sortedTags],
+  );
+  const ciChecks = useCIForCommits(
+    tagCommitIds,
+    repo?.isPrivate ? undefined : resolved?.repoRelayGroup,
+  );
+  const ciRuns = useMemo(
+    () =>
+      ciChecks ? [...ciChecks.values()].flatMap((checks) => checks.runs) : [],
+    [ciChecks],
+  );
+  const { coordinatorState, trust } = useRepositoryCITrust(repo, ciRuns);
 
   useSeoMeta({
     title: repo ? `Tags - ${repo.name} - BIES Code` : "Tags - BIES Code",
@@ -116,16 +139,35 @@ export default function RepoTagsPage() {
   // the same server the user is viewing.
   const tagHref = useCallback(
     (name: string) => {
-      const source = searchParams.get("source");
       const base = `${basePath}/tree/${name}`;
-      return source ? `${base}?source=${encodeURIComponent(source)}` : base;
+      return selectedSource !== "default"
+        ? `${base}?source=${encodeURIComponent(selectedSource)}`
+        : base;
     },
-    [searchParams, basePath],
+    [selectedSource, basePath],
   );
 
   // -------------------------------------------------------------------------
   // Early returns
   // -------------------------------------------------------------------------
+  const recoveryKey = useMemo(
+    () => ({ pool, selectedSource }),
+    [pool, selectedSource],
+  );
+  const recovery = useErrorRetry({
+    resourceKey: recoveryKey,
+    failed: !!explorer.error,
+    busy: explorer.loading || poolState.loading || poolState.pulling,
+    onRetry: async (signal) => {
+      await pool?.retryReads();
+      if (!signal.aborted) await explorer.reload();
+    },
+    policy:
+      pool && !pool.requiresSigningForReads
+        ? { mode: "read", requiresSigning: false, context: "connection" }
+        : { mode: "manual" },
+  });
+
   if (cloneUrls.length === 0) {
     return (
       <div className="container max-w-screen-xl px-4 md:px-8 py-6">
@@ -155,10 +197,14 @@ export default function RepoTagsPage() {
   }
 
   const showSkeletons = explorer.loading && sortedTags.length === 0;
-  const showEmpty = !explorer.loading && sortedTags.length === 0;
+  const showEmpty =
+    !explorer.error && !explorer.loading && sortedTags.length === 0;
 
   return (
     <div className="container max-w-screen-xl px-4 md:px-8 py-6 space-y-4">
+      {explorer.error && (
+        <CommitListError message={explorer.error} recovery={recovery} />
+      )}
       {/* Title row: tag icon + count on the left, source dropdown on the right */}
       <div className="flex items-center gap-3 flex-wrap">
         <Tag className="h-5 w-5 text-muted-foreground shrink-0" />
@@ -192,7 +238,7 @@ export default function RepoTagsPage() {
             poolWarning={poolState.warning}
             pool={pool}
             relayStateMap={relayStateMap}
-            winnerUrl={poolState.winnerUrl}
+            effectiveSource={effectiveSource}
           />
         </div>
       </div>
@@ -211,28 +257,50 @@ export default function RepoTagsPage() {
       )}
 
       {!showSkeletons && !showEmpty && (
-        <Card>
+        <Card className="overflow-hidden">
           <div className="divide-y divide-border/40">
             {sortedTags.map((tag) => {
               const row = (
                 <RefRow
                   density="expanded"
                   refWithStatus={tag}
-                  effectiveSource={effectiveSource}
                   pool={pool}
                   urlStates={poolState.urls}
                   cloneUrls={cloneUrls}
-                  annotated={tag.rawTagOid !== undefined}
                 />
               );
+              const ci = ciChecks?.get(tag.hash);
+              const trustResolution = summarizeCIRunTrust(
+                (ci?.runs ?? []).map((run) =>
+                  getCIRunTrustResolution(
+                    trust,
+                    run,
+                    repo?.confirmedMaintainers ?? [],
+                    coordinatorState?.serviceControls ?? [],
+                  ),
+                ),
+              );
               return (
-                <Link
-                  key={tag.name}
-                  to={tagHref(tag.name)}
-                  className="block hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring transition-colors"
+                <TagListRow
+                  key={`${tag.name}:${tag.rawTagOid ?? tag.hash}`}
+                  name={tag.name}
+                  href={tagHref(tag.name)}
+                  tagOid={tag.rawTagOid}
+                  pool={pool}
+                  checks={
+                    ci?.status && (
+                      <CIStatusTrustIcon
+                        to={`${basePath}/commit/${tag.hash}#checks`}
+                        status={ci.status}
+                        resolution={trustResolution}
+                        statusSummary={summarizeRuns(ci.runs)}
+                        className="h-3.5 w-3.5"
+                      />
+                    )
+                  }
                 >
                   {row}
-                </Link>
+                </TagListRow>
               );
             })}
           </div>

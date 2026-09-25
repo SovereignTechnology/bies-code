@@ -54,7 +54,6 @@ import {
 } from "lucide-react";
 import {
   graspCloneUrlNpub,
-  computeMaintainerLeadership,
   getRepoRelays,
   getRepoUpstreams,
   groupRequestedMaintainers,
@@ -73,16 +72,22 @@ import {
   getReplaceableAddress,
 } from "applesauce-core/helpers";
 import { cn } from "@/lib/utils";
-import { relayUrlToSegment, repoToPath } from "@/lib/routeUtils";
+import {
+  relayUrlToSegment,
+  repoToNostrCloneUrl,
+  repoToPath,
+} from "@/lib/routeUtils";
+import { relayMatchesGraspService } from "@/lib/grasp";
 import { format } from "date-fns";
 import { useRepoContext } from "@/pages/repo/RepoContext";
 import { useActiveAccount } from "applesauce-react/hooks";
 import { DeleteRepo } from "@/actions/nip34";
 import { runner } from "@/services/actions";
-import { useToast } from "@/hooks/useToast";
+import { useRecoveryToast as useToast } from "@/hooks/useRecoveryToast";
 import { useNavigate } from "react-router-dom";
 import { useUserPath } from "@/hooks/useUserPath";
 import { normalizeUrl } from "@/lib/url";
+import { DOCUMENTATION_URLS } from "@/lib/documentation";
 
 // ---------------------------------------------------------------------------
 // Helpers (shared)
@@ -131,15 +136,9 @@ function shortenNip19InUrl(url: string): string {
   return shortened;
 }
 
-/** Returns true if a relay URL's hostname matches one of the Grasp server domains. */
-function isGraspRelay(relayUrl: string, graspDomains: string[]): boolean {
-  if (!graspDomains.length) return false;
-  try {
-    const hostname = new URL(relayUrl).hostname;
-    return graspDomains.includes(hostname);
-  } catch {
-    return false;
-  }
+/** Returns true if a relay URL is one of the repository's GRASP services. */
+function isGraspRelay(relayUrl: string, serviceAddresses: string[]): boolean {
+  return relayMatchesGraspService(relayUrl, serviceAddresses);
 }
 
 function npubToPubkey(npub: string): string | undefined {
@@ -218,13 +217,65 @@ function invitedRepositoryPath(
   pubkey: string,
   pageSuffix: string,
 ): string {
-  const announcement = repo.announcements.find(
+  const announcement = repo.discoveredAnnouncements.find(
     (event) => event.pubkey === pubkey,
   );
   const announcementRelays = announcement ? getRepoRelays(announcement) : [];
   const relays =
     announcementRelays.length > 0 ? announcementRelays : repo.relays;
   return `${repoToPath(pubkey, repo.dTag, relays)}${pageSuffix}`;
+}
+
+function computeConfirmedMaintainerListings(
+  confirmedMaintainers: string[],
+  maintainerEdges: ResolvedRepo["maintainerEdges"],
+): Map<string, string[]> {
+  const confirmed = new Set(confirmedMaintainers);
+  const maintainerOrder = new Map(
+    confirmedMaintainers.map((pubkey, index) => [pubkey, index]),
+  );
+  const listings = new Map(
+    confirmedMaintainers.map((pubkey) => [pubkey, [] as string[]]),
+  );
+
+  for (const { from, to } of maintainerEdges) {
+    if (!confirmed.has(from) || !confirmed.has(to) || from === to) continue;
+
+    const listedMaintainers = listings.get(from);
+    if (listedMaintainers && !listedMaintainers.includes(to)) {
+      listedMaintainers.push(to);
+    }
+  }
+
+  for (const listedMaintainers of listings.values()) {
+    listedMaintainers.sort(
+      (a, b) => (maintainerOrder.get(a) ?? 0) - (maintainerOrder.get(b) ?? 0),
+    );
+  }
+
+  return listings;
+}
+
+function MaintainerListingSummary({ pubkeys }: { pubkeys: string[] }) {
+  if (pubkeys.length === 0) {
+    return <span>· lists none</span>;
+  }
+
+  return (
+    <span>
+      · lists{" "}
+      {pubkeys.map((pubkey, index) => (
+        <span key={pubkey}>
+          {index > 0 && ", "}
+          <UserName
+            pubkey={pubkey}
+            className="text-muted-foreground"
+            linkToProfile
+          />
+        </span>
+      ))}
+    </span>
+  );
 }
 
 function RequestedMaintainersSummary({
@@ -326,12 +377,12 @@ export interface RepoAboutPanelProps {
 export function RepoAboutPanel({ repo, variant }: RepoAboutPanelProps) {
   const isSidebar = variant === "sidebar";
 
-  // Build the nostr:// clone URL for ngit
-  let npub: string | undefined;
+  // Build the nostr:// clone URL for ngit.
+  let maintainerNpub: string | undefined;
   try {
-    npub = nip19.npubEncode(repo.selectedMaintainer);
+    maintainerNpub = nip19.npubEncode(repo.selectedMaintainer);
   } catch {
-    npub = undefined;
+    maintainerNpub = undefined;
   }
 
   // Prefer the NIP-05 address from the route (already verified by RepoLayoutNip05)
@@ -342,18 +393,14 @@ export function RepoAboutPanel({ repo, variant }: RepoAboutPanelProps) {
     ? routeNip05.startsWith("_@")
       ? routeNip05.slice(2)
       : routeNip05
-    : npub;
-
-  // Extract a bare domain relay hint from the first declared relay (strip wss:// / ws://)
-  const relayHint = repo.relays[0]
-    ? repo.relays[0].replace(/^wss?:\/\//, "").replace(/\/$/, "")
-    : undefined;
-  // Percent-encode the identifier per NIP-34 §nostr:// clone URL spec
-  const encodedDTag = encodeURIComponent(repo.dTag);
+    : maintainerNpub;
   const nostrCloneUrl = identitySegment
-    ? relayHint
-      ? `nostr://${identitySegment}/${relayHint}/${encodedDTag}`
-      : `nostr://${identitySegment}/${encodedDTag}`
+    ? repoToNostrCloneUrl(
+        repo.selectedMaintainer,
+        repo.dTag,
+        repo.relays,
+        routeNip05,
+      )
     : undefined;
   const hasAnyCloneUrl =
     repo.graspCloneUrls.length > 0 || repo.additionalGitServerUrls.length > 0;
@@ -389,22 +436,15 @@ function SidebarVariant({
   const aboutPath = `${repoBasePath}/about`;
   const editPath = `${repoBasePath}/settings`;
   const isMaintainer =
-    account?.pubkey && account.pubkey === repo.selectedMaintainer;
-  const selectedAnnouncement = repo.announcements.find(
+    !!account?.pubkey && repo.confirmedMaintainers.includes(account.pubkey);
+  const selectedAnnouncement = repo.confirmedAnnouncements.find(
     (a) => a.pubkey === repo.selectedMaintainer,
   );
   const upstreams = selectedAnnouncement
     ? getRepoUpstreams(selectedAnnouncement)
     : [];
-  const isMultiAnnouncement = repo.announcements.length > 1;
-  const maintainerLeadership = useMemo(
-    () =>
-      computeMaintainerLeadership(
-        repo.confirmedMaintainers,
-        repo.maintainerEdges,
-      ),
-    [repo.confirmedMaintainers, repo.maintainerEdges],
-  );
+  const isMultiAnnouncement = repo.discoveredAnnouncements.length > 1;
+  const leadMaintainer = repo.leadResolution.leadMaintainer;
   const [multiModalOpen, setMultiModalOpen] = useState(false);
 
   return (
@@ -478,7 +518,7 @@ function SidebarVariant({
                         selected
                       </Badge>
                     )}
-                  {pk === maintainerLeadership.leadMaintainer && (
+                  {pk === leadMaintainer && (
                     <Badge
                       variant="outline"
                       className="text-[10px] px-1.5 py-0 h-4 text-primary border-primary/40"
@@ -510,7 +550,7 @@ function SidebarVariant({
 
           {/* Grasp server relays */}
           {repo.relays.some((r) =>
-            isGraspRelay(r, repo.graspServerDomains),
+            isGraspRelay(r, repo.graspServerAddresses),
           ) && (
             <div className="space-y-2">
               <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
@@ -519,7 +559,7 @@ function SidebarVariant({
               </p>
               <div className="flex flex-wrap gap-1">
                 {repo.relays
-                  .filter((r) => isGraspRelay(r, repo.graspServerDomains))
+                  .filter((r) => isGraspRelay(r, repo.graspServerAddresses))
                   .map((relay) => (
                     <Link
                       key={relay}
@@ -536,20 +576,20 @@ function SidebarVariant({
 
           {/* Other relays (non-Grasp) */}
           {repo.relays.some(
-            (r) => !isGraspRelay(r, repo.graspServerDomains),
+            (r) => !isGraspRelay(r, repo.graspServerAddresses),
           ) && (
             <div className="space-y-2">
               <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
                 <Radio className="h-3 w-3" />
                 {repo.relays.some((r) =>
-                  isGraspRelay(r, repo.graspServerDomains),
+                  isGraspRelay(r, repo.graspServerAddresses),
                 )
                   ? "Other Relays"
                   : "Relays"}
               </p>
               <div className="flex flex-wrap gap-1">
                 {repo.relays
-                  .filter((r) => !isGraspRelay(r, repo.graspServerDomains))
+                  .filter((r) => !isGraspRelay(r, repo.graspServerAddresses))
                   .map((relay) => (
                     <Link
                       key={relay}
@@ -609,10 +649,10 @@ function SidebarVariant({
                   <Braces className="h-3 w-3" />
                 </Button>
                 <MultiAnnouncementsModal
-                  announcements={repo.announcements}
+                  announcements={repo.discoveredAnnouncements}
                   selectedMaintainer={repo.selectedMaintainer}
                   confirmedMaintainers={repo.confirmedMaintainers}
-                  leadMaintainer={maintainerLeadership.leadMaintainer}
+                  leadMaintainer={leadMaintainer}
                   open={multiModalOpen}
                   onOpenChange={setMultiModalOpen}
                 />
@@ -643,27 +683,31 @@ function FullVariant({
   const { basePath } = useRepoContext();
   const account = useActiveAccount();
   const isMaintainer =
-    account?.pubkey && account.pubkey === repo.selectedMaintainer;
+    !!account?.pubkey && repo.confirmedMaintainers.includes(account.pubkey);
   const editPath = `${basePath}/settings`;
 
   // For union display: find which relays/clone URLs are from other reachable
   // repository announcements.
   const selectedAnnouncement = useMemo(
-    () => repo.announcements.find((a) => a.pubkey === repo.selectedMaintainer),
+    () =>
+      repo.confirmedAnnouncements.find(
+        (a) => a.pubkey === repo.selectedMaintainer,
+      ),
     [repo],
   );
   const upstreams = useMemo(
     () => (selectedAnnouncement ? getRepoUpstreams(selectedAnnouncement) : []),
     [selectedAnnouncement],
   );
-  const hasMultipleAnnouncements = repo.announcements.length > 1;
+  const hasMultipleAnnouncements = repo.confirmedAnnouncements.length > 1;
   const confirmedMaintainerSet = useMemo(
     () => new Set(repo.confirmedMaintainers),
     [repo.confirmedMaintainers],
   );
-  const maintainerLeadership = useMemo(
+  const leadMaintainer = repo.leadResolution.leadMaintainer;
+  const maintainerListings = useMemo(
     () =>
-      computeMaintainerLeadership(
+      computeConfirmedMaintainerListings(
         repo.confirmedMaintainers,
         repo.maintainerEdges,
       ),
@@ -752,7 +796,7 @@ function FullVariant({
         </h3>
         <div className="space-y-2.5">
           {repo.confirmedMaintainers.map((pk) => (
-            <div key={pk} className="flex items-center gap-2">
+            <div key={pk} className="flex flex-wrap items-center gap-2">
               <UserLink pubkey={pk} avatarSize="md" nameClassName="text-sm" />
               {pk === repo.selectedMaintainer &&
                 repo.confirmedMaintainers.length > 1 && (
@@ -763,7 +807,7 @@ function FullVariant({
                     selected
                   </Badge>
                 )}
-              {pk === maintainerLeadership.leadMaintainer && (
+              {pk === leadMaintainer && (
                 <Badge
                   variant="outline"
                   className="text-[10px] px-1.5 py-0 h-4 text-primary border-primary/40"
@@ -771,9 +815,14 @@ function FullVariant({
                   lead
                 </Badge>
               )}
+              <span className="text-[11px] text-muted-foreground/70">
+                <MaintainerListingSummary
+                  pubkeys={maintainerListings.get(pk) ?? []}
+                />
+              </span>
             </div>
           ))}
-          {repo.requestedMaintainers.length > 0 && (
+          {repo.invitedMaintainers.length > 0 && (
             <>
               <Separator />
               <RequestedMaintainersSummary repo={repo} pageSuffix="/about" />
@@ -783,7 +832,7 @@ function FullVariant({
       </section>
 
       {/* Grasp Server relays */}
-      {repo.relays.some((r) => isGraspRelay(r, repo.graspServerDomains)) && (
+      {repo.relays.some((r) => isGraspRelay(r, repo.graspServerAddresses)) && (
         <section className="space-y-2">
           <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
             <GraspLogo className="h-3.5 w-3.5 text-primary" />
@@ -792,14 +841,14 @@ function FullVariant({
           {/* Own announcement's Grasp relays */}
           {repo.relays.some(
             (r) =>
-              isGraspRelay(r, repo.graspServerDomains) &&
+              isGraspRelay(r, repo.graspServerAddresses) &&
               !unionOnlyRelayUrls.has(r),
           ) && (
             <div className="flex flex-wrap gap-1.5">
               {repo.relays
                 .filter(
                   (r) =>
-                    isGraspRelay(r, repo.graspServerDomains) &&
+                    isGraspRelay(r, repo.graspServerAddresses) &&
                     !unionOnlyRelayUrls.has(r),
                 )
                 .map((relay) => (
@@ -817,13 +866,13 @@ function FullVariant({
           {/* Union relays from accepted or invited repositories */}
           {repo.relays.some(
             (r) =>
-              isGraspRelay(r, repo.graspServerDomains) &&
+              isGraspRelay(r, repo.graspServerAddresses) &&
               unionOnlyRelayUrls.has(r),
           ) && (
             <UnionRelayGroup
               relays={repo.relays.filter(
                 (r) =>
-                  isGraspRelay(r, repo.graspServerDomains) &&
+                  isGraspRelay(r, repo.graspServerAddresses) &&
                   unionOnlyRelayUrls.has(r),
               )}
               getContributor={(r) => getContributorPubkey(r, false)}
@@ -834,25 +883,25 @@ function FullVariant({
       )}
 
       {/* Other Relays (non-Grasp) */}
-      {repo.relays.some((r) => !isGraspRelay(r, repo.graspServerDomains)) && (
+      {repo.relays.some((r) => !isGraspRelay(r, repo.graspServerAddresses)) && (
         <section className="space-y-2">
           <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
             <Radio className="h-3.5 w-3.5" />
-            {repo.relays.some((r) => isGraspRelay(r, repo.graspServerDomains))
+            {repo.relays.some((r) => isGraspRelay(r, repo.graspServerAddresses))
               ? "Other Relays"
               : "Relays"}
           </h3>
           {/* Own announcement's non-Grasp relays */}
           {repo.relays.some(
             (r) =>
-              !isGraspRelay(r, repo.graspServerDomains) &&
+              !isGraspRelay(r, repo.graspServerAddresses) &&
               !unionOnlyRelayUrls.has(r),
           ) && (
             <div className="flex flex-wrap gap-1.5">
               {repo.relays
                 .filter(
                   (r) =>
-                    !isGraspRelay(r, repo.graspServerDomains) &&
+                    !isGraspRelay(r, repo.graspServerAddresses) &&
                     !unionOnlyRelayUrls.has(r),
                 )
                 .map((relay) => (
@@ -870,13 +919,13 @@ function FullVariant({
           {/* Union relays from accepted or invited repositories */}
           {repo.relays.some(
             (r) =>
-              !isGraspRelay(r, repo.graspServerDomains) &&
+              !isGraspRelay(r, repo.graspServerAddresses) &&
               unionOnlyRelayUrls.has(r),
           ) && (
             <UnionRelayGroup
               relays={repo.relays.filter(
                 (r) =>
-                  !isGraspRelay(r, repo.graspServerDomains) &&
+                  !isGraspRelay(r, repo.graspServerAddresses) &&
                   unionOnlyRelayUrls.has(r),
               )}
               getContributor={(r) => getContributorPubkey(r, false)}
@@ -945,14 +994,16 @@ function FullVariant({
       )}
 
       {/* Bottom action bar: edit + share + raw event + delete */}
-      {repo.announcements.length > 0 && (
+      {repo.discoveredAnnouncements.length > 0 && (
         <FullVariantActionBar
-          announcements={repo.announcements}
+          announcements={repo.discoveredAnnouncements}
           selectedMaintainer={repo.selectedMaintainer}
           confirmedMaintainers={repo.confirmedMaintainers}
-          leadMaintainer={maintainerLeadership.leadMaintainer}
+          leadMaintainer={leadMaintainer}
           editPath={isMaintainer ? editPath : undefined}
-          repoCoords={isMaintainer ? repo.allCoordinates : undefined}
+          repoCoords={
+            isMaintainer ? repo.confirmedMemberCoordinates : undefined
+          }
         />
       )}
     </div>
@@ -964,6 +1015,7 @@ function FullVariant({
 // ---------------------------------------------------------------------------
 
 function NgitCloneField({ cloneUrl }: { cloneUrl: string }) {
+  const { toast: copyToast } = useToast();
   const [copied, setCopied] = useState(false);
 
   const handleCopy = useCallback(async () => {
@@ -972,9 +1024,14 @@ function NgitCloneField({ cloneUrl }: { cloneUrl: string }) {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      /* clipboard unavailable */
+      copyToast({
+        title: "Could not copy",
+        description: "Try again or select and copy the displayed value.",
+        variant: "destructive",
+        recovery: { action: () => handleCopy() },
+      });
     }
-  }, [cloneUrl]);
+  }, [cloneUrl, copyToast]);
 
   return (
     <div className="space-y-1.5">
@@ -984,7 +1041,7 @@ function NgitCloneField({ cloneUrl }: { cloneUrl: string }) {
           <span className="text-muted-foreground/70">(nostr git plugin)</span>
         </p>
         <a
-          href="https://ngit.dev/install"
+          href={DOCUMENTATION_URLS.install}
           target="_blank"
           rel="noopener noreferrer"
           className="text-xs text-primary hover:underline flex items-center gap-1"
@@ -1119,13 +1176,22 @@ function CloneServerRow({
   isGrasp: boolean;
   sourceLabel?: string;
 }) {
+  const { toast: copyToast } = useToast();
   const [copied, setCopied] = useState(false);
 
   const handleCopy = useCallback(async () => {
-    await navigator.clipboard.writeText(url);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  }, [url]);
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      copyToast({
+        title: "Could not copy",
+        variant: "destructive",
+        recovery: { action: () => handleCopy() },
+      });
+    }
+  }, [url, copyToast]);
 
   const npub = isGrasp ? (graspCloneUrlNpub(url) ?? undefined) : undefined;
   const pubkey = npub ? npubToPubkey(npub) : undefined;
@@ -1532,6 +1598,7 @@ function DeleteRepoModal({
     } catch (err) {
       console.error("[DeleteRepoModal] failed to delete:", err);
       toast({
+        recovery: { action: () => handleDelete() },
         title: "Delete failed",
         description:
           "Could not publish the deletion request. Please try again.",
@@ -1539,7 +1606,6 @@ function DeleteRepoModal({
       });
     } finally {
       setDeleting(false);
-      setReason("");
     }
   }, [
     deleting,
@@ -1810,6 +1876,7 @@ function MultiAnnouncementsModal({
 // ---------------------------------------------------------------------------
 
 function CopyRow({ label, value }: { label: string; value: string }) {
+  const { toast: copyToast } = useToast();
   const [copied, setCopied] = useState(false);
 
   const handleCopy = useCallback(async () => {
@@ -1818,9 +1885,14 @@ function CopyRow({ label, value }: { label: string; value: string }) {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      /* clipboard unavailable */
+      copyToast({
+        title: "Could not copy",
+        description: "Try again or select and copy the displayed value.",
+        variant: "destructive",
+        recovery: { action: () => handleCopy() },
+      });
     }
-  }, [value]);
+  }, [value, copyToast]);
 
   return (
     <button
@@ -1871,13 +1943,22 @@ function CloneDropdown({
   additionalGitServerUrls: string[];
 }) {
   const [open, setOpen] = useState(false);
+  const { toast: copyToast } = useToast();
   const [copiedNostrUrl, setCopiedNostrUrl] = useState(false);
 
   const handleCopyNostrUrl = async () => {
     if (!nostrCloneUrl) return;
-    await navigator.clipboard.writeText(nostrCloneUrl);
-    setCopiedNostrUrl(true);
-    setTimeout(() => setCopiedNostrUrl(false), 2000);
+    try {
+      await navigator.clipboard.writeText(nostrCloneUrl);
+      setCopiedNostrUrl(true);
+      setTimeout(() => setCopiedNostrUrl(false), 2000);
+    } catch {
+      copyToast({
+        title: "Could not copy",
+        variant: "destructive",
+        recovery: { action: () => handleCopyNostrUrl() },
+      });
+    }
   };
 
   const hasRawUrls =
@@ -1917,7 +1998,7 @@ function CloneDropdown({
                 Clone with ngit
               </p>
               <a
-                href="https://ngit.dev/install"
+                href={DOCUMENTATION_URLS.install}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-xs text-primary hover:underline flex items-center gap-1"

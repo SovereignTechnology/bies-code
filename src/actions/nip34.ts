@@ -42,8 +42,10 @@ import {
   type InlineCommentLocation,
 } from "@/factories/InlineCommentFactory";
 import { CIManualTriggerFactory } from "@/factories/CIManualTriggerFactory";
+import { CIServiceControlFactory } from "@/factories/CIServiceControlFactory";
+import { CI_SERVICE_REQUEST_KIND, CI_SERVICE_STOP_KIND } from "@/lib/ci";
 
-import type { IssueStatus } from "@/lib/nip34";
+import { pubkeyFromCoordinate, type IssueStatus } from "@/lib/nip34";
 import { outboxStore } from "@/services/outbox";
 import { eventStore } from "@/services/nostr";
 
@@ -96,19 +98,18 @@ export interface CreateCommentOptions {
 /**
  * Create a NIP-34 git issue (kind:1621).
  *
- * Publishes to: user outbox + repo relays + repo owner's inbox (deferred).
+ * Publishes to: user outbox + every repo coordinate's relays + every
+ * maintainer's inbox (deferred).
  */
 export function CreateIssue(
-  repoCoord: string,
-  ownerPubkey: string,
+  repoCoords: string[],
   subject: string,
   content: string,
   options?: IssueOptions,
 ): Action {
   return async ({ signer, self }) => {
     const signed = await IssueFactory.create(
-      repoCoord,
-      ownerPubkey,
+      repoCoords,
       subject,
       content,
       options,
@@ -118,11 +119,20 @@ export function CreateIssue(
     // waiting for a relay round-trip.
     eventStore.add(signed);
 
-    const notifyPubkeys = ownerPubkey !== self ? [ownerPubkey] : [];
+    const notifyPubkeys = [
+      ...new Set(
+        repoCoords
+          .map(pubkeyFromCoordinate)
+          .filter(
+            (pubkey): pubkey is string =>
+              pubkey !== undefined && pubkey !== self,
+          ),
+      ),
+    ];
     // Fire-and-forget: publishing to the outbox can continue in the background
     // after the event is signed and added to the local store.
     outboxStore
-      .publish(signed, buildGroupIds(self, [repoCoord], notifyPubkeys))
+      .publish(signed, buildGroupIds(self, repoCoords, notifyPubkeys))
       .catch(console.error);
   };
 }
@@ -185,6 +195,34 @@ export function TriggerManualCI(workflowResult: NostrEvent): Action {
     eventStore.add(signed);
     outboxStore
       .publish(signed, buildGroupIds(self, repoCoords, [coordinatorPubkey]))
+      .catch(console.error);
+  };
+}
+
+/**
+ * Publish a standing CI Service Request or Stop for one repository perspective.
+ * The event reaches the repository relays and the coordinator's NIP-65 inbox.
+ */
+export function SetCIService(
+  enabled: boolean,
+  repositoryCoordinate: string,
+  coordinatorPubkey: string,
+  repositoryRelayHint?: string,
+): Action {
+  return async ({ signer, self }) => {
+    const signed = await CIServiceControlFactory.create(
+      enabled ? CI_SERVICE_REQUEST_KIND : CI_SERVICE_STOP_KIND,
+      repositoryCoordinate,
+      coordinatorPubkey,
+      repositoryRelayHint,
+    ).sign(signer);
+
+    eventStore.add(signed);
+    outboxStore
+      .publish(
+        signed,
+        buildGroupIds(self, [repositoryCoordinate], [coordinatorPubkey]),
+      )
       .catch(console.error);
   };
 }

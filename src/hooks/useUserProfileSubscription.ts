@@ -17,8 +17,8 @@
  *
  * This hook is a no-op when:
  *   - pubkey is undefined
- *   - the viewed pubkey matches the active account (the active user's identity
- *     is already kept up-to-date by startUserIdentitySubscription in accounts.ts)
+ *   - the viewed pubkey matches the active account and CI advertisements are
+ *     not requested (the account subscription already loads identity events)
  *
  * The subscription is torn down automatically when the component unmounts
  * (use$ handles the RxJS subscription lifecycle).
@@ -36,6 +36,10 @@ import { combineLatest } from "rxjs";
 import { map, distinctUntilChanged, startWith } from "rxjs/operators";
 import type { Filter } from "applesauce-core/helpers";
 import { normalizeUrl } from "@/lib/url";
+import {
+  CI_COORDINATOR_ADVERTISEMENT_KIND,
+  CI_NIX_PROVIDER_ADVERTISEMENT_KIND,
+} from "@/lib/ci";
 
 /** Replaceable event kinds that define a user's identity and follow lists. */
 const USER_REPLACEABLE_KINDS = [
@@ -51,22 +55,38 @@ const USER_REPLACEABLE_KINDS = [
  * page visit. Starts immediately on index + lookup relays and additively
  * expands to the user's outbox relays once their kind:10002 is known.
  *
+ * CI advertisements can join the same author-scoped filter for profile links.
+ * On our own profile, only these advertisements need a page-owned fetch.
+ *
  * @param pubkey - The profile page owner's hex pubkey, or undefined to skip
  */
-export function useUserProfileSubscription(pubkey: string | undefined): void {
+export function useUserProfileSubscription(
+  pubkey: string | undefined,
+  {
+    includeCIAdvertisements = false,
+  }: { includeCIAdvertisements?: boolean } = {},
+): void {
   const store = useEventStore();
   const account = useActiveAccount();
   const myPubkey = account?.pubkey;
 
-  // Skip if this is the signed-in user's own profile — their identity is
-  // already subscribed to by startUserIdentitySubscription in accounts.ts.
+  // The active account already owns the identity query. Only fetch the
+  // optional advertisements when viewing our own profile.
   const isOwnProfile = !!pubkey && pubkey === myPubkey;
 
   use$(() => {
-    if (!pubkey || isOwnProfile) return undefined;
+    if (!pubkey || (isOwnProfile && !includeCIAdvertisements)) return undefined;
 
     const filter: Filter = {
-      kinds: [...USER_REPLACEABLE_KINDS],
+      kinds: [
+        ...(isOwnProfile ? [] : USER_REPLACEABLE_KINDS),
+        ...(includeCIAdvertisements
+          ? [
+              CI_COORDINATOR_ADVERTISEMENT_KIND,
+              CI_NIX_PROVIDER_ADVERTISEMENT_KIND,
+            ]
+          : []),
+      ],
       authors: [pubkey],
     };
 
@@ -95,5 +115,5 @@ export function useUserProfileSubscription(pubkey: string | undefined): void {
       onlyEvents(),
       mapEventsToStore(store),
     );
-  }, [pubkey, isOwnProfile, store]);
+  }, [pubkey, isOwnProfile, includeCIAdvertisements, store]);
 }

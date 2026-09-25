@@ -25,7 +25,7 @@
  *
  * Multi-maintainer repos are announced under one coordinate per maintainer
  * and CI events may carry multiple `a` tags — every #a filter here takes the
- * repo's full coordinate set (repo.allCoordinates).
+ * repo's confirmed maintainer coordinate set.
  *
  * No trust filtering is applied — all runner identities are displayed and
  * the UI shows who signed each result.
@@ -44,14 +44,20 @@ import { CIRun, isValidCIRun } from "@/casts/CIRun";
 import { CIJobResultEvent, isValidCIJobResult } from "@/casts/CIJobResult";
 import { CIResult, isValidCIResult } from "@/casts/CIResult";
 import { ciResultsByCommitLoader, pool } from "@/services/nostr";
-import {
-  resilientRequest,
-  resilientSubscription,
-} from "@/lib/resilientSubscription";
+import { ciCoordinatorDiscovery$, repoCIActivity$ } from "@/services/ciQueries";
+import { resilientRequest } from "@/lib/resilientSubscription";
 import { mapEventsToStore } from "applesauce-core";
 import { onlyEvents } from "applesauce-relay";
 import { relayGroupUrls$ } from "@/models/RepositoryRelayGroup";
 import {
+  CICoordinatorAdvertisement,
+  CIRequestReadiness,
+  isValidCICoordinatorAdvertisement,
+  isValidCIRequestReadiness,
+} from "@/casts/CICoordinator";
+import {
+  CI_COORDINATOR_ADVERTISEMENT_KIND,
+  CI_REQUEST_READINESS_KIND,
   CI_RUN_KIND,
   CI_RESULT_KIND,
   CI_JOB_RESULT_KIND,
@@ -299,35 +305,24 @@ export function useCIForCommit(
  * coordinates, so the full coordinate set is passed) and reads them back
  * from the store grouped into workflow runs, most recent first.
  *
- * @param repoCoords     - The repo's full coordinate set (repo.allCoordinates)
- * @param repoRelayGroup - Repo relay group from useResolvedRepository
+ * @param repoCoords         - The repo's confirmed maintainer coordinates
+ * @param selectedCoordinate - The repo's selected coordinate (relay source)
  */
 export function useRepoCI(
   repoCoords: string[] | undefined,
-  repoRelayGroup: RelayGroup | undefined,
+  selectedCoordinate: string | undefined,
 ): CIWorkflowRun[] | undefined {
   const store = useEventStore();
 
   // Stable key — re-subscribes only when the coordinate set actually changes
   const coordsKey = repoCoords ? [...repoCoords].sort().join(",") : "";
 
-  // Reactive relay list — re-fires the subscription when the group gains relays
-  const relays =
-    use$(() => relayGroupUrls$(repoRelayGroup), [repoRelayGroup]) ?? [];
-  const relayKey = relays.join(",");
-
-  // Layer 1: fetch CI activity repo-wide by #a.
+  // Layer 1: shared repo-wide #a subscription — pinned by RepoLayout while
+  // the repository shows CI signals, so tab navigation reuses one query.
   use$(() => {
-    if (!repoCoords || repoCoords.length === 0 || relays.length === 0)
-      return undefined;
-    return resilientSubscription(pool, relays, [
-      { kinds: [...CI_EVENT_KINDS], "#a": repoCoords } as Filter,
-    ]).pipe(
-      onlyEvents(),
-      mapEventsToStore(store),
-      catchError(() => EMPTY),
-    );
-  }, [coordsKey, relayKey, store]);
+    if (!repoCoords || repoCoords.length === 0) return undefined;
+    return repoCIActivity$(repoCoords, selectedCoordinate);
+  }, [coordsKey, selectedCoordinate]);
 
   // Layer 2: read all CI kinds back from the store and group.
   return use$(() => {
@@ -379,6 +374,15 @@ export function useRepoHasCI(
   const store = useEventStore();
 
   const coordsKey = repoCoords ? [...repoCoords].sort().join(",") : "";
+  const repoMaintainers = [
+    ...new Set(
+      (repoCoords ?? []).flatMap((coordinate) => {
+        const pubkey = coordinate.split(":")[1];
+        return /^[0-9a-f]{64}$/.test(pubkey ?? "") ? [pubkey] : [];
+      }),
+    ),
+  ];
+  const maintainerKey = [...repoMaintainers].sort().join(",");
 
   const relays =
     use$(() => relayGroupUrls$(repoRelayGroup), [repoRelayGroup]) ?? [];
@@ -401,12 +405,66 @@ export function useRepoHasCI(
     );
   }, [coordsKey, relayKey, store]);
 
+  // A coordinator that explicitly targets this repository makes the Actions
+  // surface useful before its first run. A global capability advertisement by
+  // itself is not repository-specific evidence. The discovery query is shared
+  // with useCICoordinators so coordinator surfaces reuse it.
+  use$(
+    () => ciCoordinatorDiscovery$(repoCoords ?? [], repoMaintainers),
+    [coordsKey, maintainerKey],
+  );
+
   const hasCI = use$(() => {
     if (!repoCoords || repoCoords.length === 0) return undefined;
-    return store
-      .timeline([{ kinds: [...CI_EVENT_KINDS], "#a": repoCoords } as Filter])
-      .pipe(map((events) => events.length > 0));
-  }, [coordsKey, store]);
+    return combineLatest([
+      store.timeline([
+        { kinds: [...CI_EVENT_KINDS], "#a": repoCoords } as Filter,
+      ]),
+      store.timeline([
+        { kinds: [CI_COORDINATOR_ADVERTISEMENT_KIND] } as Filter,
+      ]),
+      store.timeline([
+        {
+          kinds: [CI_REQUEST_READINESS_KIND],
+          "#a": repoCoords,
+        } as Filter,
+        ...(repoMaintainers.length
+          ? [
+              {
+                kinds: [CI_REQUEST_READINESS_KIND],
+                "#p": repoMaintainers,
+              } as Filter,
+            ]
+          : []),
+      ]),
+      timer(0, EXPIRY_RECHECK_INTERVAL_MS),
+    ]).pipe(
+      map(([events, advertisements, readinessEvents]) => {
+        if (events.length > 0) return true;
+        const now = Math.floor(Date.now() / 1000);
+        const castStore = store as unknown as CastRefEventStore;
+        const liveAdvertisements = new Set(
+          (advertisements as NostrEvent[]).flatMap((event) => {
+            if (!isValidCICoordinatorAdvertisement(event)) return [];
+            const advertisement = new CICoordinatorAdvertisement(
+              event,
+              castStore,
+            );
+            return advertisement.expiration > now ? [advertisement.pubkey] : [];
+          }),
+        );
+        return (readinessEvents as NostrEvent[]).some((event) => {
+          if (!isValidCIRequestReadiness(event)) return false;
+          const readiness = new CIRequestReadiness(event, castStore);
+          return (
+            readiness.expiration > now &&
+            liveAdvertisements.has(readiness.pubkey) &&
+            readiness.supportsRepository(repoCoords, repoMaintainers)
+          );
+        });
+      }),
+    );
+  }, [coordsKey, maintainerKey, store]);
 
   return hasCI ?? false;
 }

@@ -1,7 +1,7 @@
 import { useState, useCallback } from "react";
 import { runner } from "@/services/actions";
 import { ChangeIssueStatus } from "@/actions/nip34";
-import { useToast } from "@/hooks/useToast";
+import { useRecoveryToast as useToast } from "@/hooks/useRecoveryToast";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -79,6 +79,7 @@ export function StatusDropdownBadge({
         });
       } catch (err) {
         toast({
+          recovery: { action: () => handleSelect(next) },
           title: "Failed to update status",
           description:
             err instanceof Error ? err.message : "Failed to update status",

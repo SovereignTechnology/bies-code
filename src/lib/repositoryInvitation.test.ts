@@ -4,8 +4,15 @@ import { nip19, type NostrEvent } from "nostr-tools";
 import { describe, expect, it } from "vitest";
 
 import { RepositoryState } from "@/casts/RepositoryState";
-import type { GraspServer } from "@/hooks/useGraspServers";
 import {
+  graspRepositoryCloneUrl,
+  graspServerFromAddress,
+  isValidGraspServiceAddress,
+  relayMatchesGraspService,
+  type GraspServer,
+} from "@/lib/grasp";
+import {
+  graspCloneUrlServiceAddress,
   getRepoCloneUrls,
   getRepoMaintainers,
   resolveChain,
@@ -26,6 +33,54 @@ const mainRef = "refs/heads/main";
 const topicRef = "refs/heads/topic";
 const ownerCommit = "1".repeat(40);
 const inviteeCommit = "2".repeat(40);
+
+describe("path-mounted GRASP service addresses", () => {
+  it("preserves mount paths while converting between relay and clone URLs", () => {
+    const server = graspServerFromAddress(
+      "wss://Relay.Example/services/Grasp/",
+    );
+    expect(server).toEqual({
+      serviceAddress: "relay.example/services/Grasp",
+      wsUrl: "wss://relay.example/services/Grasp",
+    });
+    expect(isValidGraspServiceAddress(server!.serviceAddress)).toBe(true);
+
+    const npub = nip19.npubEncode(owner);
+    const cloneUrl = graspRepositoryCloneUrl(
+      server!.serviceAddress,
+      npub,
+      "mounted-repo",
+    );
+    expect(cloneUrl).toBe(
+      `https://relay.example/services/Grasp/${npub}/mounted-repo.git`,
+    );
+    expect(graspCloneUrlServiceAddress(cloneUrl)).toBe(
+      "relay.example/services/Grasp",
+    );
+  });
+
+  it("keeps sibling relay mounts distinct", () => {
+    expect(
+      relayMatchesGraspService("wss://relay.example/grasp", [
+        "relay.example/grasp",
+      ]),
+    ).toBe(true);
+    expect(
+      relayMatchesGraspService("wss://relay.example/other", [
+        "relay.example/grasp",
+      ]),
+    ).toBe(false);
+  });
+
+  it("does not mistake an npub-like mount segment for the repository owner", () => {
+    const npub = nip19.npubEncode(owner);
+    const cloneUrl = `https://relay.example/npub1mount/${npub}/repo.git`;
+
+    expect(graspCloneUrlServiceAddress(cloneUrl)).toBe(
+      "relay.example/npub1mount",
+    );
+  });
+});
 
 function announcement(
   pubkey: string,
@@ -160,7 +215,10 @@ describe("invitation announcement construction", () => {
       announcement(collaborator, 5, [invitee]),
     ]);
     const servers: GraspServer[] = [
-      { domain: "new.example", wsUrl: "wss://new.example" },
+      {
+        serviceAddress: "new.example/services/grasp",
+        wsUrl: "wss://new.example/services/grasp",
+      },
     ];
 
     const template = buildMaintainerAcceptanceTemplate(
@@ -179,8 +237,13 @@ describe("invitation announcement construction", () => {
     };
 
     expect(getRepoCloneUrls(templateEvent)).toEqual([
-      `https://new.example/${ownNpub}/${repoId}.git`,
+      `https://new.example/services/grasp/${ownNpub}/${repoId}.git`,
       "https://github.com/example/invited-repo.git",
+    ]);
+    expect(template.tags).toContainEqual([
+      "relays",
+      "wss://new.example/services/grasp",
+      "wss://old.example",
     ]);
     expect(getRepoMaintainers(templateEvent)).toEqual([
       invitee,

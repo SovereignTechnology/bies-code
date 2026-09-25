@@ -1,3 +1,5 @@
+import { useErrorRetry } from "@/hooks/useErrorRetry";
+import { CommitListError } from "@/components/CommitList";
 /**
  * RepoBranchesPage — full-page expansion of the popover ref selector's
  * branches list. Shows every branch in the merged ref view (across all
@@ -14,7 +16,7 @@
  * title — the same affordance as the popover ref selector's source row,
  * just promoted to a standalone trigger.
  */
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useSeoMeta } from "@unhead/react";
 import { useRepoContext } from "./RepoContext";
@@ -32,6 +34,14 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { GitBranch, AlertCircle } from "lucide-react";
 import { isNonHttpUrl } from "@/lib/git-grasp-pool";
 import { IncompatibleProtocolError } from "@/components/IncompatibleProtocolError";
+import { useCIForCommits } from "@/hooks/useCI";
+import { useRepositoryCITrust } from "@/hooks/useRepositoryCITrust";
+import { CIStatusTrustIcon } from "@/components/ci/CIStatusTrustIcon";
+import { summarizeRuns } from "@/lib/ci";
+import {
+  getCIRunTrustResolution,
+  summarizeCIRunTrust,
+} from "@/lib/ciTrustContext";
 
 // ---------------------------------------------------------------------------
 // Branch ranking — drives the on-page sort order
@@ -101,31 +111,8 @@ export default function RepoBranchesPage() {
   const repo = resolved?.repo;
   const repoOwnerProfile = useProfile(pubkey);
 
-  // "source" query param drives which server's branches/status are shown.
-  const selectedSource = searchParams.get("source") ?? "default";
-
-  const handleSourceChange = useCallback(
-    (src: string) => {
-      setSearchParams(
-        (prev) => {
-          const next = new URLSearchParams(prev);
-          if (src === "default") {
-            next.delete("source");
-          } else {
-            next.set("source", src);
-          }
-          return next;
-        },
-        { replace: false },
-      );
-    },
-    [setSearchParams],
-  );
-
   const { pool, poolState } = useGitPool(cloneUrls, {
-    knownHeadCommit: repoState?.headCommitId,
-    stateRefs: repoState?.refs,
-    stateCreatedAt: repoState ? repoState.event.created_at : undefined,
+    private: repo?.isPrivate,
   });
 
   const stateBehindGit =
@@ -133,26 +120,45 @@ export default function RepoBranchesPage() {
     !poolState.pulling &&
     poolState.warning?.kind === "state-behind-git";
 
-  // Use the same bootstrap-head-commit derivation as RepoCodePage so the
-  // explorer reports the merged ref view from `getMergedInfoRefs()` even
-  // when the Nostr state is ahead of the chosen server.
-  const userChoseNostr = selectedSource === "nostr";
-  const bootstrapHeadCommit =
-    stateBehindGit && !userChoseNostr ? undefined : repoState?.headCommitId;
+  const sourceParam = searchParams.get("source");
+  const selectedSource =
+    sourceParam ??
+    (poolState.viewSource === "authoritative"
+      ? "default"
+      : poolState.viewSource);
+
+  useEffect(() => {
+    if (pool && sourceParam) pool.setViewSource(sourceParam);
+  }, [pool, sourceParam]);
+
+  const handleSourceChange = useCallback(
+    (src: string) => {
+      pool?.setViewSource(src);
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          if (src === "default") next.delete("source");
+          else next.set("source", src);
+          return next;
+        },
+        { replace: false },
+      );
+    },
+    [pool, setSearchParams],
+  );
 
   const explorer = useGitExplorer(pool, poolState, {
-    knownHeadCommit: bootstrapHeadCommit,
     stateRefs: repoState?.refs,
   });
 
   const { branches, mismatchCount, effectiveSource } = useRefsWithStatus({
     refs: explorer.refs,
-    selectedSource,
     repoState,
     repoRelayEose,
     relayStateMap,
     stateBehindGit,
-    poolWarning: poolState.warning,
+    viewSource: poolState.viewSource,
+    effectiveRefs: poolState.effectiveRefs,
     winnerUrl: poolState.winnerUrl,
     urlStates: poolState.urls,
     cloneUrls,
@@ -173,6 +179,20 @@ export default function RepoBranchesPage() {
     () => sortBranches(branches, divergence),
     [branches, divergence],
   );
+  const branchCommitIds = useMemo(
+    () => sortedBranches.map((branch) => branch.hash),
+    [sortedBranches],
+  );
+  const ciChecks = useCIForCommits(
+    branchCommitIds,
+    repo?.isPrivate ? undefined : resolved?.repoRelayGroup,
+  );
+  const ciRuns = useMemo(
+    () =>
+      ciChecks ? [...ciChecks.values()].flatMap((checks) => checks.runs) : [],
+    [ciChecks],
+  );
+  const { coordinatorState, trust } = useRepositoryCITrust(repo, ciRuns);
 
   useSeoMeta({
     title: repo ? `Branches - ${repo.name} - BIES Code` : "Branches - BIES Code",
@@ -186,16 +206,35 @@ export default function RepoBranchesPage() {
   // navigating into a branch keeps the user on the same server.
   const branchHref = useCallback(
     (name: string) => {
-      const source = searchParams.get("source");
       const base = `${basePath}/tree/${name}`;
-      return source ? `${base}?source=${encodeURIComponent(source)}` : base;
+      return selectedSource !== "default"
+        ? `${base}?source=${encodeURIComponent(selectedSource)}`
+        : base;
     },
-    [searchParams, basePath],
+    [selectedSource, basePath],
   );
 
   // -------------------------------------------------------------------------
   // Early returns: no clone URLs, incompatible protocols
   // -------------------------------------------------------------------------
+  const recoveryKey = useMemo(
+    () => ({ pool, selectedSource }),
+    [pool, selectedSource],
+  );
+  const recovery = useErrorRetry({
+    resourceKey: recoveryKey,
+    failed: !!explorer.error,
+    busy: explorer.loading || poolState.loading || poolState.pulling,
+    onRetry: async (signal) => {
+      await pool?.retryReads();
+      if (!signal.aborted) await explorer.reload();
+    },
+    policy:
+      pool && !pool.requiresSigningForReads
+        ? { mode: "read", requiresSigning: false, context: "connection" }
+        : { mode: "manual" },
+  });
+
   if (cloneUrls.length === 0) {
     return (
       <div className="container max-w-screen-xl px-4 md:px-8 py-6">
@@ -225,12 +264,16 @@ export default function RepoBranchesPage() {
   }
 
   const showSkeletons = explorer.loading && sortedBranches.length === 0;
-  const showEmpty = !explorer.loading && sortedBranches.length === 0;
+  const showEmpty =
+    !explorer.error && !explorer.loading && sortedBranches.length === 0;
   const branchCount = sortedBranches.length;
   const defaultBranchName = defaultBranch?.name;
 
   return (
     <div className="container max-w-screen-xl px-4 md:px-8 py-6 space-y-4">
+      {explorer.error && (
+        <CommitListError message={explorer.error} recovery={recovery} />
+      )}
       {/* Title row: branch icon + count on the left, source dropdown on the right */}
       <div className="flex items-center gap-3 flex-wrap">
         <GitBranch className="h-5 w-5 text-muted-foreground shrink-0" />
@@ -264,7 +307,7 @@ export default function RepoBranchesPage() {
             poolWarning={poolState.warning}
             pool={pool}
             relayStateMap={relayStateMap}
-            winnerUrl={poolState.winnerUrl}
+            effectiveSource={effectiveSource}
           />
         </div>
       </div>
@@ -317,24 +360,45 @@ export default function RepoBranchesPage() {
                 <RefRow
                   density="expanded"
                   refWithStatus={branch}
-                  effectiveSource={effectiveSource}
                   pool={pool}
                   urlStates={poolState.urls}
                   cloneUrls={cloneUrls}
                   divergence={div}
                 />
               );
+              const ci = ciChecks?.get(branch.hash);
+              const trustResolution = summarizeCIRunTrust(
+                (ci?.runs ?? []).map((run) =>
+                  getCIRunTrustResolution(
+                    trust,
+                    run,
+                    repo?.confirmedMaintainers ?? [],
+                    coordinatorState?.serviceControls ?? [],
+                  ),
+                ),
+              );
               // Wrap each row in a Link so the whole row navigates to the
               // branch's tree. We pass no `onSelect` to RefRow so it renders
               // as a non-interactive div inside the Link.
               return (
-                <Link
-                  key={branch.name}
-                  to={branchHref(branch.name)}
-                  className="block hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring transition-colors"
-                >
-                  {row}
-                </Link>
+                <div key={branch.name} className="flex items-center pr-4">
+                  <Link
+                    to={branchHref(branch.name)}
+                    className="min-w-0 flex-1 transition-colors hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  >
+                    {row}
+                  </Link>
+                  {ci?.status && (
+                    <CIStatusTrustIcon
+                      to={`${basePath}/commit/${branch.hash}#checks`}
+                      status={ci.status}
+                      resolution={trustResolution}
+                      statusSummary={summarizeRuns(ci.runs)}
+                      className="h-3.5 w-3.5"
+                      buttonClassName="ml-2"
+                    />
+                  )}
+                </div>
               );
             })}
           </div>
@@ -355,9 +419,9 @@ function BranchesSkeleton() {
         {Array.from({ length: 6 }).map((_, i) => (
           <div key={i} className="flex items-start gap-3 px-4 py-3">
             <Skeleton className="h-4 w-4 mt-0.5 rounded" />
-            <div className="flex-1 space-y-2">
+            <div className="min-w-0 flex-1 space-y-2">
               <Skeleton className="h-4 w-40" />
-              <Skeleton className="h-3 w-72" />
+              <Skeleton className="h-3 w-72 max-w-full" />
             </div>
             <Skeleton className="h-5 w-12 rounded" />
           </div>

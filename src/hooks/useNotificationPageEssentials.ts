@@ -40,11 +40,9 @@ import {
   LABEL_KIND,
   DELETION_KIND,
   STATUS_KINDS,
-  PATCH_KIND,
-  PR_KIND,
-  pubkeyFromCoordinate,
-  getRepoMaintainers,
+  resolveChain,
   resolveItemEssentials,
+  type ResolvedRepo,
   type ResolvedIssueLite,
 } from "@/lib/nip34";
 import type {
@@ -296,29 +294,30 @@ export function useNotificationPageEssentials(
         const result = new Map<string, ResolvedIssueLite>();
 
         for (const rootEvent of rootEvents) {
-          // Build the maintainer set from the coord's pubkey + the repo
-          // announcement's maintainers list (if the announcement is in store).
+          // Resolve the reciprocal component from every announcement currently
+          // in the store. Directional listings remain invitations and cannot
+          // authorize notification status or label events.
           const coord = rootEvent.tags.find(([t]) => t === "a")?.[1];
-          const maintainerSet = new Set<string>();
+          let memberSet = new Set<string>();
+          let roleHistory: ResolvedRepo["roleHistory"] | undefined;
 
           if (coord?.startsWith("30617:")) {
-            const pk = pubkeyFromCoordinate(coord);
-            if (pk) maintainerSet.add(pk);
-
             const parsed = splitCoord(coord);
             if (parsed) {
-              const ann = store.getByFilters([
+              const announcements = store.getByFilters([
                 {
                   kinds: [REPO_KIND],
-                  authors: [parsed.pubkey],
                   "#d": [parsed.dTag],
-                  limit: 1,
                 } as Filter,
               ]) as NostrEvent[];
-              if (ann.length > 0) {
-                for (const mp of getRepoMaintainers(ann[0])) {
-                  maintainerSet.add(mp);
-                }
+              const repository = resolveChain(
+                announcements,
+                parsed.pubkey,
+                parsed.dTag,
+              );
+              if (repository) {
+                memberSet = new Set(repository.confirmedMembers);
+                roleHistory = repository.roleHistory;
               }
             }
           }
@@ -335,11 +334,8 @@ export function useNotificationPageEssentials(
             itemEssentials,
             [], // comments — not needed for notification display
             [], // zaps — not needed for notification display
-            maintainerSet,
-            {
-              mergeStatusRequiresMaintainer:
-                rootEvent.kind === PATCH_KIND || rootEvent.kind === PR_KIND,
-            },
+            memberSet,
+            { roleHistory },
           );
 
           result.set(rootEvent.id, resolved);

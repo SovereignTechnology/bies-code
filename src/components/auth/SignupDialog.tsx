@@ -12,7 +12,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { toast } from "@/hooks/useToast";
+import { useRecoveryToast } from "@/hooks/useRecoveryToast";
 import { useLoginActions } from "@/hooks/useLoginActions";
 import { usePublish } from "@/hooks/usePublish";
 import { generateSecretKey, getPublicKey, nip19 } from "nostr-tools";
@@ -23,6 +23,7 @@ interface SignupDialogProps {
 }
 
 const SignupDialog: React.FC<SignupDialogProps> = ({ isOpen, onClose }) => {
+  const { toast } = useRecoveryToast();
   const [step, setStep] = useState<"generate" | "download" | "profile">(
     "generate",
   );
@@ -75,6 +76,7 @@ const SignupDialog: React.FC<SignupDialogProps> = ({ isOpen, onClose }) => {
       setStep("profile");
     } catch {
       toast({
+        recovery: { action: () => downloadKey() },
         title: "Download failed",
         description:
           "Could not download the key file. Please copy it manually.",
@@ -103,15 +105,15 @@ const SignupDialog: React.FC<SignupDialogProps> = ({ isOpen, onClose }) => {
           created_at: Math.floor(Date.now() / 1000),
         });
       }
+      onClose();
     } catch {
       toast({
         title: "Profile Setup Failed",
+        recovery: { action: () => finishSignup(skipProfile) },
         description:
-          "Your account was created but profile setup failed. You can update it later.",
+          "Your account was created but profile setup failed. Retry to publish the profile.",
         variant: "destructive",
       });
-    } finally {
-      onClose();
     }
   };
 

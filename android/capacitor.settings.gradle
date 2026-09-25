@@ -4,3 +4,6 @@ project(':capacitor-android').projectDir = new File('../node_modules/.pnpm/@capa
 
 include ':capacitor-app'
 project(':capacitor-app').projectDir = new File('../node_modules/.pnpm/@capacitor+app@8.1.0_@capacitor+core@8.4.1/node_modules/@capacitor/app/android')
+
+include ':nostr-signer-capacitor-plugin'
+project(':nostr-signer-capacitor-plugin').projectDir = new File('../node_modules/.pnpm/nostr-signer-capacitor-plugin@https+++codeload.github.com+chebizarro+nostr-signer-capacitor-p_k4yytgge4pkfupacxjf2fipnoy/node_modules/nostr-signer-capacitor-plugin/android')

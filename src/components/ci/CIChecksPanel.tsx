@@ -1,3 +1,6 @@
+import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
+import { useErrorRetry } from "@/hooks/useErrorRetry";
+import { ErrorRetryAction } from "@/components/ErrorRetryAction";
 /**
  * CIChecksPanel — GitHub-style checks box for a PR / patch detail page.
  *
@@ -5,8 +8,11 @@
  * expandable row per workflow attempt for the current tip commit, and a
  * collapsed section for runs against superseded commits.
  *
- * No trust filtering is applied yet — the signing runner identity is shown
- * on every row so users can judge results for themselves.
+ * No trust filtering is applied — the signing runner identity is shown on
+ * every row so users can judge results for themselves. When the caller
+ * supplies a trust context (resolved repo plus settled evidence),
+ * rows additionally carry the same settled trust-context labels and
+ * repository-attribution warnings as the repo Actions tab.
  */
 
 import {
@@ -18,7 +24,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type { NostrEvent } from "nostr-tools";
+import { nip19, type NostrEvent } from "nostr-tools";
 import { formatDistanceToNow } from "date-fns";
 import { EMPTY } from "rxjs";
 import { catchError } from "rxjs/operators";
@@ -48,29 +54,64 @@ import { cn } from "@/lib/utils";
 import {
   ciStatusLabel,
   formatCIDuration,
+  getWorkflowTiming,
   summarizeRuns,
+  workflowRunRepoCoords,
   type CIJobResult,
   type CIWorkflowRun,
 } from "@/lib/ci";
+import {
+  getCIJobTrustResolution,
+  getCIRunTrustResolution,
+  type CITrustContextState,
+  type CITrustResolution,
+} from "@/lib/ciTrustContext";
+import { hasAcceptedRepositoryReference, type ResolvedRepo } from "@/lib/nip34";
+import { findNsitePreview, parsePublicOutputUrl } from "@/lib/ciOutputs";
+import { NsitePreviewLink } from "./PRNsitePreview";
+import type { CIServiceControl } from "@/casts/CICoordinator";
+import { RepoItemAttributionIndicator } from "@/components/RepoItemAttributionWarning";
+import { CITrustContextLabel } from "./CITrustContextLabel";
 import type { CIRun } from "@/casts/CIRun";
-import type { CIManualTriggerRef } from "@/casts/CIContext";
+import type {
+  CIManualTriggerRef,
+  CIServiceRequestRef,
+} from "@/casts/CIContext";
 import type { PRCIChecks } from "@/hooks/useCI";
 import { runner } from "@/services/actions";
 import { TriggerManualCI } from "@/actions/nip34";
-import { useToast } from "@/hooks/useToast";
+import { useRecoveryToast as useToast } from "@/hooks/useRecoveryToast";
 import { Button } from "@/components/ui/button";
 import { use$ } from "@/hooks/use$";
 import { useEventStore } from "@/hooks/useEventStore";
 import { resilientRequest } from "@/lib/resilientSubscription";
-import { CI_MANUAL_TRIGGER_KIND } from "@/lib/ci";
+import { CI_MANUAL_TRIGGER_KIND, CI_SERVICE_REQUEST_KIND } from "@/lib/ci";
 import { pool } from "@/services/nostr";
 import { mapEventsToStore } from "applesauce-core";
+import { getSeenRelays } from "applesauce-core/helpers";
 import { onlyEvents } from "applesauce-relay";
+import { CICoordinatorLink } from "./CICoordinatorLink";
+import { useCurrentUnixSeconds } from "@/hooks/useCurrentUnixSeconds";
+
+/**
+ * Repository trust inputs for per-run warnings. `repo` alone enables the
+ * attribution warning; trust evidence and service controls additionally
+ * enable the shared classification labels.
+ */
+export interface CIRunTrustContext {
+  repo: ResolvedRepo;
+  trust: CITrustContextState;
+  serviceControls?: readonly CIServiceControl[];
+}
 
 interface CIChecksPanelProps {
+  /** Expand current workflows and scroll here when following a checks link. */
+  expandOnArrival?: boolean;
   checks: PRCIChecks;
   /** Whether the active account is a confirmed repository maintainer. */
   canRetry?: boolean;
+  /** When provided, rows show coordinator-trust and attribution warnings. */
+  trustContext?: CIRunTrustContext;
   className?: string;
 }
 
@@ -105,67 +146,6 @@ function formatPendingRunStatus(run: CIRun, nowSeconds: number): string {
   return duration
     ? `running for ${duration}`
     : `started ${formatDistanceToNow(new Date(startedAt * 1000), { addSuffix: true })}`;
-}
-
-/**
- * Keeps pending CI durations accurate without polling completed workflow rows.
- */
-function useCurrentUnixSeconds(enabled: boolean): number {
-  const [nowSeconds, setNowSeconds] = useState(() =>
-    Math.floor(Date.now() / 1000),
-  );
-
-  useEffect(() => {
-    if (!enabled) return;
-
-    const tick = () => setNowSeconds(Math.floor(Date.now() / 1000));
-    tick();
-    const interval = setInterval(tick, 1000);
-    return () => clearInterval(interval);
-  }, [enabled]);
-
-  return nowSeconds;
-}
-
-interface WorkflowTiming {
-  queuedAt: number | undefined;
-  startedAt: number | undefined;
-  completedAt: number | undefined;
-  queuePosition: number | undefined;
-}
-
-function getWorkflowTiming(run: CIWorkflowRun): WorkflowTiming {
-  const earliestJobTimestamp = (
-    key: "queuedAt" | "startedAt",
-  ): number | undefined =>
-    run.jobs.reduce<number | undefined>((earliest, { result }) => {
-      const timestamp = result[key];
-      return timestamp === undefined
-        ? earliest
-        : Math.min(earliest ?? timestamp, timestamp);
-    }, undefined);
-  const latestJobCompletionAt = run.jobs.reduce<number | undefined>(
-    (latest, { result }) =>
-      latest === undefined
-        ? result.event.created_at
-        : Math.max(latest, result.event.created_at),
-    undefined,
-  );
-
-  return {
-    queuedAt:
-      run.pendingRun?.queuedAt ??
-      run.workflowResult?.queuedAt ??
-      earliestJobTimestamp("queuedAt"),
-    startedAt:
-      run.pendingRun?.startedAt ??
-      run.workflowResult?.startedAt ??
-      earliestJobTimestamp("startedAt"),
-    completedAt: run.pendingRun
-      ? undefined
-      : (run.workflowResult?.event.created_at ?? latestJobCompletionAt),
-    queuePosition: run.pendingRun?.queueRounds,
-  };
 }
 
 function formatCompletedRunStatus(run: CIWorkflowRun): string {
@@ -212,14 +192,19 @@ function TimingPhase({
   );
 }
 
-/** Load the manual-trigger request quoted by a manual workflow result. */
-function useManualTriggerEvent(
+/** Load the exact maintainer request quoted by a workflow container. */
+function useRequestProvenanceEvent(
   manualTriggerRef: CIManualTriggerRef | undefined,
+  serviceRequestRef: CIServiceRequestRef | undefined,
 ): NostrEvent | undefined {
   const store = useEventStore();
-  const eventId = manualTriggerRef?.eventId;
-  const relay = manualTriggerRef?.relay;
-  const pubkey = manualTriggerRef?.pubkey;
+  const requestRef = manualTriggerRef ?? serviceRequestRef;
+  const eventId = requestRef?.eventId;
+  const relay = requestRef?.relay;
+  const pubkey = requestRef?.pubkey;
+  const kind = manualTriggerRef
+    ? CI_MANUAL_TRIGGER_KIND
+    : CI_SERVICE_REQUEST_KIND;
 
   use$(() => {
     if (!eventId || !relay || !pubkey) return undefined;
@@ -229,7 +214,7 @@ function useManualTriggerEvent(
       [
         {
           ids: [eventId],
-          kinds: [CI_MANUAL_TRIGGER_KIND],
+          kinds: [kind],
           authors: [pubkey],
         },
       ],
@@ -238,7 +223,7 @@ function useManualTriggerEvent(
       mapEventsToStore(store),
       catchError(() => EMPTY),
     );
-  }, [eventId, pubkey, relay, store]);
+  }, [eventId, kind, pubkey, relay, store]);
 
   return use$(
     () =>
@@ -253,7 +238,7 @@ function useManualTriggerEvent(
 
 function TimingConnector({ duration }: { duration: string | null }) {
   return (
-    <div className="relative flex w-12 shrink-0 items-center justify-center self-stretch sm:w-20">
+    <div className="relative hidden w-20 shrink-0 items-center justify-center self-stretch sm:flex">
       <div className="absolute inset-x-0 top-1/2 border-t border-border" />
       {duration && (
         <span className="relative bg-card px-1 text-[10px] text-muted-foreground">
@@ -312,13 +297,18 @@ function WorkflowTimingDetails({
   const executionDuration = formatCIDuration(
     startedAt === undefined ? undefined : executionEnd - startedAt,
   );
-  const manualTriggerEvent = useManualTriggerEvent(
-    run.workflowResult?.manualTriggerRef ?? run.pendingRun?.manualTriggerRef,
+  const manualTriggerRef =
+    run.workflowResult?.manualTriggerRef ?? run.pendingRun?.manualTriggerRef;
+  const serviceRequestRef =
+    run.workflowResult?.serviceRequestRef ?? run.pendingRun?.serviceRequestRef;
+  const requestEvent = useRequestProvenanceEvent(
+    manualTriggerRef,
+    serviceRequestRef,
   );
-  const manualTriggerDuration = formatCIDuration(
-    manualTriggerEvent
-      ? (queuedAt ?? startedAt ?? manualTriggerEvent.created_at) -
-          manualTriggerEvent.created_at
+  const requestDuration = formatCIDuration(
+    requestEvent
+      ? (queuedAt ?? startedAt ?? requestEvent.created_at) -
+          requestEvent.created_at
       : undefined,
   );
 
@@ -326,30 +316,30 @@ function WorkflowTimingDetails({
     queuedAt === undefined &&
     startedAt === undefined &&
     executionDuration === null &&
-    !manualTriggerEvent &&
+    !requestEvent &&
     !canRetry
   ) {
     return null;
   }
 
   return (
-    <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-2 py-1 text-xs">
-      <div className="flex items-center gap-2">
-        {manualTriggerEvent && (
+    <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-2 py-2 text-xs">
+      <div className="flex flex-wrap items-center justify-center gap-2">
+        {requestEvent && (
           <>
             <TimingPhase
-              label="Triggered By"
+              label={manualTriggerRef ? "Manual replay" : "Service requested"}
               className="px-3 py-1.5"
               detail={
                 <span className="flex flex-col items-center">
                   <UserLink
-                    pubkey={manualTriggerEvent.pubkey}
+                    pubkey={requestEvent.pubkey}
                     avatarSize="xs"
                     nameClassName="max-w-20 truncate text-[11px]"
                   />
                   <span>
                     {formatDistanceToNow(
-                      new Date(manualTriggerEvent.created_at * 1000),
+                      new Date(requestEvent.created_at * 1000),
                       { addSuffix: true },
                     )}
                   </span>
@@ -357,7 +347,7 @@ function WorkflowTimingDetails({
               }
             />
             {(hasQueuePhase || startedAt !== undefined) && (
-              <TimingConnector duration={manualTriggerDuration} />
+              <TimingConnector duration={requestDuration} />
             )}
           </>
         )}
@@ -428,14 +418,22 @@ export function CITriggerRefBadge({
 
 export function CIChecksPanel({
   checks,
+  expandOnArrival = false,
   canRetry = false,
+  trustContext,
   className,
 }: CIChecksPanelProps) {
   const { currentRuns, olderRuns } = checks;
-  if (checks.runs.length === 0) return null;
+  const panelRef = useRef<HTMLDivElement>(null);
+  const hasRuns = checks.runs.length > 0;
+  useEffect(() => {
+    if (expandOnArrival && hasRuns)
+      panelRef.current?.scrollIntoView({ block: "start" });
+  }, [expandOnArrival, hasRuns]);
+  if (!hasRuns) return null;
 
   return (
-    <Card className={className}>
+    <Card id="checks" ref={panelRef} className={cn("scroll-mt-20", className)}>
       <CardContent className="p-0">
         {/* Header */}
         <div className="flex items-center gap-2 px-4 py-3 border-b border-border/60">
@@ -458,15 +456,17 @@ export function CIChecksPanel({
         ) : (
           <ul className="divide-y divide-border/60">
             {currentRuns.map((run) => (
-              <CIRunRow
+              <TrustAwareRunRow
                 key={run.key}
                 run={run}
                 canRetry={canRetry}
+                trustContext={trustContext}
                 defaultOpen={
-                  currentRuns.length === 1 &&
-                  (run.status === "failure" ||
-                    run.status === "timed_out" ||
-                    run.status === "startup_failure")
+                  expandOnArrival ||
+                  (currentRuns.length === 1 &&
+                    (run.status === "failure" ||
+                      run.status === "timed_out" ||
+                      run.status === "startup_failure"))
                 }
               />
             ))}
@@ -483,7 +483,12 @@ export function CIChecksPanel({
             <CollapsibleContent>
               <ul className="divide-y divide-border/60 border-t border-border/60 opacity-80">
                 {olderRuns.map((run) => (
-                  <CIRunRow key={run.key} run={run} canRetry={canRetry} />
+                  <TrustAwareRunRow
+                    key={run.key}
+                    run={run}
+                    canRetry={canRetry}
+                    trustContext={trustContext}
+                  />
                 ))}
               </ul>
             </CollapsibleContent>
@@ -494,12 +499,78 @@ export function CIChecksPanel({
   );
 }
 
+const EMPTY_SERVICE_CONTROLS: readonly CIServiceControl[] = [];
+
+/**
+ * CIRunRow plus the per-run trust decorations derived from a trust context —
+ * mirrors how the repo Actions tab decorates its rows.
+ */
+function TrustAwareRunRow({
+  run,
+  canRetry,
+  trustContext,
+  defaultOpen,
+}: {
+  run: CIWorkflowRun;
+  canRetry: boolean;
+  trustContext: CIRunTrustContext | undefined;
+  defaultOpen?: boolean;
+}) {
+  if (!trustContext) {
+    return <CIRunRow run={run} canRetry={canRetry} defaultOpen={defaultOpen} />;
+  }
+
+  const { repo, trust, serviceControls } = trustContext;
+  const repoCoords = workflowRunRepoCoords(run);
+  const needsAttributionCheck = !hasAcceptedRepositoryReference(
+    repoCoords,
+    repo,
+  );
+  const trustResolution = getCIRunTrustResolution(
+    trust,
+    run,
+    repo.confirmedMaintainers,
+    serviceControls ?? EMPTY_SERVICE_CONTROLS,
+  );
+
+  return (
+    <CIRunRow
+      run={run}
+      canRetry={canRetry}
+      defaultOpen={defaultOpen}
+      maintainerRequestedOverride={false}
+      trustIndicator={
+        <CITrustContextLabel
+          resolution={trustResolution}
+          visibility="exceptions-only"
+        />
+      }
+      expandedTrustResolution={trustResolution}
+      providerTrust={trust}
+      attributionIndicator={
+        needsAttributionCheck ? (
+          <RepoItemAttributionIndicator
+            repo={repo}
+            repoCoords={repoCoords}
+            itemLabel="workflow"
+            pageSuffix="/actions"
+          />
+        ) : undefined
+      }
+    />
+  );
+}
+
 export function CIRunRow({
   run,
   defaultOpen = false,
   canRetry = false,
   triggerContext,
   attributionIndicator,
+  trustIndicator,
+  expandedTrustResolution,
+  maintainerRequestedOverride,
+  providerTrust,
 }: {
   run: CIWorkflowRun;
   defaultOpen?: boolean;
@@ -512,6 +583,14 @@ export function CIRunRow({
   triggerContext?: ReactNode;
   /** Optional repository-attribution warning shown at the right edge. */
   attributionIndicator?: ReactNode;
+  /** Optional interactive trust indicator shown outside the row trigger. */
+  trustIndicator?: ReactNode;
+  /** Full trust classification shown once the workflow is expanded. */
+  expandedTrustResolution?: CITrustResolution;
+  /** Override quote-only provenance detection when the caller validated it. */
+  maintainerRequestedOverride?: boolean;
+  /** Settled identity context used for provider labels inside expanded jobs. */
+  providerTrust?: CITrustContextState;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const nowSeconds = useCurrentUnixSeconds(run.status === "pending");
@@ -519,17 +598,34 @@ export function CIRunRow({
   const pendingStatus = run.pendingRun
     ? formatPendingRunStatus(run.pendingRun, nowSeconds)
     : undefined;
+  const status =
+    run.status === "pending" ? pendingStatus : formatCompletedRunStatus(run);
+  const compactStatus =
+    run.status === "pending"
+      ? pendingStatus
+      : formatDistanceToNow(new Date(run.createdAt * 1000), {
+          addSuffix: true,
+        });
   const primaryEvent =
     run.workflowResult?.event ??
     run.pendingRun?.event ??
     run.jobs[0]?.result.event;
+  const maintainerRequested =
+    maintainerRequestedOverride ??
+    !!(
+      run.workflowResult?.manualTriggerRef ||
+      run.pendingRun?.manualTriggerRef ||
+      run.workflowResult?.serviceRequestRef ||
+      run.pendingRun?.serviceRequestRef
+    );
+  const nsitePreview = findNsitePreview([run]);
 
   return (
     <li>
       <Collapsible open={open} onOpenChange={setOpen}>
-        <div className="flex items-center gap-2 px-4 py-2.5">
+        <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 gap-y-1 px-4 py-2.5 sm:flex">
           {/* Trigger area — UserLink stays outside to avoid nested anchors */}
-          <CollapsibleTrigger className="group flex flex-1 min-w-0 items-center gap-2 text-left">
+          <CollapsibleTrigger className="group flex min-w-0 flex-1 items-center gap-2 overflow-hidden text-left">
             <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-90" />
             <CIStatusIcon status={run.status} />
             <span className="truncate font-mono text-xs">
@@ -540,72 +636,133 @@ export function CIRunRow({
                 {run.trigger}
               </span>
             )}
+            {maintainerRequested && (
+              <Badge
+                variant="outline"
+                className="inline-flex h-5 shrink-0 border-border bg-muted/60 px-1.5 text-[10px] font-normal text-foreground"
+              >
+                <span className="hidden lg:inline">Maintainer requested</span>
+                <span className="lg:hidden">Requested</span>
+              </Badge>
+            )}
             <CITriggerRefBadge
               triggerRef={run.branchRef}
-              className="shrink-0"
+              className="hidden shrink-0 lg:inline-flex"
             />
             {run.commitId && (
-              <code className="hidden sm:inline shrink-0 font-mono text-[10px] text-muted-foreground">
+              <code className="hidden shrink-0 font-mono text-[10px] text-muted-foreground lg:inline">
                 {run.commitId.slice(0, 7)}
               </code>
             )}
           </CollapsibleTrigger>
 
           <div className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
-            {triggerContext}
-            <span className="hidden sm:inline shrink-0">
-              {run.status === "pending"
-                ? pendingStatus
-                : formatCompletedRunStatus(run)}
+            {trustIndicator}
+            {nsitePreview && (
+              <NsitePreviewLink
+                preview={nsitePreview}
+                className="shrink-0 text-[11px]"
+              >
+                nsite preview
+              </NsitePreviewLink>
+            )}
+            <span className="hidden xl:contents">{triggerContext}</span>
+            <span className="hidden shrink-0 sm:inline lg:hidden">
+              {compactStatus}
             </span>
-            <UserLink
+            <span className="hidden shrink-0 lg:inline">{status}</span>
+            <CICoordinatorLink
               pubkey={run.pubkey}
               avatarSize="xs"
-              nameClassName="text-xs font-normal text-muted-foreground max-w-24 truncate"
+              nameClassName="hidden max-w-24 truncate text-xs font-normal text-muted-foreground xl:block"
             />
             {primaryEvent && <EventCardActions event={primaryEvent} />}
             {attributionIndicator}
           </div>
+
+          <span className="col-span-2 pl-10 text-[11px] text-muted-foreground sm:hidden">
+            {compactStatus}
+          </span>
         </div>
 
         <CollapsibleContent>
-          <div className="space-y-2 pb-3 pl-10 pr-4">
-            <WorkflowTimingDetails
-              run={run}
-              nowSeconds={nowSeconds}
-              canRetry={
-                canRetry && !!run.workflowResult && run.status !== "pending"
-              }
-            />
-            {(run.runner || run.platform) && (
-              <div className="text-[11px] text-muted-foreground">
-                {[run.runner, run.platform].filter(Boolean).join(" · ")}
-              </div>
-            )}
-            {run.pendingRun && (
-              <div className="flex items-center gap-2 rounded-md border border-border/60 px-3 py-2 text-xs text-muted-foreground">
-                <CIStatusIcon status="pending" className="h-3.5 w-3.5" />
-                Workflow {formatPendingRunStatus(run.pendingRun, nowSeconds)}
-                <EventCardActions event={run.pendingRun.event} />
-              </div>
-            )}
-            {run.jobs.map((job) => (
-              <CIJobRow key={job.jobId} job={job} />
-            ))}
-            {run.inProgressJobs.map((jobId) => (
-              <div
-                key={`progress-${jobId}`}
-                className="flex items-center gap-2 rounded-md border border-border/60 px-3 py-2 text-xs text-muted-foreground"
-              >
-                <CIStatusIcon status="pending" className="h-3.5 w-3.5" />
-                <span className="truncate font-mono">{jobId}</span>
-                <span className="ml-auto shrink-0">in progress</span>
-              </div>
-            ))}
-          </div>
+          <CIRunDetails
+            run={run}
+            nowSeconds={nowSeconds}
+            canRetry={canRetry}
+            expandedTrustResolution={expandedTrustResolution}
+            providerTrust={providerTrust}
+            className="px-3 pb-3 sm:pl-10 sm:pr-4"
+          />
         </CollapsibleContent>
       </Collapsible>
     </li>
+  );
+}
+
+/** Expanded body of a workflow run: timing, jobs, logs, and artifacts. */
+export function CIRunDetails({
+  run,
+  nowSeconds,
+  canRetry = false,
+  expandedTrustResolution,
+  providerTrust,
+  className,
+}: {
+  run: CIWorkflowRun;
+  nowSeconds: number;
+  canRetry?: boolean;
+  expandedTrustResolution?: CITrustResolution;
+  providerTrust?: CITrustContextState;
+  className?: string;
+}) {
+  return (
+    <div className={cn("space-y-2", className)}>
+      {expandedTrustResolution && (
+        <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+          <span>Trust context</span>
+          <CITrustContextLabel resolution={expandedTrustResolution} />
+        </div>
+      )}
+      <WorkflowTimingDetails
+        run={run}
+        nowSeconds={nowSeconds}
+        canRetry={canRetry && !!run.workflowResult && run.status !== "pending"}
+      />
+      {(run.runner || run.platform) && (
+        <div className="text-[11px] text-muted-foreground">
+          {[run.runner, run.platform].filter(Boolean).join(" · ")}
+        </div>
+      )}
+      {run.pendingRun && (
+        <div className="flex items-center gap-2 rounded-md border border-border/60 px-3 py-2 text-xs text-muted-foreground">
+          <CIStatusIcon status="pending" className="h-3.5 w-3.5" />
+          Workflow {formatPendingRunStatus(run.pendingRun, nowSeconds)}
+          <EventCardActions event={run.pendingRun.event} />
+        </div>
+      )}
+      {run.jobs.map((job) => (
+        <CIJobRow
+          key={job.jobId}
+          job={job}
+          trustResolution={
+            providerTrust
+              ? getCIJobTrustResolution(providerTrust, run, job)
+              : undefined
+          }
+        />
+      ))}
+      {run.inProgressJobs.map((jobId) => (
+        <div
+          key={`progress-${jobId}`}
+          className="flex items-center gap-2 rounded-md border border-border/60 px-3 py-2 text-xs text-muted-foreground"
+        >
+          <CIStatusIcon status="pending" className="h-3.5 w-3.5" />
+          <span className="truncate font-mono">{jobId}</span>
+          <span className="ml-auto shrink-0">in progress</span>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -624,6 +781,7 @@ function ManualRetryButton({ workflowResult }: { workflowResult: NostrEvent }) {
       });
     } catch (error) {
       toast({
+        recovery: { action: () => retry() },
         title: "Failed to request workflow retry",
         description:
           error instanceof Error
@@ -655,21 +813,63 @@ function ManualRetryButton({ workflowResult }: { workflowResult: NostrEvent }) {
   );
 }
 
-function CIJobRow({ job }: { job: CIJobResult }) {
+function CIJobRow({
+  job,
+  trustResolution,
+}: {
+  job: CIJobResult;
+  trustResolution?: CITrustResolution;
+}) {
   const [showLog, setShowLog] = useState(false);
   const { result } = job;
   const hasLog = result.log.trim().length > 0;
   const duration = formatCIDuration(result.duration);
+  const hasResultMetadata =
+    result.outputs.length > 0 || result.omittedOutputs.length > 0;
+  const providerPath = (() => {
+    const path = `/provider/${nip19.npubEncode(result.pubkey)}`;
+    const relays = [
+      ...new Set([
+        ...(getSeenRelays(result.event) ?? []),
+        ...(result.allocationRef?.relay ? [result.allocationRef.relay] : []),
+      ]),
+    ].slice(0, 3);
+    if (relays.length === 0) return path;
+    const search = new URLSearchParams();
+    for (const relay of relays) search.append("relay", relay);
+    return `${path}?${search.toString()}`;
+  })();
+
+  const executedBy = (
+    <span className="flex items-center gap-1.5">
+      Executed by
+      <UserLink
+        pubkey={result.pubkey}
+        avatarSize="xs"
+        nameClassName="max-w-28 truncate text-[11px]"
+        profilePath={providerPath}
+      />
+      {trustResolution && (
+        <CITrustContextLabel
+          resolution={trustResolution}
+          visibility="exceptions-only"
+        />
+      )}
+    </span>
+  );
 
   return (
-    <div className="rounded-md border border-border/60">
-      <div className="flex items-center gap-2 px-3 py-2 text-xs">
+    <div className="rounded-lg bg-card [container-type:inline-size]">
+      <div className="flex items-center gap-2 rounded-t-lg bg-muted/60 px-3 py-2 text-xs">
         <CIStatusIcon status={job.status} className="h-3.5 w-3.5" />
         <span className="truncate font-mono">{result.name ?? job.jobId}</span>
         {result.exitCode !== undefined && result.exitCode !== 0 && (
           <span className="shrink-0 text-red-500">exit {result.exitCode}</span>
         )}
-        <span className="ml-auto shrink-0 text-muted-foreground">
+        <div className="ml-auto hidden shrink-0 items-center text-[11px] text-muted-foreground [@container(min-width:48rem)]:flex">
+          {executedBy}
+        </div>
+        <span className="ml-auto shrink-0 text-muted-foreground [@container(min-width:48rem)]:ml-2">
           {duration}
         </span>
         {hasLog && (
@@ -694,14 +894,42 @@ function CIJobRow({ job }: { job: CIJobResult }) {
         )}
         <EventCardActions event={result.event} />
       </div>
+      <div
+        className={cn(
+          "flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-[11px] text-muted-foreground",
+          !result.allocationRef?.coordinatorPubkey &&
+            result.runsOn.length === 0 &&
+            "[@container(min-width:48rem)]:hidden",
+        )}
+      >
+        <div className="[@container(min-width:48rem)]:hidden">{executedBy}</div>
+        {result.allocationRef?.coordinatorPubkey && (
+          <span className="flex items-center gap-1.5">
+            allocated by
+            <CICoordinatorLink
+              pubkey={result.allocationRef.coordinatorPubkey}
+              avatarSize="xs"
+              nameClassName="max-w-28 truncate text-[11px]"
+            />
+          </span>
+        )}
+        {result.runsOn.length > 0 && (
+          <span className="font-mono">{result.runsOn.join(" · ")}</span>
+        )}
+      </div>
       {result.artifacts.length > 0 && (
-        <div className="border-t border-border/60 px-3 py-2">
+        <div className="px-3 py-2">
           <table className="w-full table-fixed text-left text-xs">
             <thead className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
               <tr>
-                <th className="w-[42%] pb-1 font-medium">Artifact</th>
-                <th className="w-[28%] pb-1 font-medium">Name</th>
-                <th className="w-[30%] pb-1 font-medium">SHA-256</th>
+                <th className="w-[46%] pb-1 font-medium sm:w-[42%]">
+                  Artifact
+                </th>
+                <th className="w-[40%] pb-1 font-medium sm:w-[28%]">Name</th>
+                <th className="w-[14%] pb-1 font-medium sm:w-[30%]">
+                  <span className="sm:hidden">Hash</span>
+                  <span className="hidden sm:inline">SHA-256</span>
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -710,11 +938,62 @@ function CIJobRow({ job }: { job: CIJobResult }) {
                   key={`${artifact.url}-${artifact.filename ?? index}`}
                   url={artifact.url}
                   filename={artifact.filename}
-                  jobName={result.name}
+                  artifactName={artifact.name}
                 />
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+      {hasResultMetadata && (
+        <div className="px-3 py-2 text-xs">
+          <p className="mb-1.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+            Public outputs
+          </p>
+          <dl className="space-y-1.5">
+            {result.outputs.map((output) => (
+              <div
+                key={output.name}
+                className="grid gap-1 sm:grid-cols-[minmax(8rem,0.35fr)_minmax(0,1fr)]"
+              >
+                <dt className="font-mono font-medium">{output.name}</dt>
+                <dd className="min-w-0 break-all font-mono text-muted-foreground">
+                  {(() => {
+                    if (!output.value)
+                      return <span className="italic">empty string</span>;
+                    const url = parsePublicOutputUrl(output.value);
+                    return url ? (
+                      <a
+                        href={url.toString()}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-start gap-1 text-foreground underline-offset-2 hover:text-pink-600 hover:underline dark:hover:text-pink-400"
+                      >
+                        <span>{output.value}</span>
+                        <ExternalLink
+                          className="mt-0.5 h-3 w-3 shrink-0"
+                          aria-hidden="true"
+                        />
+                      </a>
+                    ) : (
+                      output.value
+                    );
+                  })()}
+                </dd>
+              </div>
+            ))}
+            {result.omittedOutputs.map((output) => (
+              <div
+                key={output.name}
+                className="grid gap-1 sm:grid-cols-[minmax(8rem,0.35fr)_minmax(0,1fr)]"
+              >
+                <dt className="font-mono font-medium">{output.name}</dt>
+                <dd className="text-muted-foreground">
+                  unavailable ({output.reason})
+                </dd>
+              </div>
+            ))}
+          </dl>
         </div>
       )}
       {hasLog && showLog && (
@@ -737,26 +1016,24 @@ function getBlossomHash(url: string): string | undefined {
 function CIArtifactRow({
   url,
   filename,
-  jobName,
+  artifactName,
 }: {
   url: string;
   filename: string | undefined;
-  jobName: string | undefined;
+  artifactName: string | undefined;
 }) {
+  const copyToClipboard = useCopyToClipboard();
   const [copied, setCopied] = useState(false);
   const hash = getBlossomHash(url);
 
   const copyHash = useCallback(async () => {
     if (!hash) return;
 
-    try {
-      await navigator.clipboard.writeText(hash);
+    await copyToClipboard(hash, () => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // Clipboard access can be unavailable in insecure browser contexts.
-    }
-  }, [hash]);
+    });
+  }, [hash, copyToClipboard]);
 
   return (
     <tr className="border-t border-border/40 align-middle first:border-t-0">
@@ -774,9 +1051,9 @@ function CIArtifactRow({
       </td>
       <td
         className="truncate py-1.5 pr-2 text-muted-foreground"
-        title={jobName}
+        title={artifactName}
       >
-        {jobName ?? "—"}
+        {artifactName ?? "—"}
       </td>
       <td className="py-1.5">
         {hash ? (
@@ -787,7 +1064,9 @@ function CIArtifactRow({
             title={copied ? "Copied!" : `Copy sha256:${hash}`}
             aria-label={copied ? "Artifact hash copied" : "Copy artifact hash"}
           >
-            <span className="truncate">sha256:{hash.slice(0, 12)}</span>
+            <span className="hidden truncate sm:inline">
+              sha256:{hash.slice(0, 12)}
+            </span>
             {copied ? (
               <Check className="h-3.5 w-3.5 shrink-0 text-green-500" />
             ) : (
@@ -863,6 +1142,7 @@ function CILogViewer({
       }
 
       const text = await response.text();
+      if (controller.signal.aborted) return;
       const node = containerRef.current;
       const noticeHeight = noticeRef.current?.offsetHeight ?? 0;
       const logHeight = logContentRef.current?.scrollHeight ?? 0;
@@ -880,7 +1160,7 @@ function CILogViewer({
       const reason = error instanceof Error ? error.message : "Unknown error";
       const savedLogDescription = isTailOnly ? "tail" : "log output";
       setFullLogError(
-        `Full log is no longer available. Showing the saved ${savedLogDescription}. (${reason})`,
+        `Could not fetch the full log. Showing the saved ${savedLogDescription}. (${reason})`,
       );
     } finally {
       if (!controller.signal.aborted) {
@@ -889,6 +1169,14 @@ function CILogViewer({
       }
     }
   }, [fullLog, isLoadingFullLog, isTailOnly, logUrl]);
+  const logRecoveryKey = useMemo(() => ({ log, logUrl }), [log, logUrl]);
+  const logRecovery = useErrorRetry({
+    resourceKey: logRecoveryKey,
+    failed: !!fullLogError,
+    busy: isLoadingFullLog,
+    onRetry: loadFullLog,
+    policy: { mode: "read", requiresSigning: false, context: "connection" },
+  });
 
   useLayoutEffect(() => {
     const node = containerRef.current;
@@ -940,15 +1228,7 @@ function CILogViewer({
                 <AlertCircle className="h-3.5 w-3.5 shrink-0" />
                 <span>{fullLogError}</span>
               </span>
-              {logUrl && (
-                <button
-                  type="button"
-                  onClick={() => void loadFullLog()}
-                  className="text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-                >
-                  Retry
-                </button>
-              )}
+              {logUrl && <ErrorRetryAction recovery={logRecovery} />}
             </span>
           ) : isTailOnly && logUrl ? (
             <span>

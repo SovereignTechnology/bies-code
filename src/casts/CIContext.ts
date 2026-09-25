@@ -30,10 +30,12 @@ const TriggerSymbol = Symbol.for("ci-trigger");
 const RunnerSymbol = Symbol.for("ci-runner");
 const PlatformSymbol = Symbol.for("ci-platform");
 const BranchRefSymbol = Symbol.for("ci-branch-ref");
+const WorkflowRunIdSymbol = Symbol.for("ci-workflow-run-id");
 const PRRootIdSymbol = Symbol.for("ci-pr-root-id");
 const TriggerEventIdSymbol = Symbol.for("ci-trigger-event-id");
 const JobRefsSymbol = Symbol.for("ci-job-refs");
 const ManualTriggerRefSymbol = Symbol.for("ci-manual-trigger-ref");
+const ServiceRequestRefSymbol = Symbol.for("ci-service-request-ref");
 
 export interface CIJobRef {
   eventId: string;
@@ -44,6 +46,13 @@ export interface CIJobRef {
 
 /** NIP-18 quote identifying the maintainer request for a manual CI replay. */
 export interface CIManualTriggerRef {
+  eventId: string;
+  relay: string | undefined;
+  pubkey: string | undefined;
+}
+
+/** NIP-18 quote identifying the standing request that authorized a run. */
+export interface CIServiceRequestRef {
   eventId: string;
   relay: string | undefined;
   pubkey: string | undefined;
@@ -114,9 +123,28 @@ export abstract class CIContextCast<
 
   /** Push trigger git ref (`r` tag, e.g. refs/heads/main or refs/tags/v1.0). */
   get branchRef(): string | undefined {
-    return getOrComputeCachedValue(this.event, BranchRefSymbol, () =>
-      getTagValue(this.event, "r"),
+    return getOrComputeCachedValue(
+      this.event,
+      BranchRefSymbol,
+      () =>
+        this.event.tags.find(
+          ([name, value]) => name === "r" && value?.startsWith("refs/"),
+        )?.[1],
     );
+  }
+
+  /**
+   * Stable workflow-run attempt ID shared by Progress and Workflow Result.
+   * Progress uses `d`; results use the non-Git-ref `r` value.
+   */
+  get workflowRunId(): string | undefined {
+    return getOrComputeCachedValue(this.event, WorkflowRunIdSymbol, () => {
+      if (this.event.kind === 39842) return getTagValue(this.event, "d");
+      return this.event.tags.find(
+        ([name, value]) =>
+          name === "r" && !!value && !value.startsWith("refs/"),
+      )?.[1];
+    });
   }
 
   /** Root PR event id (`E` tag) for PR-triggered workflows. */
@@ -161,6 +189,20 @@ export abstract class CIContextCast<
       const tag = this.event.tags.find(
         ([name, eventId, , , marker]) =>
           name === "q" && !!eventId && marker === "manual-trigger",
+      );
+      if (!tag) return undefined;
+
+      const [, eventId, relay, pubkey] = tag;
+      return { eventId, relay, pubkey };
+    });
+  }
+
+  /** Standing Service Request selected at final runner handoff. */
+  get serviceRequestRef(): CIServiceRequestRef | undefined {
+    return getOrComputeCachedValue(this.event, ServiceRequestRefSymbol, () => {
+      const tag = this.event.tags.find(
+        ([name, eventId, , , marker]) =>
+          name === "q" && !!eventId && marker === "service-request",
       );
       if (!tag) return undefined;
 

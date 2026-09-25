@@ -494,8 +494,6 @@ export function createPaginatedTagValueLoader(
 
   return (pointer: TagValuePointer): Observable<PaginatedTagValueResponse> =>
     new Observable<PaginatedTagValueResponse>((observer) => {
-      queue.next(pointer);
-
       const sub = next
         .pipe(
           take(1),
@@ -514,6 +512,11 @@ export function createPaginatedTagValueLoader(
           ),
         )
         .subscribe(observer);
+
+      // Listen for the batch before adding the pointer. bufferTime emits
+      // synchronously when bufferSize is reached, so queueing first can make
+      // the pointer that fills the batch miss its own upstream observable.
+      queue.next(pointer);
 
       return () => sub.unsubscribe();
     });

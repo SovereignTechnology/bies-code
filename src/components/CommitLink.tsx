@@ -12,24 +12,23 @@
 import { useState, useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
 import { GitCommit } from "lucide-react";
-import { peekPool, getOrCreatePool } from "@/lib/git-grasp-pool";
 import { useGitCommitLinkContext } from "./CommitLinkContext";
 import { CommitHoverCard } from "./CommitHoverCard";
 
 interface CommitLinkProps {
   /** The raw hex commit hash (7–40 chars). */
   hash: string;
+  /** Optional caller-selected label, while navigation and hover use the full hash. */
+  displayHash?: string;
 }
 
-export function CommitLink({ hash }: CommitLinkProps) {
+export function CommitLink({ hash, displayHash }: CommitLinkProps) {
   const ctx = useGitCommitLinkContext();
   const shortHash = hash.slice(0, 7);
 
   // Check L1 cache synchronously so already-known commits link immediately.
   const initialExists = (): boolean => {
-    if (!ctx || ctx.cloneUrls.length === 0) return false;
-    const pool = peekPool(ctx.cloneUrls);
-    return !!pool?.cache.peekCommit(hash);
+    return !!ctx?.pool?.cache.peekCommit(hash);
   };
 
   const [exists, setExists] = useState<boolean>(initialExists);
@@ -37,20 +36,15 @@ export function CommitLink({ hash }: CommitLinkProps) {
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
-    if (!ctx || ctx.cloneUrls.length === 0) return;
+    if (!ctx?.pool) return;
 
     // Already confirmed — nothing to do.
     if (exists) return;
 
-    // getOrCreatePool so the pool is created if it doesn't exist yet —
-    // on issue/comment pages the pool may not have been created by the
-    // code page, so peekPool would always return undefined.
-    const pool = getOrCreatePool({ cloneUrls: ctx.cloneUrls });
-
     const abort = new AbortController();
     abortRef.current = abort;
 
-    pool
+    ctx.pool
       .getSingleCommit(hash, abort.signal)
       .then((commit) => {
         if (!abort.signal.aborted && commit) {
@@ -65,23 +59,30 @@ export function CommitLink({ hash }: CommitLinkProps) {
       abort.abort();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ctx?.cloneUrls.join(","), hash]);
+  }, [ctx?.pool, hash]);
 
-  if (exists && ctx) {
-    const pool = getOrCreatePool({ cloneUrls: ctx.cloneUrls });
+  if (exists && ctx?.pool) {
     return (
-      <CommitHoverCard hash={hash} pool={pool} asChild>
+      <CommitHoverCard hash={hash} pool={ctx.pool} asChild>
         <Link
           to={`${ctx.basePath}/commit/${hash}`}
           className="inline-flex items-center gap-1 font-mono text-[0.8em] px-1.5 py-px rounded-md bg-muted text-muted-foreground border border-border hover:bg-accent hover:text-foreground hover:border-foreground/20 transition-colors no-underline"
         >
           <GitCommit className="h-3 w-3 shrink-0" />
-          {shortHash}
+          {displayHash ?? shortHash}
         </Link>
       </CommitHoverCard>
     );
   }
 
-  // Not yet verified or outside a repo page — plain monospace text.
-  return <code className="font-mono text-[0.875em]">{shortHash}</code>;
+  // Not yet verified or outside a repo page — preserve the original text.
+  // Abbreviating an unverified candidate can corrupt unrelated identifiers.
+  return (
+    <code
+      className="font-mono text-[0.875em]"
+      title={displayHash ? hash : undefined}
+    >
+      {displayHash ?? hash}
+    </code>
+  );
 }

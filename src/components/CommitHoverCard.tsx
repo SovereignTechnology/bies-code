@@ -1,3 +1,6 @@
+import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
+import { useErrorRetry } from "@/hooks/useErrorRetry";
+import { ErrorRetryAction } from "@/components/ErrorRetryAction";
 /**
  * CommitHoverCard — wraps a trigger element with a hover card that shows a
  * commit preview (subject, author, date, parent).
@@ -6,7 +9,7 @@
  * network cost for every CommitLink on the page.
  */
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import {
   HoverCard,
   HoverCardContent,
@@ -28,12 +31,27 @@ interface CommitHoverCardBodyProps {
 }
 
 function CommitHoverCardBody({ hash, pool }: CommitHoverCardBodyProps) {
+  const copyToClipboard = useCopyToClipboard();
   const [commit, setCommit] = useState<Commit | null>(null);
   const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
+  const [retryVersion, setRetryVersion] = useState(0);
+  const resourceKey = useMemo(() => ({ pool, hash }), [pool, hash]);
+  const recovery = useErrorRetry({
+    resourceKey,
+    failed: !loading && !commit,
+    busy: loading,
+    onRetry: async (signal) => {
+      await pool.retryReads({ refreshRefs: false });
+      if (!signal.aborted) setRetryVersion((version) => version + 1);
+    },
+  });
+
   useEffect(() => {
+    setLoading(true);
+    setCommit(null);
     const abort = new AbortController();
     abortRef.current = abort;
 
@@ -49,7 +67,7 @@ function CommitHoverCardBody({ hash, pool }: CommitHoverCardBodyProps) {
       });
 
     return () => abort.abort();
-  }, [hash, pool]);
+  }, [hash, pool, retryVersion]);
 
   if (loading) {
     return (
@@ -70,7 +88,10 @@ function CommitHoverCardBody({ hash, pool }: CommitHoverCardBodyProps) {
 
   if (!commit) {
     return (
-      <div className="p-4 text-sm text-muted-foreground">Commit not found.</div>
+      <div className="p-4 space-y-3 text-sm text-muted-foreground">
+        <p>Could not load this commit.</p>
+        <ErrorRetryAction recovery={recovery} />
+      </div>
     );
   }
 
@@ -83,9 +104,10 @@ function CommitHoverCardBody({ hash, pool }: CommitHoverCardBodyProps) {
   const handleCopy = async (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    await navigator.clipboard.writeText(commit.hash);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    await copyToClipboard(commit.hash, () => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
   };
 
   return (

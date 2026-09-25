@@ -22,7 +22,11 @@ import { loadTree, type Tree, type TreeEntry } from "./tree.ts";
 export { fetchPackfile, MissingRef, createWantRequest } from "./packs.ts";
 export type { ParsedObject } from "./parse-packfile.ts";
 export { type Commit, parseCommit } from "./commits.ts";
-export { getInfoRefs, type InfoRefsUploadPackResponse } from "./refs.ts";
+export {
+  getInfoRefs,
+  GitNaturalHttpError,
+  type InfoRefsUploadPackResponse,
+} from "./refs.ts";
 export { loadTree, parseTree, type Tree, type TreeEntry } from "./tree.ts";
 export { getCommitDiff } from "./diff.ts";
 
