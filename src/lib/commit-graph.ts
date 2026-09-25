@@ -32,7 +32,7 @@ import type { Commit } from "@/lib/git-grasp-pool";
 
 /** Lane colors — chosen to read on both light and dark card backgrounds. */
 export const GRAPH_LANE_COLORS = [
-  "#ec4899", // pink
+  "#FF5B00", // BIES blaze
   "#3b82f6", // blue
   "#10b981", // emerald
   "#f59e0b", // amber
@@ -40,7 +40,7 @@ export const GRAPH_LANE_COLORS = [
   "#06b6d4", // cyan
   "#ef4444", // red
   "#84cc16", // lime
-  "#f97316", // orange
+  "#6366f1", // indigo
   "#14b8a6", // teal
 ];
 

@@ -314,7 +314,7 @@ export function CISecretsDialog({
       <DialogContent className="max-h-[92vh] max-w-2xl overflow-y-auto p-0">
         <DialogHeader className="border-b border-border/60 px-5 py-4 sm:px-6">
           <DialogTitle className="flex items-center gap-2 text-lg">
-            <LockKeyhole className="h-5 w-5 text-pink-500" />
+            <LockKeyhole className="h-5 w-5 text-primary" />
             Repository secrets
           </DialogTitle>
           <DialogDescription className="text-left">
@@ -336,8 +336,8 @@ export function CISecretsDialog({
         </DialogHeader>
 
         <div className="space-y-6 px-5 py-5 sm:px-6">
-          <div className="flex gap-3 rounded-lg border border-pink-500/20 bg-pink-500/5 p-3 text-sm">
-            <KeyRound className="mt-0.5 h-4 w-4 shrink-0 text-pink-500" />
+          <div className="flex gap-3 rounded-lg border border-primary/20 bg-primary/5 p-3 text-sm">
+            <KeyRound className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
             <p className="text-muted-foreground">
               Names and values are encrypted before signing and sent only to the
               coordinator&rsquo;s advertised inboxes. The temporary encryption
@@ -381,7 +381,7 @@ export function CISecretsDialog({
             </section>
           )}
 
-          <section className="overflow-hidden rounded-xl border border-violet-500/25 bg-gradient-to-br from-violet-500/10 via-background to-pink-500/5">
+          <section className="overflow-hidden rounded-xl border border-violet-500/25 bg-gradient-to-br from-violet-500/10 via-background to-primary/5">
             <div className="space-y-4 p-4 sm:p-5">
               <div className="flex items-start gap-3">
                 <div className="rounded-lg border border-violet-500/20 bg-violet-500/10 p-2 text-violet-600 dark:text-violet-300">

@@ -122,7 +122,7 @@ export function EventShareButton({
         onClick={() => setShareOpen(true)}
       >
         {label ? (
-          <Link2 className="h-3.5 w-3.5 text-pink-500" />
+          <Link2 className="h-3.5 w-3.5 text-primary" />
         ) : (
           <Share2 className="h-3.5 w-3.5" />
         )}

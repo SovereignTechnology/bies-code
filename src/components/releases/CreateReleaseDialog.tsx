@@ -451,7 +451,7 @@ function AssetEditor({
           {asset.status === "uploaded" ? (
             <Check className="h-5 w-5 text-emerald-600" />
           ) : asset.status === "uploading" ? (
-            <Loader2 className="h-5 w-5 animate-spin text-pink-500" />
+            <Loader2 className="h-5 w-5 animate-spin text-primary" />
           ) : (
             <FileArchive className="h-5 w-5 text-muted-foreground" />
           )}
@@ -1668,7 +1668,7 @@ export function CreateReleaseDialog({
           {busy && (
             <div className="rounded-xl border bg-muted/30 p-4">
               <div className="mb-2 flex items-center gap-2 text-sm font-medium">
-                <Loader2 className="h-4 w-4 animate-spin text-pink-500" />
+                <Loader2 className="h-4 w-4 animate-spin text-primary" />
                 {stageLabel(stage)}
               </div>
               <Progress value={100} className="h-2" />

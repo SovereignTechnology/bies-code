@@ -335,7 +335,7 @@ function ReleaseNavigation({
                     className={cn(
                       "block border-l-2 px-3 py-2 text-sm break-words transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                       active
-                        ? "border-pink-500 bg-accent font-medium text-foreground"
+                        ? "border-primary bg-accent font-medium text-foreground"
                         : "border-transparent text-muted-foreground hover:bg-accent/60 hover:text-foreground",
                     )}
                   >
@@ -385,7 +385,7 @@ function AssetRow({
   const content = (
     <>
       {downloadable ? (
-        <Download className="h-4 w-4 shrink-0 text-muted-foreground group-hover/asset:text-pink-500" />
+        <Download className="h-4 w-4 shrink-0 text-muted-foreground group-hover/asset:text-primary" />
       ) : (
         <Package className="h-4 w-4 shrink-0 text-muted-foreground" />
       )}
@@ -394,7 +394,7 @@ function AssetRow({
           <span
             className={cn(
               "font-medium break-all",
-              downloadable && "group-hover/asset:text-pink-500",
+              downloadable && "group-hover/asset:text-primary",
             )}
           >
             {asset.filename}
@@ -444,8 +444,8 @@ function AssetRow({
       className={cn(
         "group/asset flex scroll-mt-24 items-start gap-2 px-4 py-3 transition-colors duration-700",
         downloadable && "transition-colors hover:bg-accent/50",
-        highlight === "strong" && "bg-pink-500/10",
-        highlight === "subtle" && "bg-pink-500/5",
+        highlight === "strong" && "bg-primary/10",
+        highlight === "subtle" && "bg-primary/5",
       )}
     >
       {downloadUrl ? (
@@ -593,7 +593,7 @@ function ReleaseCard({
               {applicationPath && application ? (
                 <Link
                   to={applicationPath}
-                  className="hover:text-pink-500 hover:underline"
+                  className="hover:text-primary hover:underline"
                 >
                   {application.name}
                 </Link>
@@ -603,7 +603,7 @@ function ReleaseCard({
               {releasePath ? (
                 <Link
                   to={releasePath}
-                  className="hover:text-pink-500 hover:underline"
+                  className="hover:text-primary hover:underline"
                 >
                   {release.version}
                 </Link>
@@ -650,7 +650,7 @@ function ReleaseCard({
                 <Link
                   to={`${basePath}/commit/${release.commit}`}
                   title={release.commit}
-                  className="inline-flex min-w-0 items-center gap-1 font-mono text-pink-600 hover:underline dark:text-pink-400"
+                  className="inline-flex min-w-0 items-center gap-1 font-mono text-primary hover:underline"
                 >
                   <GitCommit className="h-4 w-4 shrink-0" />
                   {release.commit.slice(0, 12)}
@@ -928,7 +928,7 @@ function SoftwareApplicationPage({
                       href={application.website}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1 text-pink-600 hover:underline dark:text-pink-400"
+                      className="inline-flex items-center gap-1 text-primary hover:underline"
                     >
                       <Globe className="h-3.5 w-3.5" />
                       Visit website
@@ -955,7 +955,7 @@ function SoftwareApplicationPage({
                         href={repositoryUrl}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 text-pink-600 hover:underline dark:text-pink-400"
+                        className="inline-flex items-center gap-1 text-primary hover:underline"
                       >
                         View repository
                         <ExternalLink className="h-3 w-3" />
@@ -1132,7 +1132,7 @@ function SoftwareApplicationsIndex({
                       <div className="min-w-0 flex-1">
                         <Link
                           to={applicationPath}
-                          className="text-lg font-semibold hover:text-pink-500 hover:underline"
+                          className="text-lg font-semibold hover:text-primary hover:underline"
                         >
                           {application.name}
                         </Link>
@@ -1328,14 +1328,14 @@ export default function RepoReleasesPage({
   useSeoMeta({
     title:
       repo && selectedApplication
-        ? `${selectedApplication.name} - ${repo.name} - ngit`
+        ? `${selectedApplication.name} - ${repo.name} - BIES Code`
         : repo && selectedRelease
-          ? `${displayVersion(selectedRelease.version)} - ${repo.name} - ngit`
+          ? `${displayVersion(selectedRelease.version)} - ${repo.name} - BIES Code`
           : repo && view === "applications"
-            ? `Applications - ${repo.name} - ngit`
+            ? `Applications - ${repo.name} - BIES Code`
             : repo
-              ? `Releases - ${repo.name} - ngit`
-              : "Releases - ngit",
+              ? `Releases - ${repo.name} - BIES Code`
+              : "Releases - BIES Code",
     description: repo
       ? `Software releases and downloadable assets for ${repo.name}`
       : "Software releases and downloadable assets",

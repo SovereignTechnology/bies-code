@@ -235,7 +235,7 @@ export function LinkSoftwareApplicationDialog({
                     "flex min-w-0 items-start gap-3 rounded-xl border p-4 transition-colors",
                     linked
                       ? "bg-muted/30"
-                      : "hover:border-pink-500/50 hover:bg-muted/20",
+                      : "hover:border-primary/50 hover:bg-muted/20",
                   )}
                 >
                   <RadioGroupItem

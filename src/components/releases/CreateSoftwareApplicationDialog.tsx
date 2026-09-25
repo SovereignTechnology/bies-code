@@ -296,7 +296,7 @@ export function CreateSoftwareApplicationDialog({
               id={fieldId("name")}
               value={name}
               onChange={(event) => setName(event.target.value)}
-              placeholder="GitWorkshop"
+              placeholder="BIES Code"
               disabled={publishing}
               autoFocus
               required
@@ -313,7 +313,7 @@ export function CreateSoftwareApplicationDialog({
               id={fieldId("app-id")}
               value={appId}
               onChange={(event) => setAppId(event.target.value)}
-              placeholder="dev.gitworkshop.app"
+              placeholder="com.example.app"
               disabled={publishing || editing}
               required
             />

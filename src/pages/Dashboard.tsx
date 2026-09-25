@@ -533,7 +533,7 @@ function AccessiblePrivateRepositoriesPanel({ pubkey }: { pubkey: string }) {
               placeholder="Filter private repositories..."
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              className="h-8 bg-background/60 pl-8 text-sm focus-visible:ring-pink-500/30"
+              className="h-8 bg-background/60 pl-8 text-sm focus-visible:ring-primary/30"
             />
           </div>
         )}

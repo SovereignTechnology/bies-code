@@ -190,7 +190,7 @@ export function NotificationSwipeSurface({
         className={cn(
           "relative z-10 border-l-2 transition-transform duration-200 ease-out motion-reduce:transition-none",
           unread
-            ? "border-l-pink-500 bg-card"
+            ? "border-l-primary bg-card"
             : "border-l-transparent bg-background",
           dragging && "select-none transition-none",
         )}

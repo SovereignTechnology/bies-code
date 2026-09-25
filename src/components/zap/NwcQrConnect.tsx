@@ -24,7 +24,7 @@ export const DEFAULT_NWC_AUTH_RELAY = "wss://relay.getalby.com/v1";
 
 interface NwcQrConnectProps {
   onConnected: () => void;
-  /** Display name advertised in the wallet auth URI. Defaults to "gitworkshop". */
+  /** Display name advertised in the wallet auth URI. Defaults to "BIES Code". */
   appName?: string;
   /** QR size in pixels. Defaults to 224. */
   size?: number;
@@ -32,7 +32,7 @@ interface NwcQrConnectProps {
 
 export function NwcQrConnect({
   onConnected,
-  appName = "gitworkshop",
+  appName = "BIES Code",
   size = 224,
 }: NwcQrConnectProps) {
   const [retryVersion, setRetryVersion] = useState(0);

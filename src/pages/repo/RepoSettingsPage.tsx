@@ -235,7 +235,7 @@ function LeadBadge() {
       <PopoverTrigger asChild>
         <button
           type="button"
-          className="inline-flex h-4 items-center rounded-full border border-primary/40 px-1.5 py-0 text-[10px] font-semibold text-primary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 dark:text-primary"
+          className="inline-flex h-4 items-center rounded-full border border-primary/40 px-1.5 py-0 text-[10px] font-semibold text-primary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
           aria-label="How lead maintainers are chosen"
           onMouseEnter={() => setOpen(true)}
           onMouseLeave={() => setOpen(false)}
@@ -2833,7 +2833,7 @@ function RepoSettingsForm({
         </div>
       </div>
 
-      <div className="sticky bottom-0 z-20 ml-[calc(50%_-_50vw)] w-screen border-y border-primary/20 bg-primary/5 py-4 backdrop-blur dark:bg-primary/10">
+      <div className="sticky bottom-0 z-20 ml-[calc(50%_-_50vw)] w-screen border-y border-primary/20 bg-background/95 py-4 backdrop-blur dark:bg-background/90">
         <div className="container max-w-screen-xl px-4 md:px-8">
           <div className="max-w-2xl space-y-3">
             {saveError && (

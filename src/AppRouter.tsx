@@ -88,7 +88,7 @@ function ExternalRedirect({
       <h1 className="text-2xl font-semibold">Documentation has moved</h1>
       <p className="mt-3 text-lg text-muted-foreground">
         Taking you to{" "}
-        <a className="text-pink-500 hover:underline" href={targetUrl}>
+        <a className="text-primary hover:underline" href={targetUrl}>
           ngit.dev
         </a>
         .

@@ -67,7 +67,7 @@ export default function CIProviderPage() {
     state.settled && coordinatorState.settled && providerJobs.settled;
 
   useSeoMeta({
-    title: `${displayName} CI identity - ngit`,
+    title: `${displayName} CI identity - BIES Code`,
     description:
       "CI identity, observed signed roles, capabilities, and trust context",
     ogImage: profile?.picture ?? "/og-image.png",
@@ -80,7 +80,7 @@ export default function CIProviderPage() {
   return (
     <div className="min-h-full">
       <header className="relative isolate overflow-hidden border-b border-border/50">
-        <div className="absolute inset-0 -z-10 bg-gradient-to-br from-violet-500/[0.08] via-background to-pink-500/[0.08]" />
+        <div className="absolute inset-0 -z-10 bg-gradient-to-br from-secondary/[0.08] via-background to-primary/[0.08]" />
         <div className="container max-w-screen-xl px-4 py-8 md:px-8 md:py-10">
           <Link
             to="/"
@@ -163,7 +163,7 @@ export default function CIProviderPage() {
               </p>
               <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
                 {profile?.nip05 && (
-                  <span className="font-medium text-pink-600 dark:text-pink-400">
+                  <span className="font-medium text-primary">
                     {profile.nip05.startsWith("_@")
                       ? profile.nip05.slice(2)
                       : profile.nip05}

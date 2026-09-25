@@ -209,8 +209,8 @@ export default function CICoordinatorPage() {
 
   useSeoMeta({
     title: displayName
-      ? `${displayName} CI coordinator - ngit`
-      : "CI coordinator - ngit",
+      ? `${displayName} CI coordinator - BIES Code`
+      : "CI coordinator - BIES Code",
     description:
       "CI coordinator capabilities, repository activity, readiness targets, relays, and GRASP identity",
     ogImage: profile?.picture ?? "/og-image.png",
@@ -223,8 +223,8 @@ export default function CICoordinatorPage() {
   return (
     <div className="min-h-full">
       <header className="relative isolate overflow-hidden border-b border-border/50">
-        <div className="absolute inset-0 -z-10 bg-gradient-to-br from-pink-500/[0.08] via-background to-violet-500/[0.08]" />
-        <div className="absolute -right-24 -top-32 -z-10 h-80 w-80 rounded-full bg-pink-500/10 blur-3xl" />
+        <div className="absolute inset-0 -z-10 bg-gradient-to-br from-primary/[0.08] via-background to-secondary/[0.08]" />
+        <div className="absolute -right-24 -top-32 -z-10 h-80 w-80 rounded-full bg-primary/10 blur-3xl" />
         <div className="container max-w-screen-xl px-4 py-8 md:px-8 md:py-10">
           <Link
             to="/"
@@ -281,7 +281,7 @@ export default function CICoordinatorPage() {
                 </p>
                 <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
                   {profile?.nip05 && (
-                    <span className="font-medium text-pink-600 dark:text-pink-400">
+                    <span className="font-medium text-primary">
                       {profile.nip05.startsWith("_@")
                         ? profile.nip05.slice(2)
                         : profile.nip05}
@@ -631,7 +631,7 @@ function CoordinatorAdvertisementCard({
       <CardHeader className="flex-row items-start justify-between gap-4 border-b border-border/60 pb-5">
         <div>
           <CardTitle className="flex items-center gap-2 text-lg">
-            <Cpu className="h-5 w-5 text-pink-500" />
+            <Cpu className="h-5 w-5 text-primary" />
             Coordinator advertisement
           </CardTitle>
           <p className="mt-1 text-sm text-muted-foreground">
@@ -821,7 +821,7 @@ function CoordinatorRepositoryRow({
   });
 
   return (
-    <Card className="transition-colors hover:border-pink-500/25">
+    <Card className="transition-colors hover:border-primary/25">
       <CardContent className="p-4 sm:p-5">
         <div className="flex min-w-0 flex-col gap-4 sm:flex-row sm:items-start">
           <div className="min-w-0 flex-1">

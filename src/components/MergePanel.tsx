@@ -330,8 +330,8 @@ export function MergePanel({
   const localMergeCommand = `ngit merge ${pr.rootEvent.id.slice(0, 8)} && git push`;
   const gitServerName = formatGitServerName(repo.additionalGitServerUrls);
   const localMergeReason = hasAdditionalGitServers
-    ? `This repository also lists ${gitServerName} as a git server, so gitworkshop can't safely update every advertised server.`
-    : `This repository uses ${gitServerName}, so merging directly from gitworkshop isn't supported.`;
+    ? `This repository also lists ${gitServerName} as a git server, so BIES Code can't safely update every advertised server.`
+    : `This repository uses ${gitServerName}, so merging directly from BIES Code isn't supported.`;
 
   // Committer identity for browser-created commits. useMergeAnalysis feeds a
   // memoised committer to the mergeability hooks (which pre-build objects);

@@ -34,7 +34,7 @@ export function NsitePreviewLink({
       rel="noopener noreferrer"
       data-ci-output={preview.name}
       className={cn(
-        "inline-flex items-center gap-1 text-xs font-medium text-pink-600 underline-offset-2 hover:text-pink-700 hover:underline dark:text-pink-400 dark:hover:text-pink-300",
+        "inline-flex items-center gap-1 text-xs font-medium text-primary underline-offset-2 hover:underline",
         className,
       )}
     >
@@ -59,14 +59,14 @@ export function PRNsitePreview({
   return (
     <Card
       className={cn(
-        "overflow-hidden border-pink-500/25 bg-gradient-to-br from-pink-500/[0.09] via-background to-violet-500/[0.07] shadow-sm",
+        "overflow-hidden border-primary/25 bg-gradient-to-br from-primary/[0.09] via-background to-secondary/[0.07] shadow-sm",
         className,
       )}
     >
       <CardContent className="p-4 sm:p-5">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
           <div className="flex min-w-0 flex-1 items-start gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-pink-500/20 bg-gradient-to-br from-pink-500/20 to-violet-500/15 text-pink-600 dark:text-pink-400">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-primary/20 bg-gradient-to-br from-primary/20 to-secondary/15 text-primary">
               <Globe2 className="h-5 w-5" aria-hidden="true" />
             </div>
             <div className="min-w-0">

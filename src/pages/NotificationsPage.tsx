@@ -841,7 +841,7 @@ function NotificationUserGroupRow({
               )}
             >
               {isUnread && (
-                <span className="h-2 w-2 shrink-0 rounded-full bg-pink-500" />
+                <span className="h-2 w-2 shrink-0 rounded-full bg-primary" />
               )}
               {expanded ? (
                 <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />

@@ -224,7 +224,7 @@ export function CICoordinatorSummaryBar({
       <Card className="overflow-hidden">
         <CardContent className="flex min-h-16 flex-col gap-3 p-3 sm:flex-row sm:items-center sm:px-4">
           <div className="flex min-w-0 items-center gap-3">
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-pink-500/20 to-violet-500/20 text-pink-500">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-primary/20 to-secondary/20 text-primary">
               <RadioTower className="h-4 w-4" />
             </div>
             <div className="min-w-0">

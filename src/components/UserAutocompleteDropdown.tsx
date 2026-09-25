@@ -341,7 +341,7 @@ function UserAutocompleteItem({
             </span>
           )}
           {showGitFollow && (
-            <span className="shrink-0 rounded-full bg-pink-500/15 px-1.5 py-0.5 text-[10px] font-medium text-pink-700 dark:text-pink-300">
+            <span className="shrink-0 rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium text-primary">
               Git follow
             </span>
           )}

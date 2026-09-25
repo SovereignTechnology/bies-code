@@ -349,7 +349,7 @@ function ComparisonLoading() {
     <div className="space-y-4">
       <Card>
         <CardContent className="flex items-center gap-3 p-4">
-          <Loader2 className="h-5 w-5 text-pink-500 motion-safe:animate-spin" />
+          <Loader2 className="h-5 w-5 text-primary motion-safe:animate-spin" />
           <div className="space-y-2">
             <Skeleton className="h-4 w-56" />
             <Skeleton className="h-3 w-36" />
@@ -558,8 +558,8 @@ export default function RepoComparePage() {
 
   useSeoMeta({
     title: repo
-      ? `${compareBaseRef ?? "Base"}...${compareHeadRef ?? "Head"} - ${repo.name} - ngit`
-      : "Compare changes - ngit",
+      ? `${compareBaseRef ?? "Base"}...${compareHeadRef ?? "Head"} - ${repo.name} - BIES Code`
+      : "Compare changes - BIES Code",
     description: repo
       ? `Compare Git refs in ${repo.name}`
       : "Compare repository changes",
@@ -631,7 +631,7 @@ export default function RepoComparePage() {
     <main className="container max-w-screen-xl space-y-5 px-4 py-6 md:px-8">
       <div className="space-y-3">
         <div className="flex items-start gap-3">
-          <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-pink-500/15 to-violet-500/15 text-pink-600 dark:text-pink-400">
+          <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-primary/15 to-secondary/15 text-primary">
             <GitCompareArrows className="h-5 w-5" />
           </div>
           <div>
@@ -657,7 +657,7 @@ export default function RepoComparePage() {
         )}
       </div>
 
-      <Card className="overflow-hidden border-border/60 bg-gradient-to-br from-muted/40 via-background to-pink-500/[0.04]">
+      <Card className="overflow-hidden border-border/60 bg-gradient-to-br from-muted/40 via-background to-primary/[0.04]">
         <CardContent className="p-4 sm:p-5">
           {hasMalformedComparison ? (
             <div className="flex items-start gap-3 text-sm text-destructive">

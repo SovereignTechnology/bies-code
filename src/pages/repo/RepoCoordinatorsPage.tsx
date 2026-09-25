@@ -70,8 +70,8 @@ export default function RepoCoordinatorsPage({
 
   useSeoMeta({
     title: repo
-      ? `${coordinatorIdentifier ? "Coordinator" : "CI coordinators"} - ${repo.name} - ngit`
-      : "CI coordinators - ngit",
+      ? `${coordinatorIdentifier ? "Coordinator" : "CI coordinators"} - ${repo.name} - BIES Code`
+      : "CI coordinators - BIES Code",
     description: coordinatorIdentifier
       ? "CI coordinator details and repository workflow runs"
       : "CI coordinators available to this repository",
@@ -85,7 +85,7 @@ export default function RepoCoordinatorsPage({
         <PageBackLink to={`${basePath}/actions`} label="Actions" />
         <div className="mb-5">
           <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-pink-500/20 to-violet-500/20 text-pink-500">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-primary/20 to-secondary/20 text-primary">
               <RadioTower className="h-5 w-5" />
             </div>
             <div>

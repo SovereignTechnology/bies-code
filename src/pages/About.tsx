@@ -453,14 +453,14 @@ export default function About() {
                 className="text-primary hover:underline"
                 to="/arjen@swissdash.site/dvm-cicd-runner/actions"
               >
-                example runs on gitworkshop
+                example runs on BIES Code
               </Link>
               . the project is currently dormant but demonstrated the viability
               of the approach
             </p>
 
             <p className="text-sm italic">
-              note: the actions tab on gitworkshop is currently available on all
+              note: the actions tab on BIES Code is currently available on all
               repositories if you turn on experimental mode (under settings in
               the user menu)
             </p>

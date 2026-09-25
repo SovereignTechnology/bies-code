@@ -26,7 +26,7 @@ export function NamecoinResolutionBanner({
         className="flex items-center gap-2 text-xs text-muted-foreground border border-border/60 rounded-md px-3 py-2 bg-muted/30"
         data-testid="namecoin-banner"
       >
-        <Loader2 className="h-3.5 w-3.5 animate-spin text-pink-500" />
+        <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
         <span>
           Resolving <span className="font-mono">{query}</span> via Namecoin…
         </span>

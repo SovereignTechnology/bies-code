@@ -1709,7 +1709,7 @@ function LatestReleaseSidebar() {
         className="group/title flex w-full items-center gap-2 px-4 pt-3 pb-2 transition-colors hover:bg-accent/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
       >
         <Package className="h-3.5 w-3.5 text-muted-foreground" />
-        <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide group-hover/title:text-pink-600 group-hover/title:underline dark:group-hover/title:text-pink-400">
+        <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide group-hover/title:text-primary group-hover/title:underline">
           Releases
         </span>
       </Link>
@@ -1718,12 +1718,12 @@ function LatestReleaseSidebar() {
         className="group/release flex min-w-0 items-center gap-3 px-4 py-2.5 transition-colors hover:bg-accent/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
         aria-label={`View release ${version}`}
       >
-        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-pink-500/10 text-pink-500">
+        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
           <Tag className="h-4 w-4" />
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2">
-            <span className="min-w-0 truncate font-mono text-sm font-semibold group-hover/release:text-pink-600 group-hover/release:underline dark:group-hover/release:text-pink-400">
+            <span className="min-w-0 truncate font-mono text-sm font-semibold group-hover/release:text-primary group-hover/release:underline">
               {version}
             </span>
             <Badge

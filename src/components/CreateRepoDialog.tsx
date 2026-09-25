@@ -553,7 +553,7 @@ export function CreateRepoDialog({ isOpen, onClose }: CreateRepoDialogProps) {
                           </p>
                           <p className="mt-1 text-xs text-muted-foreground">
                             {privateRelayState.error ??
-                              "GitWorkshop could not safely decrypt your Private Git services list."}
+                              "BIES Code could not safely decrypt your Private Git services list."}
                           </p>
                           <div className="mt-3 flex flex-wrap gap-2">
                             <Button

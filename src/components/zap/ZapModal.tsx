@@ -661,7 +661,7 @@ export function ZapModal({ open, onOpenChange, event, lnurl }: ZapModalProps) {
 
               <TabsContent value="qr">
                 <NwcQrConnect
-                  appName="gitworkshop zap"
+                  appName="BIES Code zap"
                   size={192}
                   onConnected={() => setStep("awaiting-payment")}
                 />

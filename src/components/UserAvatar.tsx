@@ -133,7 +133,7 @@ export function AvatarWithBadges({
         </span>
       )}
 
-      {/* Git badge — pink, always in front at bottom-right */}
+      {/* Git badge — primary, always in front at bottom-right */}
       {showGit && (
         <span
           className={cn(
@@ -147,7 +147,7 @@ export function AvatarWithBadges({
         >
           {size !== "xs" && size !== "sm" && (
             <UserCheck
-              className="text-white"
+              className="text-primary-foreground"
               style={{ width: "65%", height: "65%" }}
               strokeWidth={size === "xl" ? 2 : 2.5}
             />

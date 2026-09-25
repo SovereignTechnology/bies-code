@@ -967,7 +967,7 @@ function CIJobRow({
                         href={url.toString()}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="inline-flex items-start gap-1 text-foreground underline-offset-2 hover:text-pink-600 hover:underline dark:hover:text-pink-400"
+                        className="inline-flex items-start gap-1 text-foreground underline-offset-2 hover:text-primary hover:underline"
                       >
                         <span>{output.value}</span>
                         <ExternalLink
