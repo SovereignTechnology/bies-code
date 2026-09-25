@@ -54,6 +54,7 @@ import { cn } from "@/lib/utils";
 import {
   ciStatusLabel,
   formatCIDuration,
+  getWorkflowTiming,
   summarizeRuns,
   workflowRunRepoCoords,
   type CIJobResult,
@@ -91,7 +92,6 @@ import { getSeenRelays } from "applesauce-core/helpers";
 import { onlyEvents } from "applesauce-relay";
 import { CICoordinatorLink } from "./CICoordinatorLink";
 import { useCurrentUnixSeconds } from "@/hooks/useCurrentUnixSeconds";
-import { getWorkflowTiming } from "@/lib/ci";
 
 /**
  * Repository trust inputs for per-run warnings. `repo` alone enables the
@@ -323,7 +323,7 @@ function WorkflowTimingDetails({
   }
 
   return (
-    <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-2 py-1 text-xs">
+    <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-2 py-2 text-xs">
       <div className="flex flex-wrap items-center justify-center gap-2">
         {requestEvent && (
           <>
@@ -840,15 +840,36 @@ function CIJobRow({
     return `${path}?${search.toString()}`;
   })();
 
+  const executedBy = (
+    <span className="flex items-center gap-1.5">
+      Executed by
+      <UserLink
+        pubkey={result.pubkey}
+        avatarSize="xs"
+        nameClassName="max-w-28 truncate text-[11px]"
+        profilePath={providerPath}
+      />
+      {trustResolution && (
+        <CITrustContextLabel
+          resolution={trustResolution}
+          visibility="exceptions-only"
+        />
+      )}
+    </span>
+  );
+
   return (
-    <div className="rounded-md border border-border/60">
-      <div className="flex items-center gap-2 px-3 py-2 text-xs">
+    <div className="rounded-lg bg-card [container-type:inline-size]">
+      <div className="flex items-center gap-2 rounded-t-lg bg-muted/60 px-3 py-2 text-xs">
         <CIStatusIcon status={job.status} className="h-3.5 w-3.5" />
         <span className="truncate font-mono">{result.name ?? job.jobId}</span>
         {result.exitCode !== undefined && result.exitCode !== 0 && (
           <span className="shrink-0 text-red-500">exit {result.exitCode}</span>
         )}
-        <span className="ml-auto shrink-0 text-muted-foreground">
+        <div className="ml-auto hidden shrink-0 items-center text-[11px] text-muted-foreground [@container(min-width:48rem)]:flex">
+          {executedBy}
+        </div>
+        <span className="ml-auto shrink-0 text-muted-foreground [@container(min-width:48rem)]:ml-2">
           {duration}
         </span>
         {hasLog && (
@@ -873,22 +894,15 @@ function CIJobRow({
         )}
         <EventCardActions event={result.event} />
       </div>
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border/60 px-3 py-2 text-[11px] text-muted-foreground">
-        <span className="flex items-center gap-1.5">
-          Executed by
-          <UserLink
-            pubkey={result.pubkey}
-            avatarSize="xs"
-            nameClassName="max-w-28 truncate text-[11px]"
-            profilePath={providerPath}
-          />
-          {trustResolution && (
-            <CITrustContextLabel
-              resolution={trustResolution}
-              visibility="exceptions-only"
-            />
-          )}
-        </span>
+      <div
+        className={cn(
+          "flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-[11px] text-muted-foreground",
+          !result.allocationRef?.coordinatorPubkey &&
+            result.runsOn.length === 0 &&
+            "[@container(min-width:48rem)]:hidden",
+        )}
+      >
+        <div className="[@container(min-width:48rem)]:hidden">{executedBy}</div>
         {result.allocationRef?.coordinatorPubkey && (
           <span className="flex items-center gap-1.5">
             allocated by
@@ -904,7 +918,7 @@ function CIJobRow({
         )}
       </div>
       {result.artifacts.length > 0 && (
-        <div className="border-t border-border/60 px-3 py-2">
+        <div className="px-3 py-2">
           <table className="w-full table-fixed text-left text-xs">
             <thead className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
               <tr>
@@ -932,7 +946,7 @@ function CIJobRow({
         </div>
       )}
       {hasResultMetadata && (
-        <div className="border-t border-border/60 px-3 py-2 text-xs">
+        <div className="px-3 py-2 text-xs">
           <p className="mb-1.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
             Public outputs
           </p>
