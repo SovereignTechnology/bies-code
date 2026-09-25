@@ -626,8 +626,7 @@ function TabButton({
           variant={isActive ? "default" : "secondary"}
           className={cn(
             "text-[10px] px-1.5 py-0 h-4 min-w-4",
-            isActive &&
-              "bg-primary/20 text-primary border-0",
+            isActive && "bg-primary/20 text-primary border-0",
           )}
         >
           {count}

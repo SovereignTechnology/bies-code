@@ -230,10 +230,9 @@ export function SubordinateForkField({
                 <code className="font-mono">nostr://npub1…/repo</code>,{" "}
                 <code className="font-mono">nostr://nip05/relay/repo</code>,{" "}
                 <code className="font-mono">git.buildinelsalvador.com</code>{" "}
-                repo URLs,{" "}
-                <code className="font-mono">npub1…/repo</code>, and repository
-                coordinates. The checkbox checks itself when a valid reference
-                is detected.
+                repo URLs, <code className="font-mono">npub1…/repo</code>, and
+                repository coordinates. The checkbox checks itself when a valid
+                reference is detected.
               </p>
             )}
           </div>

@@ -195,7 +195,9 @@ export default function RepoBranchesPage() {
   const { coordinatorState, trust } = useRepositoryCITrust(repo, ciRuns);
 
   useSeoMeta({
-    title: repo ? `Branches - ${repo.name} - BIES Code` : "Branches - BIES Code",
+    title: repo
+      ? `Branches - ${repo.name} - BIES Code`
+      : "Branches - BIES Code",
     description: repo?.description ?? "Browse repository branches",
     ogImage: repoOwnerProfile?.picture ?? "/og-image.png",
     ogImageAlt: repo?.name,

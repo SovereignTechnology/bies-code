@@ -897,9 +897,7 @@ function GitServerPanel({
       {/* Header */}
       <div className="px-4 py-3 border-b border-border/40">
         <div className="flex items-center gap-2">
-          {usesGrasp && (
-            <GraspLogo className="h-4 w-4 shrink-0 text-primary" />
-          )}
+          {usesGrasp && <GraspLogo className="h-4 w-4 shrink-0 text-primary" />}
           <p className="text-sm font-semibold text-foreground">
             {!usesGrasp
               ? "Git Servers"

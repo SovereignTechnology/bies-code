@@ -246,9 +246,7 @@ export default function RepoCommitsPage() {
         ) : activeExplorer.loading ? (
           <Skeleton className="h-8 w-28" />
         ) : resolvedRef ? (
-          <code className="font-mono text-primary text-sm">
-            {resolvedRef}
-          </code>
+          <code className="font-mono text-primary text-sm">{resolvedRef}</code>
         ) : null}
 
         {/* Spacer */}
