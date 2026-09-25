@@ -6,7 +6,6 @@ import {
   useRef,
   useState,
 } from "react";
-import { createPortal } from "react-dom";
 import { nip19 } from "nostr-tools";
 
 import { AvatarWithBadges, UserAvatar } from "@/components/UserAvatar";
@@ -17,6 +16,11 @@ import { useProfile } from "@/hooks/useProfile";
 import { useProfilesForPubkeys } from "@/hooks/useProfilesForPubkeys";
 import { useUserDisplayName } from "@/hooks/useUserDisplayName";
 import { cn } from "@/lib/utils";
+import {
+  Popover,
+  PopoverAnchor,
+  PopoverContent,
+} from "@/components/ui/popover";
 
 const EMPTY_PUBKEYS: string[] = [];
 
@@ -61,6 +65,15 @@ export function UserAutocompleteDropdown({
   const listboxId = providedListboxId ?? generatedListboxId;
   const [selectedIndex, setSelectedIndex] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
+  const anchorRef = useMemo(
+    () => ({
+      current: {
+        getBoundingClientRect: () =>
+          new DOMRect(position?.left ?? 0, position?.top ?? 0, 0, 0),
+      },
+    }),
+    [position?.left, position?.top],
+  );
 
   const { results: contacts, isSearching } = useContactSearch(
     isOpen ? query : "",
@@ -163,10 +176,6 @@ export function UserAutocompleteDropdown({
           if (selected) selectContact(selected.pubkey);
           break;
         }
-        case "Escape":
-          e.preventDefault();
-          onClose();
-          break;
       }
     };
 
@@ -195,38 +204,56 @@ export function UserAutocompleteDropdown({
     return null;
   }
 
-  // Render via portal so the dropdown escapes any overflow:hidden or
-  // CSS-transform ancestor (e.g. Radix Dialog), while fixed coordinates
-  // keep it anchored to the correct viewport position.
-  return createPortal(
-    <div
-      className="fixed z-[100] w-[280px] rounded-xl border border-border bg-popover shadow-lg overflow-hidden animate-in fade-in-0 zoom-in-95 slide-in-from-top-2 duration-150"
-      style={{ top: position.top, left: position.left }}
+  // A nested Radix layer keeps portaled suggestions interactive inside a
+  // modal and handles Escape before the surrounding dialog can dismiss.
+  return (
+    <Popover
+      open
+      onOpenChange={(open) => {
+        if (!open) onClose();
+      }}
     >
-      <div
-        id={listboxId}
-        ref={listRef}
-        role="listbox"
-        className="max-h-[240px] overflow-y-auto py-1 [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-border hover:[&::-webkit-scrollbar-thumb]:bg-border/80"
-        style={{
-          scrollbarWidth: "thin",
-          scrollbarColor: "hsl(var(--border)) transparent",
+      <PopoverAnchor virtualRef={anchorRef} />
+      <PopoverContent
+        role="presentation"
+        align="start"
+        sideOffset={0}
+        collisionPadding={8}
+        className="z-[100] w-[280px] rounded-xl p-0 shadow-lg overflow-hidden"
+        onOpenAutoFocus={(event) => event.preventDefault()}
+        onCloseAutoFocus={(event) => event.preventDefault()}
+        onInteractOutside={(event) => {
+          // Typing and moving the caret remain interactions with the owner.
+          if (event.target === keyboardTargetRef?.current)
+            event.preventDefault();
         }}
       >
-        {filteredContacts.map((contact, index) => (
-          <UserAutocompleteItem
-            key={contact.pubkey}
-            id={getOptionId(listboxId, contact.pubkey)}
-            pubkey={contact.pubkey}
-            isGitFollow={contact.isGitFollow}
-            isSocialFollow={contact.isSocialFollow}
-            isSelected={index === selectedIndex}
-            onClick={() => selectContact(contact.pubkey)}
-          />
-        ))}
-      </div>
-    </div>,
-    document.body,
+        <div
+          id={listboxId}
+          ref={listRef}
+          role="listbox"
+          className="overflow-y-auto py-1 [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-border hover:[&::-webkit-scrollbar-thumb]:bg-border/80"
+          style={{
+            maxHeight:
+              "min(240px, var(--radix-popover-content-available-height))",
+            scrollbarWidth: "thin",
+            scrollbarColor: "hsl(var(--border)) transparent",
+          }}
+        >
+          {filteredContacts.map((contact, index) => (
+            <UserAutocompleteItem
+              key={contact.pubkey}
+              id={getOptionId(listboxId, contact.pubkey)}
+              pubkey={contact.pubkey}
+              isGitFollow={contact.isGitFollow}
+              isSocialFollow={contact.isSocialFollow}
+              isSelected={index === selectedIndex}
+              onClick={() => selectContact(contact.pubkey)}
+            />
+          ))}
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -270,7 +297,7 @@ function UserAutocompleteItem({
           : "hover:bg-secondary/60",
       )}
       onClick={onClick}
-      onMouseDown={(e) => e.preventDefault()}
+      onPointerDown={(e) => e.preventDefault()}
     >
       <AvatarWithBadges
         avatarEl={

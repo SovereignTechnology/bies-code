@@ -8,6 +8,8 @@
 
 ### Fixed
 
+- Keep mention suggestions clickable inside dialogs, dismiss suggestions first with Escape, and fit them within the visible viewport.
+
 - Keep restored issue dialogs open when their last text is cleared for replacement.
 
 - Preserve open issue forms and typing focus when newer public repository announcements arrive.
