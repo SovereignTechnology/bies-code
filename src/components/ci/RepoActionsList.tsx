@@ -77,6 +77,8 @@ const OUTCOME_ORDER: CIRunOutcome[] = [
   "queued",
   "success",
   "failure",
+  "neutral",
+  "skipped",
   "cancelled",
 ];
 const EMPTY_RELATIONSHIPS: ReadonlyMap<string, CICoordinatorRelationship> =

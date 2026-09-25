@@ -69,6 +69,14 @@ const OUTCOME_PILL: Record<CIRunOutcome, { label: string; className: string }> =
       label: "Cancelled",
       className: "border-border bg-muted/60 text-muted-foreground",
     },
+    neutral: {
+      label: "Neutral",
+      className: "border-border bg-muted/60 text-muted-foreground",
+    },
+    skipped: {
+      label: "Skipped",
+      className: "border-border bg-muted/60 text-muted-foreground",
+    },
   };
 
 function RunStatusGlyph({ run }: { run: CIWorkflowRun }) {

@@ -564,6 +564,8 @@ export type CIRunOutcome =
   | "queued"
   | "success"
   | "failure"
+  | "neutral"
+  | "skipped"
   | "cancelled";
 
 export function ciRunOutcome(run: CIWorkflowRun): CIRunOutcome {
@@ -576,8 +578,10 @@ export function ciRunOutcome(run: CIWorkflowRun): CIRunOutcome {
     case "timed_out":
     case "startup_failure":
       return "failure";
-    default:
-      return "cancelled";
+    case "neutral":
+    case "skipped":
+    case "cancelled":
+      return run.status;
   }
 }
 
@@ -586,6 +590,8 @@ export const CI_RUN_OUTCOME_LABELS: Record<CIRunOutcome, string> = {
   queued: "Queued",
   success: "Success",
   failure: "Failure",
+  neutral: "Neutral",
+  skipped: "Skipped",
   cancelled: "Cancelled",
 };
 
