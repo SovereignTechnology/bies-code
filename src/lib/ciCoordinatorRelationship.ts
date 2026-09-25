@@ -75,6 +75,18 @@ export function getCIRunMaintainerLink(
   return undefined;
 }
 
+/** Return the requester from the same quote that passed maintainer validation. */
+export function getCIRunMaintainerRequester(
+  run: CIWorkflowRun,
+  confirmedMaintainers: readonly string[],
+): string | undefined {
+  const link = getCIRunMaintainerLink(run, confirmedMaintainers);
+  const container = run.workflowResult ?? run.pendingRun;
+  if (link === "manual") return container?.manualTriggerRef?.pubkey;
+  if (link === "service") return container?.serviceRequestRef?.pubkey;
+  return undefined;
+}
+
 /**
  * Derive repository-to-coordinator relationship tiers.
  *

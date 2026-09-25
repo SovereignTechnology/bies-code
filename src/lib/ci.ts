@@ -510,7 +510,7 @@ export function ciStatusLabel(status: CICheckStatus): string {
   }
 }
 
-/** Format a duration in seconds as "42s" / "2m 5s" / "1h 3m". */
+/** Format a duration using at most two units, from seconds through weeks. */
 export function formatCIDuration(seconds: number | undefined): string | null {
   if (seconds === undefined || !Number.isFinite(seconds) || seconds < 0)
     return null;
@@ -521,7 +521,13 @@ export function formatCIDuration(seconds: number | undefined): string | null {
   if (m < 60) return rs > 0 ? `${m}m ${rs}s` : `${m}m`;
   const h = Math.floor(m / 60);
   const rm = m % 60;
-  return rm > 0 ? `${h}h ${rm}m` : `${h}h`;
+  if (h < 24) return rm > 0 ? `${h}h ${rm}m` : `${h}h`;
+  const d = Math.floor(h / 24);
+  const rh = h % 24;
+  if (d < 7) return rh > 0 ? `${d}d ${rh}h` : `${d}d`;
+  const w = Math.floor(d / 7);
+  const rd = d % 7;
+  return rd > 0 ? `${w}w ${rd}d` : `${w}w`;
 }
 
 /**
@@ -549,4 +555,89 @@ export function summarizeRuns(runs: CIWorkflowRun[]): string {
     parts.push(`${n} ${ciStatusLabel(status).toLowerCase()}`);
   }
   return parts.join(", ");
+}
+
+/** Display name for a workflow file, e.g. `.ngit/act/workflows/ci.yml` → `ci`. */
+export function ciWorkflowName(workflowPath: string | undefined): string {
+  if (!workflowPath) return "(workflow)";
+  const file = workflowPath.split("/").pop() || workflowPath;
+  return file.replace(/\.ya?ml$/i, "") || file;
+}
+
+/** Coarse outcome bucket used by the Actions list status filter and pill. */
+export type CIRunOutcome =
+  | "running"
+  | "queued"
+  | "success"
+  | "failure"
+  | "neutral"
+  | "skipped"
+  | "cancelled";
+
+export function ciRunOutcome(run: CIWorkflowRun): CIRunOutcome {
+  switch (run.status) {
+    case "pending":
+      return run.pendingRun?.progressStatus === "queued" ? "queued" : "running";
+    case "success":
+      return "success";
+    case "failure":
+    case "timed_out":
+    case "startup_failure":
+      return "failure";
+    case "neutral":
+    case "skipped":
+    case "cancelled":
+      return run.status;
+  }
+}
+
+export const CI_RUN_OUTCOME_LABELS: Record<CIRunOutcome, string> = {
+  running: "Running",
+  queued: "Queued",
+  success: "Success",
+  failure: "Failure",
+  neutral: "Neutral",
+  skipped: "Skipped",
+  cancelled: "Cancelled",
+};
+
+export interface WorkflowTiming {
+  queuedAt: number | undefined;
+  startedAt: number | undefined;
+  completedAt: number | undefined;
+  queuePosition: number | undefined;
+}
+
+export function getWorkflowTiming(run: CIWorkflowRun): WorkflowTiming {
+  const earliestJobTimestamp = (
+    key: "queuedAt" | "startedAt",
+  ): number | undefined =>
+    run.jobs.reduce<number | undefined>((earliest, { result }) => {
+      const timestamp = result[key];
+      return timestamp === undefined
+        ? earliest
+        : Math.min(earliest ?? timestamp, timestamp);
+    }, undefined);
+  const latestJobCompletionAt = run.jobs.reduce<number | undefined>(
+    (latest, { result }) =>
+      latest === undefined
+        ? result.event.created_at
+        : Math.max(latest, result.event.created_at),
+    undefined,
+  );
+
+  return {
+    queuedAt:
+      run.pendingRun?.queuedAt ??
+      run.workflowResult?.queuedAt ??
+      earliestJobTimestamp("queuedAt"),
+    startedAt:
+      run.pendingRun?.startedAt ??
+      run.workflowResult?.startedAt ??
+      earliestJobTimestamp("startedAt"),
+    completedAt: run.pendingRun
+      ? undefined
+      : (run.workflowResult?.event.created_at ?? latestJobCompletionAt),
+    queuePosition: run.pendingRun?.queueRounds,
+  };
 }

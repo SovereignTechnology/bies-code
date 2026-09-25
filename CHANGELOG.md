@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Search and filter repository workflow runs by workflow, trigger, status, branch, requester and coordinator, with responsive rows and expandable run details.
+
 ### Fixed
 
 - Advance relay connection backoff after WebSocket errors without a close event, preventing unreachable relays from retrying every second indefinitely.
