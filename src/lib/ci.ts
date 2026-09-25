@@ -558,16 +558,6 @@ export function ciWorkflowName(workflowPath: string | undefined): string {
   return file.replace(/\.ya?ml$/i, "") || file;
 }
 
-/** Maintainer who explicitly requested a run (manual replay or service request). */
-export function ciRunRequester(run: CIWorkflowRun): string | undefined {
-  return (
-    run.workflowResult?.manualTriggerRef?.pubkey ??
-    run.pendingRun?.manualTriggerRef?.pubkey ??
-    run.workflowResult?.serviceRequestRef?.pubkey ??
-    run.pendingRun?.serviceRequestRef?.pubkey
-  );
-}
-
 /** Coarse outcome bucket used by the Actions list status filter and pill. */
 export type CIRunOutcome =
   | "running"

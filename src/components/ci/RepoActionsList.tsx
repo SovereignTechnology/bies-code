@@ -13,7 +13,6 @@ import { nip19 } from "nostr-tools";
 import {
   CI_RUN_OUTCOME_LABELS,
   ciRunOutcome,
-  ciRunRequester,
   ciWorkflowName,
   getWorkflowTiming,
   workflowRunRepoCoords,
@@ -22,7 +21,7 @@ import {
 } from "@/lib/ci";
 import {
   getCICoordinatorRelationship,
-  getCIRunMaintainerLink,
+  getCIRunMaintainerRequester,
   type CICoordinatorRelationship,
   wasCIServiceRequestedWhenRunStarted,
 } from "@/lib/ciCoordinatorRelationship";
@@ -126,9 +125,10 @@ export function RepoActionsList({
         run,
         // Only name requesters the repository confirms as maintainers; the
         // quote itself is coordinator-supplied.
-        requester: getCIRunMaintainerLink(run, repo?.confirmedMaintainers ?? [])
-          ? ciRunRequester(run)
-          : undefined,
+        requester: getCIRunMaintainerRequester(
+          run,
+          repo?.confirmedMaintainers ?? [],
+        ),
         serviceRequestedAtRun: wasCIServiceRequestedWhenRunStarted(
           run,
           serviceControls,
