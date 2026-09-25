@@ -8,6 +8,8 @@
 
 ### Fixed
 
+- Preserve open issue forms and typing focus when newer public repository announcements arrive.
+
 - Keep issue dialogs and typing focus stable when unrelated private repository events arrive.
 
 - Advance relay connection backoff after WebSocket errors without a close event, preventing unreachable relays from retrying every second indefinitely.

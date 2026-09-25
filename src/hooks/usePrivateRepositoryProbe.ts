@@ -4,6 +4,7 @@ import type { Filter } from "applesauce-core/helpers";
 import { verifyEvent, type NostrEvent } from "nostr-tools";
 import {
   catchError,
+  defer,
   distinctUntilChanged,
   from,
   map,
@@ -97,18 +98,11 @@ async function discoverPrivateHintRelays(
   );
 }
 
-async function probePrivateRepository(
+function getKnownRepositoryScope(
   pubkey: string,
   dTag: string,
-  relayHints: readonly string[],
-  accountId: string | undefined,
-  accountPubkey: string | undefined,
-  listGeneration: number,
-  listStatus: string,
-  listRelayUrls: readonly string[],
-  listError: string | undefined,
   knownAnnouncement: NostrEvent | undefined,
-): Promise<PrivateRepositoryProbeState> {
+) {
   const validKnownAnnouncement =
     knownAnnouncement &&
     verifyEvent(knownAnnouncement) &&
@@ -138,13 +132,34 @@ async function probePrivateRepository(
     isPrivateRepositoryCoordinate(coordinate) ||
     installedRepositoryRelays.length > 0;
 
-  // A verified public announcement already made this coordinate public. It
-  // must remain readable from the EventStore even when the optional encrypted
-  // private-service list is temporarily unavailable, unless this page session
-  // has already positively established that the coordinate is private.
-  if (validKnownAnnouncement && !knownIsPrivate && !knownPrivateInScope) {
-    return { status: "absent", relayUrls: [] };
-  }
+  return {
+    validKnownAnnouncement,
+    cachedResolved,
+    knownIsPrivate,
+    installedRepositoryRelays,
+    knownPrivateInScope,
+  };
+}
+
+async function probePrivateRepository(
+  pubkey: string,
+  dTag: string,
+  relayHints: readonly string[],
+  accountId: string | undefined,
+  accountPubkey: string | undefined,
+  listGeneration: number,
+  listStatus: string,
+  listRelayUrls: readonly string[],
+  listError: string | undefined,
+  known: ReturnType<typeof getKnownRepositoryScope>,
+): Promise<PrivateRepositoryProbeState> {
+  const {
+    validKnownAnnouncement,
+    cachedResolved,
+    knownIsPrivate,
+    installedRepositoryRelays,
+    knownPrivateInScope,
+  } = known;
 
   if (!accountPubkey) {
     if (knownIsPrivate || knownPrivateInScope) {
@@ -447,24 +462,41 @@ export function usePrivateRepositoryProbe(
         relayUrls: [],
       });
     }
-    return from(
-      probePrivateRepository(
-        pubkey,
-        dTag,
-        relayHints,
-        account?.id,
-        account?.pubkey,
-        list.generation,
-        list.status,
-        list.relayUrls,
-        list.error,
-        knownAnnouncement,
-      ),
-    ).pipe(
-      startWith<PrivateRepositoryProbeState>({
-        status: "loading",
-        relayUrls: [],
-      }),
+    return defer(() => {
+      const known = getKnownRepositoryScope(pubkey, dTag, knownAnnouncement);
+      // A verified public announcement is a synchronous answer. Emitting
+      // loading first can unmount open composers on each announcement update.
+      // Quarantined coordinates and private components still require discovery.
+      if (
+        known.validKnownAnnouncement &&
+        !known.knownIsPrivate &&
+        !known.knownPrivateInScope
+      ) {
+        return of<PrivateRepositoryProbeState>({
+          status: "absent",
+          relayUrls: [],
+        });
+      }
+      return from(
+        probePrivateRepository(
+          pubkey,
+          dTag,
+          relayHints,
+          account?.id,
+          account?.pubkey,
+          list.generation,
+          list.status,
+          list.relayUrls,
+          list.error,
+          known,
+        ),
+      ).pipe(
+        startWith<PrivateRepositoryProbeState>({
+          status: "loading",
+          relayUrls: [],
+        }),
+      );
+    }).pipe(
       catchError((error) =>
         of<PrivateRepositoryProbeState>({
           status: "unavailable",
