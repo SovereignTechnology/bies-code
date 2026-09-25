@@ -10,7 +10,7 @@ import {
   map,
   of,
   startWith,
-  type Observable,
+  tap,
 } from "rxjs";
 
 import { use$ } from "@/hooks/use$";
@@ -418,19 +418,6 @@ export function usePrivateRepositoryProbe(
   const account = useActiveAccount();
   const list = use$(privateGitRelayList$);
   const privateScopeRevision = use$(privateRepositoryScopeRevision$);
-  // Private event arrivals also advance the global revision. Only changes to
-  // this repository's quarantine or relay mapping should restart discovery;
-  // restarting for unrelated events unmounts open composers during loading.
-  const privateScopeKey = useMemo(() => {
-    if (!pubkey || !dTag) return "";
-    const coordinate = repoCoordinate(pubkey, dTag);
-    return JSON.stringify([
-      isPrivateRepositoryCoordinate(coordinate),
-      uniqueRelayUrls(getPrivateRepositoryRelays(coordinate) ?? []),
-    ]);
-    // The scope registry is external mutable state, invalidated by its revision.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pubkey, dTag, privateScopeRevision]);
   const hintsKey = useMemo(
     () => uniqueRelayUrls(relayHints).join(","),
     [relayHints],
@@ -454,12 +441,36 @@ export function usePrivateRepositoryProbe(
       );
   }, [pubkey, dTag]);
 
-  return use$(() => {
+  // A refresh belongs to the same access session only while the route,
+  // account and private-list evidence remain unchanged. Never carry a found
+  // result across an account switch or a replacement private-service list.
+  const sessionKey = JSON.stringify([
+    pubkey,
+    dTag,
+    hintsKey,
+    account?.id,
+    account?.pubkey,
+    list.pubkey,
+    list.generation,
+    list.sourceEvent?.id,
+  ]);
+  const session = useMemo(
+    () => ({
+      key: sessionKey,
+      found: undefined as PrivateRepositoryProbeState | undefined,
+    }),
+    [sessionKey],
+  );
+
+  const result = use$(() => {
     if (!pubkey || !dTag) return undefined;
     if (account && list.pubkey !== account.pubkey) {
-      return of<PrivateRepositoryProbeState>({
-        status: "loading",
-        relayUrls: [],
+      return of({
+        session,
+        state: {
+          status: "loading",
+          relayUrls: [],
+        } as PrivateRepositoryProbeState,
       });
     }
     return defer(() => {
@@ -477,6 +488,15 @@ export function usePrivateRepositoryProbe(
           relayUrls: [],
         });
       }
+      // Preserve the mounted page, not an obsolete authority snapshot. Resolve
+      // newly admitted member announcements before waiting for relay hints.
+      const refreshing =
+        session.found && known.cachedResolved
+          ? {
+              ...session.found,
+              repo: { ...known.cachedResolved, isPrivate: true },
+            }
+          : session.found;
       return from(
         probePrivateRepository(
           pubkey,
@@ -491,10 +511,14 @@ export function usePrivateRepositoryProbe(
           known,
         ),
       ).pipe(
-        startWith<PrivateRepositoryProbeState>({
-          status: "loading",
-          relayUrls: [],
-        }),
+        // Registry writes made by discovery and later private event arrivals
+        // must refresh authority without unmounting a ready repository page.
+        startWith<PrivateRepositoryProbeState>(
+          refreshing ?? {
+            status: "loading",
+            relayUrls: [],
+          },
+        ),
       );
     }).pipe(
       catchError((error) =>
@@ -507,7 +531,11 @@ export function usePrivateRepositoryProbe(
               : "Private repository discovery did not complete safely.",
         }),
       ),
-    ) as Observable<PrivateRepositoryProbeState>;
+      tap((state) => {
+        session.found = state.status === "found" ? state : undefined;
+      }),
+      map((state) => ({ session, state })),
+    );
   }, [
     pubkey,
     dTag,
@@ -517,7 +545,15 @@ export function usePrivateRepositoryProbe(
     list.generation,
     list.status,
     list.sourceEvent?.id,
-    privateScopeKey,
+    privateScopeRevision,
+    session,
     knownAnnouncement?.id,
   ]);
+  // use$ may briefly expose its previous subscription's value during a
+  // dependency change. Access-session boundaries must also hold on that render.
+  return result?.session === session
+    ? result.state
+    : pubkey && dTag
+      ? { status: "loading", relayUrls: [] }
+      : undefined;
 }
