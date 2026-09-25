@@ -510,7 +510,7 @@ export function ciStatusLabel(status: CICheckStatus): string {
   }
 }
 
-/** Format a duration in seconds as "42s" / "2m 5s" / "1h 3m". */
+/** Format a duration using at most two units, from seconds through weeks. */
 export function formatCIDuration(seconds: number | undefined): string | null {
   if (seconds === undefined || !Number.isFinite(seconds) || seconds < 0)
     return null;
@@ -521,7 +521,13 @@ export function formatCIDuration(seconds: number | undefined): string | null {
   if (m < 60) return rs > 0 ? `${m}m ${rs}s` : `${m}m`;
   const h = Math.floor(m / 60);
   const rm = m % 60;
-  return rm > 0 ? `${h}h ${rm}m` : `${h}h`;
+  if (h < 24) return rm > 0 ? `${h}h ${rm}m` : `${h}h`;
+  const d = Math.floor(h / 24);
+  const rh = h % 24;
+  if (d < 7) return rh > 0 ? `${d}d ${rh}h` : `${d}d`;
+  const w = Math.floor(d / 7);
+  const rd = d % 7;
+  return rd > 0 ? `${w}w ${rd}d` : `${w}w`;
 }
 
 /**
