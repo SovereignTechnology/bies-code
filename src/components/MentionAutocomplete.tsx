@@ -139,6 +139,7 @@ export function MentionAutocomplete({
   const [dropdownPos, setDropdownPos] = useState<{
     top: number;
     left: number;
+    height: number;
   } | null>(null);
 
   // Detect @mention query at cursor.
@@ -194,11 +195,9 @@ export function MentionAutocomplete({
         parseFloat(window.getComputedStyle(textarea).lineHeight) || 20;
       const rect = textarea.getBoundingClientRect();
       setDropdownPos({
-        top: rect.top + coords.top + lineHeight + 4,
-        left: Math.max(
-          0,
-          Math.min(rect.left + coords.left, window.innerWidth - 280),
-        ),
+        top: rect.top + coords.top,
+        left: rect.left + coords.left,
+        height: lineHeight,
       });
     },
     [textareaRef],

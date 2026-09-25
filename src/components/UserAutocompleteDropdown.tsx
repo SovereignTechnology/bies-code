@@ -27,7 +27,8 @@ const EMPTY_PUBKEYS: string[] = [];
 export interface UserAutocompleteDropdownProps {
   query: string;
   isOpen: boolean;
-  position: { top: number; left: number } | null;
+  /** Viewport rectangle spanning the caret line or owning input. */
+  position: { top: number; left: number; height: number } | null;
   onSelectPubkey: (pubkey: string) => void;
   onClose: () => void;
   /** Element that should receive Arrow/Enter/Escape handling while open */
@@ -69,10 +70,15 @@ export function UserAutocompleteDropdown({
     () => ({
       current: {
         getBoundingClientRect: () =>
-          new DOMRect(position?.left ?? 0, position?.top ?? 0, 0, 0),
+          new DOMRect(
+            position?.left ?? 0,
+            position?.top ?? 0,
+            0,
+            position?.height ?? 0,
+          ),
       },
     }),
-    [position?.left, position?.top],
+    [position?.left, position?.top, position?.height],
   );
 
   const { results: contacts, isSearching } = useContactSearch(
@@ -217,14 +223,17 @@ export function UserAutocompleteDropdown({
       <PopoverContent
         role="presentation"
         align="start"
-        sideOffset={0}
+        sideOffset={4}
         collisionPadding={8}
         className="z-[100] w-[280px] rounded-xl p-0 shadow-lg overflow-hidden"
         onOpenAutoFocus={(event) => event.preventDefault()}
         onCloseAutoFocus={(event) => event.preventDefault()}
         onInteractOutside={(event) => {
           // Typing and moving the caret remain interactions with the owner.
-          if (event.target === keyboardTargetRef?.current)
+          if (
+            event.target instanceof Node &&
+            keyboardTargetRef?.current?.contains(event.target)
+          )
             event.preventDefault();
         }}
       >
@@ -235,7 +244,7 @@ export function UserAutocompleteDropdown({
           className="overflow-y-auto py-1 [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-border hover:[&::-webkit-scrollbar-thumb]:bg-border/80"
           style={{
             maxHeight:
-              "min(240px, var(--radix-popover-content-available-height))",
+              "max(0px, min(240px, calc(var(--radix-popover-content-available-height) - 2px)))",
             scrollbarWidth: "thin",
             scrollbarColor: "hsl(var(--border)) transparent",
           }}

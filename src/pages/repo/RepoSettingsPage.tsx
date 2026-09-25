@@ -2911,6 +2911,7 @@ function MaintainerUserInput({
   const [dropdownPos, setDropdownPos] = useState<{
     top: number;
     left: number;
+    height: number;
   } | null>(null);
 
   const raw = value.trim();
@@ -2926,8 +2927,9 @@ function MaintainerUserInput({
     if (!input) return;
     const rect = input.getBoundingClientRect();
     setDropdownPos({
-      top: rect.bottom + 4,
-      left: Math.max(0, Math.min(rect.left, window.innerWidth - 280)),
+      top: rect.top,
+      left: rect.left,
+      height: rect.height,
     });
   }, []);
 
