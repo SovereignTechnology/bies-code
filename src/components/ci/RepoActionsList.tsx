@@ -1,4 +1,10 @@
-import { useMemo, useState, type ReactNode } from "react";
+import {
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { Link } from "react-router-dom";
 import {
   ChevronDown,
@@ -63,7 +69,7 @@ import {
   SelectTrigger,
 } from "@/components/ui/select";
 import { CITrustContextLabel } from "./CITrustContextLabel";
-import { CIRunListRow } from "./CIRunListRow";
+import { CIRunListRow, type CIRunListRowLayout } from "./CIRunListRow";
 
 const ALL = "__all__";
 const RELATED = "__related__";
@@ -112,6 +118,7 @@ export function RepoActionsList({
   adaptiveCoordinatorFilter = false,
   trust,
 }: RepoActionsListProps) {
+  const { containerRef, rowLayout } = useRunRowLayout();
   const [coordinatorFilter, setCoordinatorFilter] = useState<string>(ALL);
   const [workflowFilter, setWorkflowFilter] = useState<string>(ALL);
   const [triggerFilter, setTriggerFilter] = useState<string>(ALL);
@@ -451,7 +458,10 @@ export function RepoActionsList({
         {title}
       </h2>
 
-      <div className="overflow-hidden rounded-xl border border-border bg-card">
+      <div
+        ref={containerRef}
+        className="overflow-hidden rounded-xl border border-border bg-card"
+      >
         <div className="flex flex-col gap-2 border-b border-border px-3 py-3 lg:flex-row lg:items-center lg:gap-3 lg:px-4">
           <label className="relative flex min-w-0 flex-1 items-center">
             <Search
@@ -556,7 +566,7 @@ export function RepoActionsList({
                 onValueChange={selectCoordinator}
               >
                 <SelectTrigger
-                  className="h-9 w-auto gap-1 border-0 bg-transparent px-2.5 text-sm text-muted-foreground shadow-none hover:bg-muted hover:text-foreground focus:ring-0 focus:ring-offset-0 data-[state=open]:bg-muted"
+                  className="h-9 w-auto gap-1 border-0 bg-transparent px-2.5 text-sm text-muted-foreground shadow-none hover:bg-muted hover:text-foreground focus:ring-2 focus:ring-offset-0 data-[state=open]:bg-muted"
                   aria-label="Filter actions by coordinator"
                 >
                   {coordinatorFilter === ALL ? (
@@ -688,6 +698,7 @@ export function RepoActionsList({
                 key={run.key}
                 run={run}
                 requester={requester}
+                rowLayout={rowLayout}
                 trustResolution={trustResolution}
                 repo={repo}
                 basePath={basePath}
@@ -717,6 +728,7 @@ export function RepoActionsList({
                     key={run.key}
                     run={run}
                     requester={requester}
+                    rowLayout={rowLayout}
                     trustResolution={trustResolution}
                     repo={repo}
                     basePath={basePath}
@@ -731,6 +743,39 @@ export function RepoActionsList({
       )}
     </section>
   );
+}
+
+/** Both run lists share the card width; observe once, and update only at breakpoints. */
+function useRunRowLayout() {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [rowLayout, setRowLayout] = useState<CIRunListRowLayout>({
+    inlineIdentity: false,
+    inlineActions: false,
+  });
+
+  useLayoutEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const update = () => {
+      const rem =
+        parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+      const width = container.clientWidth;
+      const inlineIdentity = width >= 70 * rem;
+      const inlineActions = width >= 64 * rem;
+      setRowLayout((previous) =>
+        previous.inlineIdentity === inlineIdentity &&
+        previous.inlineActions === inlineActions
+          ? previous
+          : { inlineIdentity, inlineActions },
+      );
+    };
+    const observer = new ResizeObserver(update);
+    observer.observe(container);
+    update();
+    return () => observer.disconnect();
+  }, []);
+
+  return { containerRef, rowLayout };
 }
 
 function coordinatorAvailabilityLabel(
@@ -751,6 +796,7 @@ function coordinatorAvailabilityLabel(
 function RepoActionRunRow({
   run,
   requester,
+  rowLayout,
   trustResolution,
   repo,
   basePath,
@@ -759,6 +805,7 @@ function RepoActionRunRow({
 }: {
   run: CIWorkflowRun;
   requester: string | undefined;
+  rowLayout: CIRunListRowLayout;
   trustResolution: CITrustResolution | undefined;
   repo: ResolvedRepo | undefined;
   basePath: string;
@@ -773,6 +820,7 @@ function RepoActionRunRow({
     <CIRunListRow
       run={run}
       requester={requester}
+      layout={rowLayout}
       canRetry={canRetry}
       trustIndicator={
         trustResolution ? (
@@ -814,16 +862,18 @@ function RunTriggerContext({
   basePath: string;
   repoRelays: string[];
 }) {
-  const pillClassName =
-    "inline-flex h-8 max-w-40 shrink-0 items-center gap-1.5 rounded-md border border-border bg-background/60 px-2.5 text-sm font-medium text-sky-600 transition-colors hover:border-sky-500/50 hover:bg-sky-500/10 dark:text-sky-400";
+  const refLinkClassName =
+    "h-8 max-w-40 shrink-0 justify-start gap-1.5 border-border bg-background/60 px-2.5 text-sky-600 hover:text-sky-700 dark:text-sky-400 dark:hover:text-sky-300";
 
   if (run.prRootId) {
     const nevent = eventIdToNevent(run.prRootId, repoRelays.slice(0, 1));
     return (
-      <Link to={`${basePath}/prs/${nevent}`} className={pillClassName}>
-        <GitPullRequest className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-        PR
-      </Link>
+      <Button asChild variant="outline" size="sm" className={refLinkClassName}>
+        <Link to={`${basePath}/prs/${nevent}`}>
+          <GitPullRequest className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          PR
+        </Link>
+      </Button>
     );
   }
 
@@ -841,14 +891,15 @@ function RunTriggerContext({
   const Icon = isBranch ? GitBranch : Tag;
 
   return (
-    <Link
-      to={`${basePath}/commits/${refName}`}
-      className={pillClassName}
-      aria-label={`${isBranch ? "Branch" : "Tag"}: ${refName}`}
-    >
-      <Icon className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-      <span className="truncate">{refName}</span>
-    </Link>
+    <Button asChild variant="outline" size="sm" className={refLinkClassName}>
+      <Link
+        to={`${basePath}/commits/${refName}`}
+        aria-label={`${isBranch ? "Branch" : "Tag"}: ${refName}`}
+      >
+        <Icon className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+        <span className="truncate">{refName}</span>
+      </Link>
+    </Button>
   );
 }
 

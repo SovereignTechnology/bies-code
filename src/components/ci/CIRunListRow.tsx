@@ -1,7 +1,7 @@
 /**
  * CIRunListRow — a roomy, expandable workflow-run row for the repo Actions
  * list: status glyph, workflow name and trigger actor on the left, branch,
- * timing and a result pill on the right. Clicking the row expands the same
+ * timing and a result badge on the right. Clicking the row expands the same
  * details (timing, jobs, logs, artifacts) as the compact CIRunRow.
  */
 
@@ -21,10 +21,12 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
+import { Badge } from "@/components/ui/badge";
 import { UserLink } from "@/components/UserAvatar";
 import { EventCardActions } from "@/components/EventCardActions";
 import { cn } from "@/lib/utils";
 import {
+  CI_RUN_OUTCOME_LABELS,
   ciRunOutcome,
   ciStatusLabel,
   ciWorkflowName,
@@ -33,51 +35,35 @@ import {
   type CIRunOutcome,
   type CIWorkflowRun,
 } from "@/lib/ci";
-import type {
-  CITrustContextState,
-  CITrustResolution,
+import {
+  CITrustClassification,
+  type CITrustContextState,
+  type CITrustResolution,
 } from "@/lib/ciTrustContext";
 import { findNsitePreview } from "@/lib/ciOutputs";
 import { NsitePreviewLink } from "./PRNsitePreview";
 import { CICoordinatorLink } from "./CICoordinatorLink";
+import { CITrustContextLabel } from "./CITrustContextLabel";
 import { useCurrentUnixSeconds } from "@/hooks/useCurrentUnixSeconds";
 import { CIRunDetails } from "./CIChecksPanel";
 
-const OUTCOME_PILL: Record<CIRunOutcome, { label: string; className: string }> =
-  {
-    success: {
-      label: "Success",
-      className:
-        "border-emerald-500/40 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300",
-    },
-    failure: {
-      label: "Failure",
-      className:
-        "border-red-500/40 bg-red-500/15 text-red-700 dark:text-red-300",
-    },
-    running: {
-      label: "Running",
-      className:
-        "border-amber-500/40 bg-amber-500/15 text-amber-700 dark:text-amber-300",
-    },
-    queued: {
-      label: "Queued",
-      className:
-        "border-amber-500/40 bg-amber-500/15 text-amber-700 dark:text-amber-300",
-    },
-    cancelled: {
-      label: "Cancelled",
-      className: "border-border bg-muted/60 text-muted-foreground",
-    },
-    neutral: {
-      label: "Neutral",
-      className: "border-border bg-muted/60 text-muted-foreground",
-    },
-    skipped: {
-      label: "Skipped",
-      className: "border-border bg-muted/60 text-muted-foreground",
-    },
-  };
+const OUTCOME_BADGE_CLASSES: Record<CIRunOutcome, string> = {
+  success:
+    "border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
+  failure: "border-red-500/20 bg-red-500/10 text-red-700 dark:text-red-300",
+  running:
+    "border-amber-500/20 bg-amber-500/10 text-amber-700 dark:text-amber-300",
+  queued:
+    "border-amber-500/20 bg-amber-500/10 text-amber-700 dark:text-amber-300",
+  cancelled: "border-border bg-muted/50 text-muted-foreground",
+  neutral: "border-border bg-muted/50 text-muted-foreground",
+  skipped: "border-border bg-muted/50 text-muted-foreground",
+};
+
+export interface CIRunListRowLayout {
+  inlineIdentity: boolean;
+  inlineActions: boolean;
+}
 
 function RunStatusGlyph({ run }: { run: CIWorkflowRun }) {
   const label = ciStatusLabel(run.status);
@@ -144,6 +130,7 @@ function RunStatusGlyph({ run }: { run: CIWorkflowRun }) {
 export function CIRunListRow({
   run,
   requester,
+  layout,
   canRetry = false,
   refContext,
   trustIndicator,
@@ -154,6 +141,7 @@ export function CIRunListRow({
   run: CIWorkflowRun;
   /** Confirmed-maintainer requester of the run, when validated by the caller. */
   requester?: string;
+  layout: CIRunListRowLayout;
   canRetry?: boolean;
   /** Branch / tag / PR pill linking to what triggered the run. */
   refContext?: ReactNode;
@@ -163,6 +151,7 @@ export function CIRunListRow({
   providerTrust?: CITrustContextState;
 }) {
   const [open, setOpen] = useState(false);
+  const { inlineActions } = layout;
   const isPending = run.status === "pending";
   const nowSeconds = useCurrentUnixSeconds(isPending);
   const { queuedAt, startedAt, completedAt } = getWorkflowTiming(run);
@@ -174,13 +163,20 @@ export function CIRunListRow({
       : endAt - startedAt,
   );
   const outcome = ciRunOutcome(run);
-  const pill = OUTCOME_PILL[outcome];
   const workflowName = ciWorkflowName(run.workflowPath);
   const primaryEvent =
     run.workflowResult?.event ??
     run.pendingRun?.event ??
     run.jobs[0]?.result.event;
   const nsitePreview = findNsitePreview([run]);
+  const maintainerDirected =
+    expandedTrustResolution?.phase === "settled" &&
+    expandedTrustResolution.classification ===
+      CITrustClassification.MaintainerDirected;
+  const maintainerRequested = !!requester || maintainerDirected;
+  const trustPending = expandedTrustResolution?.phase === "loading";
+  const inlineIdentity =
+    layout.inlineIdentity && !maintainerDirected && !trustPending;
 
   // The whole row toggles, except clicks on nested links and controls.
   const toggleFromRow = (event: MouseEvent<HTMLDivElement>) => {
@@ -195,8 +191,50 @@ export function CIRunListRow({
     setOpen((value) => !value);
   };
 
+  const identityDetails = (
+    <dl
+      className={cn(
+        "grid w-fit max-w-full grid-cols-[auto_minmax(0,1fr)] items-center gap-x-2 gap-y-1 text-xs text-muted-foreground",
+        inlineIdentity && "ml-auto",
+      )}
+    >
+      {requester && (
+        <>
+          <dt className="shrink-0 text-muted-foreground">Requested by</dt>
+          <dd
+            className={cn(
+              "min-w-0 max-w-full",
+              inlineIdentity && "justify-self-end",
+            )}
+          >
+            <UserLink
+              pubkey={requester}
+              avatarSize="xs"
+              className="min-w-0"
+              nameClassName="truncate font-normal text-muted-foreground"
+            />
+          </dd>
+        </>
+      )}
+      <dt className="shrink-0 text-muted-foreground">Coordinator</dt>
+      <dd
+        className={cn(
+          "min-w-0 max-w-full",
+          inlineIdentity && "justify-self-end",
+        )}
+      >
+        <CICoordinatorLink
+          pubkey={run.pubkey}
+          avatarSize="xs"
+          className="min-w-0"
+          nameClassName="truncate font-normal text-muted-foreground"
+        />
+      </dd>
+    </dl>
+  );
+
   return (
-    <li>
+    <li className="[container-type:inline-size]">
       <Collapsible open={open} onOpenChange={setOpen}>
         <div
           className={cn(
@@ -206,11 +244,11 @@ export function CIRunListRow({
           onClick={toggleFromRow}
         >
           <div className="flex min-w-0 flex-1 items-center gap-4">
-            <span className="flex h-6 w-6 shrink-0 items-center justify-center">
+            <span className="flex h-6 w-6 shrink-0 items-center justify-center [@container(max-width:30rem)]:hidden">
               <RunStatusGlyph run={run} />
             </span>
-            <div className="min-w-0 flex-1">
-              <div className="flex min-w-0 items-center gap-2">
+            <div className="min-w-0 flex-1 max-md:flex max-md:flex-wrap max-md:items-baseline max-md:gap-x-2 max-md:gap-y-1">
+              <div className="flex min-w-0 max-w-full items-center gap-2">
                 <span
                   className="truncate text-base font-semibold leading-tight text-foreground"
                   title={run.workflowPath}
@@ -219,30 +257,27 @@ export function CIRunListRow({
                 </span>
                 {trustIndicator}
               </div>
-              <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-sm text-muted-foreground">
+              <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-sm text-muted-foreground max-md:mt-0">
                 <span className="max-w-48 truncate font-medium text-foreground/80">
                   {run.workflowPath?.split("/").pop() ?? workflowName}
                 </span>
-                <span aria-hidden="true">·</span>
-                <span>triggered by</span>
-                {requester ? (
+                {run.trigger && (
                   <>
-                    <UserLink
-                      pubkey={requester}
-                      avatarSize="xs"
-                      nameClassName="font-normal text-muted-foreground"
-                    />
+                    <span aria-hidden="true">·</span>
+                    <span>{run.trigger}</span>
+                  </>
+                )}
+                {!maintainerRequested && !trustPending && !inlineIdentity && (
+                  <span className="inline-flex items-center gap-1.5">
                     <span aria-hidden="true">·</span>
                     <span>via</span>
-                  </>
-                ) : (
-                  run.trigger && <span>{run.trigger} on</span>
+                    <CICoordinatorLink
+                      pubkey={run.pubkey}
+                      avatarSize="xs"
+                      nameClassName="max-w-32 truncate font-normal text-muted-foreground"
+                    />
+                  </span>
                 )}
-                <CICoordinatorLink
-                  pubkey={run.pubkey}
-                  avatarSize="xs"
-                  nameClassName="max-w-32 truncate font-normal text-muted-foreground"
-                />
                 {run.commitId && (
                   <>
                     <span aria-hidden="true">·</span>
@@ -260,9 +295,15 @@ export function CIRunListRow({
             </div>
           </div>
 
-          <div className="flex shrink-0 flex-wrap items-center gap-3 pl-10 md:flex-nowrap md:gap-5 md:pl-0">
-            {refContext}
-            <div className="flex min-w-[7.5rem] flex-col items-start text-sm text-muted-foreground md:items-end">
+          {inlineIdentity && (
+            <div className="w-64 shrink-0">{identityDetails}</div>
+          )}
+
+          <div className="flex shrink-0 flex-wrap items-center gap-3 pl-10 md:flex-nowrap md:gap-5 md:pl-0 [@container(max-width:30rem)]:pl-0">
+            <div className="flex min-w-0 sm:min-w-24 md:justify-end">
+              {refContext}
+            </div>
+            <div className="flex min-w-[7.5rem] flex-col items-start text-sm text-muted-foreground sm:max-md:flex-row sm:max-md:items-center sm:max-md:gap-3 md:items-end">
               <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
                 <Clock className="h-3.5 w-3.5" aria-hidden="true" />
                 {formatDistanceToNow(new Date(triggeredAt * 1000), {
@@ -275,19 +316,24 @@ export function CIRunListRow({
                 </span>
               )}
             </div>
-            <span
-              className={cn(
-                "inline-flex w-24 shrink-0 items-center justify-center rounded-full border px-3 py-1 text-sm font-medium",
-                pill.className,
-              )}
-            >
-              {pill.label}
-            </span>
+            <div className="flex w-24 shrink-0 justify-end max-md:ml-auto">
+              <Badge
+                variant="outline"
+                className={cn(
+                  "w-full justify-center px-3 py-1 text-sm font-medium",
+                  OUTCOME_BADGE_CLASSES[outcome],
+                )}
+              >
+                {CI_RUN_OUTCOME_LABELS[outcome]}
+              </Badge>
+            </div>
             <div className="flex items-center gap-1">
               {attributionIndicator}
-              {primaryEvent && <EventCardActions event={primaryEvent} />}
+              {primaryEvent && inlineActions && (
+                <EventCardActions event={primaryEvent} />
+              )}
               <CollapsibleTrigger
-                className="group rounded-md p-1 text-muted-foreground transition-colors hover:text-foreground"
+                className="group rounded-md p-1 text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 aria-label={
                   open ? "Collapse workflow run" : "Expand workflow run"
                 }
@@ -299,14 +345,32 @@ export function CIRunListRow({
         </div>
 
         <CollapsibleContent>
-          <CIRunDetails
-            run={run}
-            nowSeconds={nowSeconds}
-            canRetry={canRetry}
-            expandedTrustResolution={expandedTrustResolution}
-            providerTrust={providerTrust}
-            className="border-t border-border/60 bg-muted/20 px-4 py-3 sm:px-5 md:pl-[4.25rem]"
-          />
+          <div className="space-y-4 border-t border-border/60 bg-muted/20 px-4 py-4 sm:px-5 md:pl-[4.25rem]">
+            {(!inlineIdentity || expandedTrustResolution) && (
+              <div className="flex items-start justify-between gap-3 border-b border-border/60 pb-3">
+                <div className="flex min-w-0 flex-wrap items-center gap-x-6 gap-y-2">
+                  {!inlineIdentity && identityDetails}
+                  {expandedTrustResolution && (
+                    <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+                      <span>Trust context</span>
+                      <CITrustContextLabel
+                        resolution={expandedTrustResolution}
+                      />
+                    </div>
+                  )}
+                </div>
+                {primaryEvent && !inlineActions && (
+                  <EventCardActions event={primaryEvent} className="shrink-0" />
+                )}
+              </div>
+            )}
+            <CIRunDetails
+              run={run}
+              nowSeconds={nowSeconds}
+              canRetry={canRetry}
+              providerTrust={providerTrust}
+            />
+          </div>
         </CollapsibleContent>
       </Collapsible>
     </li>

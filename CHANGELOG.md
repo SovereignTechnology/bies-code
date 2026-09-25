@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Search and filter repository workflow runs by workflow, trigger, status, branch, requester and coordinator, with responsive rows and expandable run details.
+
 ### Fixed
 
 - Redirect user profiles to their coordinator page when a validated coordinator advertisement is discovered.
