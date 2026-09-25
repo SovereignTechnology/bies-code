@@ -403,6 +403,19 @@ export function usePrivateRepositoryProbe(
   const account = useActiveAccount();
   const list = use$(privateGitRelayList$);
   const privateScopeRevision = use$(privateRepositoryScopeRevision$);
+  // Private event arrivals also advance the global revision. Only changes to
+  // this repository's quarantine or relay mapping should restart discovery;
+  // restarting for unrelated events unmounts open composers during loading.
+  const privateScopeKey = useMemo(() => {
+    if (!pubkey || !dTag) return "";
+    const coordinate = repoCoordinate(pubkey, dTag);
+    return JSON.stringify([
+      isPrivateRepositoryCoordinate(coordinate),
+      uniqueRelayUrls(getPrivateRepositoryRelays(coordinate) ?? []),
+    ]);
+    // The scope registry is external mutable state, invalidated by its revision.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pubkey, dTag, privateScopeRevision]);
   const hintsKey = useMemo(
     () => uniqueRelayUrls(relayHints).join(","),
     [relayHints],
@@ -472,7 +485,7 @@ export function usePrivateRepositoryProbe(
     list.generation,
     list.status,
     list.sourceEvent?.id,
-    privateScopeRevision,
+    privateScopeKey,
     knownAnnouncement?.id,
   ]);
 }

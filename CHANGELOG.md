@@ -8,6 +8,8 @@
 
 ### Fixed
 
+- Keep issue dialogs and typing focus stable when unrelated private repository events arrive.
+
 - Advance relay connection backoff after WebSocket errors without a close event, preventing unreachable relays from retrying every second indefinitely.
 
 - Redirect user profiles to their coordinator page when a validated coordinator advertisement is discovered.
