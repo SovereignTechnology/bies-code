@@ -66,14 +66,20 @@ export default function RepoIssuesPage() {
     repo?.confirmedMemberCoordinates.length === 0;
 
   // New issue dialog
-  const [newIssueOpen, setNewIssueOpen] = useState(false);
+  const [openDraft, setOpenDraft] = useState<string | null>(null);
   const draftScope = `issue:30617:${pubkey}:${repoId}`;
   const { key: draftKey, hasDraft } = useComposerDraft(draftScope);
   const [dismissedDraft, setDismissedDraft] = useState<string | null>(null);
   const closeIssue = () => {
-    setNewIssueOpen(false);
+    setOpenDraft(null);
     setDismissedDraft(draftKey);
   };
+
+  // Restoring a draft opens the form once. Clearing its text while editing
+  // must not close it; only an explicit dismissal should do that.
+  if (hasDraft && dismissedDraft !== draftKey && openDraft !== draftKey) {
+    setOpenDraft(draftKey);
+  }
 
   // Filters — all multi-select; status defaults to open
   const [statusFilter, setStatusFilter] = useState<IssueStatus[]>(
@@ -219,8 +225,10 @@ export default function RepoIssuesPage() {
       {/* New Issue Dialog */}
       {repo && !isReadOnlyRepository && (
         <Dialog
-          open={newIssueOpen || (hasDraft && dismissedDraft !== draftKey)}
-          onOpenChange={(open) => (open ? setNewIssueOpen(true) : closeIssue())}
+          open={openDraft === draftKey}
+          onOpenChange={(open) =>
+            open ? setOpenDraft(draftKey) : closeIssue()
+          }
         >
           <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
@@ -327,7 +335,7 @@ export default function RepoIssuesPage() {
             <Button
               size="sm"
               className="gap-1.5 bg-pink-600 hover:bg-pink-700 text-white h-8 text-xs shrink-0 ml-2"
-              onClick={() => setNewIssueOpen(true)}
+              onClick={() => setOpenDraft(draftKey)}
             >
               <Plus className="h-3.5 w-3.5" />
               New Issue

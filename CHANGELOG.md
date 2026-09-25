@@ -8,6 +8,8 @@
 
 ### Fixed
 
+- Keep restored issue dialogs open when their last text is cleared for replacement.
+
 - Preserve open issue forms and typing focus when newer public repository announcements arrive.
 
 - Keep issue dialogs and typing focus stable when unrelated private repository events arrive.
