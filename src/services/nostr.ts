@@ -1,5 +1,5 @@
 import { EventStore, mapEventsToStore } from "applesauce-core";
-import { fakeVerifyEvent, persistEventsToCache } from "applesauce-core/helpers";
+import { persistEventsToCache } from "applesauce-core/helpers";
 import type { Filter } from "applesauce-core/helpers";
 import {
   createAddressLoader,
@@ -90,6 +90,7 @@ import {
   getEffectivePRMergeBases,
 } from "@/lib/inferredPRParents";
 import { loadEventReferenceClosure } from "@/lib/eventReferenceClosure";
+import { createDedupedVerifyEvent } from "@/lib/dedupeVerifyEvent";
 import {
   getPrivateRepositoryRelays,
   getPrivateRelayTrustSession,
@@ -118,14 +119,16 @@ export const eventStore = new EventStore({
   deleteManager,
 });
 
-// Signature verification is intentionally disabled for the EventStore:
-// relay-delivered events are trusted without hash or schnorr checks. The
-// EventStore verifies by default, so this must be an explicit override.
-// See docs/signature-verification.md for the rationale and the planned
-// relay-trust spot-check model that will replace blanket verification.
-// The delete manager above keeps its own real verifier — rehydrated
-// deletion tombstones are always fully verified.
-eventStore.verifyEvent = fakeVerifyEvent;
+// Verify events when they are added to the store. Each event pays for a full
+// verification (hash + schnorr) at most once: identical copies of an
+// already-stored event skip straight to the store's id-based dedupe. See
+// createDedupedVerifyEvent for the safety argument.
+//
+// BIES Code keeps this on. Upstream 26e7ed57 switched to fakeVerifyEvent for
+// cold-load speed, which lets any relay the client queries inject forged
+// events (repository state, CI coordinator keys, relay lists) that the app
+// then trusts or signs on top of. See docs/signature-verification.md.
+eventStore.verifyEvent = createDedupedVerifyEvent(eventStore, verifyEvent);
 
 // Persist events to the local nostrdb
 persistEventsToCache(eventStore, saveEvents);

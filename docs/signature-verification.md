@@ -1,5 +1,15 @@
 # Signature Verification
 
+> **BIES Code fork:** verification is **enabled**. `src/services/nostr.ts` sets
+> `eventStore.verifyEvent = createDedupedVerifyEvent(eventStore, verifyEvent)`
+> (`src/lib/dedupeVerifyEvent.ts`), so every event is fully verified once and
+> only field-identical duplicates skip the check. We reverted upstream's
+> `fakeVerifyEvent` because, until the spot-check model below exists, it lets
+> any relay the client queries inject forged repository state, CI coordinator
+> advertisements and relay lists that the app trusts or signs on top of.
+> `src/lib/dedupeVerifyEvent.test.ts` fails if a merge re-disables it. The
+> upstream text below is kept for context.
+
 ## Current state: verification is disabled
 
 Since August 2026, the global `EventStore` in `src/services/nostr.ts` does not
