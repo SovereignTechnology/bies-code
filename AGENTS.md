@@ -1,3 +1,11 @@
+> **BIES Code fork — read first.** This fork does not ship upstream's MCP
+> servers (`.mcp.json`, and the `mcp` block in `opencode.json`, auto-started an
+> unpinned `npx -y @nostrbook/mcp@latest` and a remote MCP) or its `ngit` agent
+> skill (it told agents to pair fresh bunkers and print nsec/nbunksec). The
+> "Applesauce MCP" and `ngit` skill references below are upstream's. The
+> operator's own rules take precedence over this file, including: never amend
+> or force-push a pushed commit, and never print or store key material.
+
 # Project Overview
 
 This is **gitworkshop** — a Nostr-native Git collaboration client (issues, PRs, repos via NIP-34 + NIP-22 comments, GRASP repo announcements) built with React 18, TailwindCSS 3, Vite, shadcn/ui, and Applesauce v6.
