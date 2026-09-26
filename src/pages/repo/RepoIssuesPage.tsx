@@ -1,6 +1,7 @@
+import { useComposerDraft } from "@/hooks/useComposerDraft";
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { eventIdToNevent } from "@/lib/routeUtils";
+import { eventIdMatchesSearch, eventIdToNevent } from "@/lib/routeUtils";
 import { compactNumber } from "@/lib/utils";
 import { useSeoMeta } from "@unhead/react";
 import { useProfile } from "@/hooks/useProfile";
@@ -59,9 +60,26 @@ export default function RepoIssuesPage() {
   const repo = resolved?.repo;
   const account = useActiveAccount();
   const repoOwnerProfile = useProfile(pubkey);
+  const isReadOnlyRepository =
+    repo?.coordinateStatus === "archived" ||
+    repo?.coordinateStatus === "deleted" ||
+    repo?.confirmedMemberCoordinates.length === 0;
 
   // New issue dialog
-  const [newIssueOpen, setNewIssueOpen] = useState(false);
+  const [openDraft, setOpenDraft] = useState<string | null>(null);
+  const draftScope = `issue:30617:${pubkey}:${repoId}`;
+  const { key: draftKey, hasDraft } = useComposerDraft(draftScope);
+  const [dismissedDraft, setDismissedDraft] = useState<string | null>(null);
+  const closeIssue = () => {
+    setOpenDraft(null);
+    setDismissedDraft(draftKey);
+  };
+
+  // Restoring a draft opens the form once. Clearing its text while editing
+  // must not close it; only an explicit dismissal should do that.
+  if (hasDraft && dismissedDraft !== draftKey && openDraft !== draftKey) {
+    setOpenDraft(draftKey);
+  }
 
   // Filters — all multi-select; status defaults to open
   const [statusFilter, setStatusFilter] = useState<IssueStatus[]>(
@@ -123,17 +141,26 @@ export default function RepoIssuesPage() {
   }));
 
   // Apply filters
-  const filteredIssues = useMemo(() => {
-    if (!issues) return undefined;
-    return issues.filter((issue) => {
-      if (statusFilter.length > 0 && !statusFilter.includes(issue.status))
-        return false;
-      if (
-        labelFilter.length > 0 &&
-        !labelFilter.some((l) => issue.labels.includes(l))
-      )
-        return false;
-      if (authorFilter && issue.pubkey !== authorFilter) return false;
+  const { filteredIssues, idMatchesOutsideFilters } = useMemo(() => {
+    if (!issues) {
+      return { filteredIssues: undefined, idMatchesOutsideFilters: 0 };
+    }
+    let outsideFilterCount = 0;
+    const filtered = issues.filter((issue) => {
+      const matchesFacets =
+        (statusFilter.length === 0 || statusFilter.includes(issue.status)) &&
+        !(
+          labelFilter.length > 0 &&
+          !labelFilter.some((label) => issue.labels.includes(label))
+        ) &&
+        (!authorFilter || issue.pubkey === authorFilter);
+      const matchesId = eventIdMatchesSearch(issue.id, searchQuery);
+
+      if (matchesId) {
+        if (!matchesFacets) outsideFilterCount++;
+        return true;
+      }
+      if (!matchesFacets) return false;
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
         if (
@@ -145,6 +172,10 @@ export default function RepoIssuesPage() {
       }
       return true;
     });
+    return {
+      filteredIssues: filtered,
+      idMatchesOutsideFilters: outsideFilterCount,
+    };
   }, [issues, statusFilter, labelFilter, authorFilter, searchQuery]);
 
   const { visibleAcceptedIssues, visibleUnconfirmedIssues } = useMemo(() => {
@@ -182,7 +213,9 @@ export default function RepoIssuesPage() {
   };
 
   useSeoMeta({
-    title: repo ? `Issues - ${repo.name} - BIES Code` : "Repository Issues - BIES Code",
+    title: repo
+      ? `Issues - ${repo.name} - BIES Code`
+      : "Repository Issues - BIES Code",
     description: repo?.description ?? "Browse issues for this repository",
     ogImage: repoOwnerProfile?.picture ?? "/og-image.png",
     ogImageAlt: repo?.name ?? repoId,
@@ -192,8 +225,13 @@ export default function RepoIssuesPage() {
   return (
     <div className="container max-w-screen-xl px-4 md:px-8 py-6">
       {/* New Issue Dialog */}
-      {repo && (
-        <Dialog open={newIssueOpen} onOpenChange={setNewIssueOpen}>
+      {repo && !isReadOnlyRepository && (
+        <Dialog
+          open={openDraft === draftKey}
+          onOpenChange={(open) =>
+            open ? setOpenDraft(draftKey) : closeIssue()
+          }
+        >
           <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2">
@@ -207,10 +245,11 @@ export default function RepoIssuesPage() {
               </DialogDescription>
             </DialogHeader>
             <CreateIssueForm
-              repoCoord={repo.allCoordinates[0]}
-              ownerPubkey={repo.selectedMaintainer}
-              onSuccess={() => setNewIssueOpen(false)}
-              onCancel={() => setNewIssueOpen(false)}
+              key={draftKey}
+              draftScope={draftScope}
+              repoCoords={repo.confirmedMemberCoordinates}
+              onSuccess={closeIssue}
+              onCancel={closeIssue}
             />
           </DialogContent>
         </Dialog>
@@ -221,7 +260,7 @@ export default function RepoIssuesPage() {
         <div className="relative flex-1 max-w-sm">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
-            placeholder="Search issues..."
+            placeholder="Search issues or event ID..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="pl-10 bg-background/60"
@@ -272,6 +311,17 @@ export default function RepoIssuesPage() {
         </div>
       </div>
 
+      {idMatchesOutsideFilters > 0 && (
+        <p
+          role="status"
+          className="mb-3 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-sm text-amber-700 dark:text-amber-300"
+        >
+          Showing {idMatchesOutsideFilters} issue
+          {idMatchesOutsideFilters === 1 ? "" : "s"} outside your current
+          filters.
+        </p>
+      )}
+
       {/* Bordered container with status tabs header + list */}
       <div className="rounded-lg border border-border overflow-hidden">
         {/* Header bar: status tabs + new issue button */}
@@ -283,11 +333,11 @@ export default function RepoIssuesPage() {
             onChange={(v) => setStatusFilter(v as IssueStatus[])}
             className="border-b-0 pb-0 mb-0 flex-1"
           />
-          {account && repo && (
+          {account && repo && !isReadOnlyRepository && (
             <Button
               size="sm"
               className="gap-1.5 bg-primary hover:bg-primary/90 text-primary-foreground h-8 text-xs shrink-0 ml-2"
-              onClick={() => setNewIssueOpen(true)}
+              onClick={() => setOpenDraft(draftKey)}
             >
               <Plus className="h-3.5 w-3.5" />
               New Issue

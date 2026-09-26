@@ -133,7 +133,7 @@ export function AvatarWithBadges({
         </span>
       )}
 
-      {/* Git badge — pink, always in front at bottom-right */}
+      {/* Git badge — primary, always in front at bottom-right */}
       {showGit && (
         <span
           className={cn(
@@ -147,7 +147,7 @@ export function AvatarWithBadges({
         >
           {size !== "xs" && size !== "sm" && (
             <UserCheck
-              className="text-white"
+              className="text-primary-foreground"
               style={{ width: "65%", height: "65%" }}
               strokeWidth={size === "xl" ? 2 : 2.5}
             />
@@ -302,7 +302,7 @@ export function UserName({
   );
 }
 
-interface UserLinkProps {
+export interface UserLinkProps {
   pubkey: string;
   className?: string;
   avatarSize?: "xs" | "sm" | "md" | "lg" | "xl";
@@ -311,6 +311,8 @@ interface UserLinkProps {
   variant?: "default" | "inline";
   /** Set to true when UserLink is already inside an <a> element to avoid invalid nested anchors. */
   noLink?: boolean;
+  /** Override the normal user profile destination for contextual identity links. */
+  profilePath?: string;
 }
 
 /**
@@ -327,9 +329,11 @@ export function UserLink({
   nameClassName,
   variant = "default",
   noLink = false,
+  profilePath,
 }: UserLinkProps) {
   const { name: displayName, isPlaceholder } = useUserDisplayName(pubkey);
   const userPath = useUserPath(pubkey);
+  const destination = profilePath ?? userPath;
   const inline = variant === "inline";
 
   const inner = (
@@ -357,7 +361,7 @@ export function UserLink({
 
   if (noLink) {
     return (
-      <ProfileHoverCard pubkey={pubkey}>
+      <ProfileHoverCard pubkey={pubkey} profilePath={profilePath}>
         <span
           className={cn(
             inline
@@ -373,9 +377,9 @@ export function UserLink({
   }
 
   return (
-    <ProfileHoverCard pubkey={pubkey} asChild>
+    <ProfileHoverCard pubkey={pubkey} profilePath={profilePath} asChild>
       <Link
-        to={userPath}
+        to={destination}
         onClick={(e) => e.stopPropagation()}
         className={cn(
           inline

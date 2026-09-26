@@ -1,7 +1,13 @@
+import type { ComponentProps } from "react";
+import { ErrorRetryAction } from "@/components/ErrorRetryAction";
+import { useErrorRetry, type ErrorRetryState } from "@/hooks/useErrorRetry";
 import { useEffect, useMemo, useState } from "react";
 import { Link, Navigate, useParams, useLocation } from "react-router-dom";
 import { useActiveAccount } from "applesauce-react/hooks";
-import { useResolvedRepository } from "@/hooks/useResolvedRepository";
+import {
+  useResolvedRepository,
+  type ResolvedRepository,
+} from "@/hooks/useResolvedRepository";
 import RepoIssuesPage from "./RepoIssuesPage";
 import RepoPRsPage from "./RepoPRsPage";
 import RepoCodePage from "./RepoCodePage";
@@ -11,18 +17,22 @@ import RepoCommitsPage from "./RepoCommitsPage";
 import RepoCommitPage from "./RepoCommitPage";
 import RepoBranchesPage from "./RepoBranchesPage";
 import RepoTagsPage from "./RepoTagsPage";
+import RepoComparePage from "./RepoComparePage";
 import RepoActionsPage from "./RepoActionsPage";
+import RepoCoordinatorsPage from "./RepoCoordinatorsPage";
+import RepoReleasesPage from "./RepoReleasesPage";
 import IssuePage from "@/pages/IssuePage";
 import PRPage from "@/pages/PRPage";
 import { useIssues } from "@/hooks/useIssues";
 import { usePRs } from "@/hooks/usePRs";
 import { useRepoHasCI } from "@/hooks/useCI";
+import { useRepoReleaseSummary } from "@/hooks/useSoftwareReleases";
 import { usePrefetchNip05 } from "@/hooks/usePrefetchNip05";
 import { useDnsIdentity } from "@/hooks/useDnsIdentity";
 import { useRepositoryState } from "@/hooks/useRepositoryState";
+import { useRepositoryMembershipMutation } from "@/hooks/useRepositoryMembershipMutation";
+import { hasUnsupportedAcceptanceRoleHistory } from "@/lib/repositoryMembershipMutation";
 import type { RepositoryState } from "@/casts/RepositoryState";
-import { useGraspServers, type GraspServer } from "@/hooks/useGraspServers";
-import { useMaintainerAcceptanceJob } from "@/hooks/useMaintainerAcceptanceJob";
 import { use$ } from "@/hooks/use$";
 import { useProfile } from "@/hooks/useProfile";
 import { useLoadProfile } from "@/hooks/useLoadProfile";
@@ -34,16 +44,8 @@ import { nip34SupplementalRelayLoader } from "@/services/nostr";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { nip19, type EventTemplate, type NostrEvent } from "nostr-tools";
+import { Input } from "@/components/ui/input";
+import { nip19 } from "nostr-tools";
 import {
   ArrowLeft,
   CircleDot,
@@ -55,9 +57,8 @@ import {
   MoreHorizontal,
   Settings,
   Workflow,
+  Package,
   UserPlus,
-  CheckCircle2,
-  Users,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -67,10 +68,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { RepoContext, type RepoContextValue } from "./RepoContext";
 import {
-  getRepoCloneUrls,
-  graspCloneUrlDomain,
+  getRepositoryPresentationCoordinates,
   hasAcceptedRepositoryReference,
-  repoCoordinate,
   type RepoQueryOptions,
   type ResolvedRepo,
 } from "@/lib/nip34";
@@ -91,26 +90,18 @@ import {
 } from "@/components/CommitLinkContext";
 import { RepoRelaysContext } from "@/contexts/RepoRelaysContext";
 import { relayGroupUrls$ } from "@/models/RepositoryRelayGroup";
-import { EMPTY } from "rxjs";
+import { getRepositoryLeadRedirectPath } from "@/lib/repositoryLeadRoute";
+import { BehaviorSubject, EMPTY, merge } from "rxjs";
 import { catchError } from "rxjs/operators";
-import { useToast } from "@/hooks/useToast";
-import { GraspServerSelector } from "@/components/GraspServerSelector";
 import {
-  selectGraspDomainsWithBackfill,
-  validateGraspServer,
-} from "@/lib/grasp";
-import { DEFAULT_GRASP_SERVERS } from "@/services/settings";
-import {
-  maintainerAcceptanceKey,
-  runMaintainerAcceptanceDelivery,
-  saveMaintainerAcceptanceJob,
-  type MaintainerAcceptanceJob,
-} from "@/services/maintainerAcceptance";
-import {
-  buildMaintainerAcceptanceTemplate,
-  classifyInvitationState,
-  getAcceptanceMaintainerSelection,
-} from "@/lib/repositoryInvitation";
+  ciRepositoryCoordinatorStatus$,
+  repoCIActivity$,
+} from "@/services/ciQueries";
+import { useGitPool } from "@/hooks/useGitPool";
+import { usePrivateGitRelays } from "@/hooks/usePrivateGitRelays";
+import { BuzzRepositoryContext } from "@/contexts/BuzzRepositoryContext";
+import { formatDistanceToNow } from "date-fns";
+
 // ---------------------------------------------------------------------------
 // RepoLayout
 // ---------------------------------------------------------------------------
@@ -137,11 +128,11 @@ export default function RepoLayout() {
   if (parsed.type === "npub") {
     return (
       <RepoLayoutResolved
+        key={`${parsed.pubkey}:${parsed.repoId}`}
         pubkey={parsed.pubkey}
         repoId={parsed.repoId}
         relayHints={parsed.relayHints}
         location={location}
-        splat={splat ?? ""}
       />
     );
   }
@@ -153,7 +144,6 @@ export default function RepoLayout() {
       repoId={parsed.repoId}
       relayHints={parsed.relayHints}
       location={location}
-      splat={splat ?? ""}
     />
   );
 }
@@ -167,13 +157,11 @@ function RepoLayoutNip05({
   repoId,
   relayHints,
   location,
-  splat,
 }: {
   nip05: string;
   repoId: string;
   relayHints: string[];
   location: ReturnType<typeof useLocation>;
-  splat: string;
 }) {
   const identity = useDnsIdentity(nip05);
 
@@ -186,17 +174,23 @@ function RepoLayoutNip05({
   }
 
   if (identity.status === "error") {
-    return <Nip05ResolveError nip05={nip05} reason={identity.reason} />;
+    return (
+      <Nip05ResolveError
+        nip05={nip05}
+        reason={identity.reason}
+        recovery={identity.recovery}
+      />
+    );
   }
 
   return (
     <RepoLayoutResolved
+      key={`${identity.pubkey}:${repoId}`}
       pubkey={identity.pubkey}
       repoId={repoId}
       nip05Relays={identity.relays}
       relayHints={relayHints}
       location={location}
-      splat={splat}
       nip05={nip05}
     />
   );
@@ -206,31 +200,97 @@ function RepoLayoutNip05({
 // Core layout (pubkey already known)
 // ---------------------------------------------------------------------------
 
-function RepoLayoutResolved({
+function RepoLayoutResolved(
+  props: Omit<ComponentProps<typeof RepoLayoutSession>, "onRetryAccess">,
+) {
+  const [attempt, setAttempt] = useState(0);
+  return (
+    <RepoLayoutSession
+      {...props}
+      key={attempt}
+      onRetryAccess={() => setAttempt((value) => value + 1)}
+    />
+  );
+}
+
+function RepoLayoutSession({
+  onRetryAccess,
   pubkey,
   repoId,
   nip05Relays,
   relayHints,
   location,
-  splat,
   nip05,
 }: {
+  onRetryAccess: () => void;
   pubkey: string;
   repoId: string;
   /** Relay hints from NIP-05 identity resolution (shown as their own group). */
   nip05Relays?: string[];
   relayHints: string[];
   location: ReturnType<typeof useLocation>;
-  splat: string;
   nip05?: string;
 }) {
-  const { resolved, repoSearch } = useResolvedRepository(
-    pubkey,
-    repoId,
-    relayHints,
-    nip05Relays,
-  );
+  const {
+    resolved,
+    repoSearch,
+    announcementsFreshEose,
+    announcementsSettled,
+    privateProbe,
+  } = useResolvedRepository(pubkey, repoId, relayHints, nip05Relays);
   const repo = resolved?.repo;
+  const isPrivate = privateProbe?.status === "found" || !!repo?.isPrivate;
+  const presentationRepoCoordinates = useMemo(
+    () => (repo ? getRepositoryPresentationCoordinates(repo) : undefined),
+    [repo],
+  );
+
+  // Build an encoded base path for intra-repository links. Route wildcard
+  // values are decoded by React Router, including `%2F` inside a repository
+  // identifier, so always rebuild links from the resolved route values.
+  const basePath = useMemo(() => {
+    return repoToPath(pubkey, repoId, relayHints, nip05);
+  }, [pubkey, repoId, relayHints, nip05]);
+  const repoPageSuffix = useMemo(() => {
+    if (location.pathname.startsWith(basePath)) {
+      return location.pathname.slice(basePath.length);
+    }
+
+    // Incoming nprofile, raw-hex and legacy identity routes may not equal the
+    // canonical basePath. Locate explicit relay segments in the URL itself;
+    // nprofile relay hints do not occupy path segments. Parse with a plain
+    // npub to distinguish explicit hints from those embedded in the identity.
+    const rawSegments = location.pathname.slice(1).split("/").filter(Boolean);
+    const explicitRoute = parseRepoRoute(
+      [nip19.npubEncode(pubkey), ...rawSegments.slice(1)].join("/"),
+    );
+    const hasRelaySegment = (explicitRoute?.relayHints.length ?? 0) > 0;
+    let repoSegmentIndex = hasRelaySegment ? 2 : 1;
+    if (hasRelaySegment) {
+      let relaySegment = rawSegments[1] ?? "";
+      try {
+        relaySegment = decodeURIComponent(relaySegment);
+      } catch {
+        // Keep the raw segment when it is not valid percent-encoding.
+      }
+      if (relaySegment === "ws:" || relaySegment === "wss:") {
+        repoSegmentIndex = 3;
+      }
+    }
+    const suffix = rawSegments.slice(repoSegmentIndex + 1).join("/");
+    return suffix ? `/${suffix}` : "";
+  }, [basePath, location.pathname, pubkey]);
+
+  const isCodeTab =
+    repoPageSuffix.startsWith("/tree") ||
+    repoPageSuffix === "" ||
+    repoPageSuffix === "/";
+  const isIssuesTab = repoPageSuffix.startsWith("/issues");
+  const isPRsTab = repoPageSuffix.startsWith("/prs");
+  const isActionsTab = repoPageSuffix.startsWith("/actions");
+  const isAboutTab = repoPageSuffix.startsWith("/about");
+  const isSettingsTab = repoPageSuffix.startsWith("/settings");
+  const isReleasesTab = repoPageSuffix.startsWith("/releases");
 
   // Delay showing the repo search status page so the skeleton shows first.
   // Timer starts on mount (keyed to pubkey+repoId) and is never reset by
@@ -244,7 +304,7 @@ function RepoLayoutResolved({
 
   // Prefetch NIP-05 identities for all maintainers so useRepoPath can resolve
   // them synchronously from the IDB cache on subsequent visits.
-  usePrefetchNip05(repo?.maintainerSet ?? []);
+  usePrefetchNip05(isPrivate ? [] : (repo?.confirmedMembers ?? []));
   const repoRelayGroup = resolved?.repoRelayGroup;
   const extraRelaysForMaintainerMailboxCoverage =
     resolved?.extraRelaysForMaintainerMailboxCoverage;
@@ -263,59 +323,123 @@ function RepoLayoutResolved({
   // nip34SupplementalRelayLoader which — unlike a plain subscription — also
   // calls nip34ListLoader for each newly found item, ensuring status events
   // (1630-1633) and other essentials on author/maintainer outbox relays are
-  // fetched, not just the root events.
-  const coordKey = repo?.allCoordinates?.join(",") ?? "";
+  // fetched, not just the root events. Coordinates are fed in reactively so
+  // a maintainer confirming later grows the live subscription with delta
+  // REQs instead of restarting it.
+  const coordKey = repo?.confirmedMemberCoordinates.join(",") ?? "";
+  const supplementalCoords$ = useMemo(
+    () => new BehaviorSubject<string[]>(repo?.confirmedMemberCoordinates ?? []),
+    // Intentionally NOT keyed on the coordinates — they are fed in below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [extraRelaysForMaintainerMailboxCoverage],
+  );
+  useEffect(() => {
+    if (repo?.confirmedMemberCoordinates.length)
+      supplementalCoords$.next(repo.confirmedMemberCoordinates);
+    // Content-keyed dep: pushes happen only when the coordinate set changes;
+    // the loader additionally no-ops on unchanged lists.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [supplementalCoords$, coordKey]);
+  const hasMemberCoords = !!repo?.confirmedMemberCoordinates.length;
   use$(() => {
     if (
       curationMode !== "outbox" ||
+      isPrivate ||
       !extraRelaysForMaintainerMailboxCoverage ||
-      !repo?.allCoordinates?.length
+      !hasMemberCoords
     )
       return undefined;
     return nip34SupplementalRelayLoader(
-      repo.allCoordinates,
+      supplementalCoords$,
       extraRelaysForMaintainerMailboxCoverage,
     ).pipe(catchError(() => EMPTY));
-  }, [curationMode, extraRelaysForMaintainerMailboxCoverage, coordKey]);
+  }, [
+    curationMode,
+    isPrivate,
+    extraRelaysForMaintainerMailboxCoverage,
+    hasMemberCoords,
+    supplementalCoords$,
+  ]);
 
+  const relayHintsKey = relayHints.join(",");
+  const confirmedMaintainersKey = repo?.confirmedMaintainers.join(",") ?? "";
   const queryOptions: RepoQueryOptions = useMemo(
     () => ({
-      relayHints,
+      relayHints: isPrivate ? [] : relayHints,
       useItemAuthorRelays: false,
-      maintainerPubkeys: repo?.maintainerSet ?? [],
+      maintainerPubkeys: repo?.confirmedMaintainers ?? [],
+      privateRepository: isPrivate,
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [relayHints.join(","), repo?.maintainerSet?.join(","), curationMode],
+    [relayHintsKey, confirmedMaintainersKey, isPrivate],
   );
 
-  const issues = useIssues(repo?.allCoordinates, repoRelayGroup, queryOptions);
-  const prs = usePRs(repo?.allCoordinates, repoRelayGroup, queryOptions);
+  const issues = useIssues(
+    presentationRepoCoordinates,
+    repoRelayGroup,
+    queryOptions,
+    repo?.roleHistory,
+  );
+  const prs = usePRs(
+    presentationRepoCoordinates,
+    repoRelayGroup,
+    queryOptions,
+    repo?.roleHistory,
+  );
 
   const acceptedRepoCoordinates = useMemo(
-    () =>
-      repo?.confirmedMaintainers.map((maintainer) =>
-        repoCoordinate(maintainer, repo.dTag),
-      ) ?? [],
+    () => repo?.confirmedMemberCoordinates ?? [],
     [repo],
   );
-  const selectedRepoCoordinate = repo
-    ? repoCoordinate(repo.selectedMaintainer, repo.dTag)
-    : undefined;
+  const selectedRepoCoordinate = repo?.selectedCoordinate;
   const acceptedAnnouncements = useMemo(
-    () =>
-      repo?.announcements.filter((announcement) =>
-        repo.confirmedMaintainers.includes(announcement.pubkey),
-      ) ?? [],
+    () => repo?.confirmedAnnouncements ?? [],
     [repo],
   );
 
   // Whether the repo has any CI events (ngit-ci kinds 9841/9842) — drives
   // visibility of the Actions tab. Cheap limit-1 probe by #a across all
   // maintainer coordinates.
-  const hasCI = useRepoHasCI(repo?.allCoordinates, repoRelayGroup);
+  const hasCI = useRepoHasCI(
+    isPrivate ? undefined : repo?.confirmedMaintainerCoordinates,
+    isPrivate ? undefined : repoRelayGroup,
+  );
 
-  const [repoState, repoRelayEose, relayStateMap, repoStateEvents] =
-    useRepositoryState(repo?.dTag, repo?.maintainerSet, repoRelayGroup);
+  // Pin the shared repository CI context for the lifetime of the layout once
+  // the repository shows CI signals, so child pages and tab navigation attach
+  // to one live set of queries instead of reopening them per mount. The
+  // coordinator discovery query is already held open by useRepoHasCI above.
+  const maintainerCoordKey =
+    repo?.confirmedMaintainerCoordinates.join(",") ?? "";
+  use$(() => {
+    if (isPrivate || !hasCI || !repo?.confirmedMaintainerCoordinates.length)
+      return undefined;
+    return merge(
+      repoCIActivity$(
+        repo.confirmedMaintainerCoordinates,
+        repo.selectedCoordinate,
+      ),
+      ciRepositoryCoordinatorStatus$(
+        repo.confirmedMaintainerCoordinates,
+        repo.selectedCoordinate,
+        repo.confirmedMaintainers,
+      ),
+    );
+  }, [isPrivate, hasCI, maintainerCoordKey, repo?.selectedCoordinate]);
+  const releaseSummary = useRepoReleaseSummary(
+    isPrivate ? undefined : repo?.confirmedMaintainerCoordinates,
+    isPrivate ? undefined : repo?.confirmedMaintainers,
+    isPrivate ? undefined : repoRelayGroup,
+    !isReleasesTab && !isPrivate,
+  );
+  const hasReleases = releaseSummary.hasReleases;
+
+  const [repoState, repoRelayEose, relayStateMap] = useRepositoryState(
+    repo?.dTag,
+    repo?.confirmedMaintainers,
+    repoRelayGroup,
+    resolved?.replaceableCoverage,
+  );
 
   // Count open issues for the tab badge
   const openIssueCount = useMemo(() => {
@@ -337,41 +461,17 @@ function RepoLayoutResolved({
     ).length;
   }, [prs, repo]);
 
-  // Every recursively reachable maintainer can enter Settings. The settings
-  // page redirects maintainers with announcements to their own coordinate and
-  // sends invitees without one through acceptance first.
+  // Settings and maintainer-only controls are restricted to the reciprocal
+  // confirmed component.
   const account = useActiveAccount();
-  const {
-    servers: accountGraspServers,
-    isFromUserList: accountGraspServersFromUserList,
-    isLoading: accountGraspServersLoading,
-  } = useGraspServers(account?.pubkey);
   const canOpenSettings =
-    account?.pubkey && repo
-      ? repo.maintainerSet.includes(account.pubkey)
+    !isPrivate && account?.pubkey && repo
+      ? repo.confirmedMaintainers.includes(account.pubkey)
       : false;
+  const showReleases =
+    !isPrivate && (hasReleases || isReleasesTab || canOpenSettings);
 
-  // Build an encoded base path for intra-repository links. `splat` is decoded
-  // by React Router, including `%2F` inside a repository identifier; using it
-  // directly would turn an identifier such as `lightningdevkit/rust-lightning`
-  // into multiple path segments when linking to `/prs`, `/issues`, etc.
-  const basePath = useMemo(() => {
-    return repoToPath(pubkey, repoId, relayHints, nip05);
-  }, [pubkey, repoId, relayHints, nip05]);
-  const repoPageSuffix = location.pathname.startsWith(basePath)
-    ? location.pathname.slice(basePath.length)
-    : "";
-
-  const isCodeTab =
-    location.pathname.startsWith(`${basePath}/tree`) ||
-    location.pathname === basePath ||
-    location.pathname === `${basePath}/`;
-  const isIssuesTab = location.pathname.startsWith(`${basePath}/issues`);
-  const isPRsTab = location.pathname.startsWith(`${basePath}/prs`);
-  const isActionsTab = location.pathname.startsWith(`${basePath}/actions`);
-  const isAboutTab = location.pathname.startsWith(`${basePath}/about`);
-  const isSettingsTab = location.pathname.startsWith(`${basePath}/settings`);
-  // Determine which sub-page to render from the splat segments.
+  // Determine which sub-page to render from the repository suffix.
   const {
     subPage,
     issueId,
@@ -379,7 +479,12 @@ function RepoLayoutResolved({
     treeRefAndPath,
     commitId,
     commitsRef,
+    compareBaseRef,
+    compareHeadRef,
     prCommitId,
+    coordinatorIdentifier,
+    releaseId,
+    releaseView,
   } = useMemo((): {
     subPage:
       | "code"
@@ -392,7 +497,10 @@ function RepoLayoutResolved({
       | "commit"
       | "branches"
       | "tags"
+      | "compare"
       | "actions"
+      | "action-coordinators"
+      | "releases"
       | "about"
       | "edit"
       | "settings";
@@ -402,21 +510,51 @@ function RepoLayoutResolved({
     treeRefAndPath?: string;
     commitId?: string;
     commitsRef?: string;
+    compareBaseRef?: string;
+    compareHeadRef?: string;
     prCommitId?: string;
+    coordinatorIdentifier?: string;
+    releaseId?: string;
+    releaseView?: "releases" | "applications";
   } => {
-    const segments = splat.split("/").filter(Boolean);
+    const segments = repoPageSuffix
+      .split("/")
+      .filter(Boolean)
+      .map((segment) => {
+        try {
+          return decodeURIComponent(segment);
+        } catch {
+          return segment;
+        }
+      });
 
-    // Find the index of the first known sub-path keyword
-    const treeIdx = segments.indexOf("tree");
-    if (treeIdx !== -1) {
+    // Only the first segment after the resolved repository path selects a
+    // sub-page. Reserved words inside refs and file paths are ordinary data.
+    if (segments[0] === "compare") {
+      const comparison = segments.slice(1).join("/");
+      const delimiter = comparison.indexOf("...");
+      if (delimiter === -1) {
+        return {
+          subPage: "compare",
+          compareBaseRef: comparison || undefined,
+        };
+      }
+      return {
+        subPage: "compare",
+        compareBaseRef: comparison.slice(0, delimiter) || undefined,
+        compareHeadRef: comparison.slice(delimiter + 3) || undefined,
+      };
+    }
+
+    if (segments[0] === "tree") {
       // Pass everything after "tree" as a single string; useGitExplorer will
       // resolve the ref via longest-prefix matching against known git refs.
-      const refAndPath = segments.slice(treeIdx + 1).join("/");
+      const refAndPath = segments.slice(1).join("/");
       return { subPage: "code", treeRefAndPath: refAndPath || undefined };
     }
 
-    const prsIdx = segments.indexOf("prs");
-    if (prsIdx !== -1) {
+    if (segments[0] === "prs") {
+      const prsIdx = 0;
       if (segments.length > prsIdx + 1) {
         const rawSegment = segments[prsIdx + 1];
         // Accept both raw hex IDs (legacy) and nevent1/note1 identifiers
@@ -453,36 +591,56 @@ function RepoLayoutResolved({
       return { subPage: "prs" };
     }
 
-    const commitIdx = segments.indexOf("commit");
-    if (commitIdx !== -1) {
-      return { subPage: "commit", commitId: segments[commitIdx + 1] };
+    if (segments[0] === "commit") {
+      return { subPage: "commit", commitId: segments[1] };
     }
 
-    const commitsIdx = segments.indexOf("commits");
-    if (commitsIdx !== -1) {
+    if (segments[0] === "commits") {
       return {
         subPage: "commits",
-        commitsRef: segments.slice(commitsIdx + 1).join("/") || undefined,
+        commitsRef: segments.slice(1).join("/") || undefined,
       };
     }
 
-    const branchesIdx = segments.indexOf("branches");
-    if (branchesIdx !== -1) {
+    if (segments[0] === "branches") {
       return { subPage: "branches" };
     }
 
-    const tagsIdx = segments.indexOf("tags");
-    if (tagsIdx !== -1) {
+    if (segments[0] === "tags") {
       return { subPage: "tags" };
     }
 
-    const actionsIdx = segments.indexOf("actions");
-    if (actionsIdx !== -1) {
+    if (segments[0] === "actions") {
+      if (segments[1] === "coordinators") {
+        return {
+          subPage: "action-coordinators",
+          coordinatorIdentifier: segments[2],
+        };
+      }
       return { subPage: "actions" };
     }
 
-    const issuesIdx = segments.indexOf("issues");
-    if (issuesIdx !== -1) {
+    if (segments[0] === "releases") {
+      const releasesIdx = 0;
+      const applicationsRoute = segments[releasesIdx + 1] === "apps";
+      const rawSegment = segments[releasesIdx + (applicationsRoute ? 2 : 1)];
+      if (rawSegment) {
+        return {
+          subPage: "releases",
+          releaseView: applicationsRoute ? "applications" : "releases",
+          releaseId: isEventIdentifier(rawSegment)
+            ? (decodeEventIdentifier(rawSegment) ?? rawSegment)
+            : rawSegment,
+        };
+      }
+      return {
+        subPage: "releases",
+        releaseView: applicationsRoute ? "applications" : "releases",
+      };
+    }
+
+    if (segments[0] === "issues") {
+      const issuesIdx = 0;
       if (segments.length > issuesIdx + 1) {
         const rawSegment = segments[issuesIdx + 1];
         // Accept both raw hex IDs (legacy) and nevent1/note1 identifiers
@@ -494,36 +652,49 @@ function RepoLayoutResolved({
       return { subPage: "issues" };
     }
 
-    const editIdx = segments.indexOf("edit");
-    if (editIdx !== -1) {
+    if (segments[0] === "edit") {
       return { subPage: "edit" };
     }
 
-    const aboutIdx = segments.indexOf("about");
-    if (aboutIdx !== -1) {
+    if (segments[0] === "about") {
       return { subPage: "about" };
     }
 
-    const settingsIdx = segments.indexOf("settings");
-    if (settingsIdx !== -1) {
+    if (segments[0] === "settings") {
       return { subPage: "settings" };
     }
 
     return { subPage: "code" };
-  }, [splat]);
+  }, [repoPageSuffix]);
 
   const cloneUrls = repo?.cloneUrls ?? [];
+  // RepoLayout is the single live owner of signed state for this repository.
+  // The pool retains that knowledge for state-less consumers and across its
+  // eviction grace period; route cleanup never changes repository truth.
+  const { pool: commitLinkPool, privateAccessError } = useGitPool(cloneUrls, {
+    private: isPrivate,
+    headRef: repoState?.headRef,
+    knownHeadCommit: repoState?.headCommitId,
+    stateRefs: repoState?.refs,
+    stateCreatedAt: repoState ? repoState.event.created_at : undefined,
+    stateSettled: repoRelayEose && repoState !== undefined,
+  });
+  const accessRecovery = useErrorRetry({
+    resourceKey: `${pubkey}:${repoId}`,
+    failed: !!privateAccessError,
+    busy: false,
+    onRetry: onRetryAccess,
+  });
 
   // The PR base path: basePath + /prs/<prId> — used for PR sub-route links.
   const prBasePath = useMemo(() => {
     if (!prId) return undefined;
-    const segments = splat.split("/").filter(Boolean);
-    const prsIdx = segments.indexOf("prs");
-    const prIdSegment = segments[prsIdx + 1];
-    return prsIdx === -1 || !prIdSegment
+    const segments = repoPageSuffix.split("/").filter(Boolean);
+    const prIdSegment = segments[1];
+    return segments[0] !== "prs" || !prIdSegment
       ? undefined
       : `${basePath}/prs/${prIdSegment}`;
-  }, [basePath, splat, prId]);
+  }, [basePath, repoPageSuffix, prId]);
 
   const ctxValue: RepoContextValue | null =
     pubkey && repoId && resolved
@@ -541,24 +712,54 @@ function RepoLayoutResolved({
           cloneUrls,
           repoState,
           repoRelayEose,
+          announcementsSettled,
           relayStateMap,
           treeRefAndPath,
           commitId,
           commitsRef,
+          compareBaseRef,
+          compareHeadRef,
           prCommitId,
           prBasePath,
           basePath,
+          releaseSummary,
         }
       : null;
 
   // Build the git commit link context — provides cloneUrls + basePath to
   // CommentContent / MarkdownContent for linkifying commit hash mentions.
   const gitCommitLinkCtxValue: GitCommitLinkContextValue = useMemo(
-    () => ({ cloneUrls, basePath }),
+    () => ({
+      cloneUrls,
+      basePath,
+      pool: commitLinkPool,
+      privateRepository: isPrivate,
+    }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [cloneUrls.join(","), basePath],
+    [cloneUrls.join(","), basePath, commitLinkPool, isPrivate],
   );
 
+  // Route at the first fresh announcement EOSE (both explicit and
+  // legacy-inferred leads): the lead path is fail-closed on partial data, and
+  // a grasp/index relay holding any maintainer's announcement for a repo
+  // holds the whole group's, so the first fresh view is graph-complete in
+  // practice. Keeping this after every hook invalidates stale decisions
+  // across renders; a later correction is another replace-navigation.
+  const leadRedirectPath = repo
+    ? getRepositoryLeadRedirectPath({
+        selectedPubkey: pubkey,
+        dTag: repo.dTag,
+        relayHints,
+        pageSuffix: repoPageSuffix,
+        search: location.search,
+        hash: location.hash,
+        leadResolution: repo.leadResolution,
+        announcementsFreshEose,
+      })
+    : undefined;
+  if (leadRedirectPath) {
+    return <Navigate to={leadRedirectPath} replace state={location.state} />;
+  }
   return (
     <RepoRelaysContext.Provider value={repoRelayUrls}>
       <div className="min-h-full">
@@ -575,21 +776,30 @@ function RepoLayoutResolved({
                   basePath={basePath}
                   nip05={nip05}
                 />
+                {repo.isBuzz && (
+                  <Badge variant="secondary" className="shrink-0">
+                    Basic Buzz support
+                  </Badge>
+                )}
                 <div className="flex items-center gap-2 flex-shrink-0">
-                  <RepoZapButton
-                    targetAnnouncement={repo.announcements.find(
-                      (a) => a.pubkey === repo.selectedMaintainer,
-                    )}
-                    repoCoords={acceptedRepoCoordinates}
-                  />
-                  <FollowRepoButton repoCoord={selectedRepoCoordinate} />
-                  <StarButton
-                    targetAnnouncement={repo.announcements.find(
-                      (a) => a.pubkey === repo.selectedMaintainer,
-                    )}
-                    allAnnouncements={acceptedAnnouncements}
-                    repoCoords={acceptedRepoCoordinates}
-                  />
+                  {!isPrivate && (
+                    <>
+                      <RepoZapButton
+                        targetAnnouncement={repo.confirmedAnnouncements.find(
+                          (a) => a.pubkey === repo.selectedMaintainer,
+                        )}
+                        repoCoords={acceptedRepoCoordinates}
+                      />
+                      <FollowRepoButton repoCoord={selectedRepoCoordinate} />
+                      <StarButton
+                        targetAnnouncement={repo.confirmedAnnouncements.find(
+                          (a) => a.pubkey === repo.selectedMaintainer,
+                        )}
+                        allAnnouncements={acceptedAnnouncements}
+                        repoCoords={acceptedRepoCoordinates}
+                      />
+                    </>
+                  )}
                 </div>
               </div>
             ) : (
@@ -601,7 +811,7 @@ function RepoLayoutResolved({
             )}
 
             {/* Tab navigation */}
-            <nav className="flex gap-1 -mb-px">
+            <nav className="-mb-px flex w-full gap-0 sm:gap-1">
               {/* Primary tabs — always visible */}
               <TabLink
                 to={basePath}
@@ -626,12 +836,20 @@ function RepoLayoutResolved({
 
               {/* Secondary tabs — visible on md+ screens */}
               <div className="hidden md:flex gap-1">
-                {(hasCI || isActionsTab) && (
+                {!isPrivate && (hasCI || isActionsTab) && (
                   <TabLink
                     to={`${basePath}/actions`}
                     active={isActionsTab}
                     icon={<Workflow className="h-4 w-4" />}
                     label="Actions"
+                  />
+                )}
+                {showReleases && (
+                  <TabLink
+                    to={`${basePath}/releases`}
+                    active={isReleasesTab}
+                    icon={<Package className="h-4 w-4" />}
+                    label="Releases"
                   />
                 )}
                 <TabLink
@@ -651,13 +869,16 @@ function RepoLayoutResolved({
               </div>
 
               {/* "More" dropdown — mobile only */}
-              <div className="md:hidden flex items-end pb-px">
+              <div className="flex shrink-0 items-end pb-px md:hidden">
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <button
                       className={cn(
-                        "inline-flex items-center gap-1.5 px-3 py-2.5 text-sm font-medium border-b-2 transition-colors",
-                        isAboutTab || isSettingsTab || isActionsTab
+                        "inline-flex items-center gap-1.5 px-2 py-2.5 text-sm font-medium border-b-2 transition-colors sm:px-3",
+                        isAboutTab ||
+                          isSettingsTab ||
+                          isActionsTab ||
+                          isReleasesTab
                           ? "border-primary text-foreground"
                           : "border-transparent text-muted-foreground hover:text-foreground hover:border-border",
                       )}
@@ -667,7 +888,7 @@ function RepoLayoutResolved({
                     </button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
-                    {(hasCI || isActionsTab) && (
+                    {!isPrivate && (hasCI || isActionsTab) && (
                       <DropdownMenuItem asChild>
                         <Link
                           to={`${basePath}/actions`}
@@ -675,6 +896,17 @@ function RepoLayoutResolved({
                         >
                           <Workflow className="h-4 w-4" />
                           Actions
+                        </Link>
+                      </DropdownMenuItem>
+                    )}
+                    {showReleases && (
+                      <DropdownMenuItem asChild>
+                        <Link
+                          to={`${basePath}/releases`}
+                          className="flex items-center gap-2"
+                        >
+                          <Package className="h-4 w-4" />
+                          Releases
                         </Link>
                       </DropdownMenuItem>
                     )}
@@ -705,69 +937,130 @@ function RepoLayoutResolved({
           </div>
         </div>
 
-        {repo && (
+        {repo && announcementsSettled && (
+          <RepositoryLifecycleNotice repo={repo} />
+        )}
+
+        {repo && announcementsSettled && repo.repositoryHealth.length > 0 && (
+          <RepositoryHealthNotice
+            resolved={resolved}
+            repo={repo}
+            accountPubkey={account?.pubkey}
+            basePath={basePath}
+            stateSettled={repoRelayEose}
+            relayUrls={[
+              ...new Set([
+                ...repoRelayUrls,
+                ...(extraRelaysForMaintainerMailboxCoverage?.relays.map(
+                  ({ url }) => url,
+                ) ?? []),
+              ]),
+            ]}
+            repoState={repoState}
+          />
+        )}
+
+        {repo && !isPrivate && (
           <RepoMaintainerRequestBanner
             repo={repo}
             pageSuffix={repoPageSuffix}
           />
         )}
 
-        {repo && account?.pubkey && (
-          <MaintainerInvitationBanner
+        {repo && !isPrivate && account?.pubkey && (
+          <MaintainerInvitationSafetyBanner
+            resolved={resolved}
             repo={repo}
             accountPubkey={account.pubkey}
-            signer={account.signer}
-            graspServers={accountGraspServers}
-            graspServersFromUserList={accountGraspServersFromUserList}
-            ownState={repoStateEvents?.find(
-              (state) => state.publisherPubkey === account.pubkey,
-            )}
-            stateCheckComplete={repoRelayEose && !accountGraspServersLoading}
-            canonicalState={repoState}
-            openAcceptanceInitially={
-              isSettingsTab &&
-              !repo.announcements.some(
-                (announcement) => announcement.pubkey === account.pubkey,
-              )
-            }
+            announcementsSettled={announcementsSettled}
+            stateSettled={repoRelayEose}
+            repoState={repoState}
+            relayUrls={[
+              ...new Set([
+                ...repoRelayUrls,
+                ...(extraRelaysForMaintainerMailboxCoverage?.relays.map(
+                  ({ url }) => url,
+                ) ?? []),
+              ]),
+            ]}
           />
+        )}
+
+        {repo && isPrivate && privateAccessError && (
+          <div
+            className="container max-w-screen-xl px-4 pt-4 md:px-8"
+            role="alert"
+          >
+            <div className="flex gap-3 rounded-lg border border-destructive/40 bg-destructive/5 p-4 text-sm text-destructive">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <div className="space-y-3">
+                <p>{privateAccessError}</p>
+                <ErrorRetryAction recovery={accessRecovery} />
+                <Button asChild variant="outline" size="sm">
+                  <Link to="/settings">Review Private Git services</Link>
+                </Button>
+              </div>
+            </div>
+          </div>
         )}
 
         {/* Page content */}
         {ctxValue ? (
-          <GitCommitLinkContext.Provider value={gitCommitLinkCtxValue}>
-            <RepoContext.Provider value={ctxValue}>
-              {subPage === "code" ? (
-                <RepoCodePage />
-              ) : subPage === "commits" ? (
-                <RepoCommitsPage />
-              ) : subPage === "commit" ? (
-                <RepoCommitPage />
-              ) : subPage === "branches" ? (
-                <RepoBranchesPage />
-              ) : subPage === "tags" ? (
-                <RepoTagsPage />
-              ) : subPage === "actions" ? (
-                <RepoActionsPage />
-              ) : subPage === "issue" ? (
-                <IssuePage />
-              ) : subPage === "issues" ? (
-                <RepoIssuesPage />
-              ) : subPage === "pr" ? (
-                <PRPage />
-              ) : subPage === "pr-commit" ? (
-                <PRPage />
-              ) : subPage === "prs" ? (
-                <RepoPRsPage />
-              ) : subPage === "about" ? (
-                <RepoAboutPage />
-              ) : subPage === "edit" ? (
-                <Navigate to={`${basePath}/settings`} replace />
-              ) : subPage === "settings" ? (
-                <RepoSettingsPage />
-              ) : null}
-            </RepoContext.Provider>
-          </GitCommitLinkContext.Provider>
+          <BuzzRepositoryContext.Provider value={repo?.isBuzz ?? false}>
+            <GitCommitLinkContext.Provider value={gitCommitLinkCtxValue}>
+              <RepoContext.Provider value={ctxValue}>
+                {isPrivate &&
+                (subPage === "actions" ||
+                  subPage === "action-coordinators" ||
+                  subPage === "releases" ||
+                  subPage === "settings" ||
+                  subPage === "edit") ? (
+                  <PrivateFeatureUnavailable />
+                ) : subPage === "code" ? (
+                  <RepoCodePage />
+                ) : subPage === "commits" ? (
+                  <RepoCommitsPage />
+                ) : subPage === "commit" ? (
+                  <RepoCommitPage />
+                ) : subPage === "branches" ? (
+                  <RepoBranchesPage />
+                ) : subPage === "tags" ? (
+                  <RepoTagsPage />
+                ) : subPage === "compare" ? (
+                  <RepoComparePage />
+                ) : subPage === "actions" ? (
+                  <RepoActionsPage />
+                ) : subPage === "action-coordinators" ? (
+                  <RepoCoordinatorsPage
+                    coordinatorIdentifier={coordinatorIdentifier}
+                  />
+                ) : subPage === "releases" ? (
+                  <RepoReleasesPage
+                    eventId={releaseId}
+                    view={releaseView ?? "releases"}
+                  />
+                ) : subPage === "issue" ? (
+                  <IssuePage />
+                ) : subPage === "issues" ? (
+                  <RepoIssuesPage />
+                ) : subPage === "pr" ? (
+                  <PRPage />
+                ) : subPage === "pr-commit" ? (
+                  <PRPage />
+                ) : subPage === "prs" ? (
+                  <RepoPRsPage />
+                ) : subPage === "about" ? (
+                  <RepoAboutPage />
+                ) : subPage === "edit" ? (
+                  <Navigate to={`${basePath}/settings`} replace />
+                ) : subPage === "settings" ? (
+                  <RepoSettingsPage />
+                ) : null}
+              </RepoContext.Provider>
+            </GitCommitLinkContext.Provider>
+          </BuzzRepositoryContext.Provider>
+        ) : privateProbe?.status === "unavailable" ? (
+          <PrivateRepositoryUnavailable reason={privateProbe.error} />
         ) : repoSearch &&
           (repoSearch.concludedNotFound ||
             repoSearch.deleted ||
@@ -810,102 +1103,68 @@ function RepoLayoutResolved({
   );
 }
 
-function getDefaultPersonalInfrastructure(
-  accountPubkey: string,
-  dTag: string,
-  graspServers: GraspServer[],
-): { cloneUrls: string[]; relayUrls: string[] } {
-  const npub = nip19.npubEncode(accountPubkey);
-  const encodedDTag = encodeURIComponent(dTag);
-  return {
-    cloneUrls: graspServers.map(
-      ({ domain }) => `https://${domain}/${npub}/${encodedDTag}.git`,
-    ),
-    relayUrls: graspServers.map(({ wsUrl }) => wsUrl),
-  };
-}
-
-function getAnnouncementGraspDomains(
-  announcement: NostrEvent | undefined,
-): string[] {
-  if (!announcement) return [];
-  return Array.from(
-    new Set(
-      getRepoCloneUrls(announcement)
-        .map(graspCloneUrlDomain)
-        .filter((domain): domain is string => !!domain),
-    ),
-  );
-}
-
-function getInvitationDefaultGraspDomains(
-  repo: ResolvedRepo,
-  ownAnnouncement: NostrEvent | undefined,
-  graspServers: GraspServer[],
-  graspServersFromUserList: boolean,
-): string[] {
-  return selectGraspDomainsWithBackfill(
-    [
-      getAnnouncementGraspDomains(ownAnnouncement),
-      graspServersFromUserList
-        ? graspServers.map((server) => server.domain)
-        : [],
-      repo.graspServerDomains,
-    ],
-    DEFAULT_GRASP_SERVERS,
-  );
-}
-
-function MaintainerInvitationBanner({
+function MaintainerInvitationSafetyBanner({
+  resolved,
   repo,
   accountPubkey,
-  signer,
-  graspServers,
-  graspServersFromUserList,
-  ownState,
-  stateCheckComplete,
-  canonicalState,
-  openAcceptanceInitially,
+  announcementsSettled,
+  stateSettled,
+  relayUrls,
+  repoState,
 }: {
+  resolved: ResolvedRepository;
   repo: ResolvedRepo;
   accountPubkey: string;
-  signer: {
-    signEvent(template: EventTemplate): Promise<NostrEvent>;
-  };
-  graspServers: GraspServer[];
-  graspServersFromUserList: boolean;
-  ownState: RepositoryState | undefined;
-  stateCheckComplete: boolean;
-  canonicalState: RepositoryState | null | undefined;
-  openAcceptanceInitially: boolean;
+  announcementsSettled: boolean;
+  stateSettled: boolean;
+  relayUrls: string[];
+  repoState?: RepositoryState | null;
 }) {
-  const isRequested = repo.requestedMaintainers.includes(accountPubkey);
-  const acceptanceJob = useMaintainerAcceptanceJob(
-    accountPubkey,
-    repo.selectedMaintainer,
-    repo.dTag,
+  const { enabled, deliveryBlocked, mutate, pendingIntent, failure } =
+    useRepositoryMembershipMutation({
+      resolved,
+      repo,
+      relayUrls,
+      repoState,
+    });
+  const [accepted, setAccepted] = useState(false);
+  const invited = repo.invitedMaintainers.includes(accountPubkey);
+  const moderator = repo.confirmedModerators.includes(accountPubkey);
+  if (!invited && !moderator) return null;
+
+  const hasOwnAnnouncement = repo.discoveredAnnouncements.some(
+    ({ pubkey }) => pubkey === accountPubkey,
   );
-  const ownAnnouncement = repo.announcements.find(
-    (announcement) => announcement.pubkey === accountPubkey,
+  const maintainerSelfDeferWarnings = repo.repositoryHealth.filter(
+    ({ author, code, role }) =>
+      author === accountPubkey &&
+      code === "invalid-self-defer" &&
+      (role === "M" || role === "m"),
   );
+  const prospectiveAcceptanceAt = Math.floor(Date.now() / 1000);
+  const repairableMaintainerSelfDefer =
+    maintainerSelfDeferWarnings.length === 1 &&
+    !hasUnrepairableOwnDuplicates(repo, accountPubkey) &&
+    !hasUnsupportedAcceptanceRoleHistory(
+      repo,
+      accountPubkey,
+      prospectiveAcceptanceAt,
+    ) &&
+    !maintainerSelfDeferWarnings[0].selfDefer?.hasPriorIntervals &&
+    (!maintainerSelfDeferWarnings[0].selfDefer?.superseded ||
+      maintainerSelfDeferWarnings[0].selfDefer.proposedEnd !== undefined)
+      ? maintainerSelfDeferWarnings[0]
+      : undefined;
+  const unsupportedExistingAcceptance =
+    invited && hasOwnAnnouncement && !repairableMaintainerSelfDefer;
+
   const inviters = Array.from(
     new Set(
-      repo.maintainerEdges
+      (invited ? repo.maintainerEdges : repo.moderatorEdges)
         .filter(({ to }) => to === accountPubkey)
         .map(({ from }) => from),
     ),
   );
-  const acceptanceSelection = getAcceptanceMaintainerSelection(
-    repo,
-    accountPubkey,
-  );
-  const stateDecision = classifyInvitationState(
-    canonicalState,
-    ownState,
-    accountPubkey,
-  );
-
-  if (!isRequested && !acceptanceJob) return null;
 
   return (
     <div className="border-b border-primary/20 bg-gradient-to-r from-primary/10 via-background to-secondary/10">
@@ -917,431 +1176,141 @@ function MaintainerInvitationBanner({
             </div>
             <div className="min-w-0 space-y-1">
               <p className="font-semibold">
-                You’re invited to maintain {repo.name}
+                {invited
+                  ? `You’re invited to maintain ${repo.name}`
+                  : `You moderate ${repo.name}`}
               </p>
-              <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm text-muted-foreground">
-                {inviters.length > 0 ? (
-                  <>
-                    <span>Invited by</span>
-                    {inviters.map((pubkey) => (
-                      <UserLink
-                        key={pubkey}
-                        pubkey={pubkey}
-                        avatarSize="xs"
-                        nameClassName="text-sm"
-                      />
-                    ))}
-                  </>
-                ) : (
-                  <span>Select how you want to join the maintainer group.</span>
-                )}
-              </div>
+              {inviters.length > 0 && (
+                <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm text-muted-foreground">
+                  <span>{invited ? "Invited by" : "Assigned by"}</span>
+                  {inviters.map((pubkey) => (
+                    <UserLink
+                      key={pubkey}
+                      pubkey={pubkey}
+                      avatarSize="xs"
+                      nameClassName="text-sm"
+                    />
+                  ))}
+                </div>
+              )}
+              {invited && repairableMaintainerSelfDefer && (
+                <p className="text-sm text-muted-foreground">
+                  {repairableMaintainerSelfDefer.selfDefer?.superseded
+                    ? "Accepting closes your invalid interval at its signed successor boundary and opens the maintainer role at the acceptance time."
+                    : "Accepting explicitly closes your invalid deferred interval and opens the new role at the same signed boundary."}
+                </p>
+              )}
+              {unsupportedExistingAcceptance && (
+                <p className="text-sm text-muted-foreground">
+                  Your existing announcement needs separate role-history
+                  reconciliation before BIES Code can accept this invitation.
+                </p>
+              )}
             </div>
           </div>
-
-          {acceptanceJob ? (
-            <MaintainerAcceptanceProgress job={acceptanceJob} />
-          ) : !stateCheckComplete ? (
-            <Button type="button" disabled className="w-full sm:w-auto">
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              Checking repository state and infrastructure…
-            </Button>
-          ) : stateDecision.blocked ? (
-            <div className="max-w-md rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-sm">
-              <p className="font-medium text-amber-700 dark:text-amber-300">
-                Use ngit CLI to accept this invitation
+          <div className="max-w-md space-y-2">
+            {enabled ? (
+              <Button
+                type="button"
+                disabled={
+                  !!pendingIntent ||
+                  accepted ||
+                  !announcementsSettled ||
+                  !stateSettled ||
+                  unsupportedExistingAcceptance
+                }
+                onClick={() => {
+                  void mutate(invited ? { type: "accept" } : { type: "leave" })
+                    .then(() => setAccepted(true))
+                    .catch(() => undefined);
+                }}
+              >
+                {pendingIntent?.type === (invited ? "accept" : "leave") && (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                )}
+                {accepted
+                  ? invited
+                    ? "Acceptance published"
+                    : "Moderator exit published"
+                  : invited
+                    ? "Accept invitation"
+                    : "Leave moderator role"}
+              </Button>
+            ) : (
+              <p className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-sm leading-relaxed text-muted-foreground">
+                {deliveryBlocked
+                  ? "A signed membership replacement is already being delivered. Further membership changes stay disabled until that job settles."
+                  : "Browser membership changes are temporarily unavailable while their safety checks are upgraded."}
               </p>
-              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                The repository owner has a newer state that would replace or
-                remove refs from your repository. Interactive ref selection and
-                combining is deferred to a future update.
-              </p>
-            </div>
-          ) : (
-            <MaintainerAcceptanceControls
-              key={`${repo.selectedMaintainer}:${acceptanceSelection.options.join(
-                ",",
-              )}:${acceptanceSelection.defaults.join(",")}`}
-              repo={repo}
-              ownAnnouncement={ownAnnouncement}
-              accountPubkey={accountPubkey}
-              signer={signer}
-              graspServers={graspServers}
-              graspServersFromUserList={graspServersFromUserList}
-              canonicalState={canonicalState}
-              openInitially={openAcceptanceInitially}
-              {...acceptanceSelection}
-            />
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function MaintainerAcceptanceProgress({
-  job,
-}: {
-  job: MaintainerAcceptanceJob;
-}) {
-  const { toast } = useToast();
-  const readyCount = job.syncedCloneUrls.length;
-  const allReady =
-    job.cloneUrls.length > 0 && readyCount === job.cloneUrls.length;
-  const allDelivered = job.relayUrls.every((url) =>
-    job.deliveredRelayUrls.includes(url),
-  );
-  const pendingWork =
-    !allReady || !allDelivered || !job.broadcastReceived || !job.completedAt;
-
-  const retry = async () => {
-    try {
-      const result = await runMaintainerAcceptanceDelivery(job.key);
-      if (result?.phase === "delivery-error") {
-        toast({
-          title: "Some GRASP servers still did not accept the announcement",
-          description: "Check the failed servers and retry.",
-          variant: "destructive",
-        });
-      }
-    } catch (error) {
-      toast({
-        title: "Could not retry invitation delivery",
-        description: error instanceof Error ? error.message : String(error),
-        variant: "destructive",
-      });
-    }
-  };
-
-  if (job.phase === "delivery-error") {
-    const failedTargets = Object.keys(job.relayErrors);
-    return (
-      <div className="flex w-full shrink-0 flex-col gap-2 rounded-lg border border-destructive/30 bg-background/80 px-3 py-2 text-sm sm:w-auto sm:min-w-80">
-        <div className="flex items-center gap-2">
-          <AlertCircle className="h-4 w-4 shrink-0 text-destructive" />
-          <span className="font-medium">Invitation delivery incomplete</span>
-          <span className="ml-auto text-xs text-muted-foreground">
-            {job.deliveredRelayUrls.length}/{job.relayUrls.length}
-          </span>
-        </div>
-        <p className="text-xs text-muted-foreground">
-          {failedTargets.length} selected destination
-          {failedTargets.length === 1 ? "" : "s"} still need the announcement.
-        </p>
-        <Button type="button" size="sm" variant="outline" onClick={retry}>
-          Retry delivery
-        </Button>
-      </div>
-    );
-  }
-
-  const synced = job.phase === "synced";
-  return (
-    <div className="flex w-full shrink-0 items-center gap-2 rounded-lg border bg-background/80 px-3 py-2 text-sm sm:w-auto sm:min-w-72">
-      {synced ? (
-        <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />
-      ) : (
-        <Loader2 className="h-4 w-4 shrink-0 animate-spin text-primary" />
-      )}
-      <span className="font-medium">
-        {synced
-          ? allReady
-            ? "Invitation accepted · GRASP servers in sync"
-            : "Invitation accepted · GRASP server synced"
-          : job.phase === "publishing"
-            ? "Accepting invitation · publishing announcement"
-            : "Invitation accepted · syncing GRASP servers"}
-      </span>
-      {job.phase !== "publishing" && (
-        <span className="ml-auto flex items-center gap-1.5 text-xs text-muted-foreground">
-          {synced && pendingWork && (
-            <Loader2 className="h-3 w-3 animate-spin opacity-60" />
-          )}
-          {readyCount}/{job.cloneUrls.length}
-        </span>
-      )}
-    </div>
-  );
-}
-
-function MaintainerAcceptanceControls({
-  repo,
-  ownAnnouncement,
-  accountPubkey,
-  signer,
-  graspServers,
-  graspServersFromUserList,
-  canonicalState,
-  options,
-  defaults,
-  leadMaintainer,
-  openInitially,
-}: {
-  repo: ResolvedRepo;
-  ownAnnouncement: NostrEvent | undefined;
-  accountPubkey: string;
-  signer: {
-    signEvent(template: EventTemplate): Promise<NostrEvent>;
-  };
-  graspServers: GraspServer[];
-  graspServersFromUserList: boolean;
-  canonicalState: RepositoryState | null | undefined;
-  options: string[];
-  defaults: string[];
-  leadMaintainer?: string;
-  openInitially: boolean;
-}) {
-  const { toast } = useToast();
-  const [dialogOpen, setDialogOpen] = useState(openInitially);
-  const [publishing, setPublishing] = useState(false);
-  const [selectedMaintainers, setSelectedMaintainers] =
-    useState<string[]>(defaults);
-  const [selectedDomains, setSelectedDomains] = useState<string[]>(() =>
-    getInvitationDefaultGraspDomains(
-      repo,
-      ownAnnouncement,
-      graspServers,
-      graspServersFromUserList,
-    ),
-  );
-  useEffect(() => {
-    if (openInitially) setDialogOpen(true);
-  }, [openInitially]);
-  const selectedGraspServers = useMemo<GraspServer[]>(
-    () =>
-      selectedDomains.map(
-        (domain) =>
-          graspServers.find((server) => server.domain === domain) ?? {
-            domain,
-            wsUrl: `wss://${domain}`,
-          },
-      ),
-    [graspServers, selectedDomains],
-  );
-  const { cloneUrls, relayUrls } = useMemo(
-    () =>
-      getDefaultPersonalInfrastructure(
-        accountPubkey,
-        repo.dTag,
-        selectedGraspServers,
-      ),
-    [accountPubkey, repo.dTag, selectedGraspServers],
-  );
-
-  const accept = async () => {
-    if (
-      publishing ||
-      selectedMaintainers.length === 0 ||
-      selectedGraspServers.length === 0
-    ) {
-      return;
-    }
-    setPublishing(true);
-    try {
-      const validationResults = await Promise.all(
-        selectedDomains.map(async (domain) => ({
-          domain,
-          error: await validateGraspServer(domain, {
-            requiredGrasps: ["GRASP-01", "GRASP-02"],
-          }),
-        })),
-      );
-      const invalidServers = validationResults.filter(({ error }) => !!error);
-      if (invalidServers.length > 0) {
-        throw new Error(
-          invalidServers
-            .map(({ domain, error }) => `${domain}: ${error}`)
-            .join("; "),
-        );
-      }
-
-      const announcement = await signer.signEvent(
-        buildMaintainerAcceptanceTemplate(
-          repo,
-          ownAnnouncement,
-          accountPubkey,
-          selectedMaintainers,
-          selectedGraspServers,
-        ),
-      );
-      setDialogOpen(false);
-      const key = maintainerAcceptanceKey(
-        accountPubkey,
-        repo.selectedMaintainer,
-        repo.dTag,
-      );
-      const now = Date.now();
-      saveMaintainerAcceptanceJob({
-        key,
-        accountPubkey,
-        invitationAnchor: repo.selectedMaintainer,
-        dTag: repo.dTag,
-        announcement,
-        cloneUrls,
-        relayUrls,
-        deliveredRelayUrls: [],
-        syncedCloneUrls: [],
-        relayErrors: {},
-        deliveryAttempt: 0,
-        broadcastReceived: false,
-        phase: "publishing",
-        stateRefs: canonicalState?.refs ?? [],
-        knownHeadCommit: canonicalState?.headCommitId,
-        stateCreatedAt: canonicalState?.event.created_at,
-        createdAt: now,
-        updatedAt: now,
-      });
-      const result = await runMaintainerAcceptanceDelivery(key);
-      const startedSyncing = (result?.deliveredRelayUrls.length ?? 0) > 0;
-
-      toast({
-        title: startedSyncing
-          ? "Invitation accepted"
-          : "Invitation accepted, but delivery needs attention",
-        description: startedSyncing
-          ? "Your GRASP servers are syncing the repository."
-          : "Retry the GRASP servers that did not accept your announcement.",
-        variant: startedSyncing ? "default" : "destructive",
-      });
-    } catch (error) {
-      setPublishing(false);
-      toast({
-        title: "Could not accept invitation",
-        description:
-          error instanceof Error ? error.message : "Publishing failed.",
-        variant: "destructive",
-      });
-    }
-  };
-
-  const toggleMaintainer = (pubkey: string, checked: boolean) => {
-    setSelectedMaintainers((current) =>
-      checked
-        ? Array.from(new Set([...current, pubkey]))
-        : current.filter((candidate) => candidate !== pubkey),
-    );
-  };
-
-  return (
-    <>
-      <Button
-        type="button"
-        onClick={() => setDialogOpen(true)}
-        className="w-full shrink-0 bg-primary text-primary-foreground hover:bg-primary/90 sm:w-auto"
-      >
-        <CheckCircle2 className="mr-2 h-4 w-4" />
-        Accept invitation
-      </Button>
-
-      <Dialog
-        open={dialogOpen}
-        onOpenChange={(open) => {
-          if (!publishing) setDialogOpen(open);
-        }}
-      >
-        <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-xl">
-          <DialogHeader>
-            <DialogTitle>Accept invitation</DialogTitle>
-            <DialogDescription>
-              Choose where to host your copy of {repo.name}.
-            </DialogDescription>
-          </DialogHeader>
-
-          <section className="space-y-3">
-            <div>
-              <h3 className="font-medium">Your GRASP servers</h3>
-              <p className="text-sm text-muted-foreground">
-                Where to store the data
-              </p>
-            </div>
-            <GraspServerSelector
-              selectedDomains={selectedDomains}
-              onSelectedDomainsChange={setSelectedDomains}
-              resolvedServers={graspServers}
-              isFromUserList={graspServersFromUserList}
-              additionalDomains={repo.graspServerDomains}
-              currentDomains={getAnnouncementGraspDomains(ownAnnouncement)}
-              requiredGrasps={["GRASP-01", "GRASP-02"]}
-              disabled={publishing}
-              showTitle={false}
-            />
-          </section>
-
-          {options.length > 1 && (
-            <section className="space-y-3 border-t pt-4">
-              <h3 className="flex items-center gap-2 font-medium">
-                <Users className="h-4 w-4" />
-                Select lead maintainer(s)
-              </h3>
-              <div className="max-h-48 space-y-1 overflow-y-auto">
-                {options.map((pubkey) => {
-                  const checked = selectedMaintainers.includes(pubkey);
-                  return (
-                    <label
-                      key={pubkey}
-                      className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 hover:bg-muted/60"
-                    >
-                      <Checkbox
-                        checked={checked}
-                        disabled={publishing}
-                        onCheckedChange={(value) =>
-                          toggleMaintainer(pubkey, value === true)
-                        }
-                      />
-                      <UserLink
-                        pubkey={pubkey}
-                        avatarSize="xs"
-                        nameClassName="text-sm"
-                        className="min-w-0 flex-1"
-                        noLink
-                      />
-                      {pubkey === leadMaintainer && (
-                        <Badge
-                          variant="outline"
-                          className="h-4 px-1.5 text-[10px] text-primary"
-                        >
-                          lead
-                        </Badge>
-                      )}
-                    </label>
-                  );
-                })}
+            )}
+            {failure && (
+              <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+                <span className="font-mono text-amber-700 dark:text-amber-300">
+                  {failure.code}
+                </span>{" "}
+                {failure.message}
               </div>
-            </section>
-          )}
-
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={publishing}
-              onClick={() => setDialogOpen(false)}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              onClick={accept}
-              disabled={
-                publishing ||
-                selectedMaintainers.length === 0 ||
-                selectedDomains.length === 0
-              }
-              className="bg-primary text-primary-foreground hover:bg-primary/90"
-            >
-              {publishing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              {publishing ? "Accepting…" : "Accept invitation"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
 // ---------------------------------------------------------------------------
 // Error / loading states
 // ---------------------------------------------------------------------------
+
+function PrivateRepositoryUnavailable({ reason }: { reason?: string }) {
+  const { state, retry } = usePrivateGitRelays();
+  return (
+    <div className="container max-w-screen-md px-4 py-16 md:px-8">
+      <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-6 text-center">
+        <AlertCircle className="mx-auto h-8 w-8 text-amber-600 dark:text-amber-400" />
+        <h2 className="mt-4 text-xl font-semibold">
+          Private repository unavailable
+        </h2>
+        <p className="mx-auto mt-2 max-w-lg text-sm text-muted-foreground">
+          {reason ??
+            "Private discovery did not complete safely, so BIES Code did not try public relays."}
+        </p>
+        <div className="mt-6 flex flex-wrap justify-center gap-2">
+          {state.status !== "logged-out" && (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={retry}
+              disabled={state.status === "loading"}
+            >
+              {state.status === "loading" && (
+                <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+              )}
+              Retry now
+            </Button>
+          )}
+          <Button asChild variant="outline">
+            <Link to="/settings">Review Private Git services</Link>
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PrivateFeatureUnavailable() {
+  return (
+    <div className="container max-w-screen-md px-4 py-16 md:px-8">
+      <div className="rounded-xl border border-dashed p-8 text-center">
+        <h2 className="text-xl font-semibold">Unavailable for private repos</h2>
+        <p className="mx-auto mt-2 max-w-lg text-sm text-muted-foreground">
+          This feature is disabled until it can operate entirely through the
+          repository&apos;s private service relays.
+        </p>
+      </div>
+    </div>
+  );
+}
 
 function Nip05LoadingState({ nip05 }: { nip05: string }) {
   const [visible, setVisible] = useState(false);
@@ -1363,6 +1332,365 @@ function Nip05LoadingState({ nip05 }: { nip05: string }) {
         <p className="text-muted-foreground text-sm">
           Looking up <span className="font-mono text-foreground">{nip05}</span>…
         </p>
+      </div>
+    </div>
+  );
+}
+
+function lifecycleTime(createdAt: number | undefined): string | undefined {
+  return createdAt === undefined
+    ? undefined
+    : formatDistanceToNow(new Date(createdAt * 1000), { addSuffix: true });
+}
+
+function RepositoryLifecycleNotice({ repo }: { repo: ResolvedRepo }) {
+  if (
+    repo.coordinateStatus !== "archived" &&
+    repo.coordinateStatus !== "deleted" &&
+    repo.coordinateStatus !== "restarted"
+  ) {
+    return null;
+  }
+
+  const when = lifecycleTime(repo.coordinateStatusChangedAt);
+  const readOnly =
+    repo.coordinateStatus === "archived" || repo.coordinateStatus === "deleted";
+
+  return (
+    <div className="border-b border-amber-500/30 bg-amber-500/5" role="status">
+      <div className="container flex max-w-screen-xl gap-3 px-4 py-4 md:px-8">
+        <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-amber-700 dark:text-amber-300" />
+        <div className="min-w-0 space-y-1 text-sm">
+          <p className="flex flex-wrap items-center gap-x-1 text-foreground">
+            <UserLink
+              pubkey={repo.selectedMaintainer}
+              avatarSize="xs"
+              variant="inline"
+            />
+            {repo.coordinateStatus === "deleted" && (
+              <span className="font-mono">/{repo.dTag}</span>
+            )}
+            <span>
+              {repo.coordinateStatus === "deleted"
+                ? "deleted this repository"
+                : repo.coordinateStatus === "archived"
+                  ? "archived this repository"
+                  : "restarted this repository"}
+              {when ? ` ${when}` : ""}.
+            </span>
+          </p>
+          <p className="text-muted-foreground">
+            {readOnly
+              ? "Its last signed snapshot remains available here as a read-only archive."
+              : "The current repository remains available, while earlier signed activity is retained as history from its previous lifecycle."}
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Own duplicate history that no sanctioned self-defer repair can eliminate. */
+function hasUnrepairableOwnDuplicates(
+  repo: ResolvedRepo,
+  accountPubkey: string | undefined,
+): boolean {
+  return (
+    !!accountPubkey &&
+    repo.repositoryHealth.some(
+      ({ author, code, repairableBySelfDefer }) =>
+        author === accountPubkey &&
+        code === "duplicate-role-record" &&
+        !repairableBySelfDefer,
+    )
+  );
+}
+
+function dateTimeLocalValue(timestamp: number): string {
+  const date = new Date(timestamp * 1000);
+  if (!Number.isFinite(date.getTime())) return "";
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 16);
+}
+
+function RepositoryHealthNotice({
+  resolved,
+  repo,
+  accountPubkey,
+  basePath,
+  stateSettled,
+  relayUrls,
+  repoState,
+}: {
+  resolved: ResolvedRepository;
+  repo: ResolvedRepo;
+  accountPubkey?: string;
+  basePath: string;
+  stateSettled: boolean;
+  relayUrls: string[];
+  repoState?: RepositoryState | null;
+}) {
+  const selfDeferWarnings = repo.repositoryHealth.filter(
+    ({ code }) => code === "invalid-self-defer",
+  );
+  const ownSelfDeferWarnings = selfDeferWarnings.filter(
+    ({ author }) => author === accountPubkey,
+  );
+  const hasCurrentInvitation =
+    !!accountPubkey && repo.invitedMaintainers.includes(accountPubkey);
+  const ownMaintainerSelfDeferWarnings = ownSelfDeferWarnings.filter(
+    ({ role }) => role === "M" || role === "m",
+  );
+  const acceptanceHasUnsupportedRoleHistory = accountPubkey
+    ? hasUnsupportedAcceptanceRoleHistory(
+        repo,
+        accountPubkey,
+        Math.floor(Date.now() / 1000),
+      )
+    : true;
+  const acceptanceSelfDefer =
+    hasCurrentInvitation &&
+    !acceptanceHasUnsupportedRoleHistory &&
+    ownMaintainerSelfDeferWarnings.length === 1
+      ? ownMaintainerSelfDeferWarnings.find(
+          ({ selfDefer }) =>
+            !selfDefer?.hasPriorIntervals &&
+            (!selfDefer?.superseded || selfDefer.proposedEnd !== undefined),
+        )
+      : undefined;
+  const ownSelfDefer = acceptanceSelfDefer ?? ownSelfDeferWarnings[0];
+  const invitationRepairsSelfDefer = !!acceptanceSelfDefer;
+  const repairSelectionAmbiguous =
+    !!ownSelfDefer &&
+    ownSelfDeferWarnings.filter(({ role }) => role === ownSelfDefer.role)
+      .length > 1;
+  const repairBlockedByDuplicates =
+    !!ownSelfDefer && hasUnrepairableOwnDuplicates(repo, accountPubkey);
+  const superseded = ownSelfDefer?.selfDefer?.superseded ?? false;
+  const proposedEnd = ownSelfDefer?.selfDefer?.proposedEnd;
+  const mutation = useRepositoryMembershipMutation({
+    resolved,
+    repo,
+    relayUrls,
+    repoState,
+  });
+  const [chosenEnd, setChosenEnd] = useState(() =>
+    dateTimeLocalValue(Math.floor(Date.now() / 1000)),
+  );
+  const [repairPublished, setRepairPublished] = useState(false);
+  const chosenBoundary = Math.floor(new Date(chosenEnd).getTime() / 1000);
+  const chosenBoundaryValid =
+    Number.isSafeInteger(chosenBoundary) &&
+    chosenBoundary >= (ownSelfDefer?.selfDefer?.lastValidStart ?? 0) &&
+    chosenBoundary <= Math.floor(Date.now() / 1000);
+  const repair = (
+    repairIntent: { action: "continue" } | { action: "end"; boundary: number },
+  ) => {
+    if (!ownSelfDefer?.role) return;
+    mutation.clearFailure();
+    setRepairPublished(false);
+    void mutation
+      .mutate({
+        type: "repair-self-defer",
+        role: ownSelfDefer.role,
+        repair: repairIntent,
+      })
+      .then(() => setRepairPublished(true))
+      .catch(() => undefined);
+  };
+  const repairPending = mutation.pendingIntent?.type === "repair-self-defer";
+  // Dead-end warnings on the signer's OWN announcement — no guided repair can
+  // fix them, so the explicit advanced-repair editor is the sanctioned exit.
+  // Other authors' warnings never link there: only they can edit their event.
+  const hasOwnUnguidedWarnings =
+    !!accountPubkey &&
+    repo.repositoryHealth.some(
+      (warning) =>
+        warning.author === accountPubkey &&
+        (warning.code === "invalid-role-record" ||
+          warning.code === "inconsistent-maintainers-projection" ||
+          (warning.code === "duplicate-role-record" &&
+            !warning.repairableBySelfDefer)),
+    );
+  const showAdvancedRepairLink =
+    hasOwnUnguidedWarnings || repairSelectionAmbiguous;
+  const hasOtherHealth = repo.repositoryHealth.some(
+    ({ code, repairableBySelfDefer }) =>
+      code !== "invalid-self-defer" &&
+      !(code === "duplicate-role-record" && repairableBySelfDefer),
+  );
+
+  return (
+    <div className="border-b border-amber-500/30 bg-amber-500/5" role="alert">
+      <div className="container flex max-w-screen-xl gap-3 px-4 py-4 md:px-8">
+        <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-amber-700 dark:text-amber-300" />
+        <div className="min-w-0 space-y-1 text-sm">
+          <p className="font-medium text-foreground">
+            Repository announcement needs repair
+          </p>
+          <p className="text-muted-foreground">
+            {selfDeferWarnings.length > 0
+              ? "A self-authored role ends in defer, so its unresolved interval grants no authority."
+              : "One or more maintainer role records are malformed or inconsistent."}{" "}
+            {ownSelfDefer
+              ? superseded
+                ? invitationRepairsSelfDefer
+                  ? "Your later signed active role remains authoritative. Accepting the current invitation will close the invalid interval at that signed boundary and open your maintainer role at the acceptance time."
+                  : "Your later signed active role remains authoritative, so this warning does not block current writes."
+                : invitationRepairsSelfDefer
+                  ? "Only your role-dependent writes are blocked; accepting the current invitation explicitly closes this interval and opens the new role."
+                  : "Only your role-dependent writes are blocked; choose how your signed role interval should end."
+              : selfDeferWarnings.length > 0
+                ? "Only the affected signer is gated; repository reads and other maintainers continue normally."
+                : "Authority remains fail-closed until the affected history is repaired."}
+          </p>
+          {repairSelectionAmbiguous && (
+            <p className="mt-2 text-muted-foreground">
+              Multiple invalid self-{ownSelfDefer?.role} records prevent BIES
+              Code from choosing which interval to repair.
+            </p>
+          )}
+          {repairBlockedByDuplicates && !repairSelectionAmbiguous && (
+            <p className="mt-2 text-muted-foreground">
+              Duplicate role records in your announcement need separate
+              reconciliation before this interval can be repaired.
+            </p>
+          )}
+          {ownSelfDefer &&
+            !invitationRepairsSelfDefer &&
+            !repairSelectionAmbiguous &&
+            !repairBlockedByDuplicates &&
+            proposedEnd !== undefined && (
+              <div className="mt-3 space-y-2 rounded-lg border border-amber-500/30 bg-background/70 p-3">
+                <p className="text-muted-foreground">
+                  The later signed self-{ownSelfDefer.selfDefer?.successorRole}{" "}
+                  role supplies an unambiguous boundary. Approving this changes
+                  only the final value of the invalid self-{ownSelfDefer.role}{" "}
+                  record from <code className="font-mono">defer</code> to{" "}
+                  <code className="font-mono">{proposedEnd}</code>.
+                </p>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={
+                    !mutation.enabled ||
+                    repairPending ||
+                    repairPublished ||
+                    !stateSettled
+                  }
+                  onClick={() =>
+                    repair({ action: "end", boundary: proposedEnd })
+                  }
+                >
+                  {repairPending && (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  )}
+                  {repairPublished
+                    ? "Repair published"
+                    : "Approve signed repair"}
+                </Button>
+              </div>
+            )}
+          {ownSelfDefer &&
+            !invitationRepairsSelfDefer &&
+            !repairSelectionAmbiguous &&
+            !repairBlockedByDuplicates &&
+            proposedEnd === undefined && (
+              <div className="mt-3 space-y-3 rounded-lg border border-amber-500/30 bg-background/70 p-3">
+                {!superseded && (
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <p className="text-muted-foreground">
+                      Continue the self-{ownSelfDefer.role} interval as active.
+                    </p>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      disabled={
+                        !mutation.enabled ||
+                        repairPending ||
+                        repairPublished ||
+                        !stateSettled
+                      }
+                      onClick={() => repair({ action: "continue" })}
+                    >
+                      {repairPending && (
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      )}
+                      Continue role
+                    </Button>
+                  </div>
+                )}
+                <div className="space-y-2 border-t border-amber-500/20 pt-3">
+                  <label
+                    htmlFor="self-defer-end"
+                    className="text-muted-foreground"
+                  >
+                    Or choose the signed time when the interval ended
+                  </label>
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <Input
+                      id="self-defer-end"
+                      type="datetime-local"
+                      value={chosenEnd}
+                      min={dateTimeLocalValue(
+                        ownSelfDefer.selfDefer?.lastValidStart ?? 0,
+                      )}
+                      max={dateTimeLocalValue(Math.floor(Date.now() / 1000))}
+                      onChange={(event) => setChosenEnd(event.target.value)}
+                      className="sm:max-w-xs"
+                    />
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      disabled={
+                        !mutation.enabled ||
+                        repairPending ||
+                        repairPublished ||
+                        !stateSettled ||
+                        !chosenBoundaryValid
+                      }
+                      onClick={() =>
+                        repair({ action: "end", boundary: chosenBoundary })
+                      }
+                    >
+                      End role at this time
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            )}
+          {ownSelfDefer &&
+            !invitationRepairsSelfDefer &&
+            !repairSelectionAmbiguous &&
+            !repairBlockedByDuplicates &&
+            mutation.failure && (
+              <p className="mt-2 text-destructive">
+                {mutation.failure.message}
+              </p>
+            )}
+          {hasOtherHealth && selfDeferWarnings.length > 0 && (
+            <p className="mt-2 text-muted-foreground">
+              Other malformed or inconsistent records still require a separate
+              repair.
+            </p>
+          )}
+          {showAdvancedRepairLink && (
+            <p className="mt-2 text-muted-foreground">
+              No guided repair covers this part of your announcement&apos;s
+              history.{" "}
+              <Link
+                to={`${basePath}/settings/advanced`}
+                className="font-medium text-foreground underline underline-offset-2"
+              >
+                Open advanced repair
+              </Link>{" "}
+              to review and rewrite your raw role records.
+            </p>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -1401,9 +1729,11 @@ function Nip05NotFoundError({ nip05 }: { nip05: string }) {
 function Nip05ResolveError({
   nip05,
   reason,
+  recovery,
 }: {
   nip05: string;
   reason: "timeout" | "network" | "unknown";
+  recovery: ErrorRetryState;
 }) {
   const detail =
     reason === "timeout"
@@ -1427,6 +1757,7 @@ function Nip05ResolveError({
             <span className="font-mono text-foreground">{nip05}</span>.
           </p>
           <p className="text-sm text-muted-foreground">{detail}</p>
+          <ErrorRetryAction recovery={recovery} />
         </div>
         <Button asChild variant="outline">
           <Link to="/">
@@ -1542,7 +1873,7 @@ function TabLink({
     <Link
       to={to}
       className={cn(
-        "inline-flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors",
+        "inline-flex min-w-0 flex-1 items-center justify-center gap-1 px-1 py-2.5 text-sm font-medium border-b-2 transition-colors sm:flex-none sm:gap-2 sm:px-4",
         active
           ? "border-primary text-foreground"
           : "border-transparent text-muted-foreground hover:text-foreground hover:border-border",
@@ -1553,7 +1884,7 @@ function TabLink({
       {count !== undefined && count > 0 && (
         <Badge
           variant="secondary"
-          className="ml-1 h-5 min-w-[20px] px-1.5 text-[11px] font-medium"
+          className="ml-0.5 h-5 min-w-[20px] shrink-0 px-1.5 text-[11px] font-medium sm:ml-1"
         >
           {count}
         </Badge>

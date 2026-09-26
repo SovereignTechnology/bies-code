@@ -3,15 +3,15 @@
  *
  * resilientSubscription — a wrapper around pool.subscription() that provides:
  *
- *   A. lastReceivedAt-aware reconnect — uses defer() + retry() + repeat() so
- *      that on reconnect (whether from an error or a graceful relay close) we
- *      inject since: lastReceivedAt - gapFillBuffer instead of replaying the
- *      full relay history. Same pattern as processRelayStream in
- *      tagValuePaginatedLoader.ts.
+ *   A. lastReceivedAt-aware reconnect — after the relay has completed one
+ *      full declared-filter EOSE, defer() + retry() + repeat() inject a bounded
+ *      since cursor instead of replaying the full relay history. Before that
+ *      baseline exists, every retry remains a full-filter request.
  *
  *   B. Foreground resume gap-fill — subscribes to foregroundResume$. On
- *      resume, fires a one-shot REQ with since: lastReceivedAt - gapFillBuffer
- *      and merges results into the main stream.
+ *      resume, runs a bounded catch-up query with since: lastReceivedAt -
+ *      gapFillBuffer and merges results into the main stream. Ordinary callers
+ *      make one attempt; lifecycle-aware coverage callers may retry briefly.
  *
  *   C. EOSE settle signal — emits "EOSE" after a debounce window once all
  *      relays have signalled EOSE. Uses makeSettleSignal from settleSignal.ts.
@@ -36,7 +36,6 @@
 
 import type { RelayPool } from "applesauce-relay";
 import {
-  completeOnEose,
   onlyEvents,
   AuthRequiredError,
   RelayClosedError,
@@ -62,6 +61,7 @@ import {
   share,
   switchMap,
   take,
+  takeUntil,
   tap,
   timer,
   catchError,
@@ -87,7 +87,10 @@ import { foregroundResume$ } from "./foregroundResume";
  * relay.reconnectTimer (configured in nostr.ts as a 3-phase curve). Our
  * retry handler subscribes to the watchTower (keeping it alive so the
  * reconnect timer can drive new connection attempts) and waits for open$
- * to confirm a successful connection before re-executing buildLiveSub.
+ * to confirm a successful connection, then applies the configured REQ
+ * backoff before re-executing buildLiveSub. This also lets resilientRequest
+ * re-issue its one-shot REQ after transport recovery instead of completing
+ * empty.
  */
 export class TransportError extends Error {
   constructor(relay: string) {
@@ -150,12 +153,59 @@ export interface ResilientSubscriptionOptions {
    */
   onRelaySettle?: (relay: string) => void;
   /**
+   * Called only when an actual EOSE message is received from a relay.
+   * Unlike onRelaySettle, this is not called for cooldowns or graceful closes.
+   */
+  onRelayEose?: (relay: string) => void;
+  /**
    * Called when a relay fails permanently (auth-required or permanent CLOSED).
    * Useful when the caller manages its own settle signal and passes
    * settle: false.
    */
   onRelayError?: (relay: string) => void;
+  /**
+   * Reports cycle-valid coverage facts for this exact stable filter set.
+   * Every invalidation starts a newer generation, so consumers can reject
+   * late EOSE from superseded live or foreground-gap-fill requests.
+   *
+   * Use only with stable, unpaginated filters. An EOSE for a filter with
+   * `limit`, `paginate`, or `manualPaginate$` does not prove full-history
+   * coverage and must not be used as confirmed-absence evidence.
+   *
+   * This callback is intentionally unavailable to additive subscriptions:
+   * their changing filter revisions need finer-grained coverage semantics.
+   */
+  onRelayLifecycle?: (event: ResilientRelayLifecycle) => void;
 }
+
+export type ResilientRelayLifecyclePhase =
+  | "initial"
+  | "covered"
+  | "catching-up"
+  | "unavailable"
+  | "stopped";
+
+export type ResilientRelayUnavailableReason =
+  | "transport"
+  | "closed"
+  | "rate-limited"
+  | "auth"
+  | "permanent"
+  | "error";
+
+export interface ResilientRelayLifecycle {
+  relay: string;
+  generation: number;
+  phase: ResilientRelayLifecyclePhase;
+  /** Present when phase is unavailable so consumers can explain recovery. */
+  reason?: ResilientRelayUnavailableReason;
+}
+
+interface InternalResilientSubscriptionOptions extends ResilientSubscriptionOptions {
+  nextLifecycleGeneration?: () => number;
+}
+
+const DEFAULT_RETRY_COUNT = 3;
 
 /**
  * Default exponential backoff: 1s × 2^(n-1), capped at 5 minutes.
@@ -279,7 +329,7 @@ export type ResilientSubscriptionResponse = NostrEvent | "EOSE";
 function processRelay(
   pool: RelayPool,
   relay: string,
-  filters: Filter[],
+  filters: Filter[] | (() => Filter[]),
   opts: Required<
     Pick<
       ResilientSubscriptionOptions,
@@ -295,26 +345,44 @@ function processRelay(
   > & {
     manualPaginate$: Observable<void> | undefined;
     onRelaySettle: ((relay: string) => void) | undefined;
+    onRelayEose: ((relay: string) => void) | undefined;
     onRelayError: ((relay: string) => void) | undefined;
+    onRelayLifecycle: ((event: ResilientRelayLifecycle) => void) | undefined;
+    nextLifecycleGeneration: (() => number) | undefined;
+    /**
+     * Internal hook for the additive coordinator: called at the start of
+     * every buildLiveSub re-execution (retry or graceful-close repeat, never
+     * the first cycle). Signals that the next REQ re-reads the filter
+     * provider, so delta REQs opened since the last cycle are now redundant
+     * and can be consolidated away.
+     */
+    onCycleRestart?: (relay: string) => void;
   },
   signal: SettleSignal,
 ): Observable<NostrEvent> {
   const limit = opts.limit;
 
-  // Live filters: keep limit so the relay returns at most `limit` historical
+  // Filters may be a provider function (additive subscriptions grow the set
+  // over time). Live filters are re-read on every subscription cycle so a
+  // reconnect REQ covers everything added since the previous cycle. Static
+  // callers pass a fixed array, which behaves exactly as before.
+  const getFilters = typeof filters === "function" ? filters : () => filters;
+
+  // Live filters keep limit so the relay returns at most `limit` historical
   // events before EOSE. New events published after the subscription opens are
   // always forwarded regardless of limit — it only caps the backfill.
   // On reconnect, since: lastReceivedAt is injected (see buildLiveSub) which
   // already scopes the backfill to the gap window, so limit is less relevant
   // there but harmless to keep.
-  const liveFilters: Filter[] = filters.map((f) => ({ ...f }));
 
-  // Pagination filters: strip since/until/limit (TimelessFilter).
+  // Pagination filters: strip since/until/limit (TimelessFilter). Pagination
+  // is only supported for static filter sets, so a one-time snapshot is fine.
   // NOTE: mergeFilters (used by loadBlocksFromRelay) only handles kinds, ids,
   // authors, tag filters, limit, since, and until — it silently drops scalar
   // fields like `search`. We preserve those extras here and re-apply them in
   // extendingPool after the merge so they survive into every page REQ.
-  const paginationFilters: TimelessFilter[] = filters.map((f) => {
+  const filtersSnapshot = getFilters();
+  const paginationFilters: TimelessFilter[] = filtersSnapshot.map((f) => {
     const pf: TimelessFilter = { ...f };
     delete (pf as Filter).since;
     delete (pf as Filter).until;
@@ -324,7 +392,7 @@ function processRelay(
 
   // Scalar fields that mergeFilters drops — keyed by filter index so we can
   // restore them per-filter after the merge.
-  const scalarExtras: Array<Partial<Filter>> = filters.map((f) => {
+  const scalarExtras: Array<Partial<Filter>> = filtersSnapshot.map((f) => {
     const extras: Partial<Filter> = {};
     for (const key of Object.keys(f) as Array<keyof Filter>) {
       if (
@@ -349,17 +417,69 @@ function processRelay(
     let oldestSeen: number | undefined;
     let lastReceivedAt: number | undefined;
     let eoseSeen = false;
-    // Persists across retry/repeat cycles. Once true, any subsequent drop is
-    // treated as transient and retried indefinitely (with backoff) rather than
-    // consuming the fixed retryCount budget.
-    let everReceivedEose = false;
+    // Persists across retry/repeat cycles. It becomes true only when the live
+    // request completes the caller's full declared filter before any recovery
+    // cursor can be injected. Besides making subsequent drops retryable without
+    // the pre-EOSE budget, this is the proof required for bounded recovery.
+    let hasBaselineEose = false;
     // Reconnect attempt counter for backoff calculation. Reset to 0 each time
     // EOSE is received so that a relay that has been healthy for a long time
     // starts its next reconnect from 1s rather than the capped maximum.
     let reconnectAttempts = 0;
+    // Counts buildLiveSub executions so onCycleRestart fires only on
+    // re-executions (reconnects), never on the first cycle.
+    let cycleCount = 0;
     let paginateSub: { unsubscribe(): void } | undefined;
     let manualSub: { unsubscribe(): void } | undefined;
     let gapFillSub: { unsubscribe(): void } | undefined;
+    let latestLifecycleGeneration: number | undefined;
+    let livePipelineCompleted = false;
+    let lastUnavailableReason: ResilientRelayUnavailableReason | undefined;
+    const liveRestart$ = new Subject<Error>();
+    // True only while the persistent live REQ itself is subscribed. A
+    // foreground catch-up may prove the missed window, but it must not claim
+    // continuously owned coverage while the live cycle is between attempts.
+    let liveCycleOpen = false;
+
+    const beginLifecycle = (
+      phase: Exclude<ResilientRelayLifecyclePhase, "covered">,
+      reason?: ResilientRelayUnavailableReason,
+    ): number | undefined => {
+      lastUnavailableReason = phase === "unavailable" ? reason : undefined;
+      const generation = opts.nextLifecycleGeneration?.();
+      if (generation !== undefined) {
+        latestLifecycleGeneration = generation;
+        opts.onRelayLifecycle?.({
+          relay,
+          generation,
+          phase,
+          ...(phase === "unavailable" && reason !== undefined
+            ? { reason }
+            : {}),
+        });
+      }
+      return generation;
+    };
+    const completeLifecycle = (
+      generation: number | undefined,
+      phase: "covered",
+    ) => {
+      lastUnavailableReason = undefined;
+      if (generation !== undefined) {
+        opts.onRelayLifecycle?.({ relay, generation, phase });
+      }
+    };
+
+    /**
+     * A recovery cursor is safe only after this relay owner completed its full
+     * declared filter. Clamp future-dated events to now so one skewed publisher
+     * cannot move the reconnect window ahead of legitimate current events.
+     */
+    const getSafeRecoveryCursor = (): number | undefined => {
+      if (!hasBaselineEose || lastReceivedAt === undefined) return undefined;
+      const now = Math.floor(Date.now() / 1_000);
+      return Math.min(lastReceivedAt, now) - opts.gapFillBuffer;
+    };
 
     // Shared pagination window — driven by auto (BehaviorSubject) or manual.
     let window$: Subject<{ since?: number; until?: number }> | undefined;
@@ -431,8 +551,8 @@ function processRelay(
 
     // Build the live subscription factory. defer() re-executes on each retry
     // (error) and repeat (graceful close) so lastReceivedAt is read fresh on
-    // every reconnect attempt, injecting since: lastReceivedAt - gapFillBuffer
-    // to avoid replaying the full relay history.
+    // every reconnect attempt. A bounded cursor is injected only after a full
+    // declared-filter EOSE established the relay owner's baseline.
     //
     // Note on applesauce's `reconnect` / `resubscribe` options: in
     // applesauce-relay@6.0.0 the `reconnect` option on subscription() /
@@ -448,20 +568,23 @@ function processRelay(
     // relay.reconnectTimer (replaced with a 3-phase curve in nostr.ts).
     // Our retry handler subscribes to the watchTower (keeping it alive so
     // the reconnect timer can drive new connection attempts) and waits for
-    // open$ to confirm a successful connection before re-executing buildLiveSub.
+    // open$ plus the configured REQ delay before re-executing buildLiveSub.
     const buildLiveSub = () => {
       // Reset per-subscription-cycle state so that countBeforeEose and
       // oldestSeen are tracked correctly after a retry or graceful-close repeat.
-      // lastReceivedAt is intentionally NOT reset — it persists across cycles
-      // so the reconnect REQ uses since: lastReceivedAt - gapFillBuffer.
+      // lastReceivedAt and hasBaselineEose intentionally persist across cycles
+      // so a proven baseline can use bounded recovery after a disruption.
       eoseSeen = false;
       countBeforeEose = 0;
+      if (cycleCount++ > 0) opts.onCycleRestart?.(relay);
+      let lifecycleGeneration: number | undefined;
 
-      const filtersWithSince: Filter[] = liveFilters.map((f) => ({
+      const recoveryCursor = opts.reconnect
+        ? getSafeRecoveryCursor()
+        : undefined;
+      const filtersWithSince: Filter[] = getFilters().map((f) => ({
         ...f,
-        ...(opts.reconnect && lastReceivedAt !== undefined
-          ? { since: lastReceivedAt - opts.gapFillBuffer }
-          : {}),
+        ...(recoveryCursor !== undefined ? { since: recoveryCursor } : {}),
       }));
 
       // Use the single-relay API so the stream still emits NostrEvent | "EOSE"
@@ -495,6 +618,9 @@ function processRelay(
       const relayObj = pool.relay(relay);
       const inner$ = relayObj.subscription(filtersWithSince);
       const sub$ = new Observable<NostrEvent | "EOSE">((s) => {
+        lifecycleGeneration = beginLifecycle("initial");
+        liveCycleOpen = true;
+        const restartSub = liveRestart$.subscribe((error) => s.error(error));
         const errSub = relayObj.error$.subscribe((err) => {
           if (err !== null) s.error(new TransportError(relay));
         });
@@ -504,10 +630,22 @@ function processRelay(
           complete: () => s.complete(),
         });
         return () => {
+          liveCycleOpen = false;
+          restartSub.unsubscribe();
           errSub.unsubscribe();
           innerSub.unsubscribe();
         };
-      });
+      }).pipe(
+        tap((message) => {
+          if (message === "EOSE") {
+            // getSafeRecoveryCursor cannot return a value before this flag is
+            // true, so the first live EOSE necessarily covers the full declared
+            // filter. Publish the baseline fact before lifecycle coverage.
+            hasBaselineEose = true;
+            completeLifecycle(lifecycleGeneration, "covered");
+          }
+        }),
+      );
 
       // If this relay is currently rate-limited, wait out the cooldown before
       // opening the subscription. This prevents other concurrent subscriptions
@@ -520,6 +658,7 @@ function processRelay(
       // events — it just won't contribute to the initial EOSE settle window.
       const remaining = getRateLimitCooldownRemaining(relay);
       if (remaining > 0) {
+        beginLifecycle("unavailable", "rate-limited");
         signal.settle(relay);
         opts.onRelaySettle?.(relay);
         return timer(remaining).pipe(switchMap(() => sub$));
@@ -545,16 +684,23 @@ function processRelay(
           delay: (err) => {
             // Auth-required: fast-fail — handled asynchronously by the
             // pool-level auth policy in nostr.ts.
-            if (err instanceof AuthRequiredError) throw err;
+            if (err instanceof AuthRequiredError) {
+              beginLifecycle("unavailable", "auth");
+              throw err;
+            }
             // Permanent policy errors: the relay will never accept this
             // subscription regardless of retries. Fast-fail immediately.
-            if (isPermanentError(err)) throw err;
+            if (isPermanentError(err)) {
+              beginLifecycle("unavailable", "permanent");
+              throw err;
+            }
             // Rate-limited: relay is overloaded. Record the cooldown so all
             // other concurrent subscriptions to this relay also hold off,
             // preventing a stampede that would reset the relay's window.
             if (isRateLimited(err)) {
+              beginLifecycle("unavailable", "rate-limited");
               reconnectAttempts++;
-              if (!everReceivedEose && reconnectAttempts > opts.retryCount)
+              if (!hasBaselineEose && reconnectAttempts > opts.retryCount)
                 throw err;
               const { ms, timer$ } = rateLimitedRetryDelay(
                 err,
@@ -593,14 +739,19 @@ function processRelay(
             // need to fast-settle their settle signal immediately rather
             // than wait for the underlying retry cycle to complete.
             //
-            // No retryCount budget here — while the socket is bouncing we
-            // patiently wait. If the relay never recovers, open$ never fires
-            // and the subscription quietly remains dormant; if a caller
-            // unsubscribes, the watchTower sub and take(1) are torn down
-            // with no leak.
+            // Wait for the socket to recover, then apply the configured REQ
+            // retry budget/backoff before emitting the retry notifier.
+            // Persistent callers previously reached the same delay through
+            // repeat() when this notifier completed without emitting. Emitting
+            // here preserves that cadence while also letting autoClose callers
+            // re-issue their one-shot REQ after recovery.
             if (err instanceof TransportError) {
+              beginLifecycle("unavailable", "transport");
               signal.error(relay);
               opts.onRelayError?.(relay);
+              reconnectAttempts++;
+              if (!hasBaselineEose && reconnectAttempts > opts.retryCount)
+                throw err;
               const relayObj = pool.relay(relay);
               // watchTower is protected in TypeScript but is a plain property
               // at runtime — cast to access it. Subscribing to it increments
@@ -609,27 +760,46 @@ function processRelay(
               const wt = (
                 relayObj as unknown as { watchTower: Observable<never> }
               ).watchTower;
-              return new Observable<never>((s) => {
+              return new Observable<void>((s) => {
+                const retrySubs = new Subscription();
                 // Keep the watchTower alive so the reconnect timer can drive
                 // new connection attempts. The watchTower is share()d so this
                 // just increments the refcount — no duplicate socket is opened.
-                const watchSub = wt.subscribe();
-                // Wait for the next successful open before completing so
-                // defer() re-executes buildLiveSub with a clean error$ state.
-                const openSub = relayObj.open$.pipe(take(1)).subscribe({
-                  next: () => s.complete(),
-                  error: (e) => s.error(e),
-                });
-                return () => {
-                  watchSub.unsubscribe();
-                  openSub.unsubscribe();
-                };
+                retrySubs.add(wt.subscribe());
+                // Wait for the next successful open, then observe the caller's
+                // configured REQ retry delay before emitting. retry() needs an
+                // emission (not completion alone) to resubscribe.
+                retrySubs.add(
+                  relayObj.open$.pipe(take(1)).subscribe({
+                    next: () => {
+                      const retryDelay$ =
+                        typeof opts.retryDelay === "function"
+                          ? opts.retryDelay(err, reconnectAttempts)
+                          : timer(opts.retryDelay ?? 0);
+                      // Adding to an already-closed container immediately
+                      // unsubscribes a synchronously emitting delay source.
+                      retrySubs.add(
+                        retryDelay$.subscribe({
+                          next: () => s.next(),
+                          error: (e) => s.error(e),
+                          complete: () => s.complete(),
+                        }),
+                      );
+                    },
+                    error: (e) => s.error(e),
+                  }),
+                );
+                return retrySubs;
               });
             }
             // NIP-01 CLOSED (non-rate-limited, non-permanent): use our own
             // backoff. The WebSocket is still open so waitForReady won't block.
+            beginLifecycle(
+              "unavailable",
+              err instanceof RelayClosedError ? "closed" : "error",
+            );
             reconnectAttempts++;
-            if (!everReceivedEose && reconnectAttempts > opts.retryCount)
+            if (!hasBaselineEose && reconnectAttempts > opts.retryCount)
               throw err;
             return typeof opts.retryDelay === "function"
               ? opts.retryDelay(err, reconnectAttempts)
@@ -653,8 +823,9 @@ function processRelay(
           : repeat({
               count: Infinity,
               delay: () => {
+                beginLifecycle("unavailable", "closed");
                 reconnectAttempts++;
-                if (!everReceivedEose && reconnectAttempts > opts.retryCount)
+                if (!hasBaselineEose && reconnectAttempts > opts.retryCount)
                   throw new Error(
                     `relay ${relay} gave up after ${reconnectAttempts} graceful closes`,
                   );
@@ -692,8 +863,8 @@ function processRelay(
         next: (msg) => {
           if (msg === "EOSE") {
             eoseSeen = true;
-            everReceivedEose = true;
             reconnectAttempts = 0;
+            opts.onRelayEose?.(relay);
             if (opts.paginate || opts.manualPaginate$) {
               if (opts.manualPaginate$) {
                 // Manual mode: always start pagination so the Subject has a
@@ -733,6 +904,7 @@ function processRelay(
           }
         },
         complete: () => {
+          livePipelineCompleted = true;
           // autoClose: a graceful relay close (CLOSED without error prefix)
           // means the relay is done — treat it as settled rather than
           // reconnecting. Without autoClose the repeat() operator above would
@@ -748,19 +920,91 @@ function processRelay(
     // Foreground resume gap-fill
     const gapFillResumeSub = opts.gapFill
       ? foregroundResume$.subscribe(() => {
-          if (lastReceivedAt === undefined) return;
+          // Preserve the existing no-op for subscriptions that have never
+          // received an event. A coverage lease must still prove its resume
+          // pass with EOSE, so only lifecycle-aware stable filters re-read the
+          // full filter when there is no safe completed-backfill cursor.
+          if (
+            lastReceivedAt === undefined &&
+            opts.onRelayLifecycle === undefined
+          ) {
+            return;
+          }
           gapFillSub?.unsubscribe();
-          const gapFilters: Filter[] = liveFilters.map((f) => ({
+          let lifecycleGeneration = beginLifecycle("catching-up");
+          const gapFillCursor = getSafeRecoveryCursor();
+          const gapFilters: Filter[] = getFilters().map((f) => ({
             ...f,
-            since: lastReceivedAt! - opts.gapFillBuffer,
+            ...(gapFillCursor !== undefined ? { since: gapFillCursor } : {}),
           }));
-          gapFillSub = pool
-            .subscription([relay], gapFilters, { reconnect: false })
-            .pipe(completeOnEose(), onlyEvents())
+          let gapFillEoseSeen = false;
+          const gapFillDone$ = new Subject<void>();
+          const gapFillFailed = () => {
+            if (
+              opts.onRelayLifecycle === undefined ||
+              lifecycleGeneration !== latestLifecycleGeneration
+            ) {
+              return;
+            }
+            if (liveCycleOpen) {
+              // The catch-up budget was exhausted while the previously
+              // covered live REQ was still healthy. Restart that REQ so a
+              // fresh initial → covered cycle can re-establish ownership.
+              liveRestart$.next(
+                new Error(`foreground gap-fill exhausted for ${relay}`),
+              );
+            } else {
+              beginLifecycle("unavailable", "error");
+            }
+          };
+          // Resume bursts remain one-shot for ordinary consumers. Coverage
+          // owners may retry, but an always-on live retry budget (Infinity)
+          // must not turn a temporary catch-up into an unbounded burst.
+          const gapFillRetryCount =
+            opts.onRelayLifecycle === undefined
+              ? 0
+              : Math.min(Math.max(0, opts.retryCount), DEFAULT_RETRY_COUNT);
+          gapFillSub = resilientSubscription(pool, [relay], gapFilters, {
+            reconnect: false,
+            gapFill: false,
+            settle: false,
+            paginate: false,
+            retryCount: gapFillRetryCount,
+            retryDelay: opts.retryDelay,
+            onRelayLifecycle: opts.onRelayLifecycle
+              ? (event) => {
+                  if (lifecycleGeneration !== latestLifecycleGeneration) return;
+                  // The nested request owns its backoff. Project that state
+                  // onto the parent lease instead of timing out a catch-up
+                  // which has not yet been allowed to send its REQ.
+                  if (event.phase === "unavailable") {
+                    lifecycleGeneration = beginLifecycle(
+                      "unavailable",
+                      event.reason,
+                    );
+                  } else if (event.phase === "initial") {
+                    lifecycleGeneration = beginLifecycle("catching-up");
+                  }
+                }
+              : undefined,
+            onRelayEose: () => {
+              gapFillEoseSeen = true;
+              // Catch-up evidence is current only while the persistent live
+              // REQ remains open. If it is between retry attempts, its next
+              // cycle will establish a fresh generation and EOSE normally.
+              if (liveCycleOpen) {
+                completeLifecycle(lifecycleGeneration, "covered");
+              }
+              gapFillDone$.next();
+              gapFillDone$.complete();
+            },
+          })
+            .pipe(onlyEvents(), takeUntil(gapFillDone$))
             .subscribe({
               next: (event) => subscriber.next(event),
-              error: () => {
-                /* gap-fill errors are non-fatal */
+              error: gapFillFailed,
+              complete: () => {
+                if (!gapFillEoseSeen) gapFillFailed();
               },
             });
         })
@@ -772,6 +1016,11 @@ function processRelay(
       manualSub?.unsubscribe();
       gapFillSub?.unsubscribe();
       gapFillResumeSub.unsubscribe();
+      liveRestart$.complete();
+      beginLifecycle(
+        livePipelineCompleted ? "unavailable" : "stopped",
+        livePipelineCompleted ? (lastUnavailableReason ?? "error") : undefined,
+      );
     };
   });
 }
@@ -810,10 +1059,17 @@ export function resilientSubscription(
   filters: Filter[],
   opts: ResilientSubscriptionOptions = {},
 ): Observable<ResilientSubscriptionResponse> {
+  let lifecycleGeneration = 0;
+  const internalOpts: InternalResilientSubscriptionOptions = {
+    ...opts,
+    nextLifecycleGeneration: opts.onRelayLifecycle
+      ? () => ++lifecycleGeneration
+      : undefined,
+  };
   if (relays instanceof Observable) {
-    return resilientSubscriptionReactive(pool, relays, filters, opts);
+    return resilientSubscriptionReactive(pool, relays, filters, internalOpts);
   }
-  return resilientSubscriptionStatic(pool, relays, filters, opts);
+  return resilientSubscriptionStatic(pool, relays, filters, internalOpts);
 }
 
 /**
@@ -823,7 +1079,7 @@ function resilientSubscriptionStatic(
   pool: RelayPool,
   relays: string[],
   filters: Filter[],
-  opts: ResilientSubscriptionOptions = {},
+  opts: InternalResilientSubscriptionOptions = {},
 ): Observable<ResilientSubscriptionResponse> {
   const autoClose = opts.autoClose ?? false;
   // autoClose implies one-shot semantics: reconnect and gap-fill are
@@ -835,11 +1091,14 @@ function resilientSubscriptionStatic(
   const settleTime = opts.settleTime ?? DEFAULT_SETTLE_TIME;
   const paginate = opts.paginate ?? false;
   const limit = opts.limit ?? 500;
-  const retryCount = opts.retryCount ?? 3;
+  const retryCount = opts.retryCount ?? DEFAULT_RETRY_COUNT;
   const retryDelay = opts.retryDelay ?? defaultRetryDelay;
   const manualPaginate$ = opts.manualPaginate$;
   const onRelaySettle = opts.onRelaySettle;
+  const onRelayEose = opts.onRelayEose;
   const onRelayError = opts.onRelayError;
+  const onRelayLifecycle = opts.onRelayLifecycle;
+  const nextLifecycleGeneration = opts.nextLifecycleGeneration;
 
   if (relays.length === 0) return EMPTY;
 
@@ -854,7 +1113,10 @@ function resilientSubscriptionStatic(
     retryDelay,
     manualPaginate$,
     onRelaySettle,
+    onRelayEose,
     onRelayError,
+    onRelayLifecycle,
+    nextLifecycleGeneration,
   };
 
   if (!settle) {
@@ -905,7 +1167,7 @@ function resilientSubscriptionReactive(
   pool: RelayPool,
   relays$: Observable<string[]>,
   filters: Filter[],
-  opts: ResilientSubscriptionOptions = {},
+  opts: InternalResilientSubscriptionOptions = {},
 ): Observable<ResilientSubscriptionResponse> {
   const autoClose = opts.autoClose ?? false;
   const reconnect = opts.reconnect ?? (autoClose ? false : true);
@@ -915,11 +1177,14 @@ function resilientSubscriptionReactive(
   const settleTime = opts.settleTime ?? DEFAULT_SETTLE_TIME;
   const paginate = opts.paginate ?? false;
   const limit = opts.limit ?? 500;
-  const retryCount = opts.retryCount ?? 3;
+  const retryCount = opts.retryCount ?? DEFAULT_RETRY_COUNT;
   const retryDelay = opts.retryDelay ?? defaultRetryDelay;
   const manualPaginate$ = opts.manualPaginate$;
   const onRelaySettle = opts.onRelaySettle;
+  const onRelayEose = opts.onRelayEose;
   const onRelayError = opts.onRelayError;
+  const onRelayLifecycle = opts.onRelayLifecycle;
+  const nextLifecycleGeneration = opts.nextLifecycleGeneration;
 
   const resolvedOpts = {
     autoClose,
@@ -932,7 +1197,10 @@ function resilientSubscriptionReactive(
     retryDelay,
     manualPaginate$,
     onRelaySettle,
+    onRelayEose,
     onRelayError,
+    onRelayLifecycle,
+    nextLifecycleGeneration,
   };
 
   return new Observable<ResilientSubscriptionResponse>((subscriber) => {
@@ -1027,6 +1295,491 @@ function resilientSubscriptionReactive(
   });
 }
 
+// ---------------------------------------------------------------------------
+// resilientAdditiveSubscription — keyed additive filter chunks
+// ---------------------------------------------------------------------------
+
+/**
+ * A keyed, immutable unit of filters accepted by an additive subscription.
+ *
+ * The key is the chunk's identity: submitting the same key again with
+ * canonically identical filters is a no-op, while reusing a key with
+ * different filters raises AdditiveFilterConflictError.
+ */
+export interface AdditiveFilterChunk {
+  /** Caller-defined identity used to deduplicate repeated submissions. */
+  readonly key: string;
+  /** Exact Nostr filter clauses sent together. Clauses are never merged. */
+  readonly filters: readonly Filter[];
+  /**
+   * Declares that this chunk's filters are safe to send as a later delta REQ
+   * — i.e. an existing REQ plus a delta REQ with these filters returns the
+   * same events as one REQ that had included them from the start.
+   *
+   * Added tag values, exact authors, kinds, and full 64-char ids are safe.
+   * `limit`, `since`, `until`, `search`, and prefix ids are not — their
+   * meaning depends on the REQ they ride in. The declaration is validated
+   * cheaply: a chunk declared deltaSafe whose filters use one of those
+   * fields is rejected with a TypeError.
+   *
+   * Chunks delivered via `additions$` MUST declare `deltaSafe: true`.
+   * Initial chunks may omit it — they only ever ride full REQs.
+   */
+  readonly deltaSafe?: boolean;
+}
+
+/** The initial query plan plus an optional stream of later chunk additions. */
+export interface AdditiveFilterPlan {
+  /** Chunks available before relay work starts. */
+  readonly initial: readonly AdditiveFilterChunk[];
+  /**
+   * Later chunk additions, accepted for the subscription's whole lifetime.
+   * Each must declare `deltaSafe: true`. Completion of this observable has
+   * no effect on the subscription — the caller owns its lifetime; an error
+   * tears the subscription down.
+   */
+  readonly additions$?: Observable<AdditiveFilterChunk>;
+}
+
+/** Raised when a chunk key is reused with different filter clauses. */
+export class AdditiveFilterConflictError extends Error {
+  constructor(key: string) {
+    super(`additive filter chunk "${key}" was reused with different clauses`);
+    this.name = "AdditiveFilterConflictError";
+  }
+}
+
+export interface ResilientAdditiveSubscriptionOptions extends Omit<
+  ResilientSubscriptionOptions,
+  "autoClose" | "paginate" | "manualPaginate$" | "onRelayLifecycle"
+> {
+  /**
+   * Buffer window in ms coalescing chunk additions into one delta REQ per
+   * relay. Default: 25
+   */
+  deltaBufferTime?: number;
+  /** Maximum chunks per buffered delta REQ. Default: 200 */
+  deltaBufferSize?: number;
+}
+
+/** Filter fields whose meaning depends on the REQ they ride in. */
+const DELTA_UNSAFE_FIELDS = ["limit", "since", "until", "search"] as const;
+
+interface StoredAdditiveChunk {
+  /** Canonical JSON of the sorted, deduplicated clauses — used for identity. */
+  canonical: string;
+  /** Private clones of the caller's filters, safe from later mutation. */
+  filters: Filter[];
+}
+
+/** Deep-clone a JSON-ish value, dropping undefined object entries. */
+function cloneJson(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(cloneJson);
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([, entry]) => entry !== undefined)
+        .map(([key, entry]) => [key, cloneJson(entry)]),
+    );
+  }
+  return value;
+}
+
+/**
+ * Canonicalize a filter for identity comparison: object keys sorted, arrays
+ * sorted and deduplicated (Nostr filter arrays are sets — order and repeats
+ * carry no meaning).
+ */
+function canonicalFilter(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    const entries = value.map(canonicalFilter).map((entry) => ({
+      entry,
+      key: JSON.stringify(entry),
+    }));
+    return [...new Map(entries.map(({ key, entry }) => [key, entry])).entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([, entry]) => entry);
+  }
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([, entry]) => entry !== undefined)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([key, entry]) => [key, canonicalFilter(entry)]),
+    );
+  }
+  return value;
+}
+
+/** Structural validation + canonicalization for one chunk. */
+function storeAdditiveChunk(chunk: AdditiveFilterChunk): StoredAdditiveChunk {
+  if (chunk.key.length === 0)
+    throw new TypeError("additive filter chunk keys must not be empty");
+  if (chunk.filters.length === 0)
+    throw new TypeError(`additive filter chunk "${chunk.key}" has no clauses`);
+
+  const filters = chunk.filters.map((filter) => cloneJson(filter) as Filter);
+  const clauses = filters
+    .map((filter) => JSON.stringify(canonicalFilter(filter)))
+    .filter((clause, index, all) => all.indexOf(clause) === index)
+    .sort();
+  return { canonical: JSON.stringify(clauses), filters };
+}
+
+/**
+ * Cheap validation of a deltaSafe declaration. Delta-safety is a property of
+ * filter shape: added tag values and exact authors/kinds/ids are safe, while
+ * limits, time ranges, prefix ids, and search are not. This is a lie
+ * detector, not an inference engine — callers own the declaration.
+ */
+function assertDeltaSafeShape(key: string, filters: Filter[]): void {
+  for (const filter of filters) {
+    for (const field of DELTA_UNSAFE_FIELDS) {
+      if (filter[field] !== undefined)
+        throw new TypeError(
+          `additive filter chunk "${key}" is declared deltaSafe but uses "${field}"`,
+        );
+    }
+    if (filter.ids?.some((id) => id.length !== 64))
+      throw new TypeError(
+        `additive filter chunk "${key}" is declared deltaSafe but uses prefix ids`,
+      );
+  }
+}
+
+/** Shared no-op settle signal for streams that must not drive settlement. */
+const noopSettleSignal: SettleSignal = {
+  extend: () => {},
+  settle: () => {},
+  error: () => {},
+  addRelay: () => {},
+  removeRelay: () => {},
+  eose$: EMPTY as Observable<"EOSE">,
+};
+
+/**
+ * Subscribe to a growing set of keyed filter chunks without tearing down
+ * existing relay REQs.
+ *
+ * The caller supplies an initial plan (relays + keyed chunks) and may later
+ * add chunks via `plan.additions$`. The caller owns query scope entirely;
+ * this primitive owns only transport continuity and delta reconciliation:
+ *
+ *   - Each relay gets one long-lived "main" stream (a full processRelay
+ *     pipeline — reconnect with since gap-fill, foreground-resume gap-fill,
+ *     rate-limit backoff, per-relay error isolation). Its filters are a
+ *     provider over the full current chunk set, so every reconnect or
+ *     foreground gap-fill REQ covers all active chunks.
+ *   - Chunk additions are buffered (deltaBufferTime/deltaBufferSize) and
+ *     each batch opens one delta REQ per relay containing only the batch's
+ *     filters. Relays whose transport is currently failed are skipped — a
+ *     failed relay's reconnect re-reads the full chunk set, so the batch is
+ *     covered there without a delta.
+ *   - When a relay's main stream starts a new cycle (reconnect after error
+ *     or graceful close), its delta streams are closed: the new REQ already
+ *     contains their chunks. A healthy relay's delta REQs stay open until
+ *     then, so additions accumulate REQs only between reconnects.
+ *   - A relay joining later (reactive relay list) receives the full current
+ *     chunk set in its initial REQ. A removed relay is closed alone.
+ *
+ * Settlement is monotonic and reuses the standard settle semantics: the
+ * "EOSE" sentinel fires once when the initial plan reaches EOSE on every
+ * relay (or errors/caps out), and later chunk additions never unsettle it.
+ * Delta streams never drive the settle signal. There is no per-chunk
+ * completion signal and no chunk retraction.
+ *
+ * Duplicate events across overlapping REQs are expected and harmless —
+ * EventStore deduplication handles them downstream.
+ *
+ * Returns Observable<NostrEvent | "EOSE"> like resilientSubscription. Pipe
+ * through onlyEvents() if the settle sentinel is not needed. Does NOT add
+ * mapEventsToStore or filterDuplicateEvents — callers handle that. The
+ * stream never completes on its own; the caller owns its lifetime.
+ */
+export function resilientAdditiveSubscription(
+  pool: RelayPool,
+  relays: string[] | Observable<string[]>,
+  plan: AdditiveFilterPlan,
+  opts: ResilientAdditiveSubscriptionOptions = {},
+): Observable<ResilientSubscriptionResponse> {
+  const guarded = opts as ResilientSubscriptionOptions;
+  if (guarded.manualPaginate$ !== undefined)
+    throw new TypeError("additive queries do not support manual pagination");
+  if (guarded.paginate === true)
+    throw new TypeError(
+      "live additive subscriptions do not support automatic pagination",
+    );
+
+  const reconnect = opts.reconnect ?? true;
+  const gapFill = opts.gapFill ?? true;
+  const gapFillBuffer = opts.gapFillBuffer ?? 600;
+  const settle = opts.settle ?? true;
+  const settleTime = opts.settleTime ?? DEFAULT_SETTLE_TIME;
+  const limit = opts.limit ?? 500;
+  const retryCount = opts.retryCount ?? DEFAULT_RETRY_COUNT;
+  const retryDelay = opts.retryDelay ?? defaultRetryDelay;
+  const deltaBufferTime = opts.deltaBufferTime ?? 25;
+  const deltaBufferSize = Math.max(1, Math.floor(opts.deltaBufferSize ?? 200));
+
+  const mainStreamOpts = {
+    reconnect,
+    gapFill,
+    gapFillBuffer,
+    paginate: false,
+    limit,
+    retryCount,
+    retryDelay,
+    autoClose: false,
+    manualPaginate$: undefined,
+    onRelaySettle: opts.onRelaySettle,
+    onRelayEose: opts.onRelayEose,
+    onRelayError: opts.onRelayError,
+    onRelayLifecycle: undefined,
+    nextLifecycleGeneration: undefined,
+  };
+  // Delta streams: no foreground gap-fill (the main stream's gap-fill reads
+  // the full chunk set, covering every delta chunk) and no relay callbacks
+  // (the main stream is the authoritative per-relay lifecycle).
+  const deltaStreamOpts = {
+    ...mainStreamOpts,
+    gapFill: false,
+    onRelaySettle: undefined,
+    onRelayEose: undefined,
+    onRelayError: undefined,
+  };
+
+  const staticRelays = Array.isArray(relays) ? [...new Set(relays)] : undefined;
+
+  return new Observable<ResilientSubscriptionResponse>((subscriber) => {
+    const chunks = new Map<string, StoredAdditiveChunk>();
+    interface RelayStreams {
+      main: Subscription | undefined;
+      /** Container for this relay's delta streams; replaced when closed. */
+      deltas: Subscription;
+    }
+    const relayStates = new Map<string, RelayStreams>();
+    const root = new Subscription();
+    const pendingKeys = new Set<string>();
+    let bufferTimer: ReturnType<typeof setTimeout> | undefined;
+    // While true, accepted additions are folded into the initial REQs opened
+    // below instead of scheduling delta REQs.
+    let initializing = true;
+
+    const signal: SettleSignal = settle
+      ? makeSettleSignal(
+          staticRelays
+            ? { settleTime, relayIds: staticRelays }
+            : { settleTime },
+        )
+      : noopSettleSignal;
+
+    // Register teardown with the subscriber before subscribing to any cold
+    // input. A source may synchronously emit a valid chunk and then error
+    // before setup finishes — relying on a returned teardown would register
+    // it too late to disarm the buffer timer.
+    subscriber.add(() => {
+      if (bufferTimer !== undefined) clearTimeout(bufferTimer);
+      bufferTimer = undefined;
+      root.unsubscribe();
+      for (const state of relayStates.values()) {
+        state.main?.unsubscribe();
+        state.deltas.unsubscribe();
+      }
+      relayStates.clear();
+    });
+
+    const allFilters = (): Filter[] =>
+      [...chunks.values()].flatMap((chunk) => chunk.filters);
+
+    const subscribeStream = (stream: Observable<NostrEvent>): Subscription =>
+      stream.subscribe({
+        next: (event) => subscriber.next(event),
+        error: (err) => {
+          // Per-relay errors are already handled inside processRelay
+          // (catchError → signal.error). Guard defensively like the
+          // reactive implementation.
+          console.error(
+            "[resilientAdditiveSubscription] unexpected relay stream error:",
+            err,
+          );
+        },
+      });
+
+    const closeDeltas = (relay: string) => {
+      const state = relayStates.get(relay);
+      if (!state) return;
+      state.deltas.unsubscribe();
+      state.deltas = new Subscription();
+    };
+
+    const openMain = (relay: string, state: RelayStreams) => {
+      state.main = subscribeStream(
+        processRelay(
+          pool,
+          relay,
+          allFilters,
+          // The reconnect REQ re-reads allFilters, so any delta REQs opened
+          // since the last cycle are consolidated into it.
+          { ...mainStreamOpts, onCycleRestart: closeDeltas },
+          signal,
+        ),
+      );
+    };
+
+    const joinRelay = (relay: string) => {
+      if (relayStates.has(relay)) return;
+      signal.addRelay(relay);
+      const state: RelayStreams = {
+        main: undefined,
+        deltas: new Subscription(),
+      };
+      relayStates.set(relay, state);
+      if (chunks.size > 0) {
+        openMain(relay, state);
+      } else {
+        // Empty initial plan: this relay has no initial work, so it settles
+        // immediately. Its main stream opens with the first chunk batch.
+        signal.settle(relay);
+        opts.onRelaySettle?.(relay);
+      }
+    };
+
+    const leaveRelay = (relay: string) => {
+      const state = relayStates.get(relay);
+      if (!state) return;
+      state.main?.unsubscribe();
+      state.deltas.unsubscribe();
+      relayStates.delete(relay);
+      signal.removeRelay(relay);
+    };
+
+    const flush = () => {
+      bufferTimer = undefined;
+      if (pendingKeys.size === 0) return;
+      const batch = [...pendingKeys];
+      pendingKeys.clear();
+      const deltaFilters = batch.flatMap(
+        (key) => chunks.get(key)?.filters ?? [],
+      );
+      for (const [relay, state] of relayStates) {
+        if (!state.main) {
+          // First chunks for a relay that joined while the plan was empty —
+          // its full REQ (allFilters) covers this batch.
+          openMain(relay, state);
+          continue;
+        }
+        // Delta REQs go only to relays whose transport is currently healthy.
+        // A failed relay's main stream is waiting to reconnect, and its
+        // reconnect REQ re-reads the full chunk set (cycle restart), so the
+        // batch is covered there without a delta.
+        if (pool.relay(relay).error$.value !== null) continue;
+        // Delta streams never drive settlement — hence the no-op signal.
+        state.deltas.add(
+          subscribeStream(
+            processRelay(
+              pool,
+              relay,
+              deltaFilters,
+              deltaStreamOpts,
+              noopSettleSignal,
+            ),
+          ),
+        );
+      }
+    };
+
+    const scheduleFlush = () => {
+      if (pendingKeys.size >= deltaBufferSize) {
+        if (bufferTimer !== undefined) clearTimeout(bufferTimer);
+        flush();
+      } else if (bufferTimer === undefined) {
+        bufferTimer = setTimeout(flush, deltaBufferTime);
+      }
+    };
+
+    const acceptChunk = (chunk: AdditiveFilterChunk, initial: boolean) => {
+      const stored = storeAdditiveChunk(chunk);
+      const existing = chunks.get(chunk.key);
+      if (existing) {
+        if (existing.canonical !== stored.canonical)
+          throw new AdditiveFilterConflictError(chunk.key);
+        return; // canonical duplicate — no new work
+      }
+      if (chunk.deltaSafe === true)
+        assertDeltaSafeShape(chunk.key, stored.filters);
+      if (!initial && chunk.deltaSafe !== true)
+        throw new TypeError(
+          `additive filter chunk "${chunk.key}" must declare deltaSafe: true to be added after subscription start`,
+        );
+      chunks.set(chunk.key, stored);
+      if (initial || initializing) return;
+      pendingKeys.add(chunk.key);
+      scheduleFlush();
+    };
+
+    try {
+      for (const chunk of plan.initial) acceptChunk(chunk, true);
+    } catch (err) {
+      subscriber.error(err);
+      return;
+    }
+
+    // Subscribe the settle sentinel before any relay work: an empty static
+    // relay list (or an empty initial plan) settles synchronously during
+    // joinRelay, and allSettled$/firstSettle$ are plain Subjects whose
+    // emissions would be lost to a later subscriber.
+    if (settle) {
+      root.add(
+        signal.eose$.subscribe({
+          next: (v) => subscriber.next(v),
+          error: (err) => subscriber.error(err),
+        }),
+      );
+    }
+
+    if (plan.additions$) {
+      root.add(
+        plan.additions$.subscribe({
+          next: (chunk) => {
+            try {
+              acceptChunk(chunk, false);
+            } catch (err) {
+              subscriber.error(err);
+            }
+          },
+          error: (err) => subscriber.error(err),
+          // Completion means no more additions — existing streams live on.
+        }),
+      );
+    }
+
+    if (subscriber.closed) return;
+
+    if (staticRelays) {
+      for (const relay of staticRelays) joinRelay(relay);
+    } else {
+      let currentRelays = new Set<string>();
+      root.add(
+        (relays as Observable<string[]>).subscribe({
+          next: (urls) => {
+            const nextRelays = new Set(urls);
+            for (const relay of nextRelays)
+              if (!currentRelays.has(relay)) joinRelay(relay);
+            for (const relay of currentRelays)
+              if (!nextRelays.has(relay)) leaveRelay(relay);
+            currentRelays = nextRelays;
+          },
+          error: (err) => subscriber.error(err),
+          // Completion keeps the existing per-relay streams alive — same as
+          // the reactive relay-list handling in resilientSubscription.
+        }),
+      );
+    }
+
+    initializing = false;
+  });
+}
+
 /**
  * One-shot variant of resilientSubscription.
  *
@@ -1082,7 +1835,7 @@ export function resilientSingleRelayRequest(
   filters: Filter[],
   opts: Pick<ResilientSubscriptionOptions, "retryCount" | "retryDelay"> = {},
 ): Observable<NostrEvent> {
-  const retryCount = opts.retryCount ?? 3;
+  const retryCount = opts.retryCount ?? DEFAULT_RETRY_COUNT;
   let reconnectAttempts = 0;
   let everSucceeded = false;
 

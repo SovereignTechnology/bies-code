@@ -1,0 +1,26 @@
+diff --git a/dist/relay.js b/dist/relay.js
+index e9eb0e89fc67d3203254069acc20b41f96660ead..47b3c9a5c5cf7396c95c4608fbab9ff872737c9b 100644
+--- a/dist/relay.js
++++ b/dist/relay.js
+@@ -264,8 +264,6 @@ export class Relay {
+             // Changed the connected state to false
+             if (this.connected$.value)
+                 this.connected$.next(false);
+-            // Increment the attempts counter
+-            this.attempts$.next(this.attempts$.value + 1);
+             // Reset the state
+             this.resetState();
+             // Start the reconnect timer if the connection was not closed cleanly
+@@ -432,8 +430,11 @@ export class Relay {
+     startReconnectTimer(error) {
+         if (!this.ready)
+             return;
+-        this.error$.next(error instanceof Error ? error : new Error("Connection error"));
+         this._ready$.next(false);
++        // Count the failed connection here: WebSocket errors can arrive without
++        // a close event. The ready guard also deduplicates error + close pairs.
++        this.attempts$.next(this.attempts$.value + 1);
++        this.error$.next(error instanceof Error ? error : new Error("Connection error"));
+         // Cancel any previously armed reconnect timer before arming a new one
+         this.reconnectSubscription?.unsubscribe();
+         this.reconnectSubscription = this.reconnectTimer(error, this.attempts$.value)

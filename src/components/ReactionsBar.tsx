@@ -1,3 +1,4 @@
+import { useRecoveryToast } from "@/hooks/useRecoveryToast";
 /**
  * ReactionsBar — NIP-25 (kind:7) reactions for NIP-34 thread events.
  *
@@ -47,6 +48,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import { Heart, X } from "lucide-react";
+import { useOptionalRepoContext } from "@/pages/repo/RepoContext";
 
 // ---------------------------------------------------------------------------
 // Preset emojis (matching gitworkshop)
@@ -69,9 +71,12 @@ export function ReactionsBar({
   repoCoords,
   className,
 }: ReactionsBarProps) {
+  const { toast } = useRecoveryToast();
   const store = useEventStore();
   const castStore = store as unknown as CastRefEventStore;
   const activeAccount = useActiveAccount();
+  const repoContext = useOptionalRepoContext();
+  const privateRepository = repoContext?.resolved?.repo.isPrivate ?? false;
 
   // Subscribe to reactions from the EventStore via ReactionsModel
   const reactionEvents = use$(
@@ -114,22 +119,27 @@ export function ReactionsBar({
 
   const sendReaction = useCallback(
     async (emoji: string) => {
-      if (sending || !activeAccount) return;
+      if (privateRepository || sending || !activeAccount) return;
       setSending(true);
       try {
         await runner.run(CreateReaction, event, emoji, repoCoords);
       } catch (err) {
-        console.error("[ReactionsBar] failed to send reaction:", err);
+        toast({
+          title: "Could not send reaction",
+          description: err instanceof Error ? err.message : "Request failed",
+          variant: "destructive",
+          recovery: { action: () => sendReaction(emoji) },
+        });
       } finally {
         setSending(false);
         setPickerOpen(false);
       }
     },
-    [sending, activeAccount, event, repoCoords],
+    [toast, privateRepository, sending, activeAccount, event, repoCoords],
   );
 
   const confirmDeleteReaction = useCallback(async () => {
-    if (!deleteTarget || deleting) return;
+    if (privateRepository || !deleteTarget || deleting) return;
     setDeleting(true);
     try {
       await runner.run(
@@ -139,13 +149,31 @@ export function ReactionsBar({
         deleteReason.trim() || undefined,
       );
     } catch (err) {
-      console.error("[ReactionsBar] failed to delete reaction:", err);
+      toast({
+        title: "Could not remove reaction",
+        description: err instanceof Error ? err.message : "Request failed",
+        variant: "destructive",
+        recovery: {
+          label: "Review removal",
+          action: () => {
+            setDeleteTarget(deleteTarget);
+            setDeleteReason(deleteReason);
+          },
+        },
+      });
     } finally {
       setDeleting(false);
       setDeleteTarget(null);
       setDeleteReason("");
     }
-  }, [deleteTarget, deleting, repoCoords, deleteReason]);
+  }, [
+    toast,
+    privateRepository,
+    deleteTarget,
+    deleting,
+    repoCoords,
+    deleteReason,
+  ]);
 
   // Find the current user's reaction event for a given emoji (for deletion)
   const myReactionEvent = useCallback(
@@ -178,14 +206,14 @@ export function ReactionsBar({
               emoji={emoji}
               pubkeys={pubkeys}
               isMine={iMine}
-              disabled={sending}
-              onClick={() => setPickerOpen(true)}
+              disabled={sending || privateRepository}
+              onClick={() => !privateRepository && setPickerOpen(true)}
             />
           );
         })}
 
       {/* Add reaction button — hidden for own events */}
-      {activeAccount && !isOwn && !pickerOpen && (
+      {activeAccount && !isOwn && !pickerOpen && !privateRepository && (
         <button
           type="button"
           onClick={() => setPickerOpen(true)}
@@ -203,7 +231,7 @@ export function ReactionsBar({
       )}
 
       {/* Expanded picker */}
-      {pickerOpen && activeAccount && (
+      {pickerOpen && activeAccount && !privateRepository && (
         <div className="flex flex-col gap-2 w-full bg-muted/40 rounded-lg p-3">
           {/* Row 1: existing reactions with who reacted */}
           {grouped.size > 0 && (
@@ -256,6 +284,23 @@ export function ReactionsBar({
             </button>
           </div>
         </div>
+      )}
+
+      {privateRepository && activeAccount && !isOwn && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span
+              className="inline-flex cursor-help items-center gap-1 px-1 text-xs text-muted-foreground/60"
+              tabIndex={0}
+              aria-label="Reactions are read-only for private repositories"
+            >
+              <Heart className="h-3 w-3" />
+            </span>
+          </TooltipTrigger>
+          <TooltipContent>
+            Reactions are read-only for private repositories
+          </TooltipContent>
+        </Tooltip>
       )}
 
       {/* Delete confirmation dialog */}

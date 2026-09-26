@@ -1,3 +1,4 @@
+import { useRecoveryToast } from "@/hooks/useRecoveryToast";
 import { useState, useCallback } from "react";
 import type { NostrEvent } from "nostr-tools";
 import {
@@ -14,7 +15,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Copy, Check, Share2, Braces } from "lucide-react";
+import { Copy, Check, Link2, Share2, Braces, Pencil } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 /** Build a NIP-19 identifier for an event, including any seen relay hints. */
@@ -29,6 +30,7 @@ function eventToNip19(event: NostrEvent): string {
 // ---------------------------------------------------------------------------
 
 function CopyRow({ label, value }: { label: string; value: string }) {
+  const { toast } = useRecoveryToast();
   const [copied, setCopied] = useState(false);
 
   const handleCopy = useCallback(async () => {
@@ -37,9 +39,14 @@ function CopyRow({ label, value }: { label: string; value: string }) {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      /* clipboard unavailable */
+      toast({
+        title: "Could not copy",
+        description: "Try again or select and copy the displayed value.",
+        variant: "destructive",
+        recovery: { action: () => handleCopy() },
+      });
     }
-  }, [value]);
+  }, [toast, value]);
 
   return (
     <button
@@ -77,48 +84,55 @@ function CopyRow({ label, value }: { label: string; value: string }) {
 }
 
 // ---------------------------------------------------------------------------
-// EventCardActions
+// EventShareButton
 // ---------------------------------------------------------------------------
 
-interface EventCardActionsProps {
+interface EventShareButtonProps {
   event: NostrEvent;
   className?: string;
+  /** Visible text turns the compact icon action into a prominent link button. */
+  label?: string;
+  dialogTitle?: string;
 }
 
-export function EventCardActions({ event, className }: EventCardActionsProps) {
+export function EventShareButton({
+  event,
+  className,
+  label,
+  dialogTitle = "Share",
+}: EventShareButtonProps) {
   const [shareOpen, setShareOpen] = useState(false);
-  const [jsonOpen, setJsonOpen] = useState(false);
-
   const nip19Id = eventToNip19(event);
+  const actionLabel = label ?? "Share event";
 
   return (
     <>
-      <div className={cn("flex items-center gap-0.5", className)}>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-7 w-7 text-muted-foreground/50 hover:text-foreground"
-          title="Share"
-          onClick={() => setShareOpen(true)}
-        >
+      <Button
+        variant={label ? "outline" : "ghost"}
+        size={label ? "sm" : "icon"}
+        className={cn(
+          "h-7 hover:text-foreground",
+          label
+            ? "gap-1.5 border-border bg-background px-2 text-xs text-foreground shadow-sm hover:bg-muted"
+            : "w-7 text-muted-foreground/70",
+          className,
+        )}
+        title={actionLabel}
+        aria-label={actionLabel}
+        onClick={() => setShareOpen(true)}
+      >
+        {label ? (
+          <Link2 className="h-3.5 w-3.5 text-primary" />
+        ) : (
           <Share2 className="h-3.5 w-3.5" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-7 w-7 text-muted-foreground/50 hover:text-foreground"
-          title="Event JSON"
-          onClick={() => setJsonOpen(true)}
-        >
-          <Braces className="h-3.5 w-3.5" />
-        </Button>
-      </div>
+        )}
+        {label && <span>{label}</span>}
+      </Button>
 
-      {/* Share modal */}
       <Dialog open={shareOpen} onOpenChange={setShareOpen}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
-            <DialogTitle>Share</DialogTitle>
+            <DialogTitle>{dialogTitle}</DialogTitle>
           </DialogHeader>
           <div className="space-y-2 pt-1">
             <CopyRow
@@ -138,6 +152,57 @@ export function EventCardActions({ event, className }: EventCardActionsProps) {
           </div>
         </DialogContent>
       </Dialog>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// EventCardActions
+// ---------------------------------------------------------------------------
+
+interface EventCardActionsProps {
+  event: NostrEvent;
+  className?: string;
+  onEdit?: () => void;
+  editTitle?: string;
+  hideShare?: boolean;
+}
+
+export function EventCardActions({
+  event,
+  className,
+  onEdit,
+  editTitle = "Edit event",
+  hideShare = false,
+}: EventCardActionsProps) {
+  const [jsonOpen, setJsonOpen] = useState(false);
+
+  return (
+    <>
+      <div className={cn("flex items-center gap-0.5", className)}>
+        {onEdit && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 text-muted-foreground/50 hover:text-foreground"
+            title={editTitle}
+            aria-label={editTitle}
+            onClick={onEdit}
+          >
+            <Pencil className="h-3.5 w-3.5" />
+          </Button>
+        )}
+        {!hideShare && <EventShareButton event={event} />}
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7 text-muted-foreground/50 hover:text-foreground"
+          title="Event JSON"
+          onClick={() => setJsonOpen(true)}
+        >
+          <Braces className="h-3.5 w-3.5" />
+        </Button>
+      </div>
 
       {/* Raw JSON modal */}
       <Dialog open={jsonOpen} onOpenChange={setJsonOpen}>

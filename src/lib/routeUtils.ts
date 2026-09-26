@@ -4,6 +4,8 @@
  * Supported formats (all accepted as incoming routes):
  *   /:npub/:repoId
  *   /:npub/:relayHint/:repoId      relay hint has no "://" — wss:// is stripped when generating
+ *   /:nprofile/:repoId             includes relay hints embedded in the profile
+ *   /:nprofile/:relayHint/:repoId
  *   /:nip05/:repoId                nip05 = user@domain.com or domain.com
  *   /:nip05/:relayHint/:repoId
  *
@@ -190,6 +192,22 @@ export function decodeEventIdentifier(s: string): string | undefined {
 }
 
 /**
+ * Match an event ID against a raw hex prefix or a NIP-19 event identifier.
+ * Hex prefixes require at least three characters to avoid overly broad matches.
+ */
+export function eventIdMatchesSearch(id: string, search: string): boolean {
+  const query = search.trim().toLowerCase();
+  const withoutScheme = query.startsWith("nostr:") ? query.slice(6) : query;
+  const identifier = withoutScheme.startsWith("#")
+    ? withoutScheme.slice(1)
+    : withoutScheme;
+  const decodedId = decodeEventIdentifier(identifier);
+
+  if (decodedId) return id === decodedId;
+  return /^[0-9a-f]{3,64}$/.test(identifier) && id.startsWith(identifier);
+}
+
+/**
  * Extract relay hints from a nevent1 identifier.
  * Returns an empty array for note1 or invalid identifiers.
  */
@@ -228,7 +246,9 @@ const REPO_SUB_PATHS = [
   "tree",
   "branches",
   "tags",
+  "compare",
   "actions",
+  "releases",
 ];
 
 /**
@@ -270,6 +290,8 @@ function stripSubPaths(splat: string): string {
  * Segment layouts:
  *   [npub, ...repoId]
  *   [npub, relayHint, ...repoId]
+ *   [nprofile, ...repoId]
+ *   [nprofile, relayHint, ...repoId]
  *   [nip05, ...repoId]
  *   [nip05, relayHint, ...repoId]
  *
@@ -301,6 +323,27 @@ export function parseRepoRoute(splat: string): ParsedRepoRoute | undefined {
   if (segments.length < 2) return undefined;
 
   const [first] = segments;
+
+  // nprofile carries the same author identity as npub, plus discovery hints.
+  if (first.startsWith("nprofile1")) {
+    try {
+      const decoded = nip19.decode(first);
+      if (decoded.type !== "nprofile") return undefined;
+      const parsed = parseRelayAndRepoId(segments.slice(1));
+      if (!parsed) return undefined;
+      const profileRelays = (decoded.data.relays ?? [])
+        .map(normalizeRelayHint)
+        .filter((relay): relay is string => relay !== undefined);
+      return {
+        type: "npub",
+        pubkey: decoded.data.pubkey,
+        repoId: parsed.repoId,
+        relayHints: [...new Set([...parsed.relayHints, ...profileRelays])],
+      };
+    } catch {
+      return undefined;
+    }
+  }
 
   // --- npub / hex-pubkey routes ---
   if (isPubkeyIdentifier(first)) {
@@ -348,6 +391,21 @@ export function relayUrlToSegment(url: string): string {
   // ws:// — use a slash-free `ws:` form before encoding so the scheme and any
   // relay path survive as a single segment.
   return encodeURIComponent(`ws:${normalized.slice(5)}`);
+}
+
+/**
+ * Encode a relay URL for a `nostr://` clone URL.
+ *
+ * Unlike browser routes, ngit accepts the complete percent-encoded `ws://`
+ * form. Relay mount paths must be encoded so they remain one relay-hint
+ * segment rather than being mistaken for part of the repository path.
+ */
+export function relayUrlToNostrUrlSegment(url: string): string {
+  const normalized = normalizeUrl(url);
+  const hint = normalized.startsWith("wss://")
+    ? normalized.slice(6)
+    : normalized;
+  return encodeURIComponent(hint);
 }
 
 /**
@@ -438,4 +496,19 @@ export function repoToPath(
     return `/${identity}/${relayUrlToSegment(relay)}/${encodedRepoId}`;
   }
   return `/${identity}/${encodedRepoId}`;
+}
+
+/** Build an ngit-compatible `nostr://` clone URL for a repository. */
+export function repoToNostrCloneUrl(
+  pubkey: string,
+  repoId: string,
+  relays: string[],
+  nip05?: string,
+): string {
+  const identity = pubkeyToIdentity(pubkey, nip05);
+  const encodedRepoId = encodeURIComponent(repoId);
+  const relay = relays[0];
+  return relay
+    ? `nostr://${identity}/${relayUrlToNostrUrlSegment(relay)}/${encodedRepoId}`
+    : `nostr://${identity}/${encodedRepoId}`;
 }

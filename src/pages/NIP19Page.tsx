@@ -1,3 +1,4 @@
+import { ErrorRetryAction } from "@/components/ErrorRetryAction";
 import {
   normalizeToProfilePointer,
   normalizeToEventPointer,
@@ -7,14 +8,26 @@ import { use$ } from "applesauce-react/hooks";
 import { Navigate, useLocation, useParams } from "react-router-dom";
 import { nip19 } from "nostr-tools";
 import { useEffect, useMemo, useState } from "react";
-import { catchError, filter, map, of, startWith, tap } from "rxjs";
-import { eventStore, pool } from "../services/nostr";
+import {
+  catchError,
+  combineLatest,
+  endWith,
+  filter,
+  ignoreElements,
+  map,
+  of,
+  startWith,
+  tap,
+} from "rxjs";
+import { deletionEvents$, eventStore, pool } from "../services/nostr";
 import {
   REPO_KIND,
   ISSUE_KIND,
   PATCH_KIND,
   PR_KIND,
   PR_UPDATE_KIND,
+  getRootRepositoryCoordinates,
+  type ResolvedRepo,
 } from "../lib/nip34";
 import {
   eventIdToNevent,
@@ -39,19 +52,32 @@ import { useDnsIdentity } from "../hooks/useDnsIdentity";
 import type { NostrEvent } from "nostr-tools";
 import type { Observable } from "rxjs";
 import type { Filter } from "applesauce-core/helpers";
-import { getReplaceableIdentifier } from "applesauce-core/helpers";
+import {
+  getReplaceableIdentifier,
+  parseReplaceableAddress,
+} from "applesauce-core/helpers";
 import { getNip10References } from "applesauce-common/helpers";
+import {
+  isValidSoftwareApplication,
+  isValidSoftwareAsset,
+  isValidSoftwareRelease,
+  SOFTWARE_APPLICATION_KIND,
+  SOFTWARE_ASSET_KIND,
+  SOFTWARE_RELEASE_KIND,
+} from "@/casts/Software";
+import { ZAPSTORE_RELAY_URL } from "@/hooks/useSoftwareReleases";
+import { RepositoryModel } from "@/models/RepositoryModel";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Extract repository coordinates from `a` tags, preserving tag order. */
+/** Extract root repository coordinates, preserving tag order. */
 function getRepoCoords(event: NostrEvent): string[] {
   const seen = new Set<string>();
   const coords: string[] = [];
 
-  for (const [, coord] of event.tags.filter(([t]) => t === "a")) {
+  for (const coord of getRootRepositoryCoordinates(event)) {
     if (!coord || seen.has(coord)) continue;
     const parsed = parseRepoCoord(coord);
     if (parsed?.kind !== REPO_KIND || !isHexPubkey(parsed.pubkey)) continue;
@@ -66,7 +92,7 @@ function getRepoCoords(event: NostrEvent): string[] {
 function getRepoCoordRelayHints(event: NostrEvent): string[] {
   return dedupeRelays(
     event.tags
-      .filter(([t]) => t === "a")
+      .filter(([name, , , marker]) => name === "a" && marker !== "mention")
       .map(([, , relay]) => relay)
       .filter((relay): relay is string => !!relay),
   );
@@ -118,24 +144,6 @@ function getRepoCoordFilters(coords: string[]): Filter[] {
           limit: 1,
         }) as Filter,
     );
-}
-
-function firstCoordWithAnnouncement(
-  coords: string[],
-  announcements: NostrEvent[],
-): string | undefined {
-  const announced = new Set(
-    announcements
-      .map((event) => {
-        const dTag = getReplaceableIdentifier(event);
-        return dTag && event.kind === REPO_KIND
-          ? `${REPO_KIND}:${event.pubkey}:${dTag}`
-          : undefined;
-      })
-      .filter((coord): coord is string => !!coord),
-  );
-
-  return coords.find((coord) => announced.has(coord));
 }
 
 /**
@@ -199,10 +207,29 @@ function RepoCoordsRedirect({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [coordsKey]);
 
-  const filters = useMemo(
-    () => getRepoCoordFilters(candidateCoords),
-    [candidateCoords],
-  );
+  // Single pointer: exact-coordinate lookup (authors-scoped fast path from
+  // b19fba4b). Multi-pointer: ONE identifier-only wave covering the whole
+  // pointer set — a relay holding any of these repositories returns every
+  // announcement for their identifiers in a single round trip, replacing the
+  // former per-pointer sequential settlement stages. Authority is never
+  // derived from this fetch (AGENTS.md §Repository authorization model
+  // carve-out): each pointer is compared through reciprocal resolution below.
+  const filters = useMemo<Filter[]>(() => {
+    if (candidateCoords.length <= 1) {
+      return getRepoCoordFilters(candidateCoords);
+    }
+    const dTags = [
+      ...new Set(
+        candidateCoords.flatMap((coord) => {
+          const parsed = parseRepoCoord(coord);
+          return parsed ? [parsed.dTag] : [];
+        }),
+      ),
+    ];
+    return dTags.length > 0
+      ? [{ kinds: [REPO_KIND], "#d": dTags } as Filter]
+      : [];
+  }, [candidateCoords]);
 
   const lookupComplete =
     use$(() => {
@@ -217,7 +244,7 @@ function RepoCoordsRedirect({
       if (relays.length === 0) return of(true);
 
       return resilientRequest(pool, relays, filters).pipe(
-        tap((response) => {
+        tap((response: NostrEvent | "EOSE") => {
           if (response !== "EOSE") eventStore.add(response);
         }),
         filter((response) => response === "EOSE"),
@@ -227,31 +254,85 @@ function RepoCoordsRedirect({
       ) as Observable<boolean>;
     }, [coordsKey, relaysKey]) ?? false;
 
-  const bestCoord = use$(() => {
+  const componentResolution = use$(() => {
     if (candidateCoords.length === 0 || filters.length === 0) {
-      return of(undefined);
+      return of({ settled: true, coordinate: undefined });
     }
 
-    return eventStore
-      .timeline(filters)
-      .pipe(
-        map((events) =>
-          firstCoordWithAnnouncement(
-            candidateCoords,
-            events as unknown as NostrEvent[],
+    const pointers = candidateCoords.flatMap((coordinate) => {
+      const parsed = parseRepoCoord(coordinate);
+      return parsed ? [{ coordinate, ...parsed }] : [];
+    });
+    // A single repository pointer is unambiguous. Once the exact-coordinate
+    // lookup above finishes, route through its current deletion-aware model
+    // without adding two component-settlement network stages. Multi-pointer
+    // items still need component comparison before choosing a destination.
+    if (pointers.length === 1) {
+      const pointer = pointers[0];
+      return (
+        eventStore.model(
+          RepositoryModel,
+          pointer.pubkey,
+          pointer.dTag,
+          deletionEvents$,
+        ) as unknown as Observable<ResolvedRepo | undefined>
+      ).pipe(
+        map((repository) => ({
+          settled: true,
+          coordinate: repository ? pointer.coordinate : undefined,
+        })),
+      );
+    }
+
+    // Multi-pointer: compare each pointer's reciprocal component from the
+    // store. The relay work is the single identifier-only wave above
+    // (lookupComplete); these deletion-aware models are pure store
+    // projections, so the comparison itself is always concluded here and the
+    // redirect / ambiguity refusal below act on it only once the wave has
+    // settled on every relay — completeness claims need full coverage.
+    return combineLatest(
+      pointers.map(
+        ({ pubkey, dTag }) =>
+          eventStore.model(
+            RepositoryModel,
+            pubkey,
+            dTag,
+            deletionEvents$,
+          ) as unknown as Observable<ResolvedRepo | undefined>,
+      ),
+    ).pipe(
+      map((repositories) => {
+        const components = new Map(
+          repositories.flatMap((repository) =>
+            repository ? [[repository.componentId, repository] as const] : [],
           ),
-        ),
-      ) as Observable<string | undefined>;
+        );
+        // A root item naming unrelated repository components is ambiguous.
+        // Refuse instead of granting tag order authority over the route.
+        if (components.size !== 1) {
+          return { settled: true, coordinate: undefined };
+        }
+        const repository = [...components.values()][0];
+        const canonical = pointers.find(
+          ({ coordinate }) => coordinate === repository.selectedCoordinate,
+        )?.coordinate;
+        const fallback = pointers.find(
+          (_, index) =>
+            repositories[index]?.componentId === repository.componentId,
+        )?.coordinate;
+        return { settled: true, coordinate: canonical ?? fallback };
+      }),
+    );
   }, [coordsKey]);
 
-  const primaryCoord = candidateCoords[0];
-  const canRedirect =
-    bestCoord && (bestCoord === primaryCoord || lookupComplete);
+  const redirectCoordinate = componentResolution?.settled
+    ? componentResolution.coordinate
+    : undefined;
 
-  if (canRedirect) {
+  if (redirectCoordinate && lookupComplete) {
     return (
       <RepoCoordRedirect
-        coord={bestCoord}
+        coord={redirectCoordinate}
         hintRelays={hintRelays}
         subPath={subPath}
         stargazerPubkey={stargazerPubkey}
@@ -259,7 +340,7 @@ function RepoCoordsRedirect({
     );
   }
 
-  if (lookupComplete) return <NotFound />;
+  if (lookupComplete && componentResolution?.settled) return <NotFound />;
   return <LoadingState message="Resolving repository…" />;
 }
 
@@ -327,6 +408,228 @@ function getNip10RootId(event: NostrEvent): string | undefined {
   // Single e tag — this event is a direct reply to that event
   if (eTags.length === 1) return eTags[0]?.[1];
   return undefined;
+}
+
+interface SoftwareApplicationPointer {
+  kind: typeof SOFTWARE_APPLICATION_KIND;
+  pubkey: string;
+  dTag: string;
+  relayHints: string[];
+}
+
+function getSoftwareApplicationPointer(
+  release: NostrEvent,
+): SoftwareApplicationPointer | undefined {
+  const appId = release.tags.find(([name]) => name === "i")?.[1];
+  if (!appId) return undefined;
+
+  for (const [name, address, relayHint] of release.tags) {
+    if (name !== "a" || !address) continue;
+    const pointer = parseReplaceableAddress(address, true);
+    if (
+      pointer?.kind === SOFTWARE_APPLICATION_KIND &&
+      pointer.identifier === appId
+    ) {
+      return {
+        kind: SOFTWARE_APPLICATION_KIND,
+        pubkey: pointer.pubkey.toLowerCase(),
+        dTag: pointer.identifier,
+        relayHints: relayHint ? [relayHint] : [],
+      };
+    }
+  }
+
+  // Compatibility with existing Zapstore releases that identify the
+  // application only by `i`; their application is published by the same key.
+  return {
+    kind: SOFTWARE_APPLICATION_KIND,
+    pubkey: release.pubkey,
+    dTag: appId,
+    relayHints: [],
+  };
+}
+
+function SoftwareApplicationRedirect({
+  application,
+  hintRelays,
+}: {
+  application: NostrEvent;
+  hintRelays: string[];
+}) {
+  if (!isValidSoftwareApplication(application)) return <NotFound />;
+  const coords = getRepoCoords(application);
+  if (coords.length === 0) return <NotFound />;
+  const repoRelays = dedupeRelays([
+    ...getRepoCoordRelayHints(application),
+    ...hintRelays,
+  ]);
+  const applicationNevent = eventIdToNevent(application.id, hintRelays);
+  return (
+    <RepoCoordsRedirect
+      coords={coords}
+      hintRelays={repoRelays}
+      subPath={`/releases/apps/${applicationNevent}`}
+    />
+  );
+}
+
+function SoftwareReleaseRedirect({
+  release,
+  hintRelays,
+  assetId,
+}: {
+  release: NostrEvent;
+  hintRelays: string[];
+  assetId?: string;
+}) {
+  const pointer = useMemo(
+    () => getSoftwareApplicationPointer(release),
+    [release],
+  );
+  const pointerKey = pointer
+    ? `${pointer.kind}:${pointer.pubkey}:${pointer.dTag}`
+    : "";
+  const relaysKey = hintRelays.join("\u0000");
+  const searchGroups = useMemo<RelayGroupSpec[]>(() => {
+    const applicationRelays = dedupeRelays([
+      ...(pointer?.relayHints ?? []),
+      ...hintRelays,
+      ZAPSTORE_RELAY_URL,
+    ]);
+    return [
+      { label: "release relays", relays$: of(applicationRelays) },
+      { label: "git index", relays$: gitIndexRelays },
+      {
+        label: "fallback relays",
+        relays$: fallbackRelays,
+        deferred: true,
+      },
+    ];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pointerKey, relaysKey]);
+  const target = useMemo<SearchTarget | undefined>(
+    () =>
+      pointer
+        ? {
+            type: "address",
+            kind: pointer.kind,
+            pubkey: pointer.pubkey,
+            dTag: pointer.dTag,
+          }
+        : undefined,
+    [pointer],
+  );
+  const search = useEventSearch(target, searchGroups);
+  const application = search?.event;
+
+  if (!pointer || !isValidSoftwareRelease(release)) return <NotFound />;
+
+  if (application && isValidSoftwareApplication(application)) {
+    const coords = getRepoCoords(application);
+    if (coords.length === 0) return <NotFound />;
+    const repoRelays = dedupeRelays([
+      ...getRepoCoordRelayHints(application),
+      ...pointer.relayHints,
+      ...hintRelays,
+    ]);
+    const releaseNevent = eventIdToNevent(release.id, hintRelays);
+    const fragment = assetId ? `#${assetId.slice(0, 15)}` : "";
+    return (
+      <RepoCoordsRedirect
+        coords={coords}
+        hintRelays={repoRelays}
+        subPath={`/releases/${releaseNevent}${fragment}`}
+      />
+    );
+  }
+
+  if (search && (search.concludedNotFound || search.deleted || search.vanished))
+    return (
+      <EventSearchStatus search={search} itemLabel="Software application" />
+    );
+  return <LoadingState message="Resolving software application…" />;
+}
+
+function SoftwareAssetRedirect({
+  asset,
+  hintRelays,
+}: {
+  asset: NostrEvent;
+  hintRelays: string[];
+}) {
+  const appId = asset.tags.find(([name]) => name === "i")?.[1];
+  const version = asset.tags.find(([name]) => name === "version")?.[1];
+  const relaysKey = hintRelays.join("\u0000");
+  const releaseFilter = useMemo(
+    () =>
+      ({
+        kinds: [SOFTWARE_RELEASE_KIND],
+        "#e": [asset.id],
+      }) as Filter,
+    [asset.id],
+  );
+  const lookupComplete =
+    use$(() => {
+      const relays = dedupeRelays([
+        ...hintRelays,
+        ZAPSTORE_RELAY_URL,
+        ...gitIndexRelays.getValue(),
+        ...fallbackRelays.getValue(),
+      ]);
+      if (relays.length === 0) return of(true);
+
+      return resilientRequest(pool, relays, [releaseFilter]).pipe(
+        tap((response: NostrEvent | "EOSE") => {
+          if (response !== "EOSE") eventStore.add(response);
+        }),
+        ignoreElements(),
+        endWith(true),
+        startWith(false),
+        catchError(() => of(true)),
+      );
+    }, [asset.id, relaysKey]) ?? false;
+  const releases =
+    use$(
+      () =>
+        eventStore
+          .timeline([releaseFilter])
+          .pipe(
+            map((events) =>
+              (events as unknown as NostrEvent[])
+                .filter(
+                  (event) =>
+                    isValidSoftwareRelease(event) &&
+                    event.tags.some(
+                      ([name, value]) => name === "i" && value === appId,
+                    ) &&
+                    event.tags.some(
+                      ([name, value]) =>
+                        name === "version" && value === version,
+                    ),
+                )
+                .sort(
+                  (left, right) =>
+                    right.created_at - left.created_at ||
+                    right.id.localeCompare(left.id),
+                ),
+            ),
+          ),
+      [asset.id, appId, version],
+    ) ?? [];
+  const release = releases[0];
+
+  if (!isValidSoftwareAsset(asset)) return <NotFound />;
+  if (release) {
+    return (
+      <SoftwareReleaseRedirect
+        release={release}
+        hintRelays={hintRelays}
+        assetId={asset.id}
+      />
+    );
+  }
+  if (lookupComplete) return <NotFound />;
+  return <LoadingState message="Finding the release for this asset…" />;
 }
 
 // ---------------------------------------------------------------------------
@@ -455,6 +758,23 @@ function EventRedirect({
         stargazerPubkey={stargazerPubkey}
       />
     );
+  }
+
+  if (kind === SOFTWARE_APPLICATION_KIND) {
+    return (
+      <SoftwareApplicationRedirect
+        application={event}
+        hintRelays={hintRelays}
+      />
+    );
+  }
+
+  if (kind === SOFTWARE_RELEASE_KIND) {
+    return <SoftwareReleaseRedirect release={event} hintRelays={hintRelays} />;
+  }
+
+  if (kind === SOFTWARE_ASSET_KIND) {
+    return <SoftwareAssetRedirect asset={event} hintRelays={hintRelays} />;
   }
 
   // Issue
@@ -621,9 +941,17 @@ function Nip05UserPage({ nip05 }: { nip05: string }) {
     return <LoadingState message={`Resolving ${nip05}…`} />;
   }
 
-  if (identity.status === "not-found" || identity.status === "error") {
-    return <NotFound />;
+  if (identity.status === "error") {
+    return (
+      <div className="mx-auto max-w-lg space-y-4 p-6">
+        <p>
+          Could not resolve {nip05}: {identity.message}
+        </p>
+        <ErrorRetryAction recovery={identity.recovery} />
+      </div>
+    );
   }
+  if (identity.status === "not-found") return <NotFound />;
 
   return <UserPage pubkey={identity.pubkey} />;
 }
@@ -711,6 +1039,16 @@ export function NIP19Page() {
     return <UserPage pubkey={identifier.toLowerCase()} />;
   } else if (pointer) {
     if (!event) return <LoadingState message="Fetching event…" />;
+
+    if (event.kind === SOFTWARE_APPLICATION_KIND) {
+      const hintRelays = "relays" in pointer ? (pointer.relays ?? []) : [];
+      return (
+        <SoftwareApplicationRedirect
+          application={event}
+          hintRelays={hintRelays}
+        />
+      );
+    }
 
     // For any event kind this app doesn't have a dedicated page for, show a
     // preview with a link to njump.me so users aren't left with a blank 404.

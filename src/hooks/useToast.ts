@@ -10,6 +10,8 @@ type ToasterToast = ToastProps & {
   title?: React.ReactNode;
   description?: React.ReactNode;
   action?: ToastActionElement;
+  /** Keep interactive error recovery inside the active modal focus scope. */
+  container?: HTMLElement;
 };
 
 let count = 0;
@@ -95,6 +97,7 @@ export const reducer = (state: State, action: Action): State => {
             ? {
                 ...t,
                 open: false,
+                container: undefined,
               }
             : t,
         ),

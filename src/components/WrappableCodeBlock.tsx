@@ -52,7 +52,7 @@ export function WrappableCodeBlock({
     return (
       <pre
         className={cn(
-          "relative max-w-full overflow-x-auto rounded-lg border border-border bg-muted p-3 text-sm leading-relaxed my-2",
+          "relative max-w-full overflow-x-auto rounded-lg border border-border bg-muted p-3 text-sm text-foreground leading-relaxed my-2",
           className,
         )}
       >
@@ -90,7 +90,7 @@ export function WrappableCodeBlock({
       )}
       <pre
         className={cn(
-          "max-w-full rounded-lg border border-border bg-muted p-3 text-sm leading-relaxed",
+          "max-w-full rounded-lg border border-border bg-muted p-3 text-sm text-foreground leading-relaxed",
           wordWrap ? "whitespace-pre-wrap break-words" : "overflow-x-auto",
           className,
         )}

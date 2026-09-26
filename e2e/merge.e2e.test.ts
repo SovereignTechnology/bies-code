@@ -274,8 +274,7 @@ describeMerge("e2e — Merge button (merge strategy)", () => {
 
     try {
       const issue = await IssueFactory.create(
-        issueRepo.coordinate,
-        issueRepo.pubkey,
+        [issueRepo.coordinate],
         "Document the merge path",
         "The merge should publish an issue-resolution status.",
       ).sign(contributor);
@@ -397,14 +396,12 @@ describeMerge("e2e — Merge button (merge strategy)", () => {
 
     try {
       const gitAheadIssue = await IssueFactory.create(
-        issueRepo.coordinate,
-        issueRepo.pubkey,
+        [issueRepo.coordinate],
         "Resolve from git-ahead commit",
         "The signed state is behind the commit that references this issue.",
       ).sign(contributor);
       const patchIssue = await IssueFactory.create(
-        issueRepo.coordinate,
-        issueRepo.pubkey,
+        [issueRepo.coordinate],
         "Resolve from patch commit",
         "The branch being merged should still be scanned.",
       ).sign(contributor);

@@ -75,6 +75,7 @@ function MentionedItemPreview({ event }: { event: NostrEvent }) {
  * Returns events from other discussions that quote this item, oldest first so
  * callers can interleave them with their own top-level timeline entries.
  */
+// eslint-disable-next-line react-refresh/only-export-components
 export function useMentionedNip34Items(rootId: string | undefined) {
   const store = useEventStore();
 

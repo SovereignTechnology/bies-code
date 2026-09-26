@@ -35,6 +35,7 @@ import {
   TooltipProvider,
 } from "@/components/ui/tooltip";
 import { cn, compactNumber } from "@/lib/utils";
+import { useOptionalRepoContext } from "@/pages/repo/RepoContext";
 
 // ---------------------------------------------------------------------------
 // ZapsBar
@@ -48,6 +49,8 @@ interface ZapsBarProps {
 export function ZapsBar({ event, className }: ZapsBarProps) {
   const store = useEventStore();
   const account = useActiveAccount();
+  const repoContext = useOptionalRepoContext();
+  const privateRepository = repoContext?.resolved?.repo.isPrivate ?? false;
 
   // Subscribe reactively to zap receipts for this event
   const zapEvents = use$(
@@ -86,7 +89,9 @@ export function ZapsBar({ event, className }: ZapsBarProps) {
   // Determine disabled state for the zap button
   const isSelf = account?.pubkey === event.pubkey;
   let disabledReason: string | null = null;
-  if (!account) disabledReason = "Sign in to zap";
+  if (privateRepository)
+    disabledReason = "Zaps are read-only for private repositories";
+  else if (!account) disabledReason = "Sign in to zap";
   // Only report "no lightning address" once the profile has actually loaded
   // (profile === undefined means still loading; null/object means loaded)
   else if (profile !== undefined && !lnurl)

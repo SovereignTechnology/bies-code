@@ -10,7 +10,6 @@ import {
   PopoverContent,
 } from "@/components/ui/popover";
 import {
-  computeMaintainerLeadership,
   getRepoRelays,
   groupRequestedMaintainers,
   parseRepoCoordinate,
@@ -49,7 +48,7 @@ function referencedRequestedMaintainers(
   repoCoords: Iterable<string>,
   repo: ResolvedRepo,
 ): string[] {
-  const invited = new Set(repo.requestedMaintainers);
+  const invited = new Set(repo.invitedMaintainers);
   const referenced = new Set<string>();
 
   for (const coordinate of repoCoords) {
@@ -63,7 +62,7 @@ function referencedRequestedMaintainers(
 }
 
 function relayHintsForMaintainer(repo: ResolvedRepo, pubkey: string): string[] {
-  const announcement = repo.announcements.find(
+  const announcement = repo.discoveredAnnouncements.find(
     (event) => event.pubkey === pubkey,
   );
   const maintainerRelays = announcement ? getRepoRelays(announcement) : [];
@@ -140,10 +139,7 @@ function CurrentRepositoryBadge({
   repo: ResolvedRepo;
   pageSuffix: string;
 }) {
-  const leadMaintainer = computeMaintainerLeadership(
-    repo.confirmedMaintainers,
-    repo.maintainerEdges,
-  ).leadMaintainer;
+  const leadMaintainer = repo.leadResolution.leadMaintainer;
 
   return (
     <RepoGroupBadge

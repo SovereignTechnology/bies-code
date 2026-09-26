@@ -7,6 +7,7 @@ import type {
   RepoQueryOptions,
 } from "@/lib/nip34";
 import type { RepositoryState } from "@/casts/RepositoryState";
+import type { RepoReleaseSummary } from "@/hooks/useSoftwareReleases";
 import type { NostrEvent } from "nostr-tools";
 
 export interface RepoContextValue {
@@ -37,6 +38,8 @@ export interface RepoContextValue {
    * is still in flight. Always true when there is no repo relay group.
    */
   repoRelayEose: boolean;
+  /** True after every current and retained-history announcement has settled. */
+  announcementsSettled: boolean;
   /**
    * Per-relay state registry: the best kind:30618 state event seen from each
    * relay URL. Derived reactively from the EventStore. Callers can use this
@@ -51,6 +54,10 @@ export interface RepoContextValue {
   commitId?: string;
   /** The ref segment from a /commits/:ref URL (branch, tag, or commit hash). */
   commitsRef?: string;
+  /** Base ref from a /compare/:base...:head URL. */
+  compareBaseRef?: string;
+  /** Head ref from a /compare/:base...:head URL. */
+  compareHeadRef?: string;
   /**
    * Set when viewing a commit detail scoped to a PR
    * (route: prs/<prId>/commit/<commitId>).
@@ -67,6 +74,8 @@ export interface RepoContextValue {
    * decoded route params or `window.location.pathname`.
    */
   basePath: string;
+  /** Lightweight release data shared by repository navigation and sidebar. */
+  releaseSummary: RepoReleaseSummary;
 }
 
 export const RepoContext = createContext<RepoContextValue | null>(null);
@@ -75,4 +84,8 @@ export function useRepoContext(): RepoContextValue {
   const ctx = useContext(RepoContext);
   if (!ctx) throw new Error("useRepoContext must be used within RepoLayout");
   return ctx;
+}
+
+export function useOptionalRepoContext(): RepoContextValue | null {
+  return useContext(RepoContext);
 }

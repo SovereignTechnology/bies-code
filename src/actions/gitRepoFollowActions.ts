@@ -1,7 +1,7 @@
 /**
  * Custom Applesauce actions for the NIP-51 Git repositories follow list (kind:10018).
  *
- * These mirror the AddGitAuthor / RemoveGitAuthor actions (kind:10017) but
+ * These mirror the Git-author list actions (kind:10017) but
  * operate on kind:10018 and use `a` tags (address pointers to kind:30617
  * repository announcements) instead of `p` tags.
  *
@@ -9,12 +9,12 @@
  * recursive maintainer set so that any client can discover the follow
  * regardless of which maintainer's announcement they encounter first.
  *
- * Because kind:10018 is a brand-new list for most users, we do NOT throw when
- * no existing event is found — we simply build a fresh one.
+ * The actions consume the exact warm snapshot resolved by personal-singleton
+ * preflight and never reopen the EventStore or its fallback loader.
  */
 
 import type { Action } from "applesauce-actions";
-import { firstValueFrom, of, timeout } from "rxjs";
+import type { NostrEvent } from "nostr-tools";
 import {
   GitRepoListFactory,
   GIT_REPOS_KIND,
@@ -31,17 +31,12 @@ export { GIT_REPOS_KIND };
  *
  * @param coords - One or more "30617:<pubkey>:<dtag>" coordinate strings
  */
-export function AddGitRepo(...coords: string[]): Action {
-  return async ({ events, user, publish, signer }) => {
-    const [event, outboxes] = await Promise.all([
-      firstValueFrom(
-        events
-          .replaceable(GIT_REPOS_KIND, user.pubkey)
-          .pipe(timeout({ first: 1000, with: () => of(undefined) })),
-      ),
-      user.outboxes$.$first(1000, undefined),
-    ]);
-
+export function AddGitRepoFromPreflight(
+  event: NostrEvent | undefined,
+  outboxes: string[],
+  ...coords: string[]
+): Action {
+  return async ({ publish, signer }) => {
     let factory = event
       ? GitRepoListFactory.modify(event)
       : GitRepoListFactory.create();
@@ -58,17 +53,12 @@ export function AddGitRepo(...coords: string[]): Action {
  *
  * @param coords - One or more "30617:<pubkey>:<dtag>" coordinate strings
  */
-export function RemoveGitRepo(...coords: string[]): Action {
-  return async ({ events, user, publish, signer }) => {
-    const [event, outboxes] = await Promise.all([
-      firstValueFrom(
-        events
-          .replaceable(GIT_REPOS_KIND, user.pubkey)
-          .pipe(timeout({ first: 1000, with: () => of(undefined) })),
-      ),
-      user.outboxes$.$first(1000, undefined),
-    ]);
-
+export function RemoveGitRepoFromPreflight(
+  event: NostrEvent | undefined,
+  outboxes: string[],
+  ...coords: string[]
+): Action {
+  return async ({ publish, signer }) => {
     let factory = event
       ? GitRepoListFactory.modify(event)
       : GitRepoListFactory.create();

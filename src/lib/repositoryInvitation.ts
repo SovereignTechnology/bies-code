@@ -1,11 +1,11 @@
 import { nip19, type EventTemplate, type NostrEvent } from "nostr-tools";
 
 import type { RepositoryState } from "@/casts/RepositoryState";
-import type { GraspServer } from "@/hooks/useGraspServers";
+import { graspRepositoryCloneUrl, type GraspServer } from "@/lib/grasp";
 import {
-  computeMaintainerLeadership,
   getRepoCloneUrls,
   getRepoMaintainers,
+  getRepoRelays,
   isGraspCloneUrl,
   REPO_KIND,
   type ResolvedRepo,
@@ -65,10 +65,7 @@ export function getAcceptanceMaintainerSelection(
   const options = repo.confirmedMaintainers.filter(
     (pubkey) => pubkey !== accountPubkey,
   );
-  const leadMaintainer = computeMaintainerLeadership(
-    repo.confirmedMaintainers,
-    repo.maintainerEdges,
-  ).leadMaintainer;
+  const leadMaintainer = repo.leadResolution.leadMaintainer;
   const defaults =
     options.length === 1
       ? options
@@ -94,8 +91,12 @@ export function buildMaintainerAcceptanceTemplate(
   graspServers: GraspServer[],
   createdAt = Math.floor(Date.now() / 1000),
 ): EventTemplate {
-  const latestAnnouncement = repo.announcements.reduce((latest, event) =>
-    event.created_at > latest.created_at ? event : latest,
+  const latestAnnouncement = repo.confirmedAnnouncements.reduce(
+    (latest, event) =>
+      event.created_at > latest.created_at ||
+      (event.created_at === latest.created_at && event.id < latest.id)
+        ? event
+        : latest,
   );
   const existingMaintainers = ownAnnouncement
     ? getRepoMaintainers(ownAnnouncement)
@@ -117,7 +118,9 @@ export function buildMaintainerAcceptanceTemplate(
     accountPubkey,
     repo.dTag,
     graspServers,
-    repo.relays,
+    ownAnnouncement
+      ? Array.from(new Set([...repo.relays, ...getRepoRelays(ownAnnouncement)]))
+      : repo.relays,
   );
 
   return {
@@ -143,8 +146,8 @@ function buildPersonalTags(
 ): string[][] {
   const npub = nip19.npubEncode(accountPubkey);
   const encodedDTag = encodeURIComponent(dTag);
-  const graspCloneUrls = graspServers.map(
-    ({ domain }) => `https://${domain}/${npub}/${encodedDTag}.git`,
+  const graspCloneUrls = graspServers.map(({ serviceAddress }) =>
+    graspRepositoryCloneUrl(serviceAddress, npub, encodedDTag),
   );
   const existingNonGraspCloneUrls = ownAnnouncement
     ? getRepoCloneUrls(ownAnnouncement).filter((url) => !isGraspCloneUrl(url))

@@ -33,6 +33,18 @@ import { ignoreElements } from "rxjs/operators";
 import type { NostrEvent } from "nostr-tools";
 import type { RelayPool, PublishResponse } from "applesauce-relay";
 import { normalizeUrl } from "@/lib/url";
+import { getRepoIsPrivate, REPO_KIND } from "@/lib/nip34";
+import {
+  getPrivateRelayTrustSession,
+  getPrivateRepositoryRelays,
+  isPrivateRepositoryCoordinate,
+  isPrivateRepositoryEvent,
+  markPrivateRelayEvent,
+} from "@/services/privateRepositoryScope";
+
+const PRIVATE_REPOSITORY_MUTATION_KINDS = new Set([
+  5, 1111, 1617, 1618, 1619, 1621, 1630, 1631, 1632, 1633, 30617, 30618,
+]);
 
 // ---------------------------------------------------------------------------
 // URL normalization
@@ -43,6 +55,61 @@ import { normalizeUrl } from "@/lib/url";
  */
 function normalizeRelayUrls(urls: string[]): string[] {
   return [...new Set(urls.map(normalizeUrl))];
+}
+
+const FIXED_RELAY_GROUP_PREFIX = "fixed-relays:";
+const BEST_EFFORT_RELAY_GROUP_PREFIX = "best-effort:";
+
+/** Mark a relay group as attempted without making it a delivery requirement. */
+export function bestEffortRelayGroupId(groupId: string): string {
+  return `${BEST_EFFORT_RELAY_GROUP_PREFIX}${groupId}`;
+}
+
+/** Unwrap a persisted relay group while retaining its delivery semantics. */
+export function unwrapRelayGroupId(groupId: string): {
+  groupId: string;
+  bestEffort: boolean;
+} {
+  if (!groupId.startsWith(BEST_EFFORT_RELAY_GROUP_PREFIX)) {
+    return { groupId, bestEffort: false };
+  }
+  return {
+    groupId: groupId.slice(BEST_EFFORT_RELAY_GROUP_PREFIX.length),
+    bestEffort: true,
+  };
+}
+
+/**
+ * Persist an immutable relay frontier as a semantic outbox group.
+ *
+ * Dynamic groups such as `outbox:<pubkey>` deliberately follow newer relay
+ * metadata. A replaceable event that changes that metadata also needs a group
+ * whose destinations survive optimistic EventStore insertion and later page
+ * reloads, so the durable outbox can keep retrying the frozen frontier.
+ */
+export function fixedRelayGroupId(urls: string[]): string | undefined {
+  const normalized = normalizeRelayUrls(urls).sort();
+  if (normalized.length === 0) return undefined;
+  return `${FIXED_RELAY_GROUP_PREFIX}${encodeURIComponent(JSON.stringify(normalized))}`;
+}
+
+/** Decode a group created by {@link fixedRelayGroupId}. */
+export function fixedRelayGroupUrls(groupId: string): string[] | undefined {
+  if (!groupId.startsWith(FIXED_RELAY_GROUP_PREFIX)) return undefined;
+  try {
+    const value: unknown = JSON.parse(
+      decodeURIComponent(groupId.slice(FIXED_RELAY_GROUP_PREFIX.length)),
+    );
+    if (
+      !Array.isArray(value) ||
+      !value.every((url) => typeof url === "string")
+    ) {
+      return [];
+    }
+    return normalizeRelayUrls(value);
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -141,8 +208,8 @@ export interface OutboxItem {
   id: string;
   event: NostrEvent;
   /**
-   * True when every distinct relay group has at least one successful relay.
-   * A group is "covered" when ≥1 relay in that group succeeded.
+   * True when every required relay group has at least one successful relay.
+   * Best-effort groups are attempted and tracked without blocking completion.
    */
   broadlySent: boolean;
   relays: OutboxRelayEntry[];
@@ -359,6 +426,7 @@ const EXPIRE_UNSENT_AFTER_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
  *   - "outbox:<pubkey>" → that pubkey's NIP-65 write (outbox) relays
  *   - "inbox:<pubkey>"  → that pubkey's NIP-65 read (inbox) relays
  *   - "30617:<pubkey>:<d>" → resolve to that repo's relays
+ *   - "fixed-relays:<encoded>" → an immutable relay frontier
  *   - Other strings → return [] (no dynamic resolution)
  */
 export type RelayGroupResolver = (
@@ -366,7 +434,7 @@ export type RelayGroupResolver = (
   eventPubkey: string,
 ) => Promise<string[]>;
 
-class OutboxStore {
+export class OutboxStore {
   /** Reactive list of all outbox items, sorted newest-first */
   readonly items$ = new BehaviorSubject<OutboxItem[]>([]);
 
@@ -436,6 +504,25 @@ class OutboxStore {
   ): Promise<void> {
     // Deduplicate group IDs
     const uniqueGroupIds = [...new Set(groupIds)];
+    const repositoryGroups = uniqueGroupIds.filter((groupId) =>
+      groupId.startsWith("30617:"),
+    );
+    const hasPrivateRepositoryGroup = repositoryGroups.some(
+      isPrivateRepositoryCoordinate,
+    );
+    const hasPrivateIntent =
+      isPrivateRepositoryEvent(event) ||
+      (event.kind === REPO_KIND && getRepoIsPrivate(event));
+
+    if (hasPrivateRepositoryGroup || hasPrivateIntent) {
+      if (repositoryGroups.length === 0) {
+        throw new Error(
+          "Private repository publication is missing its repository coordinate",
+        );
+      }
+      await this.publishPrivateRepositoryEvent(event, repositoryGroups);
+      return;
+    }
 
     // Insert a provisional item immediately (no relays yet) so the
     // OutboxStatusBadge appears on the event card without any delay while
@@ -483,7 +570,7 @@ class OutboxStore {
     const item: OutboxItem = {
       id: event.id,
       event,
-      broadlySent: this.computeBroadlySent(relays),
+      broadlySent: this.computeBroadlySent(relays, uniqueGroupIds),
       relays,
       createdAt: Math.floor(Date.now() / 1000),
       relayGroupDefs: uniqueGroupIds,
@@ -492,6 +579,60 @@ class OutboxStore {
 
     await this.upsert(item);
     this.sendToRelays(item);
+  }
+
+  /** Publish private repository events without UI or durable outbox state. */
+  private async publishPrivateRepositoryEvent(
+    event: NostrEvent,
+    repositoryGroups: string[],
+  ): Promise<void> {
+    if (!this.pool) throw new Error("The relay pool is not ready");
+    if (!PRIVATE_REPOSITORY_MUTATION_KINDS.has(event.kind)) {
+      throw new Error(
+        `Event kind ${event.kind} is not enabled for private repositories`,
+      );
+    }
+    const relayUrls = new Set<string>();
+    let generation: number | undefined;
+    for (const coordinate of repositoryGroups) {
+      const relays = getPrivateRepositoryRelays(coordinate);
+      if (!relays?.length) {
+        throw new Error(
+          `No admitted private relay is available for ${coordinate}`,
+        );
+      }
+      for (const relay of relays) {
+        const trust = getPrivateRelayTrustSession(relay);
+        if (!trust || trust.pubkey !== event.pubkey) {
+          throw new Error(
+            "The active account no longer owns this private relay session",
+          );
+        }
+        if (generation !== undefined && trust.generation !== generation) {
+          throw new Error("Private relay destinations cross account sessions");
+        }
+        generation = trust.generation;
+        relayUrls.add(normalizeUrl(relay));
+      }
+    }
+    if (relayUrls.size === 0) {
+      throw new Error("Private repository publication has no destination");
+    }
+
+    markPrivateRelayEvent(event);
+    const destinations = [...relayUrls];
+    const responses = await this.pool.publish(destinations, event);
+    const accepted = new Set(
+      responses
+        .filter((response) => response.ok)
+        .map((response) => normalizeUrl(response.from)),
+    );
+    const missing = destinations.filter((relay) => !accepted.has(relay));
+    if (missing.length > 0) {
+      throw new Error(
+        `The private event may have reached some repository relays, but these relays did not confirm it: ${missing.join(", ")}`,
+      );
+    }
   }
 
   /**
@@ -621,7 +762,7 @@ class OutboxStore {
     const updatedItem: OutboxItem = {
       ...item,
       relays: updatedRelays,
-      broadlySent: this.computeBroadlySent(updatedRelays),
+      broadlySent: this.computeBroadlySent(updatedRelays, item.relayGroupDefs),
     };
 
     await this.upsert(updatedItem);
@@ -671,7 +812,7 @@ class OutboxStore {
     const updatedItem: OutboxItem = {
       ...item,
       relays: updatedRelays,
-      broadlySent: this.computeBroadlySent(updatedRelays),
+      broadlySent: this.computeBroadlySent(updatedRelays, item.relayGroupDefs),
     };
     await this.upsert(updatedItem);
 
@@ -887,7 +1028,7 @@ class OutboxStore {
     const updatedItem: OutboxItem = {
       ...item,
       relays: updatedRelays,
-      broadlySent: this.computeBroadlySent(updatedRelays),
+      broadlySent: this.computeBroadlySent(updatedRelays, item.relayGroupDefs),
     };
 
     await this.upsert(updatedItem);
@@ -956,12 +1097,43 @@ class OutboxStore {
   }
 
   /**
-   * An item is "broadly sent" when every distinct relay group has at least
-   * one relay that succeeded.
+   * An item is "broadly sent" when every required relay group has at least one
+   * relay that succeeded. Unresolved required groups therefore keep the item
+   * pending so reResolveRelayGroups() can retry them when metadata arrives.
+   *
+   * When an outbox group and "fallback-relays" are both declared, they form
+   * one alternative delivery target: a success in either group is sufficient.
+   * Other groups remain required unless their ID has the best-effort prefix.
    */
-  private computeBroadlySent(relays: OutboxRelayEntry[]): boolean {
-    const groups = new Set(relays.flatMap((r) => r.groups));
-    for (const group of groups) {
+  private computeBroadlySent(
+    relays: OutboxRelayEntry[],
+    relayGroupDefs: string[],
+  ): boolean {
+    const fallbackGroup = "fallback-relays";
+    const outboxGroups = relayGroupDefs.filter((group) =>
+      group.startsWith("outbox:"),
+    );
+    const hasFallbackAlternative =
+      relayGroupDefs.includes(fallbackGroup) && outboxGroups.length > 0;
+    const alternativeGroups = new Set([fallbackGroup, ...outboxGroups]);
+
+    if (
+      hasFallbackAlternative &&
+      !relays.some(
+        (relay) =>
+          relay.status === "success" &&
+          relay.groups.some((group) => alternativeGroups.has(group)),
+      )
+    ) {
+      return false;
+    }
+
+    const requiredGroups = (
+      hasFallbackAlternative
+        ? relayGroupDefs.filter((group) => !alternativeGroups.has(group))
+        : relayGroupDefs
+    ).filter((group) => !unwrapRelayGroupId(group).bestEffort);
+    for (const group of requiredGroups) {
       const groupRelays = relays.filter((r) => r.groups.includes(group));
       if (!groupRelays.some((r) => r.status === "success")) return false;
     }

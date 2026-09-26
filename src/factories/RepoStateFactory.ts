@@ -63,7 +63,9 @@ export class RepoStateFactory extends EventFactory<
 
   /**
    * Create an updated state event from an existing repository state, preserving
-   * every declared branch/tag and replacing only the target branch plus HEAD.
+   * every declared branch/tag and replacing only the target branch. HEAD is
+   * moved to the branch by default, or preserved for non-default branch
+   * updates when `updateHead` is false.
    *
    * Existing repositories need the full post-push ref set in kind:30618; Grasp
    * rejects pushes whose state event omits branches/tags that will still exist.
@@ -75,6 +77,7 @@ export class RepoStateFactory extends EventFactory<
     existingState: NostrEvent | null | undefined,
     commitHash: string,
     branchName: string = "main",
+    updateHead: boolean = true,
   ): RepoStateFactory {
     const branchRef = `refs/heads/${branchName}`;
 
@@ -90,10 +93,11 @@ export class RepoStateFactory extends EventFactory<
       .chain(includeSingletonTag(["d", identifier], true))
       .modifyPublicTags((tags) => [
         ...tags.filter(
-          ([tagName]) => tagName !== branchRef && tagName !== "HEAD",
+          ([tagName]) =>
+            tagName !== branchRef && (!updateHead || tagName !== "HEAD"),
         ),
         [branchRef, commitHash],
-        ["HEAD", `ref: ${branchRef}`],
+        ...(updateHead ? [["HEAD", `ref: ${branchRef}`]] : []),
       ]);
   }
 }

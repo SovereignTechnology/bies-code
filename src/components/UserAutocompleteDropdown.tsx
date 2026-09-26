@@ -6,20 +6,29 @@ import {
   useRef,
   useState,
 } from "react";
-import { createPortal } from "react-dom";
 import { nip19 } from "nostr-tools";
 
-import { UserAvatar } from "@/components/UserAvatar";
+import { AvatarWithBadges, UserAvatar } from "@/components/UserAvatar";
 import { useContactSearch } from "@/hooks/useContactSearch";
+import { useIsFollowing } from "@/hooks/useIsFollowing";
+import { useIsGitAuthorFollowing } from "@/hooks/useIsGitAuthorFollowing";
 import { useProfile } from "@/hooks/useProfile";
 import { useProfilesForPubkeys } from "@/hooks/useProfilesForPubkeys";
 import { useUserDisplayName } from "@/hooks/useUserDisplayName";
 import { cn } from "@/lib/utils";
+import {
+  Popover,
+  PopoverAnchor,
+  PopoverContent,
+} from "@/components/ui/popover";
+
+const EMPTY_PUBKEYS: string[] = [];
 
 export interface UserAutocompleteDropdownProps {
   query: string;
   isOpen: boolean;
-  position: { top: number; left: number } | null;
+  /** Viewport rectangle spanning the caret line or owning input. */
+  position: { top: number; left: number; height: number } | null;
   onSelectPubkey: (pubkey: string) => void;
   onClose: () => void;
   /** Element that should receive Arrow/Enter/Escape handling while open */
@@ -32,6 +41,8 @@ export interface UserAutocompleteDropdownProps {
   listboxId?: string;
   /** Receives the active option id for aria-activedescendant on the owning input */
   onActiveDescendantChange?: (id: string | undefined) => void;
+  /** Reports whether the debounced relay search is still in progress */
+  onLoadingChange?: (isLoading: boolean) => void;
 }
 
 function getOptionId(listboxId: string, pubkey: string): string {
@@ -45,17 +56,37 @@ export function UserAutocompleteDropdown({
   onSelectPubkey,
   onClose,
   keyboardTargetRef,
-  priorityPubkeys = [],
-  excludePubkeys = [],
+  priorityPubkeys = EMPTY_PUBKEYS,
+  excludePubkeys = EMPTY_PUBKEYS,
   listboxId: providedListboxId,
   onActiveDescendantChange,
+  onLoadingChange,
 }: UserAutocompleteDropdownProps) {
   const generatedListboxId = useId();
   const listboxId = providedListboxId ?? generatedListboxId;
   const [selectedIndex, setSelectedIndex] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
+  const anchorRef = useMemo(
+    () => ({
+      current: {
+        getBoundingClientRect: () =>
+          new DOMRect(
+            position?.left ?? 0,
+            position?.top ?? 0,
+            0,
+            position?.height ?? 0,
+          ),
+      },
+    }),
+    [position?.left, position?.top, position?.height],
+  );
 
-  const contacts = useContactSearch(isOpen ? query : "", priorityPubkeys);
+  const { results: contacts, isSearching } = useContactSearch(
+    isOpen ? query : "",
+    priorityPubkeys,
+    excludePubkeys,
+    isOpen,
+  );
   const excludeSet = useMemo(() => new Set(excludePubkeys), [excludePubkeys]);
   const filteredContacts = useMemo(
     () => contacts.filter((contact) => !excludeSet.has(contact.pubkey)),
@@ -71,6 +102,10 @@ export function UserAutocompleteDropdown({
     [filteredContacts],
   );
   useProfilesForPubkeys(renderedPubkeys);
+
+  useEffect(() => {
+    onLoadingChange?.(isOpen && isSearching);
+  }, [isOpen, isSearching, onLoadingChange]);
 
   useEffect(() => {
     setSelectedIndex(0);
@@ -147,10 +182,6 @@ export function UserAutocompleteDropdown({
           if (selected) selectContact(selected.pubkey);
           break;
         }
-        case "Escape":
-          e.preventDefault();
-          onClose();
-          break;
       }
     };
 
@@ -179,47 +210,74 @@ export function UserAutocompleteDropdown({
     return null;
   }
 
-  // Render via portal so the dropdown escapes any overflow:hidden or
-  // CSS-transform ancestor (e.g. Radix Dialog), while fixed coordinates
-  // keep it anchored to the correct viewport position.
-  return createPortal(
-    <div
-      className="fixed z-[100] w-[280px] rounded-xl border border-border bg-popover shadow-lg overflow-hidden animate-in fade-in-0 zoom-in-95 slide-in-from-top-2 duration-150"
-      style={{ top: position.top, left: position.left }}
+  // A nested Radix layer keeps portaled suggestions interactive inside a
+  // modal and handles Escape before the surrounding dialog can dismiss.
+  return (
+    <Popover
+      open
+      onOpenChange={(open) => {
+        if (!open) onClose();
+      }}
     >
-      <div
-        id={listboxId}
-        ref={listRef}
-        role="listbox"
-        className="max-h-[240px] overflow-y-auto py-1 [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-border hover:[&::-webkit-scrollbar-thumb]:bg-border/80"
-        style={{
-          scrollbarWidth: "thin",
-          scrollbarColor: "hsl(var(--border)) transparent",
+      <PopoverAnchor virtualRef={anchorRef} />
+      <PopoverContent
+        role="presentation"
+        align="start"
+        sideOffset={4}
+        collisionPadding={8}
+        className="z-[100] w-[280px] rounded-xl p-0 shadow-lg overflow-hidden"
+        onOpenAutoFocus={(event) => event.preventDefault()}
+        onCloseAutoFocus={(event) => event.preventDefault()}
+        onInteractOutside={(event) => {
+          // Typing and moving the caret remain interactions with the owner.
+          if (
+            event.target instanceof Node &&
+            keyboardTargetRef?.current?.contains(event.target)
+          )
+            event.preventDefault();
         }}
       >
-        {filteredContacts.map(({ pubkey }, index) => (
-          <UserAutocompleteItem
-            key={pubkey}
-            id={getOptionId(listboxId, pubkey)}
-            pubkey={pubkey}
-            isSelected={index === selectedIndex}
-            onClick={() => selectContact(pubkey)}
-          />
-        ))}
-      </div>
-    </div>,
-    document.body,
+        <div
+          id={listboxId}
+          ref={listRef}
+          role="listbox"
+          className="overflow-y-auto py-1 [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-border hover:[&::-webkit-scrollbar-thumb]:bg-border/80"
+          style={{
+            maxHeight:
+              "max(0px, min(240px, calc(var(--radix-popover-content-available-height) - 2px)))",
+            scrollbarWidth: "thin",
+            scrollbarColor: "hsl(var(--border)) transparent",
+          }}
+        >
+          {filteredContacts.map((contact, index) => (
+            <UserAutocompleteItem
+              key={contact.pubkey}
+              id={getOptionId(listboxId, contact.pubkey)}
+              pubkey={contact.pubkey}
+              isGitFollow={contact.isGitFollow}
+              isSocialFollow={contact.isSocialFollow}
+              isSelected={index === selectedIndex}
+              onClick={() => selectContact(contact.pubkey)}
+            />
+          ))}
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 }
 
 function UserAutocompleteItem({
   id,
   pubkey,
+  isGitFollow,
+  isSocialFollow,
   isSelected,
   onClick,
 }: {
   id: string;
   pubkey: string;
+  isGitFollow: boolean;
+  isSocialFollow: boolean;
   isSelected: boolean;
   onClick: () => void;
 }) {
@@ -229,6 +287,10 @@ function UserAutocompleteItem({
   const nip05 = profile?.nip05;
   const npub = nip19.npubEncode(pubkey);
   const identifier = nip05 ?? `${npub.slice(0, 12)}…`;
+  const reactiveIsGitFollow = useIsGitAuthorFollowing(pubkey);
+  const reactiveIsSocialFollow = useIsFollowing(pubkey);
+  const showGitFollow = isGitFollow || reactiveIsGitFollow === true;
+  const showSocialFollow = isSocialFollow || reactiveIsSocialFollow === true;
 
   return (
     <button
@@ -244,9 +306,21 @@ function UserAutocompleteItem({
           : "hover:bg-secondary/60",
       )}
       onClick={onClick}
-      onMouseDown={(e) => e.preventDefault()}
+      onPointerDown={(e) => e.preventDefault()}
     >
-      <UserAvatar pubkey={pubkey} size="md" className="shrink-0" />
+      <AvatarWithBadges
+        avatarEl={
+          <UserAvatar
+            pubkey={pubkey}
+            size="md"
+            className="shrink-0"
+            showFollowIndicator={false}
+          />
+        }
+        size="md"
+        showGit={showGitFollow}
+        showSocial={showSocialFollow}
+      />
 
       <div className="flex-1 min-w-0">
         <div
@@ -257,8 +331,20 @@ function UserAutocompleteItem({
         >
           {displayName}
         </div>
-        <div className="text-xs text-muted-foreground truncate font-mono">
-          {identifier}
+        <div className="flex min-w-0 items-center gap-1.5">
+          <span className="min-w-0 truncate font-mono text-xs text-muted-foreground">
+            {identifier}
+          </span>
+          {showSocialFollow && (
+            <span className="shrink-0 rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 dark:text-emerald-300">
+              Social follow
+            </span>
+          )}
+          {showGitFollow && (
+            <span className="shrink-0 rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+              Git follow
+            </span>
+          )}
         </div>
       </div>
     </button>

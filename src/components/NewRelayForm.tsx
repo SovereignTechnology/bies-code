@@ -28,17 +28,21 @@ export function NewRelayForm({
   };
 
   return (
-    <form className="flex gap-2 w-full" onSubmit={handleAdd}>
+    <form className="flex w-full min-w-0 gap-2" onSubmit={handleAdd}>
       <Input
         type="text"
         placeholder="wss://relay.example.com"
         value={newRelay}
         onChange={(e) => setNewRelay(e.target.value)}
         onKeyDown={handleKeyPress}
-        className="flex-1"
+        className="min-w-0 flex-1"
         disabled={adding}
       />
-      <Button type="submit" disabled={!newRelay.trim() || adding}>
+      <Button
+        type="submit"
+        disabled={!newRelay.trim() || adding}
+        className="shrink-0"
+      >
         Add
       </Button>
     </form>

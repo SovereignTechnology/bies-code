@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { runner } from "@/services/actions";
 import { RenameIssueSubject } from "@/actions/nip34";
-import { useToast } from "@/hooks/useToast";
+import { useRecoveryToast as useToast } from "@/hooks/useRecoveryToast";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Pencil, Check, X, Loader2 } from "lucide-react";
@@ -105,6 +105,7 @@ export function EditableSubject({
       const message =
         err instanceof Error ? err.message : "Failed to rename issue";
       toast({
+        recovery: { action: () => handleSave() },
         title: "Failed to rename issue",
         description: message,
         variant: "destructive",

@@ -1,0 +1,488 @@
+# NIP-82
+
+## Software Applications
+
+`draft` `optional`
+
+This NIP defines kind 32267 to describe a software application, kind 30063 for a software release and kind 3063 for a software asset.
+
+A software asset is a file associated with a software release. Automatic installation and dependency resolution are client concerns outside this NIP.
+
+## Software Application
+
+An application is a parameterizable replaceable event as a pubkey may maintain many different ones and update their description over time.
+
+```jsonc
+{
+  "kind": 32267,
+  // Full description of the application, markdown is allowed
+  "content": "<description>",
+  "tags": [
+    [
+      // REQUIRED
+      // Reverse-domain identifier (com.example.app) recommended, can be any string
+      "d",
+      "<app-id>",
+    ],
+    [
+      // REQUIRED
+      // App name
+      "name",
+      "<human-readable project name>",
+    ],
+    [
+      // OPTIONAL
+      // Summary, short description, Markdown not allowed
+      "summary",
+      "<summary-text>",
+    ],
+    [
+      // OPTIONAL
+      // Icon URL
+      "icon",
+      "<icon-url>",
+    ],
+    [
+      // OPTIONAL, MULTIPLE
+      // Image URL
+      "image",
+      "<image-url>",
+    ],
+    [
+      // OPTIONAL, MULTIPLE
+      // Tags used to describe the application
+      "t",
+      "<tag>",
+    ],
+    [
+      // OPTIONAL
+      // Website URL for the application
+      "url",
+      "<website-url>",
+    ],
+    [
+      // OPTIONAL
+      // Source code repository URL: https://github.com/example/android
+      // Must be able to `git clone <repo-url>`
+      "repository",
+      "<repo-url>",
+    ],
+    [
+      // OPTIONAL
+      // Pointer to NIP-34 repository
+      "a",
+      "30617:<destination-pubkey>:<repo-id>",
+      "<relay-url>",
+    ],
+    [
+      // OPTIONAL, MULTIPLE
+      // Platform identifiers for assets that have platform restrictions
+      // NOTE: See Appendix A. Only include platforms that have restrictions
+      // in the corresponding assets. Platform-agnostic software may omit
+      // this tag entirely.
+      "f",
+      "<platform-identifier>",
+    ],
+    [
+      // OPTIONAL
+      // SPDX license ID
+      "license",
+      "<spdx-id>",
+    ],
+  ],
+}
+```
+
+Tag requirements are indicated in the tag definitions.
+
+Applications SHOULD use their application or bundle identifier (typically in reverse-domain notation) as the `d` tag. Note that application and asset identifiers are independent, an Android app may have `com.example.android` as ID while its macOS counterpart may use `com.example.mac`.
+
+For `icon` and `image` tags any URL is valid but a Blossom [BUD-01](https://github.com/hzrd149/blossom/blob/master/buds/01.md#get-sha256---get-blob) endpoint is recommended.
+
+`f` tags SHOULD be included when assets have platform restrictions. See [Appendix A](#appendix-a-platform-identifiers) for identifiers and [Appendix C](#appendix-c-mime-types) for when `f` tags are required.
+
+License IDs are SPDX IDs as defined in https://spdx.org/licenses/.
+
+## Software Release
+
+A release is a parameterizable replaceable event, it is important for developers to be able to overwrite a bad release and update pointers to the right assets.
+
+It also contains a release channel name.
+
+```jsonc
+{
+  "kind": 30063,
+  // Full release notes, Markdown allowed
+  "content": "<release-notes>",
+  "tags": [
+    [
+      // REQUIRED
+      // Pointer to the software application kind 32267
+      "a",
+      "32267:<app-publisher-pubkey>:<app-id>",
+      "<relay-hint>",
+    ],
+    [
+      // REQUIRED
+      // This MUST be the `<app-id>` in the `a` tag
+      "i",
+      "<app-id>",
+    ],
+    [
+      // REQUIRED
+      // Release version: 1.2.3, v0.1.2-rc1
+      "version",
+      "<version>",
+    ],
+    [
+      // REQUIRED
+      // MUST be the `i` and `version` tags joined by '@'
+      "d",
+      "<identifier>@<version>",
+    ],
+    [
+      // REQUIRED
+      // See Appendix B for channel IDs
+      "c",
+      "<channel-id>",
+    ],
+    [
+      // REQUIRED, MULTIPLE
+      // Asset event id (kind 3063)
+      "e",
+      "<asset-event-id>",
+      "<relay-hint>",
+    ],
+    [
+      // REQUIRED, MULTIPLE
+      // Aggregate platform identifiers: MUST be the deduplicated union
+      // of every `f` tag on the linked assets (kind 3063). See Appendix A.
+      "f",
+      "<platform-identifier>",
+    ],
+    [
+      // OPTIONAL
+      // Git commit represented by this release (same as NIP-34)
+      "commit",
+      "<git-commit-id>",
+    ],
+  ],
+}
+```
+
+The `e` tags are pointers to all [Software Asset](#software-asset)s in this release. This event MUST be the authoritative source for assets belonging to a given version.
+
+The `i` tag MUST be the `<app-id>` component of the kind 32267 coordinate in the `a` tag.
+
+When `f` tags are included, they MUST be the aggregate (deduplicated union) of all `f` tags on the linked kind 3063 events. Clients MAY use them for discovery and filtering without resolving every asset. Publishers SHOULD include them whenever any linked asset has platform tags, and keep them in sync when assets are added, removed, or retagged.
+
+The event's `created_at` timestamp MUST be the release date.
+
+The identifier `i` MUST be the exact same used in the application. The `d` tag is required and MUST be `<identifier>@<version>` (`i` and `version` tags joined by `@`).
+
+Note that a release version, typically a git tag, does not need to coincide with any of the linked asset versions.
+
+The optional `commit` tag identifies the Git commit represented by the release.
+Publishers SHOULD include it when the application source is maintained in Git.
+It describes the release as a whole; individual assets MAY continue to use
+their own `commit` tags when an asset was built from a different commit.
+
+## Software Asset
+
+An asset is a regular non-replaceable event, mainly used to cryptographically link a file through its SHA-256 hash. This kind is an extension of [kind 1063](94.md). See [Appendix C](#appendix-c-mime-types) for MIME type handling.
+
+```jsonc
+{
+  "kind": 3063,
+  // Empty content
+  "content": "",
+  "tags": [
+    [
+      // OPTIONAL
+      // Pointer to the software application kind 32267
+      "a",
+      "32267:<app-publisher-pubkey>:<app-id>",
+      "<relay-hint>",
+    ],
+    // Tags derived from kind 1063
+    [
+      // REQUIRED
+      // Reverse-domain identifier: com.example.app
+      // NOTE: Here "i" stands for "identifier", not "infohash"
+      "i",
+      "<app-id>",
+    ],
+    [
+      // OPTIONAL
+      // URL of the asset, may be a Blossom URL
+      "url",
+      "<asset-url>",
+    ],
+    [
+      // OPTIONAL
+      // Filename for the asset
+      "filename",
+      "<download-filename>",
+    ],
+    [
+      // REQUIRED
+      // MIME type of the asset
+      // NOTE: This is the primary source of truth for the asset format.
+      // See Appendix C for MIME type handling.
+      "m",
+      "<mime-type>",
+    ],
+    [
+      // REQUIRED
+      // SHA-256 hash of the asset
+      "x",
+      "<sha256-hash>",
+    ],
+    [
+      // OPTIONAL
+      // Size of the asset in bytes
+      "size",
+      "<size-bytes>",
+    ],
+
+    // Software Asset-specific tags
+    [
+      // REQUIRED
+      // Version: 1.2.3, 0.1.2-rc1
+      "version",
+      "<version>",
+    ],
+    [
+      // OPTIONAL, MULTIPLE
+      // Platform restrictions (OS + architecture)
+      // NOTE: See Appendix A for identifiers.
+      //
+      // REQUIRED when MIME type does not fully determine the target platform,
+      // or to restrict compatibility to specific architectures.
+      "f",
+      "<platform-id>",
+    ],
+    [
+      // OPTIONAL
+      // Minimum platform version (minimum compatibility)
+      // NOTE: When the MIME type implies a runtime (e.g., VS Code for VSIX, Chrome for CRX),
+      // this refers to the runtime version. Otherwise, it refers to the OS version
+      // (e.g., Android API level, macOS version).
+      // See Appendix D for version comparison rules.
+      "min_platform_version",
+      "<min-platform-version>",
+    ],
+    [
+      // OPTIONAL
+      // Target platform version (version software was designed for)
+      // NOTE: Same semantics as min_platform_version.
+      "target_platform_version",
+      "<target-platform-version>",
+    ],
+    [
+      // OPTIONAL, MULTIPLE
+      // Supported Nostr NIP by this software
+      "supported_nip",
+      "<nip-id-string>",
+    ],
+    [
+      // OPTIONAL
+      // When we have sibling assets that need to differentiate, falls back to filename
+      // Example: "offline"
+      "variant",
+      "<variant-name>",
+    ],
+    [
+      // OPTIONAL
+      // Commit ID used to build the asset (same as NIP-34),
+      // needed for reproducible builds
+      "commit",
+      "<commit-id>",
+    ],
+    [
+      // OPTIONAL
+      // Minimum allowed version: defines a minimum version
+      // of this asset.
+      // See Appendix D for version comparison rules.
+      "min_allowed_version",
+      "<version>",
+    ],
+
+    // Version-code specific tags (for Android and others)
+    [
+      // Android: REQUIRED
+      "version_code",
+      "<version-code-int>",
+    ],
+    [
+      // OPTIONAL
+      // Minimum allowed version as integer
+      "min_allowed_version_code",
+      "<version-code-int>",
+    ],
+
+    // Android-specific tags (only for application/vnd.android.package-archive)
+    [
+      // REQUIRED for Android APKs, MULTIPLE
+      // APK certificate hash
+      "apk_certificate_hash",
+      "<apk_certificate_hash>",
+    ],
+
+    // Web content reference
+    [
+      // OPTIONAL
+      // URL of the original web content (e.g., PWA start URL)
+      "r",
+      "<url>",
+    ],
+  ],
+}
+```
+
+Both asset identifier `i` and `version` tags MAY be different to the application and release identifier and version.
+
+When an asset includes an `a` tag, it MUST point to the kind 32267 application
+which owns the release containing that asset. Publishers SHOULD include this
+pointer so relays can validate and accept assets before the release event is
+published. Clients MUST NOT require the pointer when reading existing assets.
+
+When `url` is omitted, clients SHOULD locate the asset via its SHA-256 hash using a Blossom [BUD-01](https://github.com/hzrd149/blossom/blob/master/buds/01.md#get-sha256---get-blob) endpoint.
+
+## Appendix A: Platform identifiers
+
+Platform is defined as the specific underlying system on which the application is executed, a combination of operating system and hardware architecture. We use the `f` tag for this purpose, with the following identifiers loosely based off `uname -sm`:
+
+| Identifier            | OS          | Architecture   |
+| --------------------- | ----------- | -------------- |
+| `android-arm64-v8a`   | Android     | ARMv8-A        |
+| `android-armeabi-v7a` | Android     | ARMv7-A        |
+| `android-x86`         | Android     | x86            |
+| `android-x86_64`      | Android     | x86-64         |
+| `darwin-arm64`        | macOS       | ARM64          |
+| `darwin-x86_64`       | macOS       | x86-64         |
+| `linux-aarch64`       | Linux       | ARM64          |
+| `linux-x86_64`        | Linux       | x86-64         |
+| `windows-aarch64`     | Windows     | ARM64          |
+| `windows-x86_64`      | Windows     | x86-64         |
+| `ios-arm64`           | iOS         | ARM64          |
+| `freebsd-x86_64`      | FreeBSD     | x86-64         |
+| `freebsd-aarch64`     | FreeBSD     | ARM64          |
+| `linux-armv7l`        | Linux       | ARMv7 (32-bit) |
+| `linux-riscv64`       | Linux       | RISC-V 64-bit  |
+| `wasm32`              | WebAssembly | WASM 32-bit    |
+| `wasm64`              | WebAssembly | WASM 64-bit    |
+| `wasi-wasm32`         | WASI        | WASM 32-bit    |
+| `wasi-wasm64`         | WASI        | WASM 64-bit    |
+
+The `f` tag is used to **restrict** compatibility when the MIME type alone does not fully determine the target platform. See [Appendix C](#appendix-c-mime-types) for when `f` tags are required.
+
+## Appendix B: Channel IDs
+
+Standard channel identifiers:
+
+- `main` (Default)
+- `beta`
+- `nightly`
+- `dev`
+
+Custom channel identifiers MAY be used for organization-specific needs (e.g., `internal`, `canary`, `lts`).
+
+## Appendix C: MIME types
+
+Any valid MIME type MAY be used. The following non-exhaustive table lists formats with commonly understood platform or runtime handling.
+
+| MIME type                                       | Platform/Runtime    | Common Extension |
+| ----------------------------------------------- | ------------------- | ---------------- |
+| `application/vnd.android.package-archive`       | Android             | `.apk`           |
+| `application/vnd.apple.ipa`                     | iOS                 | `.ipa`           |
+| `application/x-apple-diskimage`                 | macOS               | `.dmg`           |
+| `application/vnd.apple.installer+xml`           | macOS               | `.pkg`           |
+| `application/x-msi`                             | Windows             | `.msi`           |
+| `application/vnd.appimage`                      | Linux               | `.AppImage`      |
+| `application/vnd.flatpak`                       | Linux (Flatpak)     | `.flatpak`       |
+| `application/vnd.oci.image.manifest.v1+json`    | OCI (Docker/Podman) | —                |
+| `application/x-executable`                      | Linux (ELF)         | —                |
+| `application/x-mach-binary`                     | macOS (Mach-O)      | —                |
+| `application/vnd.microsoft.portable-executable` | Windows (PE)        | `.exe`           |
+| `application/vsix`                              | VS Code             | `.vsix`          |
+| `application/x-chrome-extension`                | Chrome / Chromium   | `.crx`           |
+| `application/x-xpinstall`                       | Firefox             | `.xpi`           |
+| `application/wasm`                              | Browser / WASI      | `.wasm`          |
+| `application/webbundle`                         | Browser (PWA)       | `.wbn`, `.swbn`  |
+
+The `f` tag is OPTIONAL. It records publisher-declared compatibility restrictions. Omitting it means that the publisher has declared no restriction beyond the MIME type; it does not guarantee compatibility with every device. Publishers SHOULD include explicit `f` tags for clarity, even for universal builds.
+
+### Native executables
+
+Native executables (`application/x-executable`, `application/x-mach-binary`, `application/vnd.microsoft.portable-executable`) SHOULD be statically linked. Self-contained formats like AppImage or Flatpak are preferred when additional dependencies are required. Any specific runtime requirements (e.g., C library variant, dynamic library dependencies) SHOULD be conveyed outside of this specification.
+
+**Examples:**
+
+```jsonc
+// Universal Android APK (all architectures)
+["m", "application/vnd.android.package-archive"]
+
+// Android APK restricted to ARM64 only
+["m", "application/vnd.android.package-archive"],
+["f", "android-arm64-v8a"]
+
+// macOS universal binary
+["m", "application/x-apple-diskimage"]
+
+// macOS ARM64 only
+["m", "application/x-apple-diskimage"],
+["f", "darwin-arm64"]
+```
+
+## Appendix D: Version comparison
+
+Version strings are used in `version`, `min_platform_version`, `target_platform_version`, `min_allowed_version`, and related tags. Implementations MUST follow [Semantic Versioning 2.0.0](https://semver.org/) precedence rules for versions that conform to SemVer. For non-conforming versions, use the fallback rules below.
+
+### Parsing rules
+
+1. **Split** the version string into segments using `.` (dot), `-` (hyphen), and `_` (underscore) as delimiters.
+2. **Classify** each segment as either numeric or alphanumeric.
+3. **Compare** segments left-to-right using the rules below.
+
+### Comparison rules
+
+1. **Numeric segments** are compared as integers: `9 < 10 < 100`.
+2. **Alphanumeric segments** are compared lexicographically (case-insensitive).
+3. **Numeric vs alphanumeric**: numeric segments sort BEFORE alphanumeric segments.
+4. **Missing segments** are treated as less than present segments: `1.0 < 1.0.0 < 1.0.0.1`.
+
+### Pre-release identifiers
+
+The following alphanumeric segments are common pre-release identifiers:
+
+| Identifier             |
+| ---------------------- |
+| `dev`, `develop`       |
+| `alpha`, `a`           |
+| `beta`, `b`            |
+| `rc`, `pre`, `preview` |
+
+**Examples of sort order:**
+
+```
+1.0.0-dev < 1.0.0-alpha < 1.0.0-alpha.2 < 1.0.0-beta < 1.0.0-beta.2 < 1.0.0-rc1 < 1.0.0 < 1.0.1
+```
+
+### Integer versions
+
+When comparing versions that are purely numeric integers (e.g., Android API levels, Chrome versions), compare them directly as integers:
+
+```
+119 < 120 < 121
+```
+
+### Recommendations for publishers
+
+- Use [Semantic Versioning](https://semver.org/) (`MAJOR.MINOR.PATCH`) where possible.
+- Avoid ambiguous pre-release identifiers.
+- For `version_code` and `min_allowed_version_code`, use monotonically increasing integers.
+
+## Appendix E: Attribution
+
+Signers MAY include other pubkeys as `p` tags and `zap` tags as per [NIP-57 - Appendix G](57.md) in any of the defined event kinds. This is useful when the signer is not the maintainer of the software, or in the case of multiple authors.

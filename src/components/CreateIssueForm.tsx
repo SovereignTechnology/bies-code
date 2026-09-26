@@ -1,9 +1,11 @@
+import { useComposerDraft } from "@/hooks/useComposerDraft";
+import { DraftStatus } from "@/components/DraftStatus";
 import { useState, useCallback, useMemo, useRef } from "react";
 import { useActiveAccount } from "applesauce-react/hooks";
 import { runner } from "@/services/actions";
 import { createAnonRunner } from "@/lib/anonPublish";
 import { CreateIssue } from "@/actions/nip34";
-import { useToast } from "@/hooks/useToast";
+import { useRecoveryToast as useToast } from "@/hooks/useRecoveryToast";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -11,10 +13,12 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { useAuthModal } from "@/contexts/AuthModalContext";
 import { LabelBadge } from "@/components/LabelBadge";
 import {
+  ComposerModeToggle,
   NostrComposer,
+  type ComposerTab,
   type NostrComposerHandle,
 } from "@/components/NostrComposer";
-import { composerHasNsec, hasPreviewableContent } from "@/lib/composerUtils";
+import { composerHasNsec } from "@/lib/composerUtils";
 import { extractContentTags } from "@/lib/nostrContentTags";
 import type { Nip94Tags } from "@/hooks/useBlossomUpload";
 import { Loader2, Paperclip, Plus, X, CircleDot } from "lucide-react";
@@ -75,10 +79,9 @@ function LockedLabelBadge({
 }
 
 interface CreateIssueFormProps {
-  /** Repository coordinate: "30617:<pubkey>:<d-tag>" */
-  repoCoord: string;
-  /** Hex pubkey of the repository owner */
-  ownerPubkey: string;
+  /** Ordered repository coordinates, selected maintainer first */
+  repoCoords: string[];
+  draftScope: string;
   /** Called after the issue is successfully published */
   onSuccess?: () => void;
   /** Called when the user cancels */
@@ -86,8 +89,8 @@ interface CreateIssueFormProps {
 }
 
 export function CreateIssueForm({
-  repoCoord,
-  ownerPubkey,
+  repoCoords,
+  draftScope,
   onSuccess,
   onCancel,
 }: CreateIssueFormProps) {
@@ -96,17 +99,24 @@ export function CreateIssueForm({
   const account = useActiveAccount();
   const isLoggedIn = !!account;
 
-  const [subject, setSubject] = useState("");
-  const [content, setContent] = useState("");
-  const [activeTab, setActiveTab] = useState<"write" | "preview">("write");
+  const {
+    key: draftKey,
+    draft,
+    update,
+    clear,
+    hasDraft,
+    saved,
+  } = useComposerDraft(draftScope);
+  const { subject, body: content, labels, uploadedTagGroups } = draft;
+  const setSubject = (value: string) => update("subject", value);
+  const setContent = (value: string) => update("body", value);
+  const [activeTab, setActiveTab] = useState<ComposerTab>("write");
   const [labelInput, setLabelInput] = useState("");
   const [labelError, setLabelError] = useState<string | null>(null);
-  const [labels, setLabels] = useState<string[]>([]);
   const [isPending, setIsPending] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
   const [anonMode, setAnonMode] = useState(false);
   const [showHashtagHint, setShowHashtagHint] = useState(false);
-  /** NIP-94 tag groups accumulated from Blossom uploads in this session */
-  const [uploadedTagGroups, setUploadedTagGroups] = useState<Nip94Tags[]>([]);
   const { openAuthModal } = useAuthModal();
   const composerRef = useRef<NostrComposerHandle>(null);
   const hashtagHintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
@@ -147,14 +157,17 @@ export function CreateIssueForm({
       return;
     }
 
-    setLabels((prev) => [...prev, normalised]);
+    update("labels", (prev) => [...prev, normalised]);
     setLabelInput("");
     setLabelError(null);
-  }, [labelInput, labels, contentLabels]);
+  }, [labelInput, labels, contentLabels, update]);
 
-  const removeLabel = useCallback((label: string) => {
-    setLabels((prev) => prev.filter((l) => l !== label));
-  }, []);
+  const removeLabel = useCallback(
+    (label: string) => {
+      update("labels", (prev) => prev.filter((l) => l !== label));
+    },
+    [update],
+  );
 
   const handleLabelKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -166,9 +179,12 @@ export function CreateIssueForm({
     [addLabel],
   );
 
-  const handleUploadedTags = useCallback((tags: Nip94Tags) => {
-    setUploadedTagGroups((prev) => [...prev, tags]);
-  }, []);
+  const handleUploadedTags = useCallback(
+    (tags: Nip94Tags) => {
+      update("uploadedTagGroups", (prev) => [...prev, tags]);
+    },
+    [update],
+  );
 
   const submitIssue = useCallback(
     async (
@@ -195,8 +211,7 @@ export function CreateIssueForm({
       try {
         await activeRunner.run(
           CreateIssue,
-          repoCoord,
-          ownerPubkey,
+          repoCoords,
           trimmedSubject,
           trimmedContent,
           {
@@ -211,12 +226,21 @@ export function CreateIssueForm({
           description: `"${trimmedSubject}" has been published.`,
         });
 
-        setUploadedTagGroups([]);
+        clear();
         onSuccess?.();
       } catch (err) {
         const message =
           err instanceof Error ? err.message : "Failed to create issue";
         toast({
+          recovery: {
+            action: () =>
+              submitIssue(
+                trimmedSubject,
+                trimmedContent,
+                allLabels,
+                useAnonMode,
+              ),
+          },
           title: "Failed to create issue",
           description: message,
           variant: "destructive",
@@ -225,7 +249,7 @@ export function CreateIssueForm({
         setIsPending(false);
       }
     },
-    [repoCoord, ownerPubkey, toast, onSuccess, isLoggedIn, uploadedTagGroups],
+    [repoCoords, toast, onSuccess, isLoggedIn, uploadedTagGroups, clear],
   );
 
   const handleSubmit = useCallback(
@@ -270,6 +294,7 @@ export function CreateIssueForm({
 
   return (
     <form onSubmit={handleSubmit} className="space-y-5">
+      <DraftStatus saved={saved} />
       {/* Title */}
       <div className="space-y-1.5">
         <Label htmlFor="issue-subject" className="text-sm font-medium">
@@ -293,6 +318,7 @@ export function CreateIssueForm({
           Description
         </Label>
         <NostrComposer
+          key={draftKey}
           ref={composerRef}
           value={content}
           onChange={setContent}
@@ -303,40 +329,24 @@ export function CreateIssueForm({
           activeTab={activeTab}
           onTabChange={setActiveTab}
           onUploadedTags={handleUploadedTags}
+          onUploadingChange={setIsUploading}
         />
         <div className="flex items-center gap-2">
           <button
             type="button"
             title="Attach image or video (Blossom)"
-            disabled={isPending || composerRef.current?.isUploading}
+            disabled={isPending || isUploading}
             onClick={() => composerRef.current?.triggerAttach()}
             className="rounded p-1 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            {composerRef.current?.isUploading ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Paperclip className="h-4 w-4" />
-            )}
+            <Paperclip className="h-4 w-4" />
           </button>
 
-          {hasPreviewableContent(content) && (
-            <div className="flex items-center gap-0.5">
-              {(["write", "preview"] as const).map((tab) => (
-                <button
-                  key={tab}
-                  type="button"
-                  onClick={() => setActiveTab(tab)}
-                  className={`rounded px-2 py-0.5 text-xs font-medium capitalize transition-colors ${
-                    activeTab === tab
-                      ? "bg-muted text-foreground"
-                      : "text-muted-foreground hover:text-foreground"
-                  }`}
-                >
-                  {tab}
-                </button>
-              ))}
-            </div>
-          )}
+          <ComposerModeToggle
+            value={content}
+            activeTab={activeTab}
+            onTabChange={setActiveTab}
+          />
         </div>
         <p className="text-xs text-muted-foreground">
           Markdown supported — code blocks, links, lists, etc.
@@ -444,16 +454,24 @@ export function CreateIssueForm({
               type="button"
               variant="ghost"
               size="sm"
-              onClick={onCancel}
-              disabled={isPending}
+              onClick={() => {
+                clear();
+                onCancel();
+              }}
+              disabled={isPending || isUploading}
             >
-              Cancel
+              {hasDraft ? "Discard" : "Cancel"}
             </Button>
           )}
           <Button
             type="submit"
             size="sm"
-            disabled={isPending || !subject.trim() || composerHasNsec(content)}
+            disabled={
+              isPending ||
+              isUploading ||
+              !subject.trim() ||
+              composerHasNsec(content)
+            }
             className="gap-1.5 bg-primary hover:bg-primary/90 text-primary-foreground"
           >
             {isPending ? (

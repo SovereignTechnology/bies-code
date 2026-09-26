@@ -1,5 +1,5 @@
+import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
 import {
-  lazy,
   Suspense,
   useMemo,
   useState,
@@ -22,6 +22,8 @@ import {
 } from "@/hooks/useGitExplorer";
 import { RefSelector } from "@/components/RefSelector";
 import { GitServerStatus } from "@/components/GitServerStatus";
+import { useErrorRetry } from "@/hooks/useErrorRetry";
+import { ErrorRetryAction } from "@/components/ErrorRetryAction";
 import { CodeUnavailable } from "@/components/CodeUnavailable";
 import { RepoAboutPanel } from "@/components/RepoAboutPanel";
 import type { RepositoryState } from "@/casts/RepositoryState";
@@ -54,21 +56,22 @@ import {
   Search,
   GitBranch,
   Tag,
+  Package,
 } from "lucide-react";
 import { getFileMediaType, toDataUri } from "@/lib/fileMediaType";
 import { cn, safeFormatDistanceToNow } from "@/lib/utils";
 import { useIsMobile } from "@/hooks/useIsMobile";
-import {
-  deriveEffectiveHeadCommit,
-  deriveEffectiveSource,
-} from "@/lib/sourceUtils";
 import { isNonHttpUrl } from "@/lib/git-grasp-pool";
 import { IncompatibleProtocolError } from "@/components/IncompatibleProtocolError";
 import { useCIForCommit } from "@/hooks/useCI";
-import { CIStatusIcon } from "@/components/ci/CIStatusIcon";
+import { CIStatusTrustIcon } from "@/components/ci/CIStatusTrustIcon";
 import { summarizeRuns } from "@/lib/ci";
-
-const MarkdownContent = lazy(() => import("@/components/MarkdownContent"));
+import { useRepositoryCITrust } from "@/hooks/useRepositoryCITrust";
+import {
+  getCIRunTrustResolution,
+  summarizeCIRunTrust,
+} from "@/lib/ciTrustContext";
+import MarkdownContent from "@/components/DeferredMarkdownContent";
 import { CodeBlock } from "@/components/CodeBlock";
 import { langFromFilename } from "@/lib/highlighter";
 
@@ -102,33 +105,9 @@ export default function RepoCodePage() {
   const allUrlsIncompatible =
     cloneUrls.length > 0 && cloneUrls.every(isNonHttpUrl);
 
-  // "source" query param drives which server's data the explorer shows.
-  // No param = "default" (pool-decided). "nostr" or a clone URL are explicit.
-  const selectedSource = searchParams.get("source") ?? "default";
-
-  const handleSourceChange = useCallback(
-    (src: string) => {
-      setSearchParams(
-        (prev) => {
-          const next = new URLSearchParams(prev);
-          if (src === "default") {
-            next.delete("source");
-          } else {
-            next.set("source", src);
-          }
-          return next;
-        },
-        { replace: false },
-      );
-    },
-    [setSearchParams],
-  );
-
   // Single pool subscription — drives everything on this page.
   const { pool, poolState } = useGitPool(cloneUrls, {
-    knownHeadCommit: repoState?.headCommitId,
-    stateRefs: repoState?.refs,
-    stateCreatedAt: repoState ? repoState.event.created_at : undefined,
+    private: repo?.isPrivate,
   });
 
   // Combined "pulling" signal: true while either Nostr relay EOSE is pending
@@ -146,93 +125,68 @@ export default function RepoCodePage() {
   const stateBehindGit =
     !gitPulling && poolState.warning?.kind === "state-behind-git";
 
-  // Run the explorer first with the Nostr/default commit so we get refs and
-  // resolvedRef populated. We then derive the effective commit from the
-  // selected source using the resolved ref, and re-run if it differs.
-  //
-  // Bootstrap pass: use the standard Nostr/default logic.
-  // When the user explicitly chose "nostr" as source, honour the Nostr commit
-  // even when stateBehindGit is true — the user wants to see the signed state.
+  const sourceParam = searchParams.get("source");
+  const selectedSource =
+    sourceParam ??
+    (poolState.viewSource === "authoritative"
+      ? "default"
+      : poolState.viewSource);
   const userChoseNostr = selectedSource === "nostr";
-  const bootstrapHeadCommit = useMemo(() => {
-    if (stateBehindGit && !userChoseNostr) return undefined;
-    return repoState?.headCommitId;
-  }, [stateBehindGit, userChoseNostr, repoState?.headCommitId]);
+
+  useEffect(() => {
+    if (pool && sourceParam) pool.setViewSource(sourceParam);
+  }, [pool, sourceParam]);
+
+  const handleSourceChange = useCallback(
+    (src: string) => {
+      pool?.setViewSource(src);
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          if (src === "default") next.delete("source");
+          else next.set("source", src);
+          return next;
+        },
+        { replace: false },
+      );
+    },
+    [pool, setSearchParams],
+  );
 
   const explorer = useGitExplorer(pool, poolState, {
     refAndPath: treeRefAndPath,
-    knownHeadCommit: bootstrapHeadCommit,
     stateRefs: repoState?.refs,
   });
-
-  // Once the explorer has resolved the ref, derive the effective HEAD commit
-  // from the selected source. This is what actually drives the displayed tree.
-  const resolvedRef = explorer.resolvedRef;
-  const resolvedRefIsBranch =
-    explorer.refs.find((r) => r.name === resolvedRef)?.isBranch ?? true;
-
-  // Resolve "default" → "nostr" or a concrete git server URL so all downstream
-  // logic works with a real source value rather than re-deriving it everywhere.
-  const isNoState = repoRelayEose && repoState === null;
-  const aheadServerUrl =
-    poolState.warning?.kind === "state-behind-git"
-      ? poolState.warning.gitServerUrl
-      : null;
-  const effectiveSource = useMemo(
-    () =>
-      deriveEffectiveSource(
-        selectedSource,
-        stateBehindGit,
-        isNoState,
-        poolState.winnerUrl,
-        aheadServerUrl,
-      ),
-    [
-      selectedSource,
-      stateBehindGit,
-      isNoState,
-      poolState.winnerUrl,
-      aheadServerUrl,
-    ],
+  const activeExplorer = explorer;
+  const recoveryKey = useMemo(
+    () => ({ pool, treeRefAndPath, selectedSource }),
+    [pool, treeRefAndPath, selectedSource],
   );
-
-  const effectiveHeadCommit = useMemo(() => {
-    return deriveEffectiveHeadCommit(
-      effectiveSource,
-      poolState.urls,
-      repoState ?? null,
-      // When the user explicitly chose "nostr", treat stateBehindGit as false
-      // so the explorer uses the Nostr state commit rather than the git server's.
-      stateBehindGit && selectedSource !== "nostr",
-      resolvedRef,
-      resolvedRefIsBranch,
-    );
-  }, [
-    effectiveSource,
-    poolState.urls,
-    repoState,
-    stateBehindGit,
-    selectedSource,
-    resolvedRef,
-    resolvedRefIsBranch,
-  ]);
-
-  // Re-run the explorer with the effective commit when source changes.
-  // We use a second explorer instance keyed on effectiveHeadCommit so that
-  // the bootstrap explorer's cached state is not discarded on every render.
-  const explorerForSource = useGitExplorer(pool, poolState, {
-    refAndPath: treeRefAndPath,
-    knownHeadCommit: effectiveHeadCommit,
-    stateRefs: repoState?.refs,
+  const recovery = useErrorRetry({
+    resourceKey: recoveryKey,
+    failed: !!activeExplorer.error,
+    busy: activeExplorer.loading || poolState.loading || poolState.pulling,
+    onRetry: async (signal) => {
+      await pool?.retryReads();
+      if (!signal.aborted) await activeExplorer.reload();
+    },
+    policy:
+      pool &&
+      !pool.requiresSigningForReads &&
+      !allUrlsIncompatible &&
+      cloneUrls.length > 0 &&
+      activeExplorer.errorDetail
+        ? {
+            mode: "read",
+            requiresSigning: false,
+            context:
+              activeExplorer.errorDetail.kind === "fetch-failed" ||
+              activeExplorer.errorDetail.kind === "no-servers"
+                ? "connection"
+                : "availability",
+          }
+        : { mode: "manual" },
   });
-
-  // Use the source-aware explorer when the effective source is a git server
-  // and its commit differs from the bootstrap; otherwise use the bootstrap
-  // explorer (avoids a redundant fetch when source resolves to nostr).
-  const useSourceExplorer =
-    effectiveSource !== "nostr" && effectiveHeadCommit !== bootstrapHeadCommit;
-  const activeExplorer = useSourceExplorer ? explorerForSource : explorer;
-
   // Full file tree for go-to-file search. Uses the same commitHash the active
   // explorer is displaying so the search results stay consistent with the view.
   const fullFileTree = useFullFileTree(pool, activeExplorer.commitHash);
@@ -275,15 +229,14 @@ export default function RepoCodePage() {
   // switching branches doesn't silently revert to the default source.
   const handleRefChange = useCallback(
     (newRef: string) => {
-      const source = searchParams.get("source");
       const base = `${basePath}/tree/${newRef}`;
-      if (source) {
-        navigate(`${base}?source=${encodeURIComponent(source)}`);
+      if (selectedSource !== "default") {
+        navigate(`${base}?source=${encodeURIComponent(selectedSource)}`);
       } else {
         navigate(base);
       }
     },
-    [navigate, searchParams, basePath],
+    [navigate, selectedSource, basePath],
   );
 
   // Atomic handler: navigate to a new ref while simultaneously applying a
@@ -318,6 +271,15 @@ export default function RepoCodePage() {
       ? `refs/heads/${currentRef}`
       : `refs/tags/${currentRef}`
     : "";
+  const currentEffectiveRef = poolState.effectiveRefs[currentRefFull];
+  const effectiveSource =
+    poolState.viewSource === "nostr"
+      ? "nostr"
+      : poolState.viewSource !== "authoritative"
+        ? poolState.viewSource
+        : currentEffectiveRef?.source === "git"
+          ? (currentEffectiveRef.sourceUrl ?? poolState.winnerUrl ?? "nostr")
+          : "nostr";
 
   // The commit bar and warning banner must always show the same commit — the
   // one the explorer is actually displaying. Use the explorer's own commitHash
@@ -389,6 +351,8 @@ export default function RepoCodePage() {
             poolWarning={poolState.warning}
             pool={pool}
             winnerUrl={poolState.winnerUrl}
+            viewSource={poolState.viewSource}
+            effectiveRefs={poolState.effectiveRefs}
             fullFileTree={fullFileTree}
           />
 
@@ -415,7 +379,7 @@ export default function RepoCodePage() {
                 urls={poolState.urls}
                 cloneUrls={cloneUrls}
                 graspCloneUrls={repo?.graspCloneUrls ?? []}
-                onReload={activeExplorer.reload}
+                recovery={recovery}
               />
             ) : (
               <Card className="border-destructive/30">
@@ -423,6 +387,9 @@ export default function RepoCodePage() {
                   <div className="flex items-center gap-2 text-sm text-destructive">
                     <AlertCircle className="h-4 w-4 shrink-0" />
                     <span>{activeExplorer.error}</span>
+                  </div>
+                  <div className="mt-4">
+                    <ErrorRetryAction recovery={recovery} />
                   </div>
                 </CardContent>
               </Card>
@@ -461,6 +428,7 @@ export default function RepoCodePage() {
               currentPath={currentPath}
               currentRef={currentRef}
               treeUrl={treeUrl}
+              pool={pool}
             />
           )}
 
@@ -477,6 +445,7 @@ export default function RepoCodePage() {
                     currentRef={currentRef}
                     treeUrl={treeUrl}
                     activeFile={pathSegments[pathSegments.length - 1]}
+                    pool={pool}
                   />
                 )}
                 <FileContentViewer
@@ -963,12 +932,14 @@ function GoToFileSearch({
   currentRef,
   treeUrl,
   pulling,
+  pool,
   compact = false,
 }: {
   fullFileTree: FullFileTreeState & { triggerFetch: () => void };
   currentRef: string;
   treeUrl: (ref: string, path?: string) => string;
   pulling: boolean;
+  pool: GitGraspPool | null;
   compact?: boolean;
 }) {
   const isMobile = useIsMobile();
@@ -980,6 +951,7 @@ function GoToFileSearch({
   const inputRef = useRef<HTMLInputElement>(null);
   const triggerRef = useRef<HTMLDivElement>(null);
   const [activeIndex, setActiveIndex] = useState(0);
+  const [openingPath, setOpeningPath] = useState<string | null>(null);
 
   // Reset query and open state when the user switches branches/tags so the
   // input doesn't show a stale query string typed against a different ref.
@@ -1033,17 +1005,35 @@ function GoToFileSearch({
     }
     if (e.key === "Enter" && results[activeIndex]) {
       e.preventDefault();
-      navigateTo(results[activeIndex]);
+      void navigateTo(results[activeIndex]);
       return;
     }
   }
 
   const navigate = useNavigate();
 
-  function navigateTo(entry: FlatFileEntry) {
-    setOpen(false);
-    setQuery("");
-    navigate(treeUrl(currentRef, entry.path));
+  async function navigateTo(entry: FlatFileEntry) {
+    const url = treeUrl(currentRef, entry.path);
+    if (entry.type !== "file" || !entry.hash || !pool) {
+      setOpen(false);
+      setQuery("");
+      navigate(url);
+      return;
+    }
+
+    setOpeningPath(entry.path);
+    try {
+      if (await downloadIfBinary(pool, entry.name, entry.hash)) {
+        setOpen(false);
+        setQuery("");
+      } else {
+        navigate(url);
+      }
+    } catch {
+      navigate(url);
+    } finally {
+      setOpeningPath(null);
+    }
   }
 
   function handleFocus() {
@@ -1156,14 +1146,16 @@ function GoToFileSearch({
                   onMouseEnter={() => setActiveIndex(i)}
                   onMouseDown={(e) => {
                     e.preventDefault(); // prevent input blur before click
-                    navigateTo(entry);
+                    void navigateTo(entry);
                   }}
                   className={cn(
                     "flex items-start gap-2 px-3 py-2 cursor-pointer text-sm",
                     i === activeIndex ? "bg-accent" : "hover:bg-accent/50",
                   )}
                 >
-                  {entry.type === "directory" ? (
+                  {openingPath === entry.path ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground shrink-0 mt-0.5" />
+                  ) : entry.type === "directory" ? (
                     <Folder className="h-3.5 w-3.5 text-blue-500 shrink-0 mt-0.5" />
                   ) : (
                     <FileText className="h-3.5 w-3.5 text-muted-foreground shrink-0 mt-0.5" />
@@ -1237,6 +1229,8 @@ function CodeBar({
   poolWarning,
   pool,
   winnerUrl,
+  viewSource,
+  effectiveRefs,
   fullFileTree,
 }: {
   loading: boolean;
@@ -1267,16 +1261,17 @@ function CodeBar({
   poolWarning: PoolWarning | null;
   pool: import("@/lib/git-grasp-pool").GitGraspPool | null;
   winnerUrl: string | null;
+  viewSource: import("@/lib/git-grasp-pool").ViewSource;
+  effectiveRefs: import("@/lib/git-grasp-pool").ResolvedRefMap;
   fullFileTree: FullFileTreeState & { triggerFetch: () => void };
 }) {
   // Preserve the active `?source=` selection on cross-page nav links so the
   // commit history / branches / tags views stay on the same source the user
   // is browsing here.
-  const [searchParams] = useSearchParams();
-  const sourceParam = searchParams.get("source");
-  const sourceQs = sourceParam
-    ? `?source=${encodeURIComponent(sourceParam)}`
-    : "";
+  const sourceQs =
+    selectedSource !== "default"
+      ? `?source=${encodeURIComponent(selectedSource)}`
+      : "";
 
   // On mobile, the Commits / Branches / Tags trio collapses to icon-only so
   // the commit summary row can fit alongside the commit message + hash.
@@ -1288,6 +1283,20 @@ function CodeBar({
   const headCommitCI = useCIForCommit(
     commitHash ?? undefined,
     resolved?.repoRelayGroup,
+  );
+  const { coordinatorState, trust } = useRepositoryCITrust(
+    resolved?.repo,
+    headCommitCI?.runs,
+  );
+  const headCommitTrust = summarizeCIRunTrust(
+    (headCommitCI?.runs ?? []).map((run) =>
+      getCIRunTrustResolution(
+        trust,
+        run,
+        resolved?.repo.confirmedMaintainers ?? [],
+        coordinatorState?.serviceControls ?? [],
+      ),
+    ),
   );
 
   // Compute the full ref name for the pool's refStatus lookup
@@ -1344,6 +1353,8 @@ function CodeBar({
             stateBehindGit={stateBehindGit}
             poolWarning={poolWarning}
             winnerUrl={winnerUrl}
+            viewSource={viewSource}
+            effectiveRefs={effectiveRefs}
             stateCreatedAt={repoState?.event.created_at}
             urlStates={urlStates}
             cloneUrls={cloneUrls}
@@ -1375,6 +1386,7 @@ function CodeBar({
             currentRef={currentRef}
             treeUrl={treeUrl}
             pulling={pulling}
+            pool={pool}
             compact={compactSearch}
           />
         )}
@@ -1403,41 +1415,44 @@ function CodeBar({
       {/* Commit summary row */}
       {headCommit ? (
         <div className="flex items-center gap-3 px-3 py-2.5 bg-background border-t border-border/40">
-          <Link
-            to={`${basePath}/commit/${commitHash}`}
-            className="flex items-center gap-3 min-w-0 flex-1 hover:bg-muted/20 transition-colors rounded -mx-1 px-1 -my-0.5 py-0.5"
-          >
-            <div className="p-1.5 rounded-full bg-muted shrink-0">
-              <GitCommit className="h-3.5 w-3.5 text-muted-foreground" />
-            </div>
-            <div className="min-w-0 flex-1">
-              <p className="text-sm font-medium truncate leading-snug">
-                {headCommit.message.split("\n")[0]}
-              </p>
-              <p className="text-xs text-muted-foreground">
-                {headCommit.author.name} &middot;{" "}
-                {safeFormatDistanceToNow(
-                  headCommit.committer?.timestamp ??
-                    headCommit.author.timestamp,
-                  { addSuffix: true },
-                )}
-              </p>
-            </div>
+          <div className="flex min-w-0 flex-1 items-center gap-2 rounded -mx-1 px-1 -my-0.5 py-0.5">
+            <Link
+              to={`${basePath}/commit/${commitHash}`}
+              className="flex min-w-0 flex-1 items-center gap-3 rounded transition-colors hover:bg-muted/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <div className="p-1.5 rounded-full bg-muted shrink-0">
+                <GitCommit className="h-3.5 w-3.5 text-muted-foreground" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-medium truncate leading-snug">
+                  {headCommit.message.split("\n")[0]}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {headCommit.author.name} &middot;{" "}
+                  {safeFormatDistanceToNow(
+                    headCommit.committer?.timestamp ??
+                      headCommit.author.timestamp,
+                    { addSuffix: true },
+                  )}
+                </p>
+              </div>
+            </Link>
             {headCommitCI?.status && (
-              <span
-                className="shrink-0 flex items-center"
-                title={`CI: ${summarizeRuns(headCommitCI.runs)}`}
-              >
-                <CIStatusIcon
-                  status={headCommitCI.status}
-                  className="h-3.5 w-3.5"
-                />
-              </span>
+              <CIStatusTrustIcon
+                to={`${basePath}/commit/${commitHash}#checks`}
+                status={headCommitCI.status}
+                resolution={headCommitTrust}
+                statusSummary={summarizeRuns(headCommitCI.runs)}
+                className="h-3.5 w-3.5"
+              />
             )}
-            <code className="text-xs font-mono bg-muted px-1.5 py-0.5 rounded text-muted-foreground shrink-0">
+            <Link
+              to={`${basePath}/commit/${commitHash}`}
+              className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-xs text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
               {commitHash?.slice(0, 8)}
-            </code>
-          </Link>
+            </Link>
+          </div>
           <Link
             to={`${
               currentRef
@@ -1494,6 +1509,7 @@ function FileTreeTable({
   currentRef,
   treeUrl,
   activeFile,
+  pool,
 }: {
   loading: boolean;
   entries: FileEntry[] | null;
@@ -1501,6 +1517,7 @@ function FileTreeTable({
   currentRef: string;
   treeUrl: (ref: string, path?: string) => string;
   activeFile?: string;
+  pool: GitGraspPool | null;
 }) {
   const parentPath = currentPath
     ? currentPath.split("/").slice(0, -1).join("/")
@@ -1553,6 +1570,7 @@ function FileTreeTable({
               currentRef={currentRef}
               treeUrl={treeUrl}
               isActive={activeFile === entry.name && entry.type === "file"}
+              pool={pool}
             />
           ))}
         </div>
@@ -1566,24 +1584,63 @@ function FileTreeRow({
   currentRef,
   treeUrl,
   isActive,
+  pool,
 }: {
   entry: FileEntry;
   currentRef: string;
   treeUrl: (ref: string, path?: string) => string;
   isActive?: boolean;
+  pool: GitGraspPool | null;
 }) {
   const isDir = entry.type === "directory";
   const isReadme = entry.name.toLowerCase().startsWith("readme");
+  const navigate = useNavigate();
+  const [opening, setOpening] = useState(false);
+  const url = treeUrl(currentRef, entry.path);
+
+  const handleClick = useCallback(
+    async (event: React.MouseEvent<HTMLAnchorElement>) => {
+      if (
+        entry.type !== "file" ||
+        !pool ||
+        opening ||
+        event.button !== 0 ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.shiftKey ||
+        event.altKey
+      ) {
+        return;
+      }
+
+      event.preventDefault();
+      setOpening(true);
+      try {
+        if (!(await downloadIfBinary(pool, entry.name, entry.hash))) {
+          navigate(url);
+        }
+      } catch {
+        navigate(url);
+      } finally {
+        setOpening(false);
+      }
+    },
+    [entry, navigate, opening, pool, url],
+  );
 
   return (
     <Link
-      to={treeUrl(currentRef, entry.path)}
+      to={url}
+      onClick={handleClick}
+      aria-busy={opening}
       className={cn(
         "flex items-center gap-3 px-4 py-2.5 hover:bg-muted/30 transition-colors group",
         isActive && "bg-muted/50",
       )}
     >
-      {isDir ? (
+      {opening ? (
+        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground shrink-0" />
+      ) : isDir ? (
         <Folder className="h-4 w-4 text-blue-500 shrink-0" />
       ) : (
         <FileText
@@ -1620,7 +1677,85 @@ function FileTreeRow({
 
 import type { ResolvedRepo } from "@/lib/nip34";
 function RepoSidebar({ repo }: { repo: ResolvedRepo }) {
-  return <RepoAboutPanel repo={repo} variant="sidebar" />;
+  return (
+    <aside className="space-y-3 min-w-0">
+      <RepoAboutPanel repo={repo} variant="sidebar" />
+      <LatestReleaseSidebar />
+    </aside>
+  );
+}
+
+function LatestReleaseSidebar() {
+  const { basePath, releaseSummary } = useRepoContext();
+  const { latestRelease, latestApplication } = releaseSummary;
+  if (!latestRelease) return null;
+
+  const relativeDate = safeFormatDistanceToNow(latestRelease.event.created_at, {
+    addSuffix: true,
+  });
+  const date = new Date(latestRelease.event.created_at * 1000);
+  const machineDate = Number.isNaN(date.getTime())
+    ? undefined
+    : date.toISOString();
+  const version = /^v/i.test(latestRelease.version)
+    ? latestRelease.version
+    : `v${latestRelease.version}`;
+  const isPrerelease = latestRelease.channel !== "main";
+
+  return (
+    <div className="rounded-lg border border-border/60 overflow-hidden">
+      <Link
+        to={`${basePath}/releases`}
+        className="group/title flex w-full items-center gap-2 px-4 pt-3 pb-2 transition-colors hover:bg-accent/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+      >
+        <Package className="h-3.5 w-3.5 text-muted-foreground" />
+        <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide group-hover/title:text-primary group-hover/title:underline">
+          Releases
+        </span>
+      </Link>
+      <Link
+        to={`${basePath}/releases#release-${latestRelease.event.id}`}
+        className="group/release flex min-w-0 items-center gap-3 px-4 py-2.5 transition-colors hover:bg-accent/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+        aria-label={`View release ${version}`}
+      >
+        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
+          <Tag className="h-4 w-4" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="min-w-0 truncate font-mono text-sm font-semibold group-hover/release:text-primary group-hover/release:underline">
+              {version}
+            </span>
+            <Badge
+              variant={isPrerelease ? "outline" : "secondary"}
+              className="h-5 shrink-0 px-1.5 text-[10px]"
+            >
+              {isPrerelease ? latestRelease.channel : "Latest"}
+            </Badge>
+          </div>
+          <div className="mt-1 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+            {latestApplication && (
+              <span className="truncate">{latestApplication.name}</span>
+            )}
+            {latestApplication && relativeDate && machineDate && (
+              <span aria-hidden="true">·</span>
+            )}
+            {relativeDate && machineDate && (
+              <time dateTime={machineDate} className="shrink-0">
+                {relativeDate}
+              </time>
+            )}
+          </div>
+        </div>
+      </Link>
+      <Link
+        to={`${basePath}/releases`}
+        className="block px-4 pt-2 pb-3 text-xs text-muted-foreground transition-colors hover:bg-accent/30 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+      >
+        View all
+      </Link>
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -1628,6 +1763,41 @@ function RepoSidebar({ repo }: { repo: ResolvedRepo }) {
 // ---------------------------------------------------------------------------
 
 type ViewMode = "rendered" | "text";
+
+function downloadFile(
+  filename: string,
+  fileBytes: Uint8Array,
+  mediaType: ReturnType<typeof getFileMediaType>,
+) {
+  const mime =
+    mediaType && "mime" in mediaType
+      ? mediaType.mime
+      : mediaType?.kind === "svg"
+        ? "image/svg+xml"
+        : "application/octet-stream";
+  const blob = new Blob([fileBytes.slice().buffer], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
+async function downloadIfBinary(
+  pool: GitGraspPool,
+  filename: string,
+  hash: string,
+): Promise<boolean> {
+  const fileBytes = await pool.getBlob(hash, new AbortController().signal);
+  if (!fileBytes) return false;
+
+  const mediaType = getFileMediaType(filename, fileBytes);
+  if (mediaType?.kind !== "binary") return false;
+
+  downloadFile(filename, fileBytes, mediaType);
+  return true;
+}
 
 function FileContentViewer({
   filename,
@@ -1644,12 +1814,17 @@ function FileContentViewer({
   cloneUrls: string[];
   commitHash: string | null;
 }) {
-  const mediaType = getFileMediaType(filename);
+  const copyToClipboard = useCopyToClipboard();
+  const mediaType = useMemo(
+    () => getFileMediaType(filename, fileBytes ?? undefined),
+    [filename, fileBytes],
+  );
   const isBinaryMedia =
     mediaType?.kind === "image" ||
     mediaType?.kind === "video" ||
     mediaType?.kind === "audio" ||
-    mediaType?.kind === "svg";
+    mediaType?.kind === "svg" ||
+    mediaType?.kind === "binary";
 
   // Default view mode: rendered for markdown/svg/images, text for everything else
   const defaultMode: ViewMode =
@@ -1670,19 +1845,7 @@ function FileContentViewer({
 
   const handleDownload = useCallback(() => {
     if (!fileBytes) return;
-    const mime =
-      mediaType && "mime" in mediaType
-        ? mediaType.mime
-        : mediaType?.kind === "svg"
-          ? "image/svg+xml"
-          : "application/octet-stream";
-    const blob = new Blob([fileBytes.buffer as ArrayBuffer], { type: mime });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadFile(filename, fileBytes, mediaType);
   }, [fileBytes, filename, mediaType]);
 
   const [copiedText, setCopiedText] = useState(false);
@@ -1691,11 +1854,11 @@ function FileContentViewer({
   // Copy text content to clipboard (text/code/markdown/SVG source)
   const handleCopyText = useCallback(() => {
     if (!content) return;
-    navigator.clipboard.writeText(content).then(() => {
+    void copyToClipboard(content, () => {
       setCopiedText(true);
       setTimeout(() => setCopiedText(false), 2000);
     });
-  }, [content]);
+  }, [content, copyToClipboard]);
 
   // Copy image to clipboard as PNG via canvas (raster images and SVG)
   const handleCopyImage = useCallback(() => {
@@ -1704,32 +1867,41 @@ function FileContentViewer({
     const isSvg = mediaType?.kind === "svg";
     if (!isRaster && !isSvg) return;
     const mime = isRaster ? mediaType.mime : "image/svg+xml";
-    const blob = new Blob([fileBytes.buffer as ArrayBuffer], { type: mime });
-    const url = URL.createObjectURL(blob);
-    const img = new Image();
-    img.onload = () => {
-      const canvas = document.createElement("canvas");
-      canvas.width = img.naturalWidth;
-      canvas.height = img.naturalHeight;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return;
-      ctx.drawImage(img, 0, 0);
-      canvas.toBlob((pngBlob) => {
-        if (!pngBlob) return;
-        navigator.clipboard
-          .write([new ClipboardItem({ "image/png": pngBlob })])
-          .then(() => {
-            setCopiedImage(true);
-            setTimeout(() => setCopiedImage(false), 2000);
-          })
-          .catch(() => {
-            // Clipboard write failed (e.g. permissions denied) — silently ignore
+    void copyToClipboard(
+      async () => {
+        const blob = new Blob([fileBytes.buffer as ArrayBuffer], {
+          type: mime,
+        });
+        const url = URL.createObjectURL(blob);
+        try {
+          const img = new Image();
+          img.src = url;
+          await img.decode();
+          const canvas = document.createElement("canvas");
+          canvas.width = img.naturalWidth;
+          canvas.height = img.naturalHeight;
+          const ctx = canvas.getContext("2d");
+          if (!ctx) throw new Error("Could not prepare image for copying.");
+          ctx.drawImage(img, 0, 0);
+          const pngBlob = await new Promise<Blob>((resolve, reject) => {
+            canvas.toBlob((result) => {
+              if (result) resolve(result);
+              else reject(new Error("Could not convert image for copying."));
+            }, "image/png");
           });
-      }, "image/png");
-      URL.revokeObjectURL(url);
-    };
-    img.src = url;
-  }, [fileBytes, mediaType]);
+          await navigator.clipboard.write([
+            new ClipboardItem({ "image/png": pngBlob }),
+          ]);
+        } finally {
+          URL.revokeObjectURL(url);
+        }
+      },
+      () => {
+        setCopiedImage(true);
+        setTimeout(() => setCopiedImage(false), 2000);
+      },
+    );
+  }, [fileBytes, mediaType, copyToClipboard]);
 
   // Loading state
   if (!isBinaryMedia && content === null) {
@@ -1890,6 +2062,7 @@ function FileContentViewer({
           viewMode={viewMode}
           cloneUrls={cloneUrls}
           commitHash={commitHash}
+          onDownload={handleDownload}
         />
       </CardContent>
     </Card>
@@ -1905,6 +2078,7 @@ function FileContentBody({
   viewMode,
   cloneUrls,
   commitHash,
+  onDownload,
 }: {
   filename: string;
   filePath: string;
@@ -1914,6 +2088,7 @@ function FileContentBody({
   viewMode: ViewMode;
   cloneUrls: string[];
   commitHash: string | null;
+  onDownload: () => void;
 }) {
   // Image (raster)
   if (mediaType?.kind === "image" && fileBytes) {
@@ -1979,6 +2154,28 @@ function FileContentBody({
     );
   }
 
+  // A direct URL or modified click can still open a binary in the viewer.
+  // Keep the pane useful without decoding the bytes as source text.
+  if (mediaType?.kind === "binary" && fileBytes) {
+    return (
+      <div className="flex flex-col items-center gap-4 px-6 py-12 text-center">
+        <div className="rounded-full bg-muted p-3">
+          <Download className="h-6 w-6 text-muted-foreground" />
+        </div>
+        <div className="space-y-1">
+          <p className="font-medium">Binary file</p>
+          <p className="text-sm text-muted-foreground">
+            This file cannot be previewed in the browser.
+          </p>
+        </div>
+        <Button variant="outline" onClick={onDownload}>
+          <Download className="mr-2 h-4 w-4" />
+          Download {filename}
+        </Button>
+      </div>
+    );
+  }
+
   // Markdown — rendered or source
   if (mediaType?.kind === "markdown" && content !== null) {
     if (viewMode === "rendered") {
@@ -2037,7 +2234,28 @@ function ReadmeViewer({
   const [content, setContent] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
+  const [failed, setFailed] = useState(false);
+  const [retryVersion, setRetryVersion] = useState(0);
+  const recoveryKey = useMemo(
+    () => ({ pool, commitHash, readmePath }),
+    [pool, commitHash, readmePath],
+  );
+  const recovery = useErrorRetry({
+    resourceKey: recoveryKey,
+    failed,
+    busy: loading,
+    onRetry: async (signal) => {
+      await pool.retryReads({ refreshRefs: false });
+      if (!signal.aborted) setRetryVersion((version) => version + 1);
+    },
+    policy: pool.requiresSigningForReads
+      ? { mode: "manual" }
+      : { mode: "read", requiresSigning: false, context: "connection" },
+  });
+
   useEffect(() => {
+    setFailed(false);
+    setLoading(true);
     if (!commitHash) return;
 
     // Check text cache first (synchronous, no loading flash on remount).
@@ -2057,6 +2275,7 @@ function ReadmeViewer({
       .then(async (result) => {
         if (abort.signal.aborted) return;
         if (!result || result.isDir || !result.data) {
+          setFailed(true);
           setLoading(false);
           return;
         }
@@ -2068,11 +2287,14 @@ function ReadmeViewer({
         setLoading(false);
       })
       .catch(() => {
-        if (!abort.signal.aborted) setLoading(false);
+        if (!abort.signal.aborted) {
+          setLoading(false);
+          setFailed(true);
+        }
       });
 
     return () => abort.abort();
-  }, [pool, commitHash, readmePath, readmeName]);
+  }, [pool, commitHash, readmePath, readmeName, retryVersion]);
 
   if (loading) {
     return (
@@ -2092,7 +2314,16 @@ function ReadmeViewer({
     );
   }
 
-  if (!content) return null;
+  if (failed)
+    return (
+      <Card>
+        <CardContent className="p-4 space-y-3">
+          <p>Could not load {readmeName}.</p>
+          <ErrorRetryAction recovery={recovery} />
+        </CardContent>
+      </Card>
+    );
+  if (content === null) return null;
 
   const isMarkdown = isMarkdownFile(readmeName);
 

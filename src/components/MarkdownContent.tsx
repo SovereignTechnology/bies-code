@@ -1,15 +1,26 @@
+import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
+import { useErrorRetry } from "@/hooks/useErrorRetry";
+import { ErrorRetryAction } from "@/components/ErrorRetryAction";
 /**
- * MarkdownContent — lazy-loadable markdown renderer with GitHub-style
- * component overrides and syntax highlighting.
+ * MarkdownContent — markdown renderer with GitHub-style component overrides
+ * and syntax highlighting.
  *
- * This module is intentionally NOT re-exported from a barrel file so that
- * React.lazy() can split it (and react-markdown + highlight.js languages)
- * into a separate chunk that doesn't affect initial load.
+ * This module is intentionally NOT re-exported from a barrel file. The
+ * DeferredMarkdownContent boundary keeps it and the curated highlight.js
+ * languages in a dedicated chunk, while repository-route preloading ensures
+ * primary repository content has the chunk before the route is revealed.
  *
  * Usage:
- *   const MarkdownContent = lazy(() => import("@/components/MarkdownContent"));
+ *   import MarkdownContent from "@/components/DeferredMarkdownContent";
  */
-import React, { useState, useEffect, useCallback } from "react";
+import React, {
+  createContext,
+  useState,
+  useEffect,
+  useCallback,
+  useContext,
+  useMemo,
+} from "react";
 import { Link2, Check } from "lucide-react";
 import { cn, markdownUrlTransform } from "@/lib/utils";
 import { Link } from "react-router-dom";
@@ -26,6 +37,7 @@ import { remarkCommitLinks } from "@/lib/remarkCommitLinks";
 import { decodePointer } from "applesauce-core/helpers";
 import { CommitLink } from "@/components/CommitLink";
 import { getOrCreatePool } from "@/lib/git-grasp-pool";
+import { useGitCommitLinkContext } from "@/components/CommitLinkContext";
 import { WrappableCodeBlock } from "@/components/WrappableCodeBlock";
 import { getFileMediaType, toDataUri } from "@/lib/fileMediaType";
 import { useUserPath } from "@/hooks/useUserPath";
@@ -36,6 +48,11 @@ import {
   EmbeddedEventByAddressPreview,
 } from "@/components/EmbeddedEventPreview";
 import { BlossomImage, BlossomVideo } from "@/components/BlossomMedia";
+import {
+  ImageGallery,
+  type ImageGallerySlide,
+  type OpenImageGallery,
+} from "@/components/ImageGallery";
 
 // Note: getOrCreatePool is safe to call here because the pool is already
 // subscribed by useGitPool higher in the tree (RepoCodePage). We are just
@@ -124,6 +141,42 @@ const rehypePluginsWithHtml: any[] = [
 // Git-aware image component
 // ---------------------------------------------------------------------------
 
+const LinkedMarkdownImageContext = createContext(false);
+
+type ImageViewerAttributes = React.ImgHTMLAttributes<HTMLImageElement> & {
+  "data-image-viewer"?: string;
+};
+
+function imageViewerProps(
+  linked: boolean,
+  alt: string | undefined,
+): ImageViewerAttributes {
+  if (linked) return {};
+  return {
+    "data-image-viewer": "",
+    role: "button",
+    tabIndex: 0,
+    "aria-label": alt ? `View image: ${alt}` : "View image",
+  };
+}
+
+function MarkdownBlossomImage(
+  props: React.ComponentProps<typeof BlossomImage>,
+) {
+  const linked = useContext(LinkedMarkdownImageContext);
+  return (
+    <BlossomImage
+      {...props}
+      {...imageViewerProps(linked, props.alt)}
+      className={cn(
+        props.className,
+        !linked &&
+          "cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+      )}
+    />
+  );
+}
+
 /**
  * Resolve a relative image path against the markdown file's directory.
  * e.g. filePath="docs/guide.md", src="./images/foo.png" → "docs/images/foo.png"
@@ -170,8 +223,37 @@ function GitImage({
   commitHash,
   filePath,
 }: GitImageProps) {
+  const linked = useContext(LinkedMarkdownImageContext);
+  const gitContext = useGitCommitLinkContext();
   const [dataUri, setDataUri] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const cloneKey = cloneUrls.join(",");
+  const imagePool = useMemo(
+    () =>
+      gitContext?.pool ??
+      (gitContext?.privateRepository || !src || !isRelativeSrc(src)
+        ? undefined
+        : getOrCreatePool({ cloneUrls })),
+    // cloneKey represents the clone URL values.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [gitContext?.pool, gitContext?.privateRepository, cloneKey, src],
+  );
+  const [retryVersion, setRetryVersion] = useState(0);
+  const [loadingImage, setLoadingImage] = useState(false);
+  const recoveryKey = useMemo(
+    () => ({ imagePool, commitHash, filePath, src }),
+    [imagePool, commitHash, filePath, src],
+  );
+  const recovery = useErrorRetry({
+    resourceKey: recoveryKey,
+    failed: !!error,
+    busy: loadingImage,
+    onRetry: async (signal) => {
+      await imagePool?.retryReads({ refreshRefs: false });
+      if (!signal.aborted) setRetryVersion((version) => version + 1);
+    },
+  });
 
   useEffect(() => {
     if (!src || !isRelativeSrc(src)) {
@@ -180,6 +262,10 @@ function GitImage({
     }
 
     let cancelled = false;
+    const abort = new AbortController();
+    setLoadingImage(true);
+    setError(null);
+    setDataUri(null);
     const resolvedPath = resolveRelativePath(filePath, src);
     const mediaType = getFileMediaType(resolvedPath);
     const mime =
@@ -193,8 +279,9 @@ function GitImage({
       try {
         // Route through the pool — uses the winning URL with fallback, CORS
         // proxy, and the pool's cache. No filterFailedUrls needed.
-        const pool = getOrCreatePool({ cloneUrls });
-        const abort = new AbortController();
+        const pool = imagePool;
+        if (!pool) throw new Error("Private Git access is not ready");
+
         const result = await pool.getObjectByPath(
           commitHash,
           resolvedPath,
@@ -213,18 +300,29 @@ function GitImage({
       }
     }
 
-    load();
+    void load().finally(() => {
+      if (!cancelled) setLoadingImage(false);
+    });
     return () => {
       cancelled = true;
+      abort.abort();
     };
-  }, [src, cloneUrls.join(","), commitHash, filePath]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [
+    src,
+    imagePool,
+    commitHash,
+    filePath,
+    gitContext?.pool,
+    gitContext?.privateRepository,
+    retryVersion,
+  ]);
 
   if (!src) return null;
 
   // Absolute URL — render with Blossom fallback
   if (!isRelativeSrc(src)) {
     return (
-      <BlossomImage
+      <MarkdownBlossomImage
         src={src}
         alt={alt ?? ""}
         className="max-w-full rounded-md my-3"
@@ -240,6 +338,7 @@ function GitImage({
     return (
       <span className="inline-flex items-center px-2 py-0.5 rounded text-xs bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300 font-mono">
         {error}
+        <ErrorRetryAction recovery={recovery} />
       </span>
     );
   }
@@ -275,10 +374,15 @@ function GitImage({
     <img
       src={dataUri}
       alt={alt ?? ""}
-      className="max-w-full rounded-md my-3"
+      className={cn(
+        "max-w-full rounded-md my-3",
+        !linked &&
+          "cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+      )}
       loading="lazy"
       title={title}
       style={Object.keys(sizeStyle).length > 0 ? sizeStyle : undefined}
+      {...imageViewerProps(linked, alt)}
     />
   );
 }
@@ -349,6 +453,7 @@ function HeadingWithAnchor({
   className?: string;
   [key: string]: unknown;
 }) {
+  const copyToClipboard = useCopyToClipboard();
   const text = childrenToText(children);
   const slug = slugifyHeading(text);
   const [copied, setCopied] = useState(false);
@@ -357,12 +462,12 @@ function HeadingWithAnchor({
     (e: React.MouseEvent) => {
       e.preventDefault();
       const url = `${window.location.href.split("#")[0]}#${slug}`;
-      navigator.clipboard.writeText(url).then(() => {
+      void copyToClipboard(url, () => {
         setCopied(true);
         setTimeout(() => setCopied(false), 2000);
       });
     },
-    [slug],
+    [slug, copyToClipboard],
   );
 
   const Tag = `h${level}` as "h1" | "h2" | "h3" | "h4" | "h5" | "h6";
@@ -466,7 +571,9 @@ function buildComponents(
           )}
           {...props}
         >
-          {children}
+          <LinkedMarkdownImageContext.Provider value>
+            {children}
+          </LinkedMarkdownImageContext.Provider>
         </a>
       );
     },
@@ -496,7 +603,7 @@ function buildComponents(
       }
       if (!src) return null;
       return (
-        <BlossomImage
+        <MarkdownBlossomImage
           src={src}
           alt={alt ?? ""}
           className="max-w-full rounded-md my-3"
@@ -684,6 +791,8 @@ function buildComponents(
 // Public component
 // ---------------------------------------------------------------------------
 
+const EMPTY_CLONE_URLS: string[] = [];
+
 export interface MarkdownContentProps {
   content: string;
   className?: string;
@@ -714,12 +823,18 @@ export interface MarkdownContentProps {
 function MarkdownContent({
   content,
   className,
-  cloneUrls = [],
+  cloneUrls = EMPTY_CLONE_URLS,
   commitHash = null,
   filePath = "",
   allowHtml = false,
 }: MarkdownContentProps) {
-  const components = buildComponents(cloneUrls, commitHash, filePath);
+  // react-markdown treats renderer functions as component types. Rebuilding
+  // this map on every render remounts embedded previews, briefly resetting
+  // loaded avatars to their fallback while Radix reloads the image.
+  const components = useMemo(
+    () => buildComponents(cloneUrls, commitHash, filePath),
+    [cloneUrls, commitHash, filePath],
+  );
   const rehypePlugins = allowHtml ? rehypePluginsWithHtml : rehypePluginsBase;
 
   // After the markdown renders, scroll to the heading referenced by the URL
@@ -734,22 +849,61 @@ function MarkdownContent({
     return () => cancelAnimationFrame(raf);
   }, [content]);
 
+  const openRenderedImage = (
+    container: HTMLDivElement,
+    target: EventTarget | null,
+    openGallery: OpenImageGallery,
+  ) => {
+    if (!(target instanceof HTMLImageElement)) return false;
+    if (!target.hasAttribute("data-image-viewer")) return false;
+    const images = Array.from(
+      container.querySelectorAll<HTMLImageElement>("img[data-image-viewer]"),
+    );
+    const index = images.indexOf(target);
+    if (index < 0) return false;
+    const slides: ImageGallerySlide[] = images.map((image, imageIndex) => ({
+      src: image.currentSrc || image.src,
+      alt: image.alt || `Image ${imageIndex + 1}`,
+    }));
+    openGallery(slides, index);
+    return true;
+  };
+
   return (
-    <div
-      className={cn(
-        "min-w-0 w-full overflow-hidden",
-        className ?? "markdown-content",
+    <ImageGallery>
+      {(openGallery) => (
+        <div
+          className={cn(
+            "min-w-0 w-full overflow-hidden",
+            className ?? "markdown-content",
+          )}
+          onClick={(event) => {
+            if (
+              openRenderedImage(event.currentTarget, event.target, openGallery)
+            ) {
+              event.preventDefault();
+            }
+          }}
+          onKeyDown={(event) => {
+            if (event.key !== "Enter" && event.key !== " ") return;
+            if (
+              openRenderedImage(event.currentTarget, event.target, openGallery)
+            ) {
+              event.preventDefault();
+            }
+          }}
+        >
+          <ReactMarkdown
+            remarkPlugins={remarkPlugins}
+            rehypePlugins={rehypePlugins}
+            components={components}
+            urlTransform={markdownUrlTransform}
+          >
+            {content}
+          </ReactMarkdown>
+        </div>
       )}
-    >
-      <ReactMarkdown
-        remarkPlugins={remarkPlugins}
-        rehypePlugins={rehypePlugins}
-        components={components}
-        urlTransform={markdownUrlTransform}
-      >
-        {content}
-      </ReactMarkdown>
-    </div>
+    </ImageGallery>
   );
 }
 

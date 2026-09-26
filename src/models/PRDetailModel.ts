@@ -27,6 +27,10 @@ import {
   type ResolvedPR,
   type PRRevision,
   type PRItemType,
+  type RepositoryRoleHistory,
+  compareNip01Chronologically,
+  isItemEventMaintainerAuthorisedAt,
+  getPRTargetBranch,
 } from "@/lib/nip34";
 import { resolveAllChains } from "@/hooks/usePatchChain";
 import { Patch, isValidPatch } from "@/casts/Patch";
@@ -51,7 +55,9 @@ import { Patch, isValidPatch } from "@/casts/Patch";
  */
 export function PRDetailModel(
   rootId: string,
+  members: Set<string> | undefined,
   maintainers: Set<string> | undefined,
+  roleHistory?: RepositoryRoleHistory,
 ): Model<ResolvedPR | undefined> {
   return (store) => {
     // All essential kinds fetched per-item
@@ -168,6 +174,7 @@ export function PRDetailModel(
             rootEvent.kind === PATCH_KIND ? "patch" : "pr";
 
           // Effective maintainer set (use provided or empty while loading)
+          const effectiveMembers = members ?? new Set<string>();
           const effectiveMaintainers = maintainers ?? new Set<string>();
 
           // Split merged updates into PR Updates (kind:1619) and patches (kind:1617)
@@ -182,11 +189,11 @@ export function PRDetailModel(
             essentials,
             allComments,
             zaps,
-            effectiveMaintainers,
+            effectiveMembers,
             {
-              mergeStatusRequiresMaintainer: true,
               prUpdateEvents,
               essentialDeletionEvents: essentialDeletionEvents as NostrEvent[],
+              roleHistory,
             },
           );
 
@@ -267,16 +274,17 @@ export function PRDetailModel(
               .filter(([t]) => t === "clone")
               .flatMap(([, ...urls]) => urls.filter(Boolean));
 
-            // Sort updates by created_at ascending
+            // Sort chronologically; the NIP-01 winner is the latest revision.
             const sortedUpdates = [...prUpdateEvents]
               .filter((ev) =>
-                isPubkeyAuthorised(
-                  ev.pubkey,
+                isItemEventMaintainerAuthorisedAt(
+                  ev,
                   rootEvent.pubkey,
                   effectiveMaintainers,
+                  roleHistory,
                 ),
               )
-              .sort((a, b) => a.created_at - b.created_at);
+              .sort(compareNip01Chronologically);
 
             revisions = sortedUpdates.map((ev, idx) => ({
               type: "pr-update" as const,
@@ -352,6 +360,7 @@ export function PRDetailModel(
             rootEvent.pubkey,
             coverNotes,
             core.authorisedUsers,
+            roleHistory,
           );
           const coverNote = allCoverNotes[0];
 
@@ -369,7 +378,7 @@ export function PRDetailModel(
             comments: mergedComments,
             essentials,
             authorisedUsers: core.authorisedUsers,
-            maintainers: effectiveMaintainers,
+            roleHistory,
             deletedEssentialEventIds: core.deletedEssentialEventIds,
             revisions,
             revisionRootIds,
@@ -444,6 +453,7 @@ export function PRDetailModel(
             pubkey: core.pubkey,
             event: core.event,
             itemType,
+            targetBranch: getPRTargetBranch(rootEvent),
             originalSubject: core.originalSubject,
             currentSubject: core.currentSubject,
             content: core.content,
@@ -484,23 +494,6 @@ export function PRDetailModel(
       ),
     );
   };
-}
-
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
-
-/**
- * Returns true when a pubkey is authorised to write status, label, or
- * PR Update events for a given PR/patch.
- */
-function isPubkeyAuthorised(
-  pubkey: string,
-  itemPubkey: string,
-  maintainers: Set<string>,
-): boolean {
-  if (maintainers.size === 0) return true; // still loading
-  return pubkey === itemPubkey || maintainers.has(pubkey);
 }
 
 /** Extract clone URLs from a chain of patches. */

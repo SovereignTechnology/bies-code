@@ -2,21 +2,9 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
-    rust-overlay.url = "github:oxalica/rust-overlay";
-
-    # ngit-grasp provides the GRASP server binary used by the optional e2e
-    # test harness (`pnpm test:e2e`, see e2e/README.md). Pinned to a specific
-    # rev so the harness is reproducible — bump it intentionally. This matches
-    # the pin used by ngit's own Rust test harness.
-    ngit-grasp = {
-      url = "git+https://gitnostr.com/npub15qydau2hjma6ngxkl2cyar74wzyjshvl65za5k5rl69264ar2exs5cyejr/ngit-grasp.git";
-      inputs.nixpkgs.follows = "nixpkgs";
-      inputs.rust-overlay.follows = "rust-overlay";
-      inputs.flake-utils.follows = "flake-utils";
-    };
   };
 
-  outputs = { nixpkgs, flake-utils, ngit-grasp, ... }:
+  outputs = { nixpkgs, flake-utils, ... }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs {
@@ -24,14 +12,30 @@
           config.allowUnfree = true;
           config.android_sdk.accept_license = true;
         };
-        # ngit-grasp's upstream derivation runs `cargo test` during the nix
-        # build; several of those tests need ambient state (git in PATH, etc.)
-        # and fail inside the build sandbox. We only want the binary for the
-        # e2e harness, so disable the test phase.
-        ngit-grasp-pkg =
-          ngit-grasp.packages.${system}.default.overrideAttrs (_: {
-            doCheck = false;
-          });
+        # The e2e harness needs a reproducible ngit-grasp binary. Build the
+        # published crate directly and leave its live-relay tests to the
+        # application's e2e suite.
+        ngit-grasp-pkg = pkgs.rustPlatform.buildRustPackage rec {
+          pname = "ngit-grasp";
+          version = "3.0.0";
+          src = pkgs.fetchCrate {
+            inherit pname version;
+            hash = "sha256-t14USfeuoXGKws1ueVXqQk+hjE2mGf1zjXMzHrTax58=";
+          };
+          NGIT_BUILD_REVISION = "bce30ef039ecbc8c2371008e1bd00eedd79bbccf";
+          cargoHash = "sha256-MACPKCWuUuMe37dE84AoWeWH2S4EIp/LFqihvwBzSiY=";
+          nativeBuildInputs = [ pkgs.pkg-config ];
+          buildInputs = [ pkgs.openssl ];
+          doCheck = false;
+        };
+        # Headless Chromium for browser automation (benchmarks/). The npm
+        # playwright-core devDependency in package.json must be pinned to the
+        # exact version of pkgs.playwright-driver so the browser revisions in
+        # this bundle match what the library looks for.
+        playwright-browsers = pkgs.playwright-driver.browsers.override {
+          withFirefox = false;
+          withWebkit = false;
+        };
         android-sdk = pkgs.androidenv.composeAndroidPackages {
           platformVersions = [ "36" ];
           # Android Gradle Plugin 8.13 defaults to Build Tools 35.0.0. Include
@@ -39,7 +43,7 @@
           # cannot install its default version at build time.
           buildToolsVersions = [ "35.0.0" "36.0.0" ];
         };
-      in {
+      in rec {
         devShell = pkgs.mkShell {
           buildInputs = [
             pkgs.nodejs
@@ -139,6 +143,24 @@ EOF
               fi
             fi
           '';
+        };
+
+        devShells = {
+          default = devShell;
+          # Browser-benchmark shell (`nix develop .#bench`). Kept separate so
+          # ordinary `nix develop` entries don't realise the ~1 GB Chromium
+          # bundle that only `pnpm bench` needs.
+          bench = pkgs.mkShell {
+            buildInputs = [
+              pkgs.nodejs
+              pkgs.pnpm
+            ];
+            # playwright-core downloads no browsers at install time; point it
+            # at the Nix-provided bundle. Host-requirement validation checks
+            # FHS paths that don't exist on NixOS, so skip it.
+            PLAYWRIGHT_BROWSERS_PATH = playwright-browsers;
+            PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS = "true";
+          };
         };
       });
 }

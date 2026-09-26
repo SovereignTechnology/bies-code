@@ -1,0 +1,15 @@
+{
+  "$schema": "https://nsyte.run/schemas/config.schema.json",
+  "relays": [
+    "wss://relay.nsite.lol",
+    "wss://nos.lol",
+    "wss://relay.primal.net",
+    "wss://nsite.run"
+  ],
+  "servers": ["https://blossom.primal.net", "https://blossom.ditto.pub"],
+  "id": "gitworkshop",
+  "title": "GitWorkshop",
+  "description": "Nostr-native Git collaboration for issues, pull requests, code review, and decentralized repository browsing.",
+  "source": "https://gitnostr.com/npub15qydau2hjma6ngxkl2cyar74wzyjshvl65za5k5rl69264ar2exs5cyejr/gitworkshop.git",
+  "fallback": "/index.html"
+}

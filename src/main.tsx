@@ -1,6 +1,7 @@
 import { createRoot } from "react-dom/client";
 import { Capacitor } from "@capacitor/core";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { deletionCacheReady } from "@/services/nostr";
 import App from "./App.tsx";
 import "./index.css";
 import "@fontsource-variable/inter";
@@ -15,8 +16,16 @@ if (!Capacitor.isNativePlatform() && "serviceWorker" in navigator) {
   });
 }
 
-createRoot(document.getElementById("root")!).render(
-  <ErrorBoundary>
-    <App />
-  </ErrorBoundary>,
-);
+async function bootstrap(): Promise<void> {
+  // Restore durable kind-5 state before any component can load stale cached
+  // originals into the EventStore.
+  await deletionCacheReady;
+
+  createRoot(document.getElementById("root")!).render(
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>,
+  );
+}
+
+void bootstrap();

@@ -10,7 +10,6 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { BehaviorSubject } from "rxjs";
 import {
   GraspServer,
   RelayClient,
@@ -19,11 +18,7 @@ import {
   seedRepo,
   type SeededRepo,
 } from "./harness";
-import {
-  GitGraspPool,
-  type PoolState,
-  type StateEventInput,
-} from "@/lib/git-grasp-pool";
+import { GitGraspPool, type PoolState } from "@/lib/git-grasp-pool";
 
 const describeIfGrasp = graspBinaryAvailable() ? describe : describe.skip;
 
@@ -32,17 +27,14 @@ describeIfGrasp("e2e — invitation GRASP provisioning", () => {
   let relay: RelayClient;
   let signer: TestSigner;
   let pool: GitGraspPool;
-  let stateEvent$: BehaviorSubject<StateEventInput>;
   let unsubscribe: (() => void) | undefined;
 
   beforeAll(async () => {
     server = await GraspServer.start({ role: "invitation-provisioning" });
     relay = await RelayClient.connect(server.relayUrl);
     signer = new TestSigner();
-    stateEvent$ = new BehaviorSubject<StateEventInput>(undefined);
     pool = new GitGraspPool({
       cloneUrls: [server.cloneUrl(signer.npub, "invitation-provisioning-repo")],
-      stateEvent$: stateEvent$.asObservable(),
       corsProxyBase: null,
       expectRepositoryProvisioning: true,
     });
@@ -51,7 +43,6 @@ describeIfGrasp("e2e — invitation GRASP provisioning", () => {
   afterAll(async () => {
     unsubscribe?.();
     pool?.dispose();
-    stateEvent$?.complete();
     relay?.close();
     await server?.stop();
   });
@@ -76,7 +67,7 @@ describeIfGrasp("e2e — invitation GRASP provisioning", () => {
       identifier: "invitation-provisioning-repo",
       name: "Invitation provisioning repo",
     });
-    stateEvent$.next({
+    pool.seedStateEvent({
       headCommitId: repo.headCommit,
       refs: [
         {

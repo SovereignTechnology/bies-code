@@ -30,7 +30,7 @@ import {
 } from "./useNip34Loaders";
 import type { EventSearchState, RelayGroupSpec } from "./useEventSearch";
 import { PRDetailModel } from "@/models/PRDetailModel";
-import { type ResolvedPR } from "@/lib/nip34";
+import { type RepositoryRoleHistory, type ResolvedPR } from "@/lib/nip34";
 import { relayCurationMode } from "@/services/settings";
 import type { RelayGroup } from "applesauce-relay";
 import { type Observable } from "rxjs";
@@ -38,6 +38,9 @@ import { type Observable } from "rxjs";
 export interface UseResolvedPROptions {
   /** Extra clone URLs for fallback relay queries (from the repo). */
   fallbackCloneUrls?: string[];
+  extraSearchGroups?: RelayGroupSpec[];
+  retryKey?: number;
+  privateRepository?: boolean;
 }
 
 export interface ResolvedPRResult {
@@ -52,31 +55,32 @@ export interface ResolvedPRResult {
  * @param prId            - The event ID of the root PR or patch
  * @param repoRelayGroup  - Base relay group from useResolvedRepository
  * @param extraRelaysForMaintainerMailboxCoverage - Delta relay group for outbox mode
- * @param maintainers     - Effective maintainer set from repo resolution
+ * @param members         - Confirmed member set from repo resolution
+ * @param maintainers     - Confirmed maintainer-only authority set
  * @param options         - Additional options
- * @param extraSearchGroups - Additional relay groups for user-triggered expansion
- * @param retryKey        - Increment to force a fresh search across all relays
  */
 export function useResolvedPR(
   prId: string | undefined,
   repoRelayGroup: RelayGroup | undefined,
   extraRelaysForMaintainerMailboxCoverage: RelayGroup | undefined,
+  members: Set<string> | undefined,
   maintainers: Set<string> | undefined,
-  _options?: UseResolvedPROptions,
-  extraSearchGroups?: RelayGroupSpec[],
-  retryKey?: number,
+  roleHistory?: RepositoryRoleHistory,
+  options: UseResolvedPROptions = {},
 ): ResolvedPRResult {
   const store = useEventStore();
   const curationMode = use$(relayCurationMode);
+  const { extraSearchGroups, retryKey, privateRepository = false } = options;
 
   // ── 1. Fetch root event + tiered loading (shared with useResolvedIssue) ──
   const { maintainerKey, search } = useNip34ItemDetailLoader(
     prId,
     repoRelayGroup,
     extraRelaysForMaintainerMailboxCoverage,
-    maintainers,
+    members,
     extraSearchGroups,
     retryKey,
+    privateRepository,
   );
 
   // ── 2. Subscribe to PRDetailModel ───────────────────────────────────────
@@ -85,9 +89,11 @@ export function useResolvedPR(
     return store.model(
       PRDetailModel,
       prId,
+      members,
       maintainers,
+      roleHistory,
     ) as unknown as Observable<ResolvedPR | undefined>;
-  }, [prId, maintainerKey, store]);
+  }, [prId, maintainerKey, maintainers, roleHistory, store]);
 
   // ── 3. For patch revisions: batch-load revision root comments ───────────
   // Once the model resolves, we know which revision root IDs exist.
@@ -106,7 +112,14 @@ export function useResolvedPR(
 
   useNip34ItemLoaderBatch(revisionRootIds, repoRelayGroup, {
     includeThread: true,
-    includeAuthorNip65: curationMode === "outbox",
+    includeAuthorNip65: !privateRepository && curationMode === "outbox",
+    supplementalRelayGroup:
+      !privateRepository && curationMode === "outbox"
+        ? extraRelaysForMaintainerMailboxCoverage
+        : undefined,
+    additionalThreadRelayGroups: privateRepository
+      ? undefined
+      : extraSearchGroups,
   });
 
   return { pr: resolved, search };

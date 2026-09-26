@@ -11,7 +11,7 @@
  *     route through the pool's winning URL with fallback and cache.
  */
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import type {
   Commit,
   Tree,
@@ -19,6 +19,7 @@ import type {
 } from "@/lib/vendored/git-natural-api";
 import type { GitGraspPool, PoolState } from "@/lib/git-grasp-pool";
 import { FULL_NEST_LIMIT } from "@/lib/git-grasp-pool/cache";
+import { useErrorRetry, type ErrorRetryState } from "@/hooks/useErrorRetry";
 import type { RepoStateRef } from "@/lib/nip34";
 
 // ---------------------------------------------------------------------------
@@ -40,11 +41,18 @@ export interface GitRef {
   rawTagOid?: string;
 }
 
-export interface FileEntry {
-  name: string;
-  path: string; // full path from repo root
-  type: "file" | "directory";
-}
+export type FileEntry =
+  | {
+      name: string;
+      path: string; // full path from repo root
+      type: "file";
+      hash: string;
+    }
+  | {
+      name: string;
+      path: string; // full path from repo root
+      type: "directory";
+    };
 
 /**
  * Structured reason for why the file tree couldn't be loaded, used by the UI
@@ -55,10 +63,9 @@ export interface FileEntry {
  *   - "no-branches"    : servers are reachable but advertise no branches.
  *   - "commit-missing" : branches exist, but the requested commit's objects
  *                        aren't served by any reachable server.
- *   - "fetch-failed"   : branches exist and at least one server should have the
- *                        commit, but every attempt to fetch the objects failed
- *                        at the transport/parse level (e.g. git-upload-pack
- *                        errored). NOT confirmed-missing objects.
+ *   - "fetch-failed"   : code could not be loaded, but the available evidence
+ *                        does not establish that every server rejected it.
+ *                        Includes mixed failures and unattempted fetches.
  */
 export type GitExplorerErrorKind =
   | "no-servers"
@@ -123,7 +130,12 @@ function treeToEntries(tree: Tree, dirPath: string): FileEntry[] {
   }
   for (const file of tree.files) {
     const fullPath = dirPath ? `${dirPath}/${file.name}` : file.name;
-    entries.push({ name: file.name, path: fullPath, type: "file" });
+    entries.push({
+      name: file.name,
+      path: fullPath,
+      type: "file",
+      hash: file.hash,
+    });
   }
 
   // Directories first, then files, both alphabetical
@@ -333,7 +345,7 @@ function getInfoRefsFromState(
 ): InfoRefsUploadPackResponse | null {
   // Use the merged view once the winner is known — this unions refs from all
   // servers so GitHub-only refs appear alongside grasp-server refs.
-  const merged = pool.getMergedInfoRefs();
+  const merged = pool.getEffectiveInfoRefs();
   if (merged) return merged;
 
   // Fall back to any URL that has infoRefs — fires as soon as the first
@@ -384,33 +396,26 @@ function describeMissingCode(
     };
   }
 
-  // Branches exist, but the objects for the requested commit aren't available
-  // on any reachable server. Distinguish two causes using the per-server
-  // object-fetch outcomes the pool recorded:
-  //   - At least one reachable server returned a valid response lacking the
-  //     commit's objects → genuinely missing objects ("commit-missing").
-  //   - No server confirmed the objects missing, but at least one attempt
-  //     failed at the transport/parse level (git-upload-pack errored, packfile
-  //     couldn't be read) → a fetch failure, not missing objects.
-  const objectFetches = reachable
-    .map((u) => u.lastObjectFetch)
-    .filter((o): o is NonNullable<typeof o> => o !== null)
-    .filter(
-      (o) =>
-        !opts.commitHash ||
-        o.commitHash.startsWith(opts.commitHash) ||
-        opts.commitHash.startsWith(o.commitHash),
-    );
-  const anyConfirmedMissing = objectFetches.some(
-    (o) => o.result === "object-missing",
-  );
-  const anyFetchError = objectFetches.some((o) => o.result === "fetch-error");
+  // A global unavailable diagnosis requires a matching rejection from every
+  // configured server. A failed connection, incomplete response, or absent
+  // outcome leaves availability unknown, even if another mirror rejected it.
+  const servers = Object.values(state.urls);
+  const allConfirmedMissing =
+    servers.length > 0 &&
+    servers.every((server) => {
+      const outcome = server.lastObjectFetch;
+      return (
+        server.status === "ok" &&
+        outcome?.result === "object-missing" &&
+        (!opts.commitHash || outcome.commitHash === opts.commitHash)
+      );
+    });
 
-  if (!anyConfirmedMissing && anyFetchError) {
+  if (!allConfirmedMissing) {
     return {
       message: opts.commitHash
-        ? `Couldn't fetch the code for commit ${opts.commitHash.slice(0, 8)} — the git server(s) responded but the object fetch failed.`
-        : "Couldn't fetch the code from the connected git server(s) — the object fetch failed.",
+        ? `Couldn't fetch the code for commit ${opts.commitHash.slice(0, 8)} — availability could not be confirmed.`
+        : "Couldn't fetch the code from the git server(s). Retry to check availability.",
       detail: {
         kind: "fetch-failed",
         requestedRef: opts.resolvedRef,
@@ -421,8 +426,8 @@ function describeMissingCode(
 
   return {
     message: opts.commitHash
-      ? `The connected git server(s) don't have the code for commit ${opts.commitHash.slice(0, 8)} yet.`
-      : "The connected git server(s) don't have the code for this commit yet.",
+      ? `The git server(s) rejected the request for commit ${opts.commitHash.slice(0, 8)}.`
+      : "The git server(s) rejected the request for this commit.",
     detail: {
       kind: "commit-missing",
       requestedRef: opts.resolvedRef,
@@ -468,8 +473,30 @@ export function useGitExplorer(
   pool: GitGraspPool | null,
   poolState: PoolState,
   options: UseGitExplorerOptions = {},
-): GitExplorerState & { reload: () => void } {
+): GitExplorerState & { reload: () => Promise<void> } {
   const { refAndPath, knownHeadCommit, stateRefs } = options;
+
+  // RepositoryState.refs and PoolState.effectiveRefs are derived values whose
+  // containers may be recreated on otherwise unrelated renders. Depending on
+  // their identities makes run() reset explorer state, which creates a render
+  // loop on failure pages and makes the error alternate with its skeleton.
+  // Track only the protocol values that can change what the explorer loads.
+  const stateRefsKey = (stateRefs ?? [])
+    .map((ref) => `${ref.name}:${ref.commitId}`)
+    .sort()
+    .join(",");
+  const stableStateRefsRef = useRef({ key: stateRefsKey, value: stateRefs });
+  if (stableStateRefsRef.current.key !== stateRefsKey) {
+    stableStateRefsRef.current = { key: stateRefsKey, value: stateRefs };
+  }
+  const stableStateRefs = stableStateRefsRef.current.value;
+  const effectiveRefsKey = Object.entries(poolState.effectiveRefs)
+    .map(
+      ([name, ref]) =>
+        `${name}:${ref.commitId}:${ref.source}:${ref.sourceUrl ?? ""}`,
+    )
+    .sort()
+    .join(",");
 
   const [state, setState] = useState<GitExplorerState>({
     loading: false,
@@ -497,6 +524,9 @@ export function useGitExplorer(
   // We use the pool reference itself as the key; if the pool changes, re-run.
   const poolRef = useRef<GitGraspPool | null>(null);
 
+  // effectiveRefsKey is an intentional semantic trigger: the callback reads
+  // the effective refs imperatively from the pool when it runs.
+  /* eslint-disable react-hooks/exhaustive-deps */
   const run = useCallback(async () => {
     if (!pool) return;
 
@@ -509,14 +539,13 @@ export function useGitExplorer(
     // Fast path: if infoRefs + tree are already in the L1 memory cache we can
     // render immediately without a loading flash. Common case on remount.
     //
-    // Use getMergedInfoRefs() so that refs from all servers (e.g. GitHub-only
-    // branches not mirrored to the grasp server) are included in the ref list,
-    // consistent with the slow path which also uses the merged view.
+    // Use the pool's effective per-ref view so every explorer consumer shares
+    // the same authoritative/nostr/server selection.
     // -----------------------------------------------------------------------
-    const fastInfo = pool.getMergedInfoRefs();
+    const fastInfo = pool.getEffectiveInfoRefs();
 
     if (fastInfo) {
-      const fastInfoWithState = includeStateRefs(fastInfo, stateRefs);
+      const fastInfoWithState = includeStateRefs(fastInfo, stableStateRefs);
       const fastParsedRefs = parseRefs(fastInfoWithState);
       let fastCommitHash: string | undefined;
       let fastResolvedRef: string | undefined;
@@ -525,6 +554,7 @@ export function useGitExplorer(
       if (refAndPath) {
         const resolved = resolveRefAndPath(refAndPath, fastInfoWithState);
         if (resolved) {
+          void pool.resolveRef(resolved.refPath);
           fastCommitHash = resolved.hash;
           fastResolvedRef = shortRefName(resolved.refPath);
           fastResolvedPath = resolved.path;
@@ -716,7 +746,7 @@ export function useGitExplorer(
     let info: InfoRefsUploadPackResponse | null = null;
 
     // Check if infoRefs are already available synchronously.
-    info = getInfoRefsFromState(pool, poolState);
+    info = getInfoRefsFromState(pool, pool.getState());
 
     if (!info) {
       // Wait for the pool's observable to emit infoRefs.
@@ -748,7 +778,10 @@ export function useGitExplorer(
           }
 
           // All URLs settled with no infoRefs — give up.
-          if (!state.loading && state.health === "all-failed") {
+          if (
+            !state.loading &&
+            (state.health === "all-failed" || state.error !== null)
+          ) {
             resolved = true;
             resolve(null);
           }
@@ -784,7 +817,7 @@ export function useGitExplorer(
 
     if (signal.aborted) return;
 
-    const infoWithState = includeStateRefs(info, stateRefs);
+    const infoWithState = includeStateRefs(info, stableStateRefs);
     const parsedRefs = parseRefs(infoWithState);
     setState((prev) => ({ ...prev, refs: parsedRefs }));
 
@@ -802,7 +835,17 @@ export function useGitExplorer(
     let fallbackCommitHash: string | undefined;
 
     if (refAndPath) {
-      const resolved = resolveRefAndPath(refAndPath, infoWithState);
+      const initialResolved = resolveRefAndPath(refAndPath, infoWithState);
+      if (initialResolved) {
+        await pool.resolveRef(initialResolved.refPath);
+      }
+      const refreshedInfo = pool.getEffectiveInfoRefs();
+      const resolved = resolveRefAndPath(
+        refAndPath,
+        refreshedInfo
+          ? includeStateRefs(refreshedInfo, stableStateRefs)
+          : infoWithState,
+      );
       if (!resolved) {
         if (signal.aborted) return;
         setState((prev) => ({
@@ -1025,7 +1068,8 @@ export function useGitExplorer(
       loading: false,
       pathExists: false,
     }));
-  }, [pool, refAndPath, knownHeadCommit, stateRefs]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [pool, refAndPath, knownHeadCommit, stableStateRefs, effectiveRefsKey]);
+  /* eslint-enable react-hooks/exhaustive-deps */
 
   // Re-run when the pool changes or when the pool emits infoRefs for the
   // first time (poolState.health transitions away from "idle"/"connecting").
@@ -1063,7 +1107,7 @@ export function useGitExplorer(
 
   const reload = useCallback(() => {
     reloadCounterRef.current += 1;
-    run();
+    return run();
   }, [run]);
 
   return { ...state, reload };
@@ -1121,11 +1165,11 @@ export function useCommitHistory(
   maxCommits: number = 50,
   fallbackUrls?: string[],
   untilHash?: string,
-): CommitHistoryState {
+): CommitHistoryState & { recovery: ErrorRetryState } {
   const [state, setState] = useState<CommitHistoryState>(() => {
     // Fast path: check L1 cache synchronously on first render.
     if (ref && pool) {
-      const fastInfo = pool.getInfoRefs();
+      const fastInfo = pool.getEffectiveInfoRefs();
       if (fastInfo) {
         const rawHash = ref.startsWith("refs/")
           ? fastInfo.refs[ref]
@@ -1150,10 +1194,35 @@ export function useCommitHistory(
     return { loading: false, error: null, commits: [] };
   });
 
-  const hasInfoRefs = pool ? !!pool.getInfoRefs() : false;
+  const [retryVersion, setRetryVersion] = useState(0);
+  const fallbackKey = fallbackUrls?.join(",");
+  const resourceKey = useMemo(
+    () => ({ pool, ref, maxCommits, fallbackKey, untilHash }),
+    [pool, ref, maxCommits, fallbackKey, untilHash],
+  );
+  const recovery = useErrorRetry({
+    resourceKey,
+    failed: !!state.error,
+    busy: state.loading || poolState.loading || poolState.pulling,
+    onRetry: async (signal) => {
+      await pool?.retryReads({
+        refreshRefs: !/^[0-9a-f]{40}$/i.test(ref ?? ""),
+      });
+      if (!signal.aborted) setRetryVersion((version) => version + 1);
+    },
+    policy:
+      pool && !pool.requiresSigningForReads
+        ? { mode: "read", requiresSigning: false, context: "availability" }
+        : { mode: "manual" },
+  });
+
+  const hasInfoRefs = pool ? !!pool.getEffectiveInfoRefs() : false;
 
   useEffect(() => {
-    if (!pool || !ref) return;
+    if (!pool || !ref) {
+      setState({ loading: false, error: null, commits: [] });
+      return;
+    }
 
     const abort = new AbortController();
     const signal = abort.signal;
@@ -1161,8 +1230,10 @@ export function useCommitHistory(
     async function run() {
       if (!pool || !ref) return;
 
+      setState({ loading: true, error: null, commits: [] });
+
       // Wait for infoRefs if not yet available.
-      let info = pool.getInfoRefs();
+      let info = pool.getEffectiveInfoRefs();
       if (!info) {
         info = await new Promise<InfoRefsUploadPackResponse | null>(
           (resolve) => {
@@ -1170,24 +1241,31 @@ export function useCommitHistory(
               resolve(null);
               return;
             }
+            let settled = false;
+            const finish = (value: InfoRefsUploadPackResponse | null) => {
+              if (settled) return;
+              settled = true;
+              resolve(value);
+              queueMicrotask(() => sub.unsubscribe());
+            };
             const sub = pool!.observable.subscribe((s) => {
               if (signal.aborted) {
-                sub.unsubscribe();
-                resolve(null);
+                finish(null);
                 return;
               }
               const available =
-                pool!.getInfoRefs() ??
+                pool!.getEffectiveInfoRefs() ??
                 Object.values(s.urls).find((u) => u.infoRefs)?.infoRefs ??
                 null;
               if (available) {
-                sub.unsubscribe();
-                resolve(available);
+                finish(available);
                 return;
               }
-              if (!s.loading && s.health === "all-failed") {
-                sub.unsubscribe();
-                resolve(null);
+              if (
+                !s.loading &&
+                (s.health === "all-failed" || s.error !== null)
+              ) {
+                finish(null);
               }
             });
             signal.addEventListener("abort", () => {
@@ -1239,6 +1317,7 @@ export function useCommitHistory(
         commitHash,
         maxCommits,
       );
+      if (signal.aborted) return;
       if (cachedHistory) {
         setState({ loading: false, error: null, commits: cachedHistory });
         return;
@@ -1256,19 +1335,42 @@ export function useCommitHistory(
       if (signal.aborted) return;
 
       if (!commits || commits.length === 0) {
-        setState({ loading: false, error: "No commits found", commits: [] });
+        setState({
+          loading: false,
+          error:
+            "Could not fetch the commit history. Try again when the Git servers are reachable.",
+          commits: [],
+        });
         return;
       }
 
       setState({ loading: false, error: null, commits });
     }
 
-    void run();
+    void run().catch((error: unknown) => {
+      if (!signal.aborted)
+        setState({
+          loading: false,
+          error:
+            error instanceof Error
+              ? error.message
+              : "Could not fetch commit history",
+          commits: [],
+        });
+    });
     return () => abort.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pool, ref, maxCommits, hasInfoRefs, fallbackUrls?.join(","), untilHash]);
+  }, [
+    pool,
+    ref,
+    maxCommits,
+    hasInfoRefs,
+    fallbackKey,
+    untilHash,
+    retryVersion,
+  ]);
 
-  return state;
+  return { ...state, recovery };
 }
 
 // ---------------------------------------------------------------------------
@@ -1284,6 +1386,7 @@ export interface InfiniteCommitHistoryState {
   hasMore: boolean;
   /** Call to fetch the next batch. No-op while already loading. */
   loadMore: () => void;
+  reload: () => void;
 }
 
 const INFINITE_BATCH_SIZE = 50;
@@ -1307,6 +1410,7 @@ export function useInfiniteCommitHistory(
   batchSize: number = INFINITE_BATCH_SIZE,
   fallbackUrls?: string[],
 ): InfiniteCommitHistoryState {
+  const [retryVersion, setRetryVersion] = useState(0);
   const [commits, setCommits] = useState<Commit[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -1320,7 +1424,8 @@ export function useInfiniteCommitHistory(
   // Track the ref+pool combination we last initialised for.
   const lastInitKeyRef = useRef<string>("");
 
-  const hasInfoRefs = pool ? !!pool.getInfoRefs() : false;
+  const hasInfoRefs = pool ? !!pool.getEffectiveInfoRefs() : false;
+  const fallbackUrlsKey = fallbackUrls?.join(",");
 
   // ── Initial load ──────────────────────────────────────────────────────────
   // Re-runs when the ref or pool changes (e.g. branch switch).
@@ -1343,7 +1448,7 @@ export function useInfiniteCommitHistory(
       if (!pool || !ref) return;
 
       // Wait for infoRefs if not yet available.
-      let info = pool.getInfoRefs();
+      let info = pool.getEffectiveInfoRefs();
       if (!info) {
         info = await new Promise<InfoRefsUploadPackResponse | null>(
           (resolve) => {
@@ -1358,7 +1463,7 @@ export function useInfiniteCommitHistory(
                 return;
               }
               const available =
-                pool!.getInfoRefs() ??
+                pool!.getEffectiveInfoRefs() ??
                 Object.values(s.urls).find((u) => u.infoRefs)?.infoRefs ??
                 null;
               if (available) {
@@ -1408,7 +1513,7 @@ export function useInfiniteCommitHistory(
         return;
       }
 
-      const initKey = `${commitHash}:${pool.getInfoRefs()?.refs["HEAD"] ?? ""}`;
+      const initKey = `${commitHash}:${pool.getEffectiveInfoRefs()?.refs["HEAD"] ?? ""}`;
       if (initKey === lastInitKeyRef.current) return;
       lastInitKeyRef.current = initKey;
 
@@ -1457,7 +1562,7 @@ export function useInfiniteCommitHistory(
     void init();
     return () => abort.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pool, ref, batchSize, hasInfoRefs, fallbackUrls?.join(",")]);
+  }, [pool, ref, batchSize, hasInfoRefs, fallbackUrlsKey, retryVersion]);
 
   // ── Load more ─────────────────────────────────────────────────────────────
   const loadMore = useCallback(() => {
@@ -1494,7 +1599,11 @@ export function useInfiniteCommitHistory(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pool, batchSize, loadingMore, loading, fallbackUrls?.join(",")]);
 
-  return { loading, loadingMore, error, commits, hasMore, loadMore };
+  const reload = useCallback(() => {
+    lastInitKeyRef.current = "";
+    setRetryVersion((n) => n + 1);
+  }, []);
+  return { loading, loadingMore, error, commits, hasMore, loadMore, reload };
 }
 
 // ---------------------------------------------------------------------------
@@ -1508,6 +1617,8 @@ export interface FlatFileEntry {
   type: "file" | "directory";
   /** Lowercase file extension including the dot, e.g. ".ts". Empty string for directories. */
   extension: string;
+  /** Git blob hash. Present for files, absent for directories. */
+  hash?: string;
 }
 
 /**
@@ -1538,7 +1649,13 @@ export function flattenTree(
     const fullPath = basePath ? `${basePath}/${file.name}` : file.name;
     const dotIdx = file.name.lastIndexOf(".");
     const extension = dotIdx > 0 ? file.name.slice(dotIdx).toLowerCase() : "";
-    entries.push({ name: file.name, path: fullPath, type: "file", extension });
+    entries.push({
+      name: file.name,
+      path: fullPath,
+      type: "file",
+      extension,
+      hash: file.hash,
+    });
   }
 
   return entries;

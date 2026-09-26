@@ -38,10 +38,12 @@ jobs:
         run: nix develop --command pnpm test:e2e
 
       # Deploy the exact files produced by the test command instead of
-      # rebuilding the application in the deployment job.
+      # rebuilding the application in either deployment job.
       - name: Upload tested web build
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: actions/upload-artifact@v4
+        if: >-
+          github.event_name == 'pull_request' ||
+          (github.event_name == 'push' && github.ref == 'refs/heads/main')
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: web-dist
           path: dist
@@ -78,9 +80,117 @@ jobs:
       # to regular GitHub Actions and the intentionally minimal act runner.
       - run: pnpm android:lint
 
-  deploy-netlify:
+  # The act runner shares one action checkout cache across parallel jobs. Give
+  # each production deploy a distinct pinned download-action revision, and
+  # warm both before fan-out, so concurrent action setup cannot mutate the
+  # directory another job is copying into its container.
+  prepare-web-deploys:
     runs-on: ubuntu-latest
     needs: [test, android-lint]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - name: Warm nsite artifact downloader
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: web-dist
+          path: dist-nsite
+
+      - name: Warm Netlify artifact downloader
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
+        with:
+          name: web-dist
+          path: dist-netlify
+
+  deploy-nsite-preview:
+    runs-on: ubuntu-latest
+    needs: [test, android-lint]
+    if: github.event_name == 'pull_request'
+    outputs:
+      nsite_preview: ${{ steps.preview.outputs.url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: danconwaydev/setup-ngit@v3
+
+      - name: Download tested web build
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: web-dist
+          path: dist
+
+      # _redirects configures Netlify and is not part of the website. ngit
+      # nsite paths require filename extensions, so exclude it here.
+      - name: Prepare nsite artifact
+        run: rm dist/_redirects
+
+      # The local file-backed account and its secret disappear with this
+      # untrusted job. Only its public npub crosses the step boundary.
+      - name: Generate ephemeral preview identity
+        id: identity
+        run: |
+          set -eu
+          ngit account create \
+            --name "GitWorkshop PR preview" \
+            --offline \
+            --local \
+            --secret-storage file \
+            --json
+          preview_npub="$(git config --local --get nostr.npub)"
+          case "$preview_npub" in
+            npub1*) ;;
+            *)
+              echo "ngit did not activate a local preview account." >&2
+              exit 1
+              ;;
+          esac
+          printf 'npub=%s\n' "$preview_npub" >> "$GITHUB_OUTPUT"
+
+      # GitHub checkouts do not have a nostr:// origin, so name the repository
+      # explicitly. --no-config keeps the production named-site identifier out
+      # of this root preview; --fallback maps index.html to /404.html without
+      # uploading a duplicate blob.
+      - name: Publish nsite preview
+        run: |
+          ngit nsite publish dist \
+            --repo nostr://dan@gitworkshop.dev/gitnostr.com/gitworkshop \
+            --no-config \
+            --fallback index.html \
+            --blossom-server https://blossom.primal.net \
+            --blossom-server https://blossom.ditto.pub \
+            --relay wss://relay.nsite.lol \
+            --relay wss://nos.lol \
+            --relay wss://relay.primal.net \
+            --relay wss://nsite.run \
+            --concurrency 12 \
+            --defaults \
+            --json
+
+      # ngit-ci publishes this declared scalar on the signed Job Result. Wait
+      # for the gateway to resolve the new manifest before exposing the URL so
+      # a successful upload cannot advertise an unavailable root site.
+      - name: Expose preview URL
+        id: preview
+        env:
+          PREVIEW_NPUB: ${{ steps.identity.outputs.npub }}
+        run: |
+          set -eu
+          : "${PREVIEW_NPUB:?The ephemeral preview npub is missing.}"
+          preview_url="https://$PREVIEW_NPUB.nsite.cloud/"
+          deadline=$((SECONDS + 120))
+          until curl --fail --silent --show-error --max-time 15 \
+            --output /dev/null "$preview_url"; do
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              printf 'Preview manifest did not become available at %s\n' \
+                "$preview_url" >&2
+              exit 1
+            fi
+            sleep 5
+          done
+          printf 'url=%s\n' "$preview_url" >> "$GITHUB_OUTPUT"
+
+  deploy-netlify:
+    runs-on: ubuntu-latest
+    needs: [test, android-lint, prepare-web-deploys]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     concurrency:
       group: netlify-production
@@ -95,7 +205,7 @@ jobs:
           node-version: 24
 
       - name: Download tested web build
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
         with:
           name: web-dist
           path: dist
@@ -113,6 +223,51 @@ jobs:
             --no-build \
             --dir=dist \
             --message="ngit act $GITHUB_SHA"
+
+  deploy-nsite-production:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [test, android-lint, prepare-web-deploys]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    concurrency:
+      group: nsite-production
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: danconwaydev/setup-ngit@v3
+
+      - name: Download tested web build
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: web-dist
+          path: dist
+
+      # _redirects configures Netlify and is not part of the website. The
+      # committed nsite config maps index.html to /404.html without uploading
+      # a duplicate blob.
+      - name: Prepare nsite artifact
+        run: rm dist/_redirects
+
+      # Reuse the established Amber connection without exposing its nbunksec
+      # in the process arguments. The committed .nsite/config.json supplies
+      # the named-site metadata, fallback, relays, and Blossom servers.
+      - name: Publish production nsite
+        env:
+          NGIT_PUBLISHER_NBUNKSEC: ${{ secrets.NGIT_PUBLISHER_NBUNKSEC }}
+        run: |
+          set -eu
+          : "${NGIT_PUBLISHER_NBUNKSEC:?Set the NGIT_PUBLISHER_NBUNKSEC secret.}"
+          signer_file="$RUNNER_TEMP/ngit-publisher.nbunksec"
+          trap 'rm -f "$signer_file"' EXIT
+          umask 077
+          printf '%s' "$NGIT_PUBLISHER_NBUNKSEC" > "$signer_file"
+          ngit nsite publish dist \
+            --repo nostr://dan@gitworkshop.dev/gitnostr.com/gitworkshop \
+            --nbunksec-file "$signer_file" \
+            --concurrency 12 \
+            --defaults \
+            --json
 
   build-android-release:
     runs-on: ubuntu-latest
@@ -187,8 +342,8 @@ jobs:
             exit 1
           fi
 
-      # Build both distributable formats in one Gradle invocation. Zapstore
-      # publishing runs in a dependent job using the uploaded signed APK.
+      # Build both distributable formats in one Gradle invocation. NIP-82
+      # publication runs in a dependent job using the uploaded signed APK.
       - run: pnpm android:build:release
 
       - name: Name release artifacts
@@ -212,7 +367,7 @@ jobs:
           rm -f android/signing.properties
           rm -rf "$RUNNER_TEMP/gitworkshop-signing"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: gitworkshop-android-v${{ steps.version.outputs.name }}
           path: |
@@ -220,58 +375,55 @@ jobs:
             ${{ runner.temp }}/gitworkshop-android-v${{ steps.version.outputs.name }}/gitworkshop-android-v${{ steps.version.outputs.name }}.aab
           if-no-files-found: error
 
-  publish-zapstore:
+  # Building through workflow_dispatch remains useful for release rehearsal,
+  # but publication is deliberately tag-only so merging workflow preparation
+  # cannot publish a release before its coordinated announcement.
+  publish-release:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     needs: build-android-release
+    if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.24"
+      - uses: danconwaydev/setup-ngit@v3
 
       - name: Download signed APK
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: gitworkshop-android-v${{ needs.build-android-release.outputs.version }}
           path: release-artifacts
 
-      - name: Publish to Zapstore
+      # Publish the existing dev.gitworkshop application, inspected APK asset,
+      # and release event in dependency order. zapstore.yaml remains available
+      # for a manual zsp repair during the first ngit-driven release.
+      - name: Publish NIP-82 release
         env:
-          SIGN_WITH: ${{ secrets.ZAPSTORE_BUNKER_URL }}
-          ZAPSTORE_CLIENT_KEY: ${{ secrets.ZAPSTORE_CLIENT_KEY }}
+          NGIT_PUBLISHER_NBUNKSEC: ${{ secrets.NGIT_PUBLISHER_NBUNKSEC }}
           VERSION_NAME: ${{ needs.build-android-release.outputs.version }}
           RELEASE_TAG: ${{ github.ref_name }}
-          RELEASE_REF_TYPE: ${{ github.ref_type }}
-          RELAY_URLS: wss://relay.zapstore.dev,wss://relay.ditto.pub,wss://relay.dreamith.to,wss://relay.primal.net
         run: |
           set -eu
-          : "${SIGN_WITH:?Set the ZAPSTORE_BUNKER_URL secret.}"
-          : "${ZAPSTORE_CLIENT_KEY:?Set the ZAPSTORE_CLIENT_KEY secret.}"
+          : "${NGIT_PUBLISHER_NBUNKSEC:?Set the NGIT_PUBLISHER_NBUNKSEC secret.}"
+          : "${VERSION_NAME:?The Android build did not report a version.}"
+          : "${RELEASE_TAG:?The release tag is missing.}"
+          test -f "release-artifacts/gitworkshop-android-v$VERSION_NAME.apk"
 
-          if [ "$RELEASE_REF_TYPE" = "tag" ]; then
-            VERSION_NAME="${RELEASE_TAG#v}"
-          fi
-
-          apk_path="release-artifacts/gitworkshop-android-v$VERSION_NAME.apk"
-          test -f "$apk_path"
-
-          go install github.com/zapstore/zsp@latest
-          export PATH="$(go env GOPATH)/bin:$PATH"
-
-          # zsp creates a NIP-46 client key on first use. Restore that key so
-          # the bunker recognizes this CI workflow as the same application.
-          bunker_pubkey="${SIGN_WITH#bunker://}"
-          bunker_pubkey="${bunker_pubkey%%\?*}"
-          test "$bunker_pubkey" != "$SIGN_WITH"
+          signer_file="$RUNNER_TEMP/ngit-publisher.nbunksec"
+          trap 'rm -f "$signer_file"' EXIT
           umask 077
-          mkdir -p ~/.config/zsp/bunker-keys
-          printf '%s\n' "$ZAPSTORE_CLIENT_KEY" > ~/.config/zsp/bunker-keys/"$bunker_pubkey".key
-
-          release_config="$(mktemp zapstore-release.XXXXXX.yaml)"
-          trap 'rm -f "$release_config"' EXIT
-          cp zapstore.yaml "$release_config"
-          sed -i "2i release_source: ./$apk_path" "$release_config"
-          sed -i "2i version: $VERSION_NAME" "$release_config"
-          zsp publish --quiet --skip-metadata --skip-preview "$release_config"
+          printf '%s' "$NGIT_PUBLISHER_NBUNKSEC" > "$signer_file"
+          if [ "${VERSION_NAME#*-}" != "$VERSION_NAME" ]; then
+            prerelease="${VERSION_NAME#*-}"
+            channel="${prerelease%%[.+]*}"
+          else
+            channel=main
+          fi
+          ngit release publish "$VERSION_NAME" \
+            --repo nostr://dan@gitworkshop.dev/gitnostr.com/gitworkshop \
+            --manifest .ngit/release.yaml \
+            --channel "$channel" \
+            --tag "$RELEASE_TAG" \
+            --nbunksec-file "$signer_file" \
+            --defaults \
+            --json

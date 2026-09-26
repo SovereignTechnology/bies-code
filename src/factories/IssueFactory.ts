@@ -8,7 +8,7 @@
  * import { IssueFactory } from "@/factories/IssueFactory";
  *
  * const signed = await IssueFactory
- *   .create(repoCoord, ownerPubkey, subject, content, { labels: ["bug"] })
+ *   .create(repoCoords, subject, content, { labels: ["bug"] })
  *   .sign(signer);
  * ```
  */
@@ -20,7 +20,7 @@ import {
   addNameValueTag,
   addProfilePointerTag,
 } from "applesauce-core/operations/tag/common";
-import { ISSUE_KIND } from "@/lib/nip34";
+import { ISSUE_KIND, pubkeyFromCoordinate } from "@/lib/nip34";
 import { getPubkeyRelayHint } from "./hints";
 import type { NostrTag } from "@/lib/nostrContentTags";
 import type { KnownEventTemplate } from "applesauce-core/helpers/event";
@@ -50,26 +50,41 @@ export class IssueFactory extends EventFactory<
   /**
    * Create a new NIP-34 git issue factory.
    *
-   * @param repoCoord   - Repository coordinate: "30617:<pubkey>:<d-tag>"
-   * @param ownerPubkey - Hex pubkey of the repository owner (added as `p` tag)
-   * @param subject     - Issue title / subject line
-   * @param content     - Markdown body of the issue
-   * @param options     - Optional: labels, contentTags, extraTags
+   * @param repoCoords - Ordered repository coordinates, selected maintainer first
+   * @param subject    - Issue title / subject line
+   * @param content    - Markdown body of the issue
+   * @param options    - Optional: labels, contentTags, extraTags
    */
   static create(
-    repoCoord: string,
-    ownerPubkey: string,
+    repoCoords: string[],
     subject: string,
     content: string,
     options?: IssueOptions,
   ): IssueFactory {
+    const uniqueRepoCoords = [...new Set(repoCoords)];
+    if (uniqueRepoCoords.length === 0) {
+      throw new Error("At least one repository coordinate is required");
+    }
+
+    const ownerPubkeys = [
+      ...new Set(
+        uniqueRepoCoords
+          .map(pubkeyFromCoordinate)
+          .filter((pubkey): pubkey is string => pubkey !== undefined),
+      ),
+    ];
+
     let factory = new IssueFactory((resolve) =>
       resolve(blankEventTemplate(ISSUE_KIND)),
     )
       .content(content)
       .modifyPublicTags(
-        addAddressPointerTag(repoCoord, getPubkeyRelayHint),
-        addProfilePointerTag(ownerPubkey, getPubkeyRelayHint),
+        ...uniqueRepoCoords.map((coord) =>
+          addAddressPointerTag(coord, getPubkeyRelayHint),
+        ),
+        ...ownerPubkeys.map((pubkey) =>
+          addProfilePointerTag(pubkey, getPubkeyRelayHint),
+        ),
       )
       .modifyPublicTags((tags) => [...tags, ["subject", subject]])
       .chain(includeContentHashtags())

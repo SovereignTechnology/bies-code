@@ -10,7 +10,9 @@ import customRules from "./eslint-rules/index.js";
 export default tseslint.config(
   // Android builds generate third-party JavaScript and HTML reports that are
   // not project source and must not be linted by the repository-wide command.
-  { ignores: ["dist", "android/**/build/**"] },
+  // CI also keeps pnpm's store inside the checkout, including temporary source
+  // trees created while preparing Git/tarball dependencies.
+  { ignores: ["dist", ".pnpm-store/**", "android/**/build/**"] },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     files: ["**/*.{ts,tsx}"],

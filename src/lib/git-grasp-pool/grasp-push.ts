@@ -21,6 +21,10 @@
  * advance to a tip that does not descend from the current state tip.
  * Individual mirrors may be force-aligned; the signed state may not.
  *
+ * The fan-out resolves as soon as one server accepts; slow or unreachable
+ * mirrors keep syncing in the background and report through `onUpdate` /
+ * `summary.settled` rather than holding up the caller.
+ *
  * Extracted from `MergePanel` so it can run without React and be reused by
  * any flow that pushes browser-created objects to Grasp servers.
  */
@@ -28,12 +32,17 @@
 import type { NostrEvent } from "nostr-tools";
 import { createPackfile, type PackableObject } from "@/lib/git-packfile";
 import {
+  GitHttpError,
   getReceivePackRefs,
   pushToGitServer,
   ZERO_HASH,
   type RefUpdate,
 } from "@/lib/git-push";
 import { assertFastForwardSafe } from "@/lib/patch-merge";
+import {
+  gitAuthorizationHeaders,
+  type GitHttpAuthorizationProvider,
+} from "@/lib/git-http-auth";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -44,6 +53,14 @@ export interface PushDeliveryOutcome {
   cloneUrl: string;
   ok: boolean;
   message: string;
+  /** HTTP status retained for an expandable diagnostic view. */
+  httpStatus?: number;
+  /** Server-supplied HTTP status text, when present. */
+  httpStatusText?: string;
+  /** Bounded response body retained for an expandable diagnostic view. */
+  httpResponseBody?: string;
+  /** True while the push to this server is still in flight. */
+  pending?: boolean;
 }
 
 /** Aggregate outcome of pushing to every Grasp server. */
@@ -51,6 +68,13 @@ export interface PushDeliverySummary {
   outcomes: PushDeliveryOutcome[];
   successCount: number;
   totalCount: number;
+  /** Servers whose push is still in flight (background catch-up). */
+  pendingCount: number;
+  /**
+   * Resolves with the final summary once every server has settled. Never
+   * rejects — per-server failures are reported in the outcomes.
+   */
+  settled: Promise<PushDeliverySummary>;
 }
 
 /** A ref the servers should advertise after the push completes. */
@@ -77,6 +101,7 @@ export type CatchUpObjectFetcher = (
   tipCommitId: string,
   stopAtCommitId: string,
   includeObjectIds?: string[],
+  signal?: AbortSignal,
 ) => Promise<PackableObject[] | null>;
 
 /**
@@ -93,6 +118,8 @@ export interface GraspPushContext {
   sharedPackfile: Uint8Array;
   desiredRefs: DesiredStateRef[];
   fetchCatchUpObjects: CatchUpObjectFetcher;
+  authorizationProvider?: GitHttpAuthorizationProvider;
+  signal: AbortSignal;
 }
 
 /** Inputs for {@link pushRefUpdateToGraspServers}. */
@@ -110,6 +137,15 @@ export interface PushRefUpdateParams {
   currentStateEvent?: NostrEvent | null;
   /** Fetches catch-up objects for lagging or fresh servers. */
   fetchCatchUpObjects: CatchUpObjectFetcher;
+  authorizationProvider?: GitHttpAuthorizationProvider;
+  /** Cancels authorization, receive-pack, verification, and background mirrors. */
+  signal?: AbortSignal;
+  /**
+   * Called with a fresh summary snapshot every time a server settles,
+   * including servers that settle after the returned promise has already
+   * resolved with the first success.
+   */
+  onUpdate?: (summary: PushDeliverySummary) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -138,7 +174,10 @@ export function formatCloneUrlHost(cloneUrl: string): string {
 
 /** One-line human summary of a push delivery. */
 export function summarizePushDelivery(summary: PushDeliverySummary): string {
-  return `Pushed to ${summary.successCount}/${summary.totalCount} Grasp server${summary.totalCount !== 1 ? "s" : ""}.`;
+  const base = `Pushed to ${summary.successCount}/${summary.totalCount} Grasp server${summary.totalCount !== 1 ? "s" : ""}`;
+  return summary.pendingCount > 0
+    ? `${base} (${summary.pendingCount} still syncing).`
+    : `${base}.`;
 }
 
 // ---------------------------------------------------------------------------
@@ -152,6 +191,45 @@ export function uniquePackableObjects(
   const byHash = new Map<string, PackableObject>();
   for (const object of objects) byHash.set(object.hash, object);
   return [...byHash.values()];
+}
+
+function abortError(signal: AbortSignal): Error {
+  return signal.reason instanceof Error
+    ? signal.reason
+    : new DOMException("Aborted", "AbortError");
+}
+
+function throwIfAborted(signal: AbortSignal): void {
+  if (signal.aborted) throw abortError(signal);
+}
+
+const SLOW_PUSH_THRESHOLD_MS = 10_000;
+
+function acceptedPushMessage(responseReceivedAt: number | undefined): string {
+  if (responseReceivedAt === undefined) return "accepted";
+
+  const elapsedMs = Math.max(0, Date.now() - responseReceivedAt);
+  if (elapsedMs < SLOW_PUSH_THRESHOLD_MS) return "accepted";
+
+  return `accepted eventually (registered ${Math.round(elapsedMs / 1_000)}s after the push response)`;
+}
+
+function failedPushOutcome(
+  cloneUrl: string,
+  error: unknown,
+): PushDeliveryOutcome {
+  return {
+    cloneUrl,
+    ok: false,
+    message: error instanceof Error ? error.message : "push failed",
+    ...(error instanceof GitHttpError
+      ? {
+          httpStatus: error.status,
+          httpStatusText: error.statusText || undefined,
+          httpResponseBody: error.responseBody,
+        }
+      : {}),
+  };
 }
 
 /**
@@ -171,10 +249,18 @@ function summarizeRawPushResponse(raw: string): string {
 
 async function getAdvertisedRefs(
   cloneUrl: string,
+  authorizationProvider?: GitHttpAuthorizationProvider,
+  signal?: AbortSignal,
 ): Promise<Record<string, string> | null> {
   try {
-    return (await getReceivePackRefs(cloneUrl)).refs;
+    if (signal) throwIfAborted(signal);
+    return (
+      await getReceivePackRefs(cloneUrl, signal, (url) =>
+        gitAuthorizationHeaders(authorizationProvider, url, signal),
+      )
+    ).refs;
   } catch {
+    if (signal?.aborted) throw abortError(signal);
     return null;
   }
 }
@@ -253,8 +339,14 @@ export function getPostPushStateRefs(
 async function serverRefsMatch(
   cloneUrl: string,
   desiredRefs: DesiredStateRef[],
+  authorizationProvider?: GitHttpAuthorizationProvider,
+  signal?: AbortSignal,
 ): Promise<boolean> {
-  const advertisedRefs = await getAdvertisedRefs(cloneUrl);
+  const advertisedRefs = await getAdvertisedRefs(
+    cloneUrl,
+    authorizationProvider,
+    signal,
+  );
   if (!advertisedRefs) return false;
 
   return desiredRefs.every(({ refName, commitHash }) =>
@@ -272,10 +364,15 @@ export async function pushToGraspServer(
   refUpdate: RefUpdate,
   ctx: GraspPushContext,
 ): Promise<PushDeliveryOutcome> {
+  throwIfAborted(ctx.signal);
   // Read the server's actual advertised ref. Grasp servers can lag behind the
   // signed Nostr state (missed earlier pushes), so the consensus old hash is
   // not necessarily what this server has.
-  const advertisedRefs = await getAdvertisedRefs(cloneUrl);
+  const advertisedRefs = await getAdvertisedRefs(
+    cloneUrl,
+    ctx.authorizationProvider,
+    ctx.signal,
+  );
   const serverHead = advertisedRefs
     ? getAdvertisedRef(advertisedRefs, refUpdate.refName)
     : null;
@@ -313,7 +410,13 @@ export async function pushToGraspServer(
       // Create it, sending a bounded catch-up pack of recent history alongside
       // the base objects. If the repo is deeper than the bound, the server's
       // connectivity check fails and the outcome reports it.
-      const catchUp = await ctx.fetchCatchUpObjects(refUpdate.oldHash, "");
+      const catchUp = await ctx.fetchCatchUpObjects(
+        refUpdate.oldHash,
+        "",
+        undefined,
+        ctx.signal,
+      );
+      throwIfAborted(ctx.signal);
       primaryCatchUpObjects = catchUp ?? [];
       effectiveUpdates.push({ ...refUpdate, oldHash: ZERO_HASH });
     } else if (serverHead !== null && serverHead !== refUpdate.oldHash) {
@@ -327,7 +430,10 @@ export async function pushToGraspServer(
       const catchUp = await ctx.fetchCatchUpObjects(
         refUpdate.oldHash,
         serverHead,
+        undefined,
+        ctx.signal,
       );
+      throwIfAborted(ctx.signal);
       if (!catchUp) {
         return {
           cloneUrl,
@@ -371,7 +477,9 @@ export async function pushToGraspServer(
             tipCommitId,
             existingHash ?? "",
             includeObjectIds,
+            ctx.signal,
           );
+          throwIfAborted(ctx.signal);
 
           if (!catchUp) {
             return {
@@ -393,6 +501,7 @@ export async function pushToGraspServer(
     const needsCustomPackfile =
       primaryCatchUpObjects.length > 0 || supplementalObjects.length > 0;
     if (needsCustomPackfile) {
+      throwIfAborted(ctx.signal);
       packfile = await createPackfile(
         uniquePackableObjects([
           ...ctx.baseObjects,
@@ -400,28 +509,52 @@ export async function pushToGraspServer(
           ...supplementalObjects,
         ]),
       );
+      throwIfAborted(ctx.signal);
     }
 
-    const result = await pushToGitServer(cloneUrl, effectiveUpdates, packfile);
+    const result = await pushToGitServer(
+      cloneUrl,
+      effectiveUpdates,
+      packfile,
+      ctx.signal,
+      (url) =>
+        gitAuthorizationHeaders(ctx.authorizationProvider, url, ctx.signal),
+    );
+    throwIfAborted(ctx.signal);
+    const responseReceivedAt = Date.now();
     const refFailures = result.refResults.filter((r) => !r.ok);
+    const responseAccepted = result.unpackOk && refFailures.length === 0;
 
     if (
-      result.unpackOk &&
-      refFailures.length === 0 &&
-      (await serverRefsMatch(cloneUrl, ctx.desiredRefs))
+      responseAccepted &&
+      (await serverRefsMatch(
+        cloneUrl,
+        ctx.desiredRefs,
+        ctx.authorizationProvider,
+        ctx.signal,
+      ))
     ) {
       return {
         cloneUrl,
         ok: true,
-        message: "accepted",
+        message: acceptedPushMessage(responseReceivedAt),
       };
     }
 
-    if (await serverRefsMatch(cloneUrl, ctx.desiredRefs)) {
+    if (
+      await serverRefsMatch(
+        cloneUrl,
+        ctx.desiredRefs,
+        ctx.authorizationProvider,
+        ctx.signal,
+      )
+    ) {
       return {
         cloneUrl,
         ok: true,
-        message: "accepted; server reported a stale failure",
+        message: acceptedPushMessage(
+          responseAccepted ? responseReceivedAt : undefined,
+        ),
       };
     }
 
@@ -458,19 +591,23 @@ export async function pushToGraspServer(
       message: failures || "ref update rejected",
     };
   } catch (err) {
-    if (await serverRefsMatch(cloneUrl, ctx.desiredRefs)) {
+    if (ctx.signal.aborted) throw abortError(ctx.signal);
+    if (
+      await serverRefsMatch(
+        cloneUrl,
+        ctx.desiredRefs,
+        ctx.authorizationProvider,
+        ctx.signal,
+      )
+    ) {
       return {
         cloneUrl,
         ok: true,
-        message: "accepted; confirmation failed",
+        message: "accepted",
       };
     }
 
-    return {
-      cloneUrl,
-      ok: false,
-      message: err instanceof Error ? err.message : "push failed",
-    };
+    return failedPushOutcome(cloneUrl, err);
   }
 }
 
@@ -489,46 +626,96 @@ export async function pushToGraspServer(
  * mirrors that lag or diverge are forced in line with the signed state (see
  * {@link pushToGraspServer}).
  *
- * Resolves with a per-server delivery summary once at least one server
- * accepted; throws when every server rejected.
+ * Resolves with a per-server delivery summary as soon as ONE server accepted
+ * — a slow or unreachable mirror must not hold up the rest of the merge
+ * sequence. The remaining pushes continue in the background: each settle
+ * invokes `onUpdate` with a fresh snapshot, and `summary.settled` resolves
+ * with the final summary once every server has settled. Throws only when
+ * every server rejected.
  */
 export async function pushRefUpdateToGraspServers(
   params: PushRefUpdateParams,
 ): Promise<PushDeliverySummary> {
   const { cloneUrls, objects, refUpdate, currentStateEvent } = params;
+  const signal = params.signal ?? new AbortController().signal;
 
+  throwIfAborted(signal);
   assertFastForwardSafe(objects, refUpdate.oldHash, refUpdate.newHash);
 
-  const baseObjects = uniquePackableObjects(objects);
-  const ctx: GraspPushContext = {
-    baseObjects,
-    sharedPackfile: await createPackfile(baseObjects),
-    desiredRefs: getPostPushStateRefs(currentStateEvent, refUpdate),
-    fetchCatchUpObjects: params.fetchCatchUpObjects,
-  };
-
-  const outcomes = await Promise.all(
-    cloneUrls.map((cloneUrl) => pushToGraspServer(cloneUrl, refUpdate, ctx)),
-  );
-  const successCount = outcomes.filter((outcome) => outcome.ok).length;
-  const summary: PushDeliverySummary = {
-    outcomes,
-    successCount,
-    totalCount: outcomes.length,
-  };
-
-  if (successCount === 0) {
-    const reasons = outcomes
-      .map(
-        (outcome) =>
-          `${formatCloneUrlHost(outcome.cloneUrl)}: ${outcome.message}`,
-      )
-      .join("; ");
+  if (cloneUrls.length === 0) {
     throw new Error(
-      `Push failed to all Grasp servers. ${reasons}. ` +
-        "The state event will expire from purgatory in 30 minutes.",
+      "Push failed: no Grasp servers to push to. " +
+        "A purgatory-capable relay may eventually discard the staged state; " +
+        "a relay without purgatory may already be broadcasting it.",
     );
   }
 
-  return summary;
+  const baseObjects = uniquePackableObjects(objects);
+  throwIfAborted(signal);
+  const sharedPackfile = await createPackfile(baseObjects);
+  throwIfAborted(signal);
+  const ctx: GraspPushContext = {
+    baseObjects,
+    sharedPackfile,
+    desiredRefs: getPostPushStateRefs(currentStateEvent, refUpdate),
+    fetchCatchUpObjects: params.fetchCatchUpObjects,
+    authorizationProvider: params.authorizationProvider,
+    signal,
+  };
+
+  const outcomes: PushDeliveryOutcome[] = cloneUrls.map((cloneUrl) => ({
+    cloneUrl,
+    ok: false,
+    message: "still syncing",
+    pending: true,
+  }));
+
+  let resolveSettled!: (summary: PushDeliverySummary) => void;
+  const settled = new Promise<PushDeliverySummary>((resolve) => {
+    resolveSettled = resolve;
+  });
+
+  const snapshot = (): PushDeliverySummary => ({
+    outcomes: outcomes.map((outcome) => ({ ...outcome })),
+    successCount: outcomes.filter((outcome) => outcome.ok).length,
+    totalCount: outcomes.length,
+    pendingCount: outcomes.filter((outcome) => outcome.pending).length,
+    settled,
+  });
+
+  return new Promise<PushDeliverySummary>((resolve, reject) => {
+    let firstSettled = false;
+
+    const recordOutcome = (index: number, outcome: PushDeliveryOutcome) => {
+      outcomes[index] = outcome;
+      const summary = snapshot();
+      params.onUpdate?.(summary);
+
+      if (!firstSettled && outcome.ok) {
+        firstSettled = true;
+        resolve(summary);
+      }
+
+      if (summary.pendingCount > 0) return;
+
+      if (!firstSettled) {
+        firstSettled = true;
+        if (signal.aborted) {
+          reject(abortError(signal));
+          resolveSettled(summary);
+          return;
+        }
+        reject(new Error("Push failed to all Grasp servers."));
+      }
+      resolveSettled(summary);
+    };
+
+    cloneUrls.forEach((cloneUrl, index) => {
+      pushToGraspServer(cloneUrl, refUpdate, ctx)
+        .catch((err): PushDeliveryOutcome => failedPushOutcome(cloneUrl, err))
+        .then((outcome) =>
+          recordOutcome(index, { ...outcome, pending: false }),
+        );
+    });
+  });
 }

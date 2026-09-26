@@ -16,7 +16,7 @@
  * - Integrate with Nostr state events (backoff re-fetch, warning computation)
  */
 
-import { BehaviorSubject, Subscription } from "rxjs";
+import { BehaviorSubject } from "rxjs";
 import type { Observable } from "rxjs";
 import type {
   PoolState,
@@ -24,13 +24,18 @@ import type {
   PoolOptions,
   PoolSubscriber,
   PoolWarning,
+  AuthoritativeRef,
   AuthoritativeHead,
+  ResolvedRefMap,
+  ViewSource,
   RefDiscrepancy,
   UrlRefStatus,
+  StateEvent,
   StateEventInput,
   Commit,
   Tree,
   CommitRangeData,
+  CommitComparisonData,
   InfoRefsUploadPackResponse,
 } from "./types";
 import { CorsProxyManager } from "./cors-proxy";
@@ -42,7 +47,11 @@ import {
   isNonHttpUrl,
 } from "./git-http";
 import { UrlStateManager, UrlTracker } from "./url-state";
-import { PROVISIONING_BACKOFF_MAX_MS, StateEventManager } from "./state-event";
+import {
+  PROVISIONING_BACKOFF_MAX_MS,
+  StateEventManager,
+  stateEventInputsEqual,
+} from "./state-event";
 import {
   pushRefUpdateToGraspServers,
   type PushDeliverySummary,
@@ -50,6 +59,10 @@ import {
 import type { NostrEvent } from "nostr-tools";
 import type { PackableObject } from "@/lib/git-packfile";
 import { ZERO_HASH, type RefUpdate } from "@/lib/git-push";
+import {
+  UnverifiedPrivateGitRootError,
+  type GitHttpAuthorizationProvider,
+} from "@/lib/git-http-auth";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -62,6 +75,9 @@ const DEFAULT_EVICTION_GRACE_MS = 60_000;
  * of a git server head that claims to be ahead of the signed state.
  */
 const ANCESTRY_VERIFICATION_MAX_DEPTH = 500;
+
+/** Graph sizes probed before falling back to a caller's full comparison cap. */
+const COMPARISON_GRAPH_DEPTHS = [15, 60, 240, 960];
 
 // ---------------------------------------------------------------------------
 // Initial state
@@ -79,7 +95,10 @@ function makeInitialState(): PoolState {
     readmeFilename: null,
     defaultBranch: null,
     warning: null,
+    authoritativeRefs: {},
     authoritativeHead: null,
+    viewSource: "authoritative",
+    effectiveRefs: {},
     error: null,
     lastCheckedAt: null,
     crossRefDiscrepancies: [],
@@ -113,6 +132,132 @@ function ancestryDistances(
   }
 
   return distances;
+}
+
+function findMergeBaseInHistories(
+  commitA: string,
+  commitB: string,
+  chainA: Commit[],
+  chainB: Commit[],
+): string | null {
+  const byHash = new Map([...chainA, ...chainB].map((c) => [c.hash, c]));
+  const distancesFromA = ancestryDistances(commitA, byHash);
+  const distancesFromB = ancestryDistances(commitB, byHash);
+
+  let bestHash: string | null = null;
+  let bestScore = Number.POSITIVE_INFINITY;
+
+  for (const [hash, distanceA] of distancesFromA) {
+    const distanceB = distancesFromB.get(hash);
+    if (distanceB === undefined) continue;
+
+    const score = distanceA + distanceB;
+    if (score < bestScore) {
+      bestScore = score;
+      bestHash = hash;
+    }
+  }
+
+  return bestHash;
+}
+
+function commitsUntilSharedHistory(
+  tipCommitId: string,
+  mergeBaseId: string,
+  firstHistory: Commit[],
+  secondHistory: Commit[],
+): Commit[] | null {
+  if (tipCommitId === mergeBaseId) return [];
+
+  const commitsByHash = new Map(
+    [...firstHistory, ...secondHistory].map((commit) => [commit.hash, commit]),
+  );
+  const secondHistoryHashes = new Set(
+    secondHistory.map((commit) => commit.hash),
+  );
+  const sharedHashes = new Set(
+    firstHistory
+      .filter((commit) => secondHistoryHashes.has(commit.hash))
+      .map((commit) => commit.hash),
+  );
+  sharedHashes.add(mergeBaseId);
+
+  const rangeHashes = new Set<string>();
+  const pending = [tipCommitId];
+
+  while (pending.length > 0) {
+    const commitId = pending.pop();
+    if (!commitId || sharedHashes.has(commitId) || rangeHashes.has(commitId)) {
+      continue;
+    }
+
+    const commit = commitsByHash.get(commitId);
+    if (!commit) return null;
+    rangeHashes.add(commitId);
+    pending.push(...commit.parents);
+  }
+
+  return Array.from(rangeHashes)
+    .map((hash) => commitsByHash.get(hash))
+    .filter((commit): commit is Commit => !!commit)
+    .sort(
+      (left, right) =>
+        (right.committer?.timestamp ?? right.author.timestamp) -
+        (left.committer?.timestamp ?? left.author.timestamp),
+    );
+}
+
+function comparisonGraphDepths(maxDepth: number): number[] {
+  const depths = COMPARISON_GRAPH_DEPTHS.filter((depth) => depth < maxDepth);
+  depths.push(maxDepth);
+  return [...new Set(depths)];
+}
+
+function comparisonFromHistories(
+  baseCommitId: string,
+  headCommitId: string,
+  baseHistory: Commit[],
+  headHistory: Commit[],
+): CommitComparisonData | null {
+  const mergeBaseId = findMergeBaseInHistories(
+    baseCommitId,
+    headCommitId,
+    baseHistory,
+    headHistory,
+  );
+  if (!mergeBaseId) return null;
+
+  const commitsByHash = new Map(
+    [...baseHistory, ...headHistory].map((commit) => [commit.hash, commit]),
+  );
+  const baseCommit = commitsByHash.get(baseCommitId);
+  const headCommit = commitsByHash.get(headCommitId);
+  if (!baseCommit || !headCommit) return null;
+
+  const baseRange = commitsUntilSharedHistory(
+    baseCommitId,
+    mergeBaseId,
+    baseHistory,
+    headHistory,
+  );
+  const headRange = commitsUntilSharedHistory(
+    headCommitId,
+    mergeBaseId,
+    headHistory,
+    baseHistory,
+  );
+  if (!baseRange || !headRange) return null;
+
+  const baseHashes = new Set(baseRange.map((commit) => commit.hash));
+  const headHashes = new Set(headRange.map((commit) => commit.hash));
+
+  return {
+    mergeBaseId,
+    baseCommit,
+    headCommit,
+    baseOnlyCommits: baseRange.filter((commit) => !headHashes.has(commit.hash)),
+    headOnlyCommits: headRange.filter((commit) => !baseHashes.has(commit.hash)),
+  };
 }
 
 /**
@@ -158,6 +303,26 @@ function estimateDeepenDepth(
  */
 function commitsMatch(a: string, b: string): boolean {
   return a === b || a.startsWith(b) || b.startsWith(a);
+}
+
+interface ServerRefCandidate {
+  commitId: string;
+  sourceUrl: string;
+  rawTagOid?: string;
+}
+
+interface ServerRefCandidateGroup {
+  commitId: string;
+  members: ServerRefCandidate[];
+}
+
+interface RefAncestryVerification {
+  stateCommit: string;
+  gitCommit: string;
+  status: "pending" | "complete" | "unavailable";
+  descendsFromState: boolean | undefined;
+  history: string[] | undefined;
+  promise: Promise<void>;
 }
 
 /**
@@ -323,6 +488,7 @@ export class GitGraspPool {
   private http: GitHttpClient;
   private urlManager: UrlStateManager;
   private stateManager: StateEventManager;
+  private readonly authorizationProvider?: GitHttpAuthorizationProvider;
 
   // --- Observable state ---
   private state$ = new BehaviorSubject<PoolState>(makeInitialState());
@@ -335,40 +501,45 @@ export class GitGraspPool {
   // --- Fetch lifecycle ---
   private abort: AbortController | null = null;
   private fetching = false;
+  private fetchTask: Promise<void> | null = null;
+  private readRecovery: Promise<void> | null = null;
   private fetchedOnce = false;
+  private disposed = false;
 
-  // --- State event subscription ---
-  private stateEventSub: Subscription | null = null;
+  // --- State event ownership ---
+  private hasAuthoritativeState = false;
 
   // --- Winner tracking ---
   private winnerUrl: string | null = null;
 
-  // --- Authoritative head ancestry verification ---
+  // --- Per-ref ancestry verification ---
   /**
-   * Cached result of the "is the git-ahead head a descendant of the state
-   * head?" check, keyed by the exact (stateHead, gitHead) pair. `undefined`
-   * result = check in flight. Cleared implicitly when either head changes.
+   * Cached "is the server commit a descendant of the state commit?" results,
+   * keyed by full ref name and guarded by the exact commit pair. `undefined`
+   * means the check is in flight.
    */
-  private ancestryVerification: {
-    stateHead: string;
-    gitHead: string;
-    descendsFromState: boolean | undefined;
-  } | null = null;
+  private ancestryVerifications = new Map<string, RefAncestryVerification>();
 
   constructor(options: PoolOptions) {
     this.evictionGraceMs =
       options.evictionGracePeriodMs ?? DEFAULT_EVICTION_GRACE_MS;
 
+    this.authorizationProvider = options.authorizationProvider;
+
     // Initialize services
     this.cors = new CorsProxyManager(
-      options.corsProxyBase,
+      options.authorizationProvider ? null : options.corsProxyBase,
       options.knownCorsBlockedOrigins,
     );
-    this.cache = new GitObjectCache(options.infoRefsTtlMs);
+    this.cache = new GitObjectCache(
+      options.infoRefsTtlMs,
+      options.authorizationProvider?.accessScope,
+    );
     this.http = new GitHttpClient(
       this.cache,
       this.cors,
       options.expectRepositoryProvisioning,
+      options.authorizationProvider,
     );
     this.urlManager = new UrlStateManager(this.cors);
     this.stateManager = new StateEventManager();
@@ -378,23 +549,35 @@ export class GitGraspPool {
 
     // Add initial URLs
     this.urlManager.addUrls(options.cloneUrls);
-
-    // Subscribe to state event observable if provided
-    if (options.stateEvent$) this.setStateEventSource(options.stateEvent$);
   }
 
   /**
-   * Attach or replace the repository state event source for this pool.
+   * Apply the current authoritative repository state.
    *
-   * Pools are shared by clone URL, so the first consumer to create a pool may
-   * not have repo-state context. Later consumers can provide it here without
-   * forcing a separate pool for the same git server.
+   * `null` is an explicit, settled clear. Concrete events may move forward or
+   * backward because maintainer changes and deletion requests can invalidate a
+   * newer event. Loading and consumer cleanup never call this method.
    */
-  setStateEventSource(stateEvent$: Observable<StateEventInput>): void {
-    this.stateEventSub?.unsubscribe();
-    this.stateEventSub = stateEvent$.subscribe((stateEvent) => {
-      this.onStateEventChange(stateEvent);
-    });
+  setAuthoritativeStateEvent(stateEvent: StateEvent | null): void {
+    if (this.disposed) return;
+    this.hasAuthoritativeState = true;
+    if (stateEventInputsEqual(this.stateManager.currentState, stateEvent))
+      return;
+    this.onStateEventChange(stateEvent);
+  }
+
+  /**
+   * Seed a pool before its authoritative repository-state owner is available.
+   *
+   * Acceptance monitoring uses this to recover newly provisioned repositories.
+   * Seeds can advance other seeds but never outvote a live authoritative owner,
+   * so a frozen job snapshot cannot pin revoked state.
+   */
+  seedStateEvent(stateEvent: StateEvent): void {
+    if (this.disposed || this.hasAuthoritativeState) return;
+    const current = this.stateManager.currentState;
+    if (current && current.createdAt >= stateEvent.createdAt) return;
+    this.onStateEventChange(stateEvent);
   }
 
   /**
@@ -417,6 +600,51 @@ export class GitGraspPool {
   /** Get the current state as an RxJS observable */
   get observable(): Observable<PoolState> {
     return this.state$.asObservable();
+  }
+
+  /** Authenticated Git reads may request signatures and must not auto-retry. */
+  get requiresSigningForReads(): boolean {
+    return this.authorizationProvider !== undefined;
+  }
+
+  /**
+   * Re-enable read endpoints while retaining successful object caches.
+   * Known-object reads can preserve refs; unavailable pools still need discovery.
+   * Concurrent recovery callers share and await the active pool fetch.
+   */
+  retryReads({
+    refreshRefs = true,
+  }: { refreshRefs?: boolean } = {}): Promise<void> {
+    if (this.isDisposed) return Promise.resolve();
+    if (this.readRecovery) return this.readRecovery;
+    if (this.fetchTask) return this.fetchTask;
+
+    this.http.resetReadFailures();
+    this.urlManager.resetFailures();
+    if (
+      !refreshRefs &&
+      this.getEffectiveInfoRefs() &&
+      this.getState().health !== "all-failed"
+    ) {
+      return Promise.resolve();
+    }
+
+    // Publish the shared promise before emitting state or starting network work.
+    this.readRecovery = Promise.resolve()
+      .then(async () => {
+        if (this.isDisposed) return;
+        if (this.fetchTask) return this.fetchTask;
+        this.stateManager.cancelBackoff();
+        for (const tracker of this.urlManager.getAll()) {
+          this.cache.invalidateInfoRefs(tracker.url);
+        }
+        this.setState((prev) => ({ ...prev, retryAt: null }));
+        await this.runFetch();
+      })
+      .finally(() => {
+        this.readRecovery = null;
+      });
+    return this.readRecovery;
   }
 
   /** Get the current state snapshot */
@@ -464,112 +692,409 @@ export class GitGraspPool {
     }
   }
 
-  private setState(updater: (prev: PoolState) => PoolState): void {
+  private setState(
+    updater: (prev: PoolState) => PoolState,
+    verifyHead = true,
+  ): void {
     const next = updater(this.state$.getValue());
-    // Every emission carries a consistent authoritative head, whatever code
-    // path produced it — and any unverified git-ahead claim kicks off the
-    // (idempotent, cache-first) ancestry check that may upgrade it later.
+    // Protocol truth and display preference are recomputed together on every
+    // emission. The view layer can never feed back into authoritativeRefs.
+    next.authoritativeRefs = this.deriveAuthoritativeRefs();
     next.authoritativeHead = this.deriveAuthoritativeHead(next);
-    this.ensureAncestryVerification(next.warning);
+    next.effectiveRefs = this.deriveEffectiveRefs(next);
     this.state$.next(next);
     this.notify();
+
+    if (verifyHead) {
+      const headRef = this.getHeadRef(next);
+      if (headRef) void this.ensureRefVerification(headRef);
+    }
   }
 
   // -----------------------------------------------------------------------
-  // Authoritative head resolution
+  // Authoritative ref resolution
   // -----------------------------------------------------------------------
 
+  private getHeadRef(next: PoolState): string | undefined {
+    const stateEvent = this.stateManager.currentState;
+    if (stateEvent?.headRef) return stateEvent.headRef;
+    const winnerInfo = this.getInfoRefs();
+    const gitHeadRef = winnerInfo?.symrefs["HEAD"];
+    if (gitHeadRef) return gitHeadRef;
+    return next.defaultBranch ? `refs/heads/${next.defaultBranch}` : undefined;
+  }
+
+  private getServerRefCandidates(refName: string): ServerRefCandidate[] {
+    const peeledName = `${refName}^{}`;
+    const candidates: ServerRefCandidate[] = [];
+
+    for (const tracker of this.urlManager.getAll()) {
+      if (tracker.status !== "ok" || !tracker.state.infoRefs) continue;
+      const refs = tracker.state.infoRefs.refs;
+      const rawTagOid = refs[refName];
+      const commitId = refs[peeledName] ?? rawTagOid;
+      if (commitId) {
+        candidates.push({
+          commitId,
+          sourceUrl: tracker.url,
+          rawTagOid:
+            refs[peeledName] && rawTagOid !== commitId ? rawTagOid : undefined,
+        });
+      }
+    }
+
+    return candidates;
+  }
+
+  private groupServerRefCandidates(refName: string): ServerRefCandidateGroup[] {
+    const groups: ServerRefCandidateGroup[] = [];
+    for (const candidate of this.getServerRefCandidates(refName)) {
+      const group = groups.find((entry) =>
+        commitsMatch(entry.commitId, candidate.commitId),
+      );
+      if (group) group.members.push(candidate);
+      else groups.push({ commitId: candidate.commitId, members: [candidate] });
+    }
+    return groups;
+  }
+
+  private pickGroupSource(group: ServerRefCandidateGroup): ServerRefCandidate {
+    return (
+      group.members.find((member) => member.sourceUrl === this.winnerUrl) ??
+      group.members[0]
+    );
+  }
+
   /**
-   * Resolve the authoritative default-branch tip for this emission — see
-   * {@link AuthoritativeHead} for the semantics.
-   *
-   * The signed state head wins whenever a state event exists. A git server
-   * head reported ahead of it (the `state-behind-git` warning) only takes
-   * over once the ancestry check has confirmed the state head is reachable
-   * from it: the warning is committer-date based, so without the check a
-   * rewritten/divergent server head — or a stale cached warning emitted by
-   * the fast-path right after a merge push — could hijack the merge target.
+   * Pick the server value for a ref that has no signed state entry. Majority
+   * wins; ties prefer the pool winner, then stable URL-manager order.
+   */
+  private selectServerRefCandidate(refName: string): ServerRefCandidate | null {
+    const groups = this.groupServerRefCandidates(refName);
+    if (groups.length === 0) return null;
+    groups.sort((a, b) => {
+      if (a.members.length !== b.members.length) {
+        return b.members.length - a.members.length;
+      }
+      const aHasWinner = a.members.some(
+        (member) => member.sourceUrl === this.winnerUrl,
+      );
+      const bHasWinner = b.members.some(
+        (member) => member.sourceUrl === this.winnerUrl,
+      );
+      return Number(bHasWinner) - Number(aHasWinner);
+    });
+
+    const selected = groups[0];
+    return this.pickGroupSource(selected);
+  }
+
+  private verificationKey(
+    refName: string,
+    stateCommit: string,
+    gitCommit: string,
+  ): string {
+    return `${refName}\u0000${stateCommit}\u0000${gitCommit}`;
+  }
+
+  /**
+   * Resolve the commit that acts as the signed ancestry anchor. Old ngit
+   * state events stored annotated-tag object IDs; when a server supplies the
+   * corresponding peeled commit, use that commit for ancestry and tree reads.
+   */
+  private getStateRefAnchor(
+    stateCommit: string,
+    groups: ServerRefCandidateGroup[],
+  ): string {
+    for (const group of groups) {
+      const matchingMember = group.members.find(
+        (member) =>
+          commitsMatch(member.commitId, stateCommit) ||
+          (!!member.rawTagOid && commitsMatch(member.rawTagOid, stateCommit)),
+      );
+      if (matchingMember) return matchingMember.commitId;
+    }
+    return stateCommit;
+  }
+
+  /**
+   * Choose among server commits already verified to descend from signed
+   * state. A single candidate wins even when most mirrors remain at state.
+   * With multiple candidates, only a tip containing every other candidate is
+   * safe; incomparable descendants leave the signed state authoritative.
+   */
+  private selectVerifiedDescendant(
+    refName: string,
+    stateCommit: string,
+    groups: ServerRefCandidateGroup[],
+  ): ServerRefCandidate | null {
+    const differing = groups.filter(
+      (group) => !commitsMatch(group.commitId, stateCommit),
+    );
+    const withVerification = differing.map((group) => ({
+      group,
+      verification: this.ancestryVerifications.get(
+        this.verificationKey(refName, stateCommit, group.commitId),
+      ),
+    }));
+    if (
+      withVerification.some(
+        ({ verification }) =>
+          !verification || verification.status === "pending",
+      )
+    ) {
+      return null;
+    }
+
+    const verified = withVerification
+      .filter(({ verification }) => verification?.descendsFromState === true)
+      .map(({ group }) => group);
+    if (verified.length === 0) return null;
+
+    const containingTips = verified.filter((group) => {
+      const verification = this.ancestryVerifications.get(
+        this.verificationKey(refName, stateCommit, group.commitId),
+      );
+      return verified.every(
+        (other) =>
+          commitsMatch(group.commitId, other.commitId) ||
+          verification?.history?.some((hash) =>
+            commitsMatch(hash, other.commitId),
+          ),
+      );
+    });
+    if (containingTips.length === 0) return null;
+
+    containingTips.sort((a, b) => {
+      if (a.members.length !== b.members.length) {
+        return b.members.length - a.members.length;
+      }
+      const aHasWinner = a.members.some(
+        (member) => member.sourceUrl === this.winnerUrl,
+      );
+      const bHasWinner = b.members.some(
+        (member) => member.sourceUrl === this.winnerUrl,
+      );
+      return Number(bHasWinner) - Number(aHasWinner);
+    });
+    return this.pickGroupSource(containingTips[0]);
+  }
+
+  private deriveAuthoritativeRefs(): ResolvedRefMap {
+    const refNames = new Set<string>();
+    const stateEvent = this.stateManager.currentState;
+    if (stateEvent) {
+      for (const ref of stateEvent.refs) refNames.add(ref.name);
+    }
+    for (const tracker of this.urlManager.getAll()) {
+      if (tracker.status !== "ok" || !tracker.state.infoRefs) continue;
+      for (const refName of Object.keys(tracker.state.infoRefs.refs)) {
+        if (!refName.endsWith("^{}")) refNames.add(refName);
+      }
+    }
+
+    const resolved: ResolvedRefMap = {};
+    for (const refName of refNames) {
+      const stateRef = stateEvent?.refs.find((ref) => ref.name === refName);
+      if (!stateRef) {
+        const server = this.selectServerRefCandidate(refName);
+        if (server) {
+          resolved[refName] = {
+            commitId: server.commitId,
+            source: "git",
+            sourceUrl: server.sourceUrl,
+          };
+        }
+        continue;
+      }
+
+      const groups = this.groupServerRefCandidates(refName);
+      const stateAnchor = this.getStateRefAnchor(stateRef.commitId, groups);
+      const verified = this.selectVerifiedDescendant(
+        refName,
+        stateAnchor,
+        groups,
+      );
+      if (verified) {
+        resolved[refName] = {
+          commitId: verified.commitId,
+          source: "git",
+          sourceUrl: verified.sourceUrl,
+        };
+      } else {
+        resolved[refName] = {
+          commitId: stateAnchor,
+          source: "state",
+        };
+      }
+    }
+
+    return resolved;
+  }
+
+  /**
+   * Backward-compatible default-branch alias over authoritativeRefs.
    */
   private deriveAuthoritativeHead(next: PoolState): AuthoritativeHead | null {
     const stateEvent = this.stateManager.currentState;
-    const stateHead = stateEvent ? stateEvent.headCommitId : undefined;
-
-    if (stateHead) {
-      const verification = this.ancestryVerification;
-      if (
-        next.warning?.kind === "state-behind-git" &&
-        next.warning.stateCommitId === stateHead &&
-        verification &&
-        verification.stateHead === stateHead &&
-        verification.gitHead === next.warning.gitCommitId &&
-        verification.descendsFromState === true
-      ) {
-        return { commitId: next.warning.gitCommitId, source: "git" };
-      }
-      return { commitId: stateHead, source: "state" };
+    const headRef = this.getHeadRef(next);
+    if (headRef && next.authoritativeRefs[headRef]) {
+      return next.authoritativeRefs[headRef];
     }
-
-    // No state event (still loading or confirmed absent) — the git servers
-    // are all we have.
+    if (stateEvent?.headCommitId) {
+      return { commitId: stateEvent.headCommitId, source: "state" };
+    }
     return next.latestCommit
-      ? { commitId: next.latestCommit.hash, source: "git" }
+      ? {
+          commitId: next.latestCommit.hash,
+          source: "git",
+          sourceUrl: next.winnerUrl ?? undefined,
+        }
       : null;
   }
 
-  /**
-   * Start (once per (stateHead, gitHead) pair) the ancestry walk that decides
-   * whether a `state-behind-git` git head really extends the signed state.
-   * Cache-first and fire-and-forget; on a positive result the state is
-   * re-emitted so `authoritativeHead` upgrades to the git head.
-   */
-  private ensureAncestryVerification(warning: PoolWarning | null): void {
-    if (warning?.kind !== "state-behind-git") return;
-    const stateEvent = this.stateManager.currentState;
-    const stateHead = stateEvent ? stateEvent.headCommitId : undefined;
-    if (!stateHead || warning.stateCommitId !== stateHead) return;
-
-    const gitHead = warning.gitCommitId;
-    const existing = this.ancestryVerification;
-    if (
-      existing &&
-      existing.stateHead === stateHead &&
-      existing.gitHead === gitHead
-    ) {
-      return; // already checked or in flight
+  private deriveEffectiveRefs(next: PoolState): ResolvedRefMap {
+    if (next.viewSource === "authoritative") {
+      return { ...next.authoritativeRefs };
     }
 
-    const verification = {
-      stateHead,
-      gitHead,
-      descendsFromState: undefined as boolean | undefined,
-    };
-    this.ancestryVerification = verification;
+    const effective: ResolvedRefMap = { ...next.authoritativeRefs };
+    const stateEvent = this.stateManager.currentState;
+    if (next.viewSource === "nostr") {
+      for (const ref of stateEvent?.refs ?? []) {
+        const groups = this.groupServerRefCandidates(ref.name);
+        effective[ref.name] = {
+          commitId: this.getStateRefAnchor(ref.commitId, groups),
+          source: "state",
+        };
+      }
+      return effective;
+    }
 
+    const selectedUrl = next.viewSource;
+    const tracker = this.urlManager.get(selectedUrl);
+    if (!tracker?.state.infoRefs) return effective;
+    for (const refName of Object.keys(tracker.state.infoRefs.refs)) {
+      if (refName.endsWith("^{}")) continue;
+      const commitId =
+        tracker.state.infoRefs.refs[`${refName}^{}`] ??
+        tracker.state.infoRefs.refs[refName];
+      if (commitId) {
+        effective[refName] = {
+          commitId,
+          source: "git",
+          sourceUrl: selectedUrl,
+        };
+      }
+    }
+    return effective;
+  }
+
+  /**
+   * Lazily verify a ref's differing server value. The default branch calls
+   * this eagerly; other refs are checked on first resolveRef() use.
+   */
+  private ensureRefVerification(refName: string): Promise<void> {
+    const stateEvent = this.stateManager.currentState;
+    const stateRef = stateEvent?.refs.find((ref) => ref.name === refName);
+    if (!stateRef) return Promise.resolve();
+
+    const groups = this.groupServerRefCandidates(refName);
+    const stateAnchor = this.getStateRefAnchor(stateRef.commitId, groups);
+    const differing = groups.filter(
+      (group) => !commitsMatch(group.commitId, stateAnchor),
+    );
+    const unsettled = differing.filter((group) => {
+      const verification = this.ancestryVerifications.get(
+        this.verificationKey(refName, stateAnchor, group.commitId),
+      );
+      return !verification || verification.status !== "complete";
+    });
+    if (unsettled.length === 0) return Promise.resolve();
+
+    return Promise.all(
+      unsettled.map((group) =>
+        this.ensureCandidateVerification(
+          refName,
+          stateAnchor,
+          this.pickGroupSource(group),
+        ),
+      ),
+    ).then(() => {
+      // Re-derive only after every candidate in this batch has settled. This
+      // prevents a fast mirror from temporarily winning before a slower
+      // mirror proves that it contains an incomparable fork.
+      if (!this.isDisposed) this.setState((prev) => ({ ...prev }), false);
+    });
+  }
+
+  private ensureCandidateVerification(
+    refName: string,
+    stateCommit: string,
+    candidate: ServerRefCandidate,
+  ): Promise<void> {
+    const key = this.verificationKey(refName, stateCommit, candidate.commitId);
+    const existing = this.ancestryVerifications.get(key);
+    if (existing && existing.status !== "unavailable") {
+      return existing.promise;
+    }
+
+    const verification: RefAncestryVerification = {
+      stateCommit,
+      gitCommit: candidate.commitId,
+      status: "pending",
+      descendsFromState: undefined as boolean | undefined,
+      history: undefined,
+      promise: Promise.resolve(),
+    };
     const abort = new AbortController();
-    this.getCommitHistory(
-      gitHead,
+    verification.promise = this.getCommitHistory(
+      candidate.commitId,
       ANCESTRY_VERIFICATION_MAX_DEPTH,
       abort.signal,
-      undefined,
-      stateHead,
+      [candidate.sourceUrl],
+      stateCommit,
     )
       .then((history) => {
-        if (this.isDisposed || this.ancestryVerification !== verification) {
+        if (
+          this.isDisposed ||
+          this.ancestryVerifications.get(key) !== verification
+        ) {
           return;
         }
-        verification.descendsFromState = !!history?.some(
-          (commit) => commit.hash === stateHead,
-        );
-        if (verification.descendsFromState) {
-          // Re-emit so deriveAuthoritativeHead picks up the verified head.
-          this.setState((prev) => ({ ...prev }));
+        if (!history || history.length === 0) {
+          verification.status = "unavailable";
+          return;
         }
+        verification.history = history.map((commit) => commit.hash);
+        verification.descendsFromState = history.some((commit) =>
+          commitsMatch(commit.hash, stateCommit),
+        );
+        verification.status = "complete";
       })
       .catch(() => {
-        // Walk failed — leave descendsFromState undefined so the signed
-        // state head stays authoritative; a later warning re-triggers the
-        // check only if the head pair changes.
+        // Transport/parser failures are not ancestry evidence. Keep a
+        // distinct unavailable result so ref derivation can distinguish it
+        // from a newly discovered candidate whose check has not started.
+        if (this.ancestryVerifications.get(key) === verification) {
+          verification.status = "unavailable";
+        }
       });
+    this.ancestryVerifications.set(key, verification);
+    return verification.promise;
+  }
+
+  /** Resolve protocol truth for a ref, lazily ancestry-verifying if needed. */
+  async resolveRef(refName: string): Promise<AuthoritativeRef | null> {
+    await this.ensureRefVerification(refName);
+    return this.state$.getValue().authoritativeRefs[refName] ?? null;
+  }
+
+  /** Change the shared display preference without affecting protocol truth. */
+  setViewSource(source: ViewSource | "default"): void {
+    const viewSource = source === "default" ? "authoritative" : source;
+    if (this.state$.getValue().viewSource === viewSource) return;
+    this.setState((prev) => ({ ...prev, viewSource }));
   }
 
   // -----------------------------------------------------------------------
@@ -769,7 +1294,15 @@ export class GitGraspPool {
     this.startFetch();
   }
 
-  private async runFetch(): Promise<void> {
+  private runFetch(): Promise<void> {
+    const task = this.performFetch().finally(() => {
+      if (this.fetchTask === task) this.fetchTask = null;
+    });
+    this.fetchTask = task;
+    return task;
+  }
+
+  private async performFetch(): Promise<void> {
     const allUrls = this.urlManager.getLiveUrls();
     if (allUrls.length === 0) {
       this.fetching = false;
@@ -1377,16 +1910,13 @@ export class GitGraspPool {
             nestLimit,
             signal,
           );
+          // Cancellation carries no evidence about this server's objects.
+          signal.throwIfAborted();
+          this.http.lifecycleSignal.throwIfAborted();
           const tracker = this.urlManager.get(url);
-          if (result) {
-            tracker?.recordOperationSuccess(Date.now() - start);
-            tracker?.recordObjectFetch(commitHash, "ok");
-          } else {
-            // fetchTree returned null without throwing — the server's response
-            // genuinely lacked the objects for this commit.
-            tracker?.recordObjectFetch(commitHash, "object-missing");
-          }
-          if (!result && isPoolUrl) {
+          tracker?.recordOperationSuccess(Date.now() - start);
+          tracker?.recordObjectFetch(commitHash, "ok");
+          if (isPoolUrl) {
             this.setState((prev) => ({
               ...prev,
               urls: this.urlManager.toStateRecord(),
@@ -1394,12 +1924,11 @@ export class GitGraspPool {
           }
           return result;
         } catch (err) {
-          if (signal.aborted) throw err;
+          if (signal.aborted || this.http.lifecycleSignal.aborted) return null;
           const classified = classifyObjectFetchError(err);
           const tracker = this.urlManager.get(url);
           if (classified.missing) {
-            // The server returned a valid response (or "not our ref") without
-            // the commit's objects — genuine missing objects.
+            // upload-pack explicitly rejected the requested ref.
             tracker?.recordObjectFetch(commitHash, "object-missing");
           } else {
             // The git-upload-pack call or packfile transport/parse failed.
@@ -1461,6 +1990,16 @@ export class GitGraspPool {
     );
   }
 
+  /** Read the annotation using the raw tag OID, never the peeled commit OID. */
+  async getTagMessage(
+    tagHash: string,
+    signal: AbortSignal,
+  ): Promise<string | null> {
+    return this.withFallback(signal, (url) =>
+      this.http.fetchTagMessage(url, tagHash, signal),
+    );
+  }
+
   /**
    * Get a blob by its object hash.
    *
@@ -1491,6 +2030,71 @@ export class GitGraspPool {
       },
       fallbackUrls,
     );
+  }
+
+  /**
+   * Get several blobs, using one upload-pack request for uncached hashes.
+   *
+   * If no single mirror can serve the complete batch, missing hashes retain
+   * the established per-object mirror and fallback-URL behavior.
+   */
+  async getBlobs(
+    blobHashes: string[],
+    signal: AbortSignal,
+    fallbackUrls?: string[],
+  ): Promise<Map<string, Uint8Array>> {
+    const blobs = new Map<string, Uint8Array>();
+    const uniqueHashes = [...new Set(blobHashes)];
+
+    for (const hash of uniqueHashes) {
+      const cached = this.cache.peekBlob(hash);
+      if (cached) blobs.set(hash, cached);
+    }
+
+    const l2Hashes = uniqueHashes.filter((hash) => !blobs.has(hash));
+    const l2Results = await Promise.all(
+      l2Hashes.map(
+        async (hash) => [hash, await this.cache.getBlob(hash)] as const,
+      ),
+    );
+    for (const [hash, data] of l2Results) {
+      if (data) blobs.set(hash, data);
+    }
+
+    if (signal.aborted) return blobs;
+    const missing = uniqueHashes.filter((hash) => !blobs.has(hash));
+    if (missing.length === 0) return blobs;
+
+    const batch = await this.withFallback(
+      signal,
+      async (url) => {
+        const start = Date.now();
+        const result = await this.http.fetchBlobs(url, missing, signal);
+        if (result && result.size > 0) {
+          const tracker = this.urlManager.get(url);
+          tracker?.recordOperationSuccess(Date.now() - start);
+        }
+        return result;
+      },
+      fallbackUrls,
+    );
+    if (batch) {
+      for (const [hash, data] of batch) blobs.set(hash, data);
+    }
+
+    if (signal.aborted) return blobs;
+    const stillMissing = uniqueHashes.filter((hash) => !blobs.has(hash));
+    const fallbackResults = await Promise.all(
+      stillMissing.map(
+        async (hash) =>
+          [hash, await this.getBlob(hash, signal, fallbackUrls)] as const,
+      ),
+    );
+    for (const [hash, data] of fallbackResults) {
+      if (data) blobs.set(hash, data);
+    }
+
+    return blobs;
   }
 
   /**
@@ -1662,7 +2266,9 @@ export class GitGraspPool {
    * {@link getPackableObjectsForCommitRange}; see `grasp-push.ts` for the
    * per-server semantics. Guards the signed Nostr state with a fast-forward
    * check before anything is sent. Resolves once at least one server
-   * accepted; throws when every server rejected.
+   * accepted — the rest keep syncing in the background, reporting through
+   * `options.onUpdate` and `summary.settled`. Throws when every server
+   * rejected.
    *
    * @param objects - All objects required for the primary update.
    * @param refUpdate - The primary ref update (consensus old hash → new hash).
@@ -1671,6 +2277,8 @@ export class GitGraspPool {
    * @param options.currentStateEvent - Current kind:30618 state; its refs form
    *   the post-push ref set every server is verified against.
    * @param options.fallbackUrls - Extra URLs for catch-up object fetches.
+   * @param options.onUpdate - Called with a fresh summary snapshot every time
+   *   a server settles, including background settles after resolution.
    */
   async pushRefUpdate(
     objects: PackableObject[],
@@ -1680,26 +2288,45 @@ export class GitGraspPool {
       currentStateEvent?: NostrEvent | null;
       fallbackUrls?: string[];
       signal?: AbortSignal;
+      onUpdate?: (summary: PushDeliverySummary) => void;
     },
   ): Promise<PushDeliverySummary> {
+    const signal = options.signal
+      ? AbortSignal.any([options.signal, this.http.lifecycleSignal])
+      : this.http.lifecycleSignal;
+    if (signal.aborted) {
+      throw signal.reason instanceof Error
+        ? signal.reason
+        : new DOMException("Aborted", "AbortError");
+    }
+
     const summary = await pushRefUpdateToGraspServers({
       cloneUrls: options.targetCloneUrls,
       objects,
       refUpdate,
       currentStateEvent: options.currentStateEvent,
+      authorizationProvider: this.authorizationProvider,
+      signal,
+      onUpdate: (snapshot) => {
+        if (signal.aborted) return;
+        // Once the last background push settles, revalidate info/refs again
+        // so late-syncing mirrors are reflected without waiting for a poll.
+        if (snapshot.pendingCount === 0) this.refreshAdvertisedRefs();
+        options.onUpdate?.(snapshot);
+      },
       fetchCatchUpObjects: async (
         tipCommitId,
         stopAtCommitId,
         includeObjectIds,
+        pushSignal,
       ) => {
         if (!tipCommitId || tipCommitId === ZERO_HASH) {
           return Promise.resolve(null);
         }
-        const signal = options.signal ?? new AbortController().signal;
         const objects = await this.getPackableObjectsForCommitRange(
           tipCommitId,
           stopAtCommitId,
-          signal,
+          pushSignal ?? signal,
           options.fallbackUrls,
         );
         if (!objects || !includeObjectIds || includeObjectIds.length === 0) {
@@ -1714,7 +2341,7 @@ export class GitGraspPool {
 
           const extraObjects = await this.getPackableObjectsForObject(
             objectId,
-            signal,
+            pushSignal ?? signal,
             options.fallbackUrls,
           );
           if (!extraObjects?.some((object) => object.hash === objectId)) {
@@ -1726,11 +2353,20 @@ export class GitGraspPool {
         return fetchedObjects;
       },
     });
+    if (signal.aborted) {
+      throw signal.reason instanceof Error
+        ? signal.reason
+        : new DOMException("Aborted", "AbortError");
+    }
 
     // The server-side refs have just changed, but info/refs is cached by the
     // pool. Revalidate immediately rather than waiting for the state-event
-    // backoff poll (or a full page reload) to notice this merge.
-    this.refreshAdvertisedRefs();
+    // backoff poll (or a full page reload) to notice this merge. When pushes
+    // are still settling in the background, the onUpdate wrapper above
+    // refreshes again once the last one lands.
+    if (summary.pendingCount > 0 && !signal.aborted) {
+      this.refreshAdvertisedRefs();
+    }
 
     return summary;
   }
@@ -1746,6 +2382,12 @@ export class GitGraspPool {
     signal: AbortSignal,
     fallbackUrls?: string[],
   ): Promise<Commit | null> {
+    if (!/^[0-9a-f]{40}$/i.test(commitHash)) {
+      throw new Error(
+        `Invalid commit ID "${commitHash}": expected a 40-character hexadecimal SHA-1`,
+      );
+    }
+
     const cached = this.cache.peekCommit(commitHash);
     if (cached) return cached;
 
@@ -1757,6 +2399,40 @@ export class GitGraspPool {
       async (url) => {
         const start = Date.now();
         const result = await this.http.fetchSingleCommit(
+          url,
+          commitHash,
+          signal,
+        );
+        if (result) {
+          const tracker = this.urlManager.get(url);
+          tracker?.recordOperationSuccess(Date.now() - start);
+        }
+        return result;
+      },
+      fallbackUrls,
+    );
+  }
+
+  /**
+   * Prove that an advertised server can supply an exact commit now. Unlike
+   * getSingleCommit, this deliberately bypasses both memory and IndexedDB.
+   */
+  async probeCommitOnNetwork(
+    commitHash: string,
+    signal: AbortSignal,
+    fallbackUrls?: string[],
+  ): Promise<Commit | null> {
+    if (!/^[0-9a-f]{40}$/i.test(commitHash)) {
+      throw new Error(
+        `Invalid commit ID "${commitHash}": expected a 40-character hexadecimal SHA-1`,
+      );
+    }
+
+    return this.withFallback(
+      signal,
+      async (url) => {
+        const start = Date.now();
+        const result = await this.http.fetchSingleCommitFromNetwork(
           url,
           commitHash,
           signal,
@@ -1898,27 +2574,63 @@ export class GitGraspPool {
       return null;
     }
 
-    const byHash = new Map([...chainA, ...chainB].map((c) => [c.hash, c]));
-    const distancesFromA = ancestryDistances(commitA, byHash);
-    const distancesFromB = ancestryDistances(commitB, byHash);
+    return findMergeBaseInHistories(commitA, commitB, chainA, chainB);
+  }
 
-    let bestHash: string | null = null;
-    let bestScore = Number.POSITIVE_INFINITY;
-
-    for (const [hash, distanceA] of distancesFromA) {
-      const distanceB = distancesFromB.get(hash);
-      if (distanceB === undefined) continue;
-
-      // Pick the nearest common ancestor in the graph, not the first common
-      // commit in the timestamp-sorted history returned by getCommitHistory().
-      const score = distanceA + distanceB;
-      if (score < bestScore) {
-        bestScore = score;
-        bestHash = hash;
-      }
+  /**
+   * Compare two explicit commits without downloading their full capped
+   * histories up front. The graph is expanded through bounded checkpoints and
+   * stops as soon as both the merge base and complete exclusive ranges are
+   * available.
+   */
+  async compareCommits(
+    baseCommitId: string,
+    headCommitId: string,
+    signal: AbortSignal,
+    fallbackUrls?: string[],
+    maxDepth = 200,
+  ): Promise<CommitComparisonData | null> {
+    if (baseCommitId === headCommitId) {
+      const commit = await this.getSingleCommit(
+        baseCommitId,
+        signal,
+        fallbackUrls,
+      );
+      return commit
+        ? {
+            mergeBaseId: commit.hash,
+            baseCommit: commit,
+            headCommit: commit,
+            baseOnlyCommits: [],
+            headOnlyCommits: [],
+          }
+        : null;
     }
 
-    if (bestHash) return bestHash;
+    for (const depth of comparisonGraphDepths(maxDepth)) {
+      const [baseHistory, headHistory] = await Promise.all([
+        this.getCommitHistory(baseCommitId, depth, signal),
+        this.getCommitHistory(headCommitId, depth, signal, fallbackUrls),
+      ]);
+
+      if (signal.aborted) return null;
+      if (
+        !baseHistory ||
+        baseHistory.length === 0 ||
+        !headHistory ||
+        headHistory.length === 0
+      ) {
+        return null;
+      }
+
+      const comparison = comparisonFromHistories(
+        baseCommitId,
+        headCommitId,
+        baseHistory,
+        headHistory,
+      );
+      if (comparison) return comparison;
+    }
 
     return null;
   }
@@ -1941,20 +2653,21 @@ export class GitGraspPool {
    *
    * @param batchSize - Commits per fetch (default 200, matches findMergeBase).
    * @param maxTotal  - Hard cap on total commits walked (default 5000).
+   * @param tipCommitId - Explicit effective default-branch tip. When omitted,
+   *   the pool resolves HEAD from its effective ref view.
    */
   async countCommitsBehind(
     mergeBase: string,
     signal: AbortSignal,
     batchSize = 200,
     maxTotal = 5000,
+    tipCommitId?: string,
   ): Promise<number | null> {
-    const info = this.getInfoRefs();
-    if (!info) return null;
-
-    const headRef = info.symrefs["HEAD"];
-    const defaultBranchCommit = headRef
-      ? info.refs[headRef]
-      : Object.values(info.refs)[0];
+    const info = tipCommitId ? null : this.getEffectiveInfoRefs();
+    const headRef = info?.symrefs["HEAD"];
+    const defaultBranchCommit =
+      tipCommitId ??
+      (headRef ? info?.refs[headRef] : info && Object.values(info.refs)[0]);
     if (!defaultBranchCommit) return null;
 
     if (defaultBranchCommit === mergeBase) return 0;
@@ -2149,8 +2862,8 @@ export class GitGraspPool {
    * take precedence; refs from all servers are merged so that refs only
    * present on some servers (e.g. GitHub-only branches) are visible.
    *
-   * Winner refs take precedence over other servers for the same ref name,
-   * so the displayed commit hash is always from the authoritative source.
+   * Winner refs take precedence in this raw union. Display consumers should
+   * use getEffectiveInfoRefs(), which overlays the pool's per-ref resolution.
    */
   getMergedInfoRefs(): InfoRefsUploadPackResponse | null {
     const winner = this.getInfoRefs();
@@ -2185,6 +2898,50 @@ export class GitGraspPool {
   }
 
   /**
+   * Return the merged ref advertisement with the shared display preference
+   * applied per ref. Annotated tag object IDs are preserved while their
+   * peeled commit entries receive the effective commit.
+   */
+  getEffectiveInfoRefs(): InfoRefsUploadPackResponse | null {
+    const merged = this.getMergedInfoRefs();
+    if (!merged) return null;
+
+    const state = this.state$.getValue();
+    const refs = { ...merged.refs };
+    for (const [refName, resolved] of Object.entries(state.effectiveRefs)) {
+      if (refs[`${refName}^{}`]) {
+        const stateRef = this.stateManager.currentState?.refs.find(
+          (ref) => ref.name === refName,
+        );
+        if (
+          resolved.source === "state" &&
+          stateRef &&
+          !commitsMatch(stateRef.commitId, resolved.commitId)
+        ) {
+          // Legacy signed state used the annotated-tag object ID. Preserve
+          // that signed raw ref while placing its normalized commit in ^{}.
+          refs[refName] = stateRef.commitId;
+        }
+        refs[`${refName}^{}`] = resolved.commitId;
+      } else {
+        refs[refName] = resolved.commitId;
+      }
+    }
+
+    let symrefs = merged.symrefs;
+    if (state.viewSource !== "authoritative" && state.viewSource !== "nostr") {
+      symrefs =
+        this.urlManager.get(state.viewSource)?.state.infoRefs?.symrefs ??
+        symrefs;
+    } else {
+      const headRef = this.stateManager.currentState?.headRef;
+      if (headRef) symrefs = { ...symrefs, HEAD: headRef };
+    }
+
+    return { ...merged, refs, symrefs };
+  }
+
+  /**
    * Returns true if the given URL is currently being routed through the
    * CORS proxy. Useful for UI components that display proxy status.
    */
@@ -2205,6 +2962,8 @@ export class GitGraspPool {
    *   the pool — they are only used for this single operation invocation.
    *   Intended for PR/PR-Update clone URLs that may host commits not yet
    *   mirrored to the repo's main git servers.
+   *   Authenticated pools reject an extra URL unless the authorization
+   *   provider independently verified that exact repository root.
    */
   private async withFallback<T>(
     signal: AbortSignal,
@@ -2218,6 +2977,12 @@ export class GitGraspPool {
     const extraUrls = fallbackUrls
       ? fallbackUrls.filter((u) => !poolUrlSet.has(u) && !isNonHttpUrl(u))
       : [];
+    if (this.authorizationProvider) {
+      const unverified = extraUrls.find(
+        (url) => !this.authorizationProvider?.canAuthorize(url),
+      );
+      if (unverified) throw new UnverifiedPrivateGitRootError(unverified);
+    }
     const urls = [...poolUrls, ...extraUrls];
 
     if (urls.length === 0) return null;
@@ -2274,8 +3039,21 @@ export class GitGraspPool {
     const all = this.urlManager.getAll();
     const result: string[] = [];
 
+    // A concrete view override is a read-routing preference only. It never
+    // changes authoritativeRefs or a write target, and normal fallbacks still
+    // apply when the selected server lacks an object.
+    const viewSource = this.state$.getValue().viewSource;
+    const preferredViewUrl =
+      viewSource !== "authoritative" && viewSource !== "nostr"
+        ? viewSource
+        : null;
+    if (preferredViewUrl) {
+      const preferred = this.urlManager.get(preferredViewUrl);
+      if (preferred?.isUsable) result.push(preferredViewUrl);
+    }
+
     // Winner first
-    if (this.winnerUrl) {
+    if (this.winnerUrl && this.winnerUrl !== preferredViewUrl) {
       const winner = this.urlManager.get(this.winnerUrl);
       if (winner && winner.isUsable) {
         result.push(this.winnerUrl);
@@ -2284,7 +3062,12 @@ export class GitGraspPool {
 
     // Other ok URLs sorted by latency
     const okUrls = all
-      .filter((t) => t.status === "ok" && t.url !== this.winnerUrl)
+      .filter(
+        (t) =>
+          t.status === "ok" &&
+          t.url !== this.winnerUrl &&
+          t.url !== preferredViewUrl,
+      )
       .sort((a, b) => a.avgLatency - b.avgLatency);
     for (const t of okUrls) {
       result.push(t.url);
@@ -2292,7 +3075,10 @@ export class GitGraspPool {
 
     // Untested URLs
     const untested = all.filter(
-      (t) => t.status === "untested" && t.url !== this.winnerUrl,
+      (t) =>
+        t.status === "untested" &&
+        t.url !== this.winnerUrl &&
+        t.url !== preferredViewUrl,
     );
     for (const t of untested) {
       result.push(t.url);
@@ -2318,10 +3104,11 @@ export class GitGraspPool {
    * Called automatically after the eviction grace period, or manually.
    */
   dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
     this.abort?.abort();
+    this.http.dispose();
     this.stateManager.cancelBackoff();
-    this.stateEventSub?.unsubscribe();
-    this.stateEventSub = null;
     if (this.evictTimer !== null) {
       clearTimeout(this.evictTimer);
       this.evictTimer = null;
@@ -2332,6 +3119,11 @@ export class GitGraspPool {
 
   /** Whether this pool has been disposed */
   get isDisposed(): boolean {
-    return this.state$.closed;
+    return this.disposed;
+  }
+
+  /** Current React/imperative subscribers, used for private-session disposal. */
+  get subscriberCount(): number {
+    return this.subscribers.size;
   }
 }

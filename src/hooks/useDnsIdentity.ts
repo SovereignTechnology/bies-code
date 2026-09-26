@@ -1,9 +1,30 @@
-import { useState, useEffect } from "react";
+import { useErrorRetry, type ErrorRetryState } from "@/hooks/useErrorRetry";
+import { useState, useEffect, useRef } from "react";
 import { IdentityStatus } from "applesauce-loaders/helpers";
 import type { Identity } from "applesauce-loaders/helpers";
 import { dnsIdentityLoader, nip05WarmupReady } from "@/services/nostr";
 
 const RESOLVE_TIMEOUT_MS = 5_000;
+
+/**
+ * Namecoin `.bit` NIP-05 opt-in.
+ *
+ * A NIP-05 domain that ends in `.bit` is a Namecoin identifier, not
+ * a DNS one — there is no DNS root that answers for `.bit`. We check
+ * this cheaply with an inline substring test (no import cost) and,
+ * on a hit, route the lookup through the lazy Namecoin resolver.
+ *
+ * This is one of the two integration points the gitworkshop review
+ * asked for: a URL / identifier ending in `.bit` counts as an
+ * explicit opt-in, so `resolveNamecoinLazily` is only ever pulled in
+ * on demand. Everything else in this hook still uses the standard
+ * DNS resolver.
+ */
+function isDotBitNip05(nip05: string): boolean {
+  const atIdx = nip05.indexOf("@");
+  const domain = atIdx === -1 ? nip05 : nip05.slice(atIdx + 1);
+  return domain.toLowerCase().endsWith(".bit");
+}
 
 export type DnsIdentityState =
   | { status: "loading" }
@@ -49,7 +70,9 @@ function parseNip05(nip05: string): { name: string; domain: string } | null {
  * identities already resolved this session (e.g. via usePrefetchNip05) are
  * available on the very first render — no loading flash.
  */
-export function useDnsIdentity(nip05: string | undefined): DnsIdentityState {
+export function useDnsIdentity(
+  nip05: string | undefined,
+): DnsIdentityState & { recovery: ErrorRetryState } {
   const [state, setState] = useState<DnsIdentityState>(() => {
     // Check the in-memory cache synchronously so components that arrive from
     // the repositories list (where usePrefetchNip05 has already run) render
@@ -57,12 +80,41 @@ export function useDnsIdentity(nip05: string | undefined): DnsIdentityState {
     if (!nip05) return { status: "loading" };
     const parsed = parseNip05(nip05);
     if (!parsed) return { status: "loading" };
+    // `.bit` names never hit the DNS loader; keep the initial state as
+    // `loading` and let the effect below route to Namecoin resolution.
+    if (isDotBitNip05(nip05)) return { status: "loading" };
     const cached = dnsIdentityLoader.getIdentity(parsed.name, parsed.domain);
     return cached ? cachedIdentityToState(cached) : { status: "loading" };
   });
 
+  const [stateKey, setStateKey] = useState(nip05);
+  const currentState: DnsIdentityState =
+    stateKey === nip05 ? state : { status: "loading" };
+  const [retryVersion, setRetryVersion] = useState(0);
+  const retryIdentity = useRef<string | undefined>(undefined);
+  const recovery = useErrorRetry({
+    resourceKey: nip05,
+    failed: currentState.status === "error",
+    busy: currentState.status === "loading",
+    onRetry: () => {
+      retryIdentity.current = nip05;
+      setRetryVersion((version) => version + 1);
+    },
+    policy:
+      nip05 && parseNip05(nip05)
+        ? { mode: "read", requiresSigning: false, context: "connection" }
+        : { mode: "manual" },
+  });
+
   useEffect(() => {
-    if (!nip05) return;
+    // Bypass the cache only for the requested attempt, never a later identity.
+    const forceRefresh = !!nip05 && retryIdentity.current === nip05;
+    retryIdentity.current = undefined;
+    setStateKey(nip05);
+    if (!nip05) {
+      setState({ status: "loading" });
+      return;
+    }
 
     const parsed = parseNip05(nip05);
     if (!parsed) {
@@ -74,8 +126,65 @@ export function useDnsIdentity(nip05: string | undefined): DnsIdentityState {
       return;
     }
     const { name, domain } = parsed;
+    setState({ status: "loading" });
 
     let cancelled = false;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+
+    // ------------------------------------------------------------
+    // Namecoin `.bit` short-circuit — opt-in path.
+    //
+    // The identifier itself carries the opt-in signal (`.bit` TLD),
+    // so lazy-load the Namecoin resolver and skip the DNS path
+    // entirely. Matches the gitworkshop review bullet: "same
+    // client-side resolver for both search and direct repository URLs".
+    // ------------------------------------------------------------
+    if (domain.toLowerCase().endsWith(".bit")) {
+      // Namecoin `.bit` records use the same `_` root convention as
+      // NIP-05 to mean "the record for the bare domain". Rebuild the
+      // identifier in the form the resolver accepts.
+      const bareDomain = domain.slice(0, -".bit".length);
+      const identifier =
+        name === "_" ? `${bareDomain}.bit` : `${name}@${bareDomain}.bit`;
+      void import(
+        /* webpackChunkName: "namecoin-resolver" */ "@/lib/namecoin/lazy"
+      )
+        .then(({ resolveNamecoinLazily }) => resolveNamecoinLazily(identifier))
+        .then((outcome) => {
+          if (cancelled) return;
+          if (outcome.status === "resolved") {
+            setState({
+              status: "found",
+              pubkey: outcome.result.pubkey,
+              relays: outcome.result.relays ?? [],
+            });
+          } else if (outcome.status === "not-found") {
+            setState({ status: "not-found" });
+          } else {
+            // `unavailable` — map onto the existing `error/network`
+            // shape so downstream Nip05ResolveError renders a
+            // "resolver offline" style message rather than the
+            // more definitive not-found page.
+            setState({
+              status: "error",
+              reason: "network",
+              message:
+                "Namecoin resolver unavailable — could not reach any ElectrumX server.",
+            });
+          }
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setState({
+            status: "error",
+            reason: "network",
+            message: "Namecoin resolver unavailable (module load failed).",
+          });
+        });
+      return () => {
+        cancelled = true;
+      };
+    }
 
     // Await the IDB warmup before checking the in-memory cache. On a fresh
     // page load the warmup is async; if the user navigates to a NIP-05 repo
@@ -88,17 +197,22 @@ export function useDnsIdentity(nip05: string | undefined): DnsIdentityState {
       // Check in-memory cache — avoids a loading flash when the identity is
       // already resolved (e.g. back-navigation or warm IDB).
       const cached = dnsIdentityLoader.getIdentity(name, domain);
-      if (cached) {
+      if (cached && !forceRefresh) {
         setState(cachedIdentityToState(cached));
         return;
       }
 
-      const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("__timeout__")), RESOLVE_TIMEOUT_MS),
-      );
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error("__timeout__")),
+          RESOLVE_TIMEOUT_MS,
+        );
+      });
 
       Promise.race([
-        dnsIdentityLoader.loadIdentity(name, domain),
+        forceRefresh
+          ? dnsIdentityLoader.fetchIdentity(name, domain)
+          : dnsIdentityLoader.loadIdentity(name, domain),
         timeoutPromise,
       ])
         .then((identity) => {
@@ -131,13 +245,15 @@ export function useDnsIdentity(nip05: string | undefined): DnsIdentityState {
               message: msg,
             });
           }
-        });
+        })
+        .finally(() => clearTimeout(timeout));
     });
 
     return () => {
+      clearTimeout(timeout);
       cancelled = true;
     };
-  }, [nip05]);
+  }, [nip05, retryVersion]);
 
-  return state;
+  return { ...currentState, recovery };
 }

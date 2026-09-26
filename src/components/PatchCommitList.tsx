@@ -1,34 +1,32 @@
 /**
- * PatchCommitList — renders a list of commits derived from a NIP-34 patch chain.
+ * PatchCommitList — renders a NIP-34 patch chain as condensed commit-graph
+ * rows, matching the visual language of CommitList (PR commits tab, repo
+ * commits page).
  *
  * Each patch in the chain represents one commit. When the patch includes
  * `commit`, `parent-commit`, and `committer` tags, we display the git commit
  * metadata. Otherwise we fall back to the patch subject and event timestamp.
+ * The chain is linear and displayed oldest-first; the base commit always
+ * lies outside the chain, so the boundary row fades into a dashed stub.
  *
- * Commit links point to `<basePath>/commit/<hash>` when a commit ID is
- * available, matching the same pattern as CommitList for PRs.
+ * Commit links point to `<basePath>/commit/<nevent1>` — the patch event ID
+ * is the canonical URL segment, matching CommitList's pattern for PRs.
  */
 
 import { useMemo } from "react";
-import { Link } from "react-router-dom";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { cn } from "@/lib/utils";
 import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import {
-  Clock,
-  User,
-  GitCommit,
-  AlertTriangle,
-  ChevronDown,
-} from "lucide-react";
-import { safeFormatDistanceToNow, safeFormat } from "@/lib/utils";
+import { AlertTriangle, ChevronDown, GitCommit } from "lucide-react";
 import { eventIdToNevent } from "@/lib/routeUtils";
+import { layoutCommitGraph } from "@/lib/commit-graph";
+import { GraphCommitRow } from "@/components/CommitList";
+import type { Commit } from "@/lib/git-grasp-pool";
 import type { Patch } from "@/casts/Patch";
 
 // ---------------------------------------------------------------------------
@@ -87,32 +85,88 @@ export function PatchCommitList({
     failureReason?: "no-base" | "fetch-failed" | "hunk-mismatch";
   };
 }) {
-  // Group by date (using committer timestamp or event created_at)
-  const grouped = useMemo(() => {
-    const groups: { date: string; patches: Patch[] }[] = [];
-    let currentDate = "";
-
-    // Render oldest first (natural patch chain order), skipping cover letters
-    for (const patch of patches.filter((p) => !p.isCoverLetter)) {
+  // One entry per non-cover patch, oldest first (natural chain order).
+  const entries = useMemo(() => {
+    const chain = patches.filter((p) => !p.isCoverLetter);
+    return chain.map((patch) => {
       const committer = parseCommitterTag(patch);
-      const ts = committer?.timestamp ?? patch.event.created_at;
-      const dateStr = safeFormat(ts, "MMMM d, yyyy") ?? "Unknown date";
-      if (dateStr !== currentDate) {
-        currentDate = dateStr;
-        groups.push({ date: dateStr, patches: [] });
-      }
-      groups[groups.length - 1].patches.push(patch);
-    }
+      return {
+        patch,
+        // The commit hash keys the graph row; patches without a commit tag
+        // fall back to the event ID, which is equally unique.
+        hash: patch.commitId ?? patch.event.id,
+        commitId: patch.commitId,
+        timestamp: committer?.timestamp ?? patch.event.created_at,
+        authorName: committer?.name ?? "(unknown)",
+        linkSegment: eventIdToNevent(patch.event.id, relayHints),
+      };
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [patches, relayHints?.join(",")]);
 
-    return groups;
-  }, [patches]);
+  // Synthesize the linear chain for the graph: each patch's parent is its
+  // predecessor; the oldest patch points at its parent-commit tag (outside
+  // the set → natural stub) or, lacking one, relies on continuesBelow — the
+  // base commit always exists below a patch chain.
+  const layout = useMemo(() => {
+    const commits: Commit[] = entries.map((entry, i) => {
+      const person = {
+        name: entry.authorName,
+        email: "",
+        timestamp: entry.timestamp,
+        timezone: "+0000",
+      };
+      const parentCommitId = entry.patch.parentCommitId;
+      return {
+        hash: entry.hash,
+        tree: "",
+        parents:
+          i > 0
+            ? [entries[i - 1].hash]
+            : parentCommitId
+              ? [parentCommitId]
+              : [],
+        author: person,
+        committer: person,
+        message: entry.patch.subject,
+      };
+    });
+    return layoutCommitGraph(commits, { continuesBelow: true });
+  }, [entries]);
+
+  const rows = useMemo(() => {
+    const byHash = new Map(entries.map((entry) => [entry.hash, entry]));
+    // Layout rows are newest-first; display oldest-first like the PR tab.
+    return [...layout.rows].reverse().map((graphRow) => ({
+      graphRow,
+      entry: byHash.get(graphRow.commit.hash),
+    }));
+  }, [layout, entries]);
 
   // Determine which banner to show based on what we know.
   // applyResult is only available after the user has visited the Files tab.
   const applyFailed = applyResult && applyResult.failedCount > 0;
 
+  const patchBadge = (
+    <TooltipProvider delayDuration={300}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Badge
+            variant="outline"
+            className="hidden sm:inline-flex text-[10px] px-1.5 py-0 h-4 font-normal text-muted-foreground/70 border-muted-foreground/20 shrink-0"
+          >
+            patch
+          </Badge>
+        </TooltipTrigger>
+        <TooltipContent side="top" className="text-xs">
+          Sourced from a Nostr patch event
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       {/* Apply failed — amber warning */}
       {isBaseGuessed && applyFailed && (
         <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-sm text-amber-700 dark:text-amber-400">
@@ -134,120 +188,35 @@ export function PatchCommitList({
           </details>
         </div>
       )}
-      {grouped.map((group) => (
-        <div key={group.date}>
-          <div className="flex items-center gap-3 mb-2">
-            <Clock className="h-3.5 w-3.5 text-muted-foreground" />
-            <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-              {group.date}
-            </span>
-            <div className="flex-1 h-px bg-border/40" />
-          </div>
-          <Card className="overflow-hidden">
-            <div className="divide-y divide-border/40">
-              {group.patches.map((patch) => (
-                <PatchCommitRow
-                  key={patch.id}
-                  patch={patch}
-                  basePath={basePath}
-                  relayHints={relayHints}
-                />
-              ))}
-            </div>
-          </Card>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// PatchCommitRow
-// ---------------------------------------------------------------------------
-
-function PatchCommitRow({
-  patch,
-  basePath,
-  relayHints,
-}: {
-  patch: Patch;
-  basePath: string;
-  relayHints?: string[];
-}) {
-  const committer = parseCommitterTag(patch);
-  const ts = committer?.timestamp ?? patch.event.created_at;
-  const authorName = committer?.name ?? "(unknown)";
-  const commitId = patch.commitId;
-  // Always use nevent1 of the patch event ID for the URL segment — this is
-  // the canonical Nostr identifier. The router decodes it back to the event ID,
-  // and patchMatch handles both event ID and commit hash matching.
-  const linkSegment = eventIdToNevent(patch.event.id, relayHints);
-  const shortHash = commitId?.slice(0, 8);
-
-  const subject = patch.subject;
-  const body = patch.body;
-
-  const relativeTime = safeFormatDistanceToNow(ts, { addSuffix: true });
-
-  const titleContent = (
-    <span className="text-sm font-medium hover:text-primary transition-colors line-clamp-2">
-      {subject}
-    </span>
-  );
-
-  return (
-    <div className="px-4 py-3 hover:bg-muted/20 transition-colors group">
-      <div className="flex items-start gap-3">
-        <div className="min-w-0 flex-1">
-          <Link to={`${basePath}/commit/${linkSegment}`}>{titleContent}</Link>
-          {body && (
-            <p className="text-xs text-muted-foreground mt-0.5 line-clamp-1">
-              {body}
-            </p>
-          )}
-          <div className="flex items-center gap-2 mt-1.5 text-xs text-muted-foreground">
-            <User className="h-3 w-3 shrink-0" />
-            <span>{authorName}</span>
-            <span>&middot;</span>
-            <span title={safeFormat(ts, "PPpp") ?? undefined}>
-              {relativeTime}
-            </span>
-          </div>
-        </div>
-        <div className="flex items-center gap-1.5 shrink-0">
-          <TooltipProvider delayDuration={300}>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Badge
-                  variant="outline"
-                  className="text-[10px] px-1.5 py-0 h-4 font-normal text-muted-foreground/70 border-muted-foreground/20"
-                >
-                  patch
-                </Badge>
-              </TooltipTrigger>
-              <TooltipContent side="top" className="text-xs">
-                Sourced from a Nostr patch event
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-          <Link
-            to={`${basePath}/commit/${linkSegment}`}
-            className={cn(
-              "text-xs bg-muted hover:bg-muted/70 px-2 py-1 rounded transition-colors",
-              commitId
-                ? "font-mono text-muted-foreground hover:text-foreground"
-                : "text-muted-foreground/50 hover:text-muted-foreground",
-            )}
-            title={
-              commitId
-                ? undefined
-                : "No git commit ID — click to view patch event"
-            }
-          >
-            {shortHash ?? "[unknown]"}
-          </Link>
-        </div>
-      </div>
+      <Card className="overflow-hidden py-1">
+        {rows.map(({ graphRow, entry }) => {
+          if (!entry) return null;
+          const { patch } = entry;
+          const href = `${basePath}/commit/${entry.linkSegment}`;
+          return (
+            <GraphCommitRow
+              key={patch.id}
+              graphRow={graphRow}
+              laneCount={layout.laneCount}
+              flip
+              subject={patch.subject}
+              subjectTitle={
+                patch.body ? `${patch.subject}\n\n${patch.body}` : patch.subject
+              }
+              href={href}
+              shortHash={entry.commitId?.slice(0, 8) ?? "[unknown]"}
+              hashTitle={
+                entry.commitId
+                  ? undefined
+                  : "No git commit ID — click to view patch event"
+              }
+              authorName={entry.authorName}
+              timestamp={entry.timestamp}
+              badge={patchBadge}
+            />
+          );
+        })}
+      </Card>
     </div>
   );
 }

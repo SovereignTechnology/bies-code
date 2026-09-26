@@ -11,7 +11,9 @@
  *   kind 10002 — NIP-65 relay list (mailboxes)
  *   kind 10017 — NIP-51 Git authors follow list
  *   kind 10018 — NIP-51 Git repositories follow list
+ *   kind 10063 — Blossom server list
  *   kind 10317 — Grasp server list
+ *   kind 10318 — encrypted private Git relay list
  *   kind 10617 — pinned git repositories list
  *
  * Events are piped directly into the EventStore (and therefore the IndexedDB
@@ -40,25 +42,25 @@ import { eventStore, pool } from "./nostr";
 import { lookupRelays } from "./settings";
 import type { Filter } from "applesauce-core/helpers";
 import { resilientSubscription } from "@/lib/resilientSubscription";
+import { createRelaySubscriptionCoverage } from "@/lib/relaySubscriptionCoverage";
 import { normalizeUrl } from "@/lib/url";
+import {
+  USER_IDENTITY_COVERAGE_SETTLEMENT_TIMEOUT_MS,
+  userIdentityCoverage,
+} from "@/services/userIdentityCoverage";
+import { PERSONAL_SINGLETON_KINDS } from "@/lib/personalSingletons";
+import { startUserPersonalDeletionSubscription } from "@/services/userPersonalDeletionSubscription";
 
 /**
  * All replaceable event kinds that define the user's identity, relay
  * configuration, and list preferences. Any kind added here will be
  * persistently subscribed to for the active user's session.
  *
- * This is the single source of truth — import it from here when you need
- * to check whether a kind is a "user replaceable" kind.
+ * The canonical policy list lives in personalSingletons.ts. Keep this export
+ * for callers that treat the identity subscription as the source of its exact
+ * filter.
  */
-export const USER_REPLACEABLE_KINDS = [
-  0, // profile metadata
-  3, // contact / follow list
-  10002, // NIP-65 relay list (mailboxes)
-  10017, // NIP-51 Git authors follow list
-  10018, // NIP-51 Git repositories follow list
-  10317, // Grasp server list
-  10617, // pinned git repositories list
-] as const;
+export const USER_REPLACEABLE_KINDS = PERSONAL_SINGLETON_KINDS;
 
 /**
  * Open a persistent subscription for the user's replaceable events on the
@@ -99,6 +101,20 @@ export function startUserIdentitySubscription(
     ),
   );
 
+  // Personal-singleton warm coverage is owned by this exact account/filter
+  // subscription. See docs/replaceable-preflight.md, "Warm coverage leases".
+  const coverage = createRelaySubscriptionCoverage({
+    settlementTimeoutMs: USER_IDENTITY_COVERAGE_SETTLEMENT_TIMEOUT_MS,
+  });
+  let stopped = false;
+  let releaseCoverage: (() => void) | undefined;
+  const stopCoverage = () => {
+    if (stopped) return;
+    stopped = true;
+    releaseCoverage?.();
+    coverage.stop();
+  };
+
   // resilientSubscription provides:
   //   - lastReceivedAt-aware reconnect (avoids replaying full relay history)
   //   - foreground resume gap-fill (recovers events missed while backgrounded)
@@ -108,13 +124,35 @@ export function startUserIdentitySubscription(
     gapFill: true,
     settle: false, // no consumer needs the EOSE signal here
     paginate: false,
+    // This lease gates all personal replaceable writes for the session. A
+    // boot-time relay cap or transient outage must not make it terminal.
+    retryCount: Infinity,
+    onRelayLifecycle: (event) => coverage.onLifecycle(event),
   })
     .pipe(onlyEvents(), mapEventsToStore(eventStore))
     .subscribe({
       error: (err) => {
+        stopCoverage();
         console.warn("[userIdentitySubscription] subscription error:", err);
       },
     });
 
-  return () => sub.unsubscribe();
+  // Subscribe before publishing the new owner. relays$ emits synchronously, so
+  // the handle already contains its initial lifecycle facts when activate()
+  // announces it. A pending writer therefore observes either no lease (the
+  // deliberate hand-off gap) or a successor capable of settling, never an
+  // empty successor that looks terminal.
+  if (!stopped) {
+    releaseCoverage = userIdentityCoverage.activate(pubkey, coverage);
+  }
+  const stopDeletionCoverage = startUserPersonalDeletionSubscription(
+    pubkey,
+    relays$,
+  );
+
+  return () => {
+    stopDeletionCoverage();
+    stopCoverage();
+    sub.unsubscribe();
+  };
 }

@@ -21,6 +21,7 @@ import {
   buildRenameItems,
   buildTimelineNodes,
   resolveCoverNotes,
+  type RepositoryRoleHistory,
   type ResolvedIssue,
 } from "@/lib/nip34";
 
@@ -43,6 +44,7 @@ import {
 export function IssueDetailModel(
   rootId: string,
   maintainers: Set<string> | undefined,
+  roleHistory?: RepositoryRoleHistory,
 ): Model<ResolvedIssue | undefined> {
   return (store) => {
     // All essential kinds fetched per-item
@@ -144,6 +146,7 @@ export function IssueDetailModel(
             effectiveMaintainers,
             {
               essentialDeletionEvents: essentialDeletionEvents as NostrEvent[],
+              roleHistory,
             },
           );
 
@@ -153,6 +156,7 @@ export function IssueDetailModel(
             rootEvent.pubkey,
             coverNotes,
             core.authorisedUsers,
+            roleHistory,
           );
           const coverNote = allCoverNotes[0];
 
@@ -170,6 +174,7 @@ export function IssueDetailModel(
             comments: allComments,
             essentials,
             authorisedUsers: core.authorisedUsers,
+            roleHistory,
             deletedEssentialEventIds: core.deletedEssentialEventIds,
             zaps,
           });

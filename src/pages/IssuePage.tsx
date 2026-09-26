@@ -39,6 +39,7 @@ import { gitIndexRelays, fallbackRelays } from "@/services/settings";
 import { ArrowLeft, MessageCircle, Zap, Users, Clock, Pin } from "lucide-react";
 import { hasAcceptedRepositoryReference } from "@/lib/nip34";
 import { RepoItemAttributionWarning } from "@/components/RepoItemAttributionWarning";
+import { EventShareButton } from "@/components/EventCardActions";
 
 export default function IssuePage() {
   const { pubkey, repoId, resolved, issueId, nip05 } = useRepoContext();
@@ -48,15 +49,15 @@ export default function IssuePage() {
   // All confirmed co-maintainer coordinates — gives the full union of relay
   // groups for publishing. Falls back to the issue's own `a` tag coords if
   // the resolved repo isn't available yet (shouldn't happen in practice).
-  // Using allCoordinates instead of issue.repoCoords ensures comments, status
+  // Use every confirmed member coordinate so collaboration events survive
   // changes, labels etc. reach every co-maintainer's relay set, not just the
   // single maintainer baked into the issue's `a` tag at creation time.
-  const repoAllCoords = repo?.allCoordinates;
+  const repoAllCoords = repo?.confirmedMemberCoordinates;
 
   // Compute the effective maintainer set.
   const selectedMaintainers = useMemo(
-    () => (repo?.maintainerSet ? new Set(repo.maintainerSet) : undefined),
-    [repo?.maintainerSet],
+    () => (repo?.confirmedMembers ? new Set(repo.confirmedMembers) : undefined),
+    [repo?.confirmedMembers],
   );
 
   // ── Retry search ─────────────────────────────────────────────────────────
@@ -67,12 +68,12 @@ export default function IssuePage() {
   const [searchMoreActive, setSearchMoreActive] = useState(false);
 
   const extraSearchGroups = useMemo<RelayGroupSpec[]>(() => {
-    if (!searchMoreActive) return [];
+    if (!searchMoreActive || repo?.isPrivate) return [];
     return [
       { label: "git index", relays$: gitIndexRelays },
       { label: "fallback relays", relays$: fallbackRelays },
     ];
-  }, [searchMoreActive]);
+  }, [searchMoreActive, repo?.isPrivate]);
 
   const handleSearchMore = useCallback(() => {
     setSearchMoreActive(true);
@@ -84,8 +85,12 @@ export default function IssuePage() {
     resolved?.repoRelayGroup,
     resolved?.extraRelaysForMaintainerMailboxCoverage,
     selectedMaintainers,
-    extraSearchGroups,
-    retryKey,
+    repo?.roleHistory,
+    {
+      extraSearchGroups,
+      retryKey,
+      privateRepository: repo?.isPrivate ?? false,
+    },
   );
   const mentionedItems = useMentionedNip34Items(issue?.rootEvent.id);
   const timelineEntries = useMemo(() => {
@@ -120,9 +125,9 @@ export default function IssuePage() {
     };
     add(issue.pubkey);
     for (const pk of issue.participants) add(pk);
-    for (const pk of repo?.maintainerSet ?? []) add(pk);
+    for (const pk of repo?.confirmedMembers ?? []) add(pk);
     return out;
-  }, [issue, repo?.maintainerSet]);
+  }, [issue, repo?.confirmedMembers]);
 
   // ── Auth ──────────────────────────────────────────────────────────────────
   const activeAccount = useActiveAccount();
@@ -197,7 +202,9 @@ export default function IssuePage() {
         backPath={`${repoBasePath}/issues`}
         backLabel="Back to issues"
         onSearchMore={
-          !searchMoreActive && search.settled ? handleSearchMore : undefined
+          !repo?.isPrivate && !searchMoreActive && search.settled
+            ? handleSearchMore
+            : undefined
         }
         searchMoreActive={searchMoreActive}
         onRetry={handleRetry}
@@ -236,9 +243,16 @@ export default function IssuePage() {
               </div>
 
               <div className="flex items-center gap-4 flex-wrap text-sm text-muted-foreground ml-[calc(theme(spacing.3)+4.5rem-3.5rem)]">
-                <code className="font-mono text-xs text-muted-foreground/80">
-                  #{issue.id.slice(0, 8)}
-                </code>
+                <div className="flex items-center gap-1.5">
+                  <code className="font-mono text-xs text-muted-foreground/80">
+                    #{issue.id.slice(0, 8)}
+                  </code>
+                  <EventShareButton
+                    event={issue.rootEvent}
+                    label="Copy link"
+                    dialogTitle="Copy link to issue"
+                  />
+                </div>
                 <UserLink
                   pubkey={issue.pubkey}
                   avatarSize="sm"
@@ -434,7 +448,7 @@ export default function IssuePage() {
               </div>
 
               {/* Reply box — always shown; anonymous posting handled inside */}
-              {issue && (
+              {issue && !repo?.isBuzz && (
                 <ReplyBox
                   rootEvent={issue.rootEvent}
                   priorityPubkeys={mentionPriorityPubkeys}

@@ -16,7 +16,6 @@ import {
   GitCommitHorizontal,
   Inbox,
   Loader2,
-  RotateCcw,
   SearchX,
   Server,
   ServerCrash,
@@ -24,7 +23,8 @@ import {
   XCircle,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
+import { ErrorRetryAction } from "@/components/ErrorRetryAction";
+import type { ErrorRetryState } from "@/hooks/useErrorRetry";
 import { GraspLogo } from "@/components/GraspLogo";
 import { graspCloneUrlNpub } from "@/lib/nip34";
 import { cn } from "@/lib/utils";
@@ -42,6 +42,7 @@ type ServerProblem =
   | "branch-not-found"
   | "commit-missing"
   | "fetch-error"
+  | "unconfirmed"
   | "has-code"
   | "checking";
 
@@ -104,18 +105,13 @@ function classifyServer(
     return "branch-not-found";
   }
 
-  // Branches exist (and the requested ref, if any). Prefer the per-server
-  // object-fetch outcome recorded by the pool: it tells us whether THIS server
-  // actually returned a valid response lacking the commit's objects, or whether
-  // the packfile fetch/transport itself failed (which is NOT evidence the
-  // server is missing the objects). Only fall back to the global detail.kind
-  // when no object fetch was attempted against this server.
+  // Only this server's matching object-fetch outcome establishes whether it
+  // served or rejected the commit. Another mirror's result is not evidence.
   const objectFetch = urlState.lastObjectFetch;
   if (
     objectFetch &&
     (!detail.requestedCommit ||
-      objectFetch.commitHash.startsWith(detail.requestedCommit) ||
-      detail.requestedCommit.startsWith(objectFetch.commitHash))
+      objectFetch.commitHash === detail.requestedCommit)
   ) {
     switch (objectFetch.result) {
       case "fetch-error":
@@ -127,8 +123,7 @@ function classifyServer(
     }
   }
 
-  // No per-server object-fetch evidence — defer to the overall classification.
-  return detail.kind === "commit-missing" ? "commit-missing" : "has-code";
+  return "unconfirmed";
 }
 
 // ---------------------------------------------------------------------------
@@ -220,10 +215,10 @@ function problemMeta(
         icon: (
           <GitCommitHorizontal className="h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
         ),
-        label: "missing objects",
+        label: "commit unavailable",
         detailText: detail.requestedCommit
-          ? `doesn't have the objects for commit ${detail.requestedCommit.slice(0, 8)}`
-          : "doesn't have this commit's objects yet",
+          ? `rejected the request for commit ${detail.requestedCommit.slice(0, 8)}`
+          : "rejected the request for this commit",
       };
     case "fetch-error":
       return {
@@ -232,6 +227,13 @@ function problemMeta(
         ),
         label: "fetch error",
         detailText: fetchErrorText(urlState?.lastObjectFetch?.errorKind),
+      };
+    case "unconfirmed":
+      return {
+        icon: <Server className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />,
+        label: "availability unknown",
+        detailText:
+          "reachable, but this commit's objects haven't been confirmed",
       };
     case "has-code":
       return {
@@ -339,14 +341,14 @@ function headlineFor(detail: GitExplorerErrorDetail): {
           ? `Commit ${detail.requestedCommit.slice(0, 8)} isn't available`
           : "This commit isn't available",
         description:
-          "The connected git server(s) don't have the objects for this commit yet.",
+          "The git server(s) rejected the request for this commit. They may not have received it yet.",
       };
     case "fetch-failed":
       return {
         icon: <ServerCrash className="h-8 w-8 text-destructive/70" />,
         headline: "Couldn't fetch the code from the git server(s)",
         description:
-          "The git server(s) are reachable, but every attempt to fetch the objects failed at the transport level (not a case of missing objects). This is often a temporary network/proxy problem or a browser compatibility issue — retrying may help.",
+          "The code couldn't be loaded. Check each server's status below and retry to check availability.",
       };
   }
 }
@@ -363,8 +365,8 @@ export interface CodeUnavailableProps {
   cloneUrls: string[];
   /** Subset of cloneUrls that are Grasp server clone URLs */
   graspCloneUrls?: string[];
-  /** Retry the explorer fetch across all servers */
-  onReload?: () => void;
+  /** Recovery state owned by the page, so loading does not reset its budget. */
+  recovery: ErrorRetryState;
 }
 
 export function CodeUnavailable({
@@ -372,7 +374,7 @@ export function CodeUnavailable({
   urls,
   cloneUrls,
   graspCloneUrls = [],
-  onReload,
+  recovery,
 }: CodeUnavailableProps) {
   const { icon, headline, description } = headlineFor(detail);
 
@@ -418,20 +420,13 @@ export function CodeUnavailable({
           </div>
         </div>
 
+        <div className="flex justify-center">
+          <ErrorRetryAction recovery={recovery} />
+        </div>
+
         {/* Per-server breakdown */}
         {cloneUrls.length > 0 && (
           <Card className="relative">
-            {onReload && (
-              <Button
-                variant="ghost"
-                size="icon"
-                className="absolute top-2 right-2 h-6 w-6 text-muted-foreground hover:text-foreground"
-                onClick={onReload}
-                title="Retry all servers"
-              >
-                <RotateCcw className="h-3.5 w-3.5" />
-              </Button>
-            )}
             <CardContent className="p-4 space-y-4">
               {graspUrls.length > 0 && otherUrls.length > 0 ? (
                 <>

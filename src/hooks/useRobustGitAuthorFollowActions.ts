@@ -3,8 +3,8 @@
  * follow list (kind:10017).
  *
  * Thin wrapper around useRobustReplaceableAction that provides a convenient
- * add/remove API. All connectivity checks, freshness prefetching, and error
- * handling are delegated to the generic hook.
+ * add/remove API. All warm-coverage, local-cache, and error handling safeguards
+ * are delegated to the generic hook.
  *
  * Unlike the social follow (kind:3), we do NOT warn when no existing list is
  * found — kind:10017 is new and most users won't have one yet, so silently
@@ -17,8 +17,8 @@ import { useCallback } from "react";
 import { useAction } from "@/hooks/useAction";
 import { useRobustReplaceableAction } from "@/hooks/useRobustReplaceableAction";
 import {
-  AddGitAuthor,
-  RemoveGitAuthor,
+  AddGitAuthorFromPreflight,
+  RemoveGitAuthorFromPreflight,
   GIT_AUTHORS_KIND,
 } from "@/actions/gitAuthorFollowActions";
 import type { ProfilePointer } from "applesauce-core/helpers";
@@ -37,19 +37,23 @@ export interface RobustGitAuthorFollowActionsResult {
 }
 
 export function useRobustGitAuthorFollowActions(): RobustGitAuthorFollowActionsResult {
-  const { run: addAuthor } = useAction(AddGitAuthor);
-  const { run: removeAuthor } = useAction(RemoveGitAuthor);
+  const { run: addAuthor } = useAction(AddGitAuthorFromPreflight);
+  const { run: removeAuthor } = useAction(RemoveGitAuthorFromPreflight);
   const { execute, pending } = useRobustReplaceableAction();
 
   const addGitAuthor = useCallback(
     (pubkey: string | ProfilePointer) =>
-      execute(GIT_AUTHORS_KIND, () => addAuthor(pubkey)),
+      execute(GIT_AUTHORS_KIND, ({ event, outboxes }) =>
+        addAuthor(event, outboxes, pubkey),
+      ),
     [execute, addAuthor],
   );
 
   const removeGitAuthor = useCallback(
     (pubkey: string | ProfilePointer) =>
-      execute(GIT_AUTHORS_KIND, () => removeAuthor(pubkey)),
+      execute(GIT_AUTHORS_KIND, ({ event, outboxes }) =>
+        removeAuthor(event, outboxes, pubkey),
+      ),
     [execute, removeAuthor],
   );
 

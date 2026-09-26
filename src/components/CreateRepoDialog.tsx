@@ -6,7 +6,7 @@
  */
 
 import { useState, useMemo, useCallback, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useActiveAccount } from "applesauce-react/hooks";
 import {
   Check,
@@ -43,14 +43,19 @@ import {
 } from "@/hooks/useCreateRepo";
 import { useGraspServers, type GraspServer } from "@/hooks/useGraspServers";
 import { useRepoPath } from "@/hooks/useRepoPath";
-import { usePublish } from "@/hooks/usePublish";
+import { useRobustReplaceableAction } from "@/hooks/useRobustReplaceableAction";
+import {
+  GRASP_LIST_KIND,
+  ReplaceGraspListFromPreflight,
+} from "@/actions/graspListActions";
+import { runner } from "@/services/actions";
 import { GraspServerSelector } from "@/components/GraspServerSelector";
+import { graspServerFromAddress } from "@/lib/grasp";
+import { usePrivateGitRelays } from "@/hooks/usePrivateGitRelays";
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
-
-const GRASP_LIST_KIND = 10317;
 
 // ---------------------------------------------------------------------------
 // Props
@@ -66,6 +71,7 @@ interface CreateRepoDialogProps {
 // ---------------------------------------------------------------------------
 
 const STEPS: { key: CreateRepoStep; label: string }[] = [
+  { key: "checking-relays", label: "Checking repository identifier" },
   { key: "building-commit", label: "Building initial commit" },
   { key: "signing-events", label: "Signing events" },
   {
@@ -112,37 +118,15 @@ function StepIcon({
 }
 
 // ---------------------------------------------------------------------------
-// Purgatory countdown
+// Accepted-event retry guidance
 // ---------------------------------------------------------------------------
 
-function PurgatoryCountdown({ publishedAt }: { publishedAt: number }) {
-  const [now, setNow] = useState(Date.now());
-
-  useEffect(() => {
-    const interval = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(interval);
-  }, []);
-
-  const expiresAt = publishedAt + 30 * 60 * 1000; // 30 minutes
-  const remaining = Math.max(0, Math.floor((expiresAt - now) / 1000));
-  const minutes = Math.floor(remaining / 60);
-  const seconds = remaining % 60;
-
-  if (remaining <= 0) {
-    return (
-      <p className="text-sm text-red-500">
-        Purgatory window has expired. Events may have been discarded.
-      </p>
-    );
-  }
-
+function AcceptedEventsRetryNotice() {
   return (
     <p className="text-sm text-muted-foreground">
-      Events are in purgatory. You have{" "}
-      <span className="font-mono font-medium text-foreground">
-        {minutes}:{seconds.toString().padStart(2, "0")}
-      </span>{" "}
-      to retry before they expire.
+      The repository events were accepted before the Git push. Retry promptly: a
+      purgatory-capable server may eventually discard staged events, while a
+      server without purgatory may already be broadcasting them.
     </p>
   );
 }
@@ -188,20 +172,26 @@ export function CreateRepoDialog({ isOpen, onClose }: CreateRepoDialogProps) {
     servers: resolvedServers,
     isFromUserList,
     isLoading: serversLoading,
+    sourceEvent: graspListSourceEvent,
   } = useGraspServers(pubkey);
 
   const { state, execute, retryPush, reset } = useCreateRepo();
-  const { publishEvent } = usePublish();
+  const { state: privateRelayState, retry: retryPrivateRelays } =
+    usePrivateGitRelays();
+  const { execute: executePersonalSingleton } = useRobustReplaceableAction();
 
   // Form state
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [privateRepository, setPrivateRepository] = useState(false);
 
   // Advanced section state
   const [advancedOpen, setAdvancedOpen] = useState(false);
-  // selectedDomains: the set of domains the user has chosen for this repo.
+  // selectedAddresses: the GRASP service endpoints chosen for this repo.
   // Initialised from resolvedServers once they load.
-  const [selectedDomains, setSelectedDomains] = useState<string[]>([]);
+  const [selectedAddresses, setSelectedAddresses] = useState<string[]>([]);
+  const [selectedAddressesBaseEventId, setSelectedAddressesBaseEventId] =
+    useState<string | null>(null);
   // Whether to save these servers as the user's default grasp list
   const [saveAsDefaults, setSaveAsDefaults] = useState(false);
 
@@ -212,28 +202,62 @@ export function CreateRepoDialog({ isOpen, onClose }: CreateRepoDialogProps) {
     [name, identifier],
   );
 
-  // Build the effective GraspServer list from selectedDomains
-  const selectedServers = useMemo<GraspServer[]>(() => {
-    return selectedDomains.map((domain) => {
-      // Prefer the wsUrl from resolvedServers if available
-      const existing = resolvedServers.find((s) => s.domain === domain);
-      return existing ?? { domain, wsUrl: `wss://${domain}` };
-    });
-  }, [selectedDomains, resolvedServers]);
+  const privateServers = useMemo(
+    () =>
+      privateRelayState.status === "ready"
+        ? privateRelayState.relayUrls.flatMap((relay) => {
+            const server = graspServerFromAddress(relay);
+            return server ? [server] : [];
+          })
+        : [],
+    [privateRelayState],
+  );
+  const selectableServers = privateRepository
+    ? privateServers
+    : resolvedServers;
 
-  // Initialise selectedDomains when servers load or dialog opens
+  // Build the effective GraspServer list from selectedAddresses.
+  const selectedServers = useMemo<GraspServer[]>(() => {
+    return selectedAddresses.flatMap((address) => {
+      const existing = selectableServers.find(
+        (server) => server.serviceAddress === address,
+      );
+      // Private creation never accepts an endpoint outside the current
+      // decrypted list. Public creation retains the advanced custom input.
+      const server =
+        existing ??
+        (privateRepository ? undefined : graspServerFromAddress(address));
+      return server ? [server] : [];
+    });
+  }, [selectedAddresses, selectableServers, privateRepository]);
+
+  // Initialise selectedAddresses when servers load or the dialog opens.
   useEffect(() => {
-    if (resolvedServers.length > 0 && selectedDomains.length === 0) {
-      setSelectedDomains(resolvedServers.map((s) => s.domain));
+    if (selectableServers.length > 0 && selectedAddresses.length === 0) {
+      setSelectedAddresses(
+        privateRepository
+          ? [selectableServers[0].serviceAddress]
+          : selectableServers.map((server) => server.serviceAddress),
+      );
+      setSelectedAddressesBaseEventId(graspListSourceEvent?.id ?? null);
     }
-  }, [resolvedServers, selectedDomains.length]);
+  }, [
+    selectableServers,
+    selectedAddresses.length,
+    privateRepository,
+    graspListSourceEvent?.id,
+  ]);
 
   // Reset form when dialog opens
   useEffect(() => {
     if (isOpen) {
       setName("");
       setDescription("");
-      setSelectedDomains(resolvedServers.map((s) => s.domain));
+      setPrivateRepository(false);
+      setSelectedAddresses(
+        resolvedServers.map((server) => server.serviceAddress),
+      );
+      setSelectedAddressesBaseEventId(graspListSourceEvent?.id ?? null);
       setSaveAsDefaults(false);
       setAdvancedOpen(false);
       reset();
@@ -242,12 +266,23 @@ export function CreateRepoDialog({ isOpen, onClose }: CreateRepoDialogProps) {
   }, [isOpen, reset]);
 
   // When resolvedServers change (e.g. after load) and we haven't customised yet,
-  // sync selectedDomains to the new resolved list.
+  // sync selectedAddresses to the new resolved list.
   useEffect(() => {
-    if (!advancedOpen) {
-      setSelectedDomains(resolvedServers.map((s) => s.domain));
+    if (!advancedOpen || privateRepository) {
+      setSelectedAddresses(
+        privateRepository
+          ? privateServers.slice(0, 1).map((server) => server.serviceAddress)
+          : resolvedServers.map((server) => server.serviceAddress),
+      );
+      setSelectedAddressesBaseEventId(graspListSourceEvent?.id ?? null);
     }
-  }, [resolvedServers, advancedOpen]);
+  }, [
+    resolvedServers,
+    privateServers,
+    advancedOpen,
+    privateRepository,
+    graspListSourceEvent?.id,
+  ]);
 
   const handleClose = useCallback(() => {
     if (
@@ -264,21 +299,27 @@ export function CreateRepoDialog({ isOpen, onClose }: CreateRepoDialogProps) {
     name.trim().length > 0 &&
     !identifierError &&
     selectedServers.length > 0 &&
+    (!privateRepository ||
+      (privateRelayState.status === "ready" && selectedServers.length === 1)) &&
     state.step === "idle";
 
   const handleSubmit = useCallback(async () => {
     if (!canSubmit) return;
 
     // Optionally save as defaults before creating
-    if (saveAsDefaults && account) {
+    if (!privateRepository && saveAsDefaults && account) {
       try {
-        const tags = selectedServers.map((s) => ["g", s.wsUrl]);
-        await publishEvent({
-          kind: GRASP_LIST_KIND,
-          content: "",
-          tags,
-          created_at: Math.floor(Date.now() / 1000),
-        });
+        await executePersonalSingleton(
+          GRASP_LIST_KIND,
+          ({ event, outboxes }) =>
+            runner.run(
+              ReplaceGraspListFromPreflight,
+              event,
+              outboxes,
+              selectedServers.map((server) => server.wsUrl),
+            ),
+          { expectedEventId: selectedAddressesBaseEventId },
+        );
       } catch {
         // Non-fatal — continue with repo creation even if saving defaults fails
       }
@@ -289,6 +330,7 @@ export function CreateRepoDialog({ isOpen, onClose }: CreateRepoDialogProps) {
       description: description.trim(),
       identifier,
       graspServers: selectedServers,
+      private: privateRepository,
     };
 
     await execute(input);
@@ -297,11 +339,13 @@ export function CreateRepoDialog({ isOpen, onClose }: CreateRepoDialogProps) {
     saveAsDefaults,
     account,
     selectedServers,
-    publishEvent,
+    selectedAddressesBaseEventId,
+    executePersonalSingleton,
     name,
     description,
     identifier,
     execute,
+    privateRepository,
   ]);
 
   const handleRetry = useCallback(async () => {
@@ -312,6 +356,7 @@ export function CreateRepoDialog({ isOpen, onClose }: CreateRepoDialogProps) {
       description: description.trim(),
       identifier,
       graspServers: selectedServers,
+      private: privateRepository,
     };
 
     await retryPush(input, state.commitHash);
@@ -322,6 +367,7 @@ export function CreateRepoDialog({ isOpen, onClose }: CreateRepoDialogProps) {
     identifier,
     selectedServers,
     retryPush,
+    privateRepository,
   ]);
 
   const isInProgress =
@@ -329,20 +375,22 @@ export function CreateRepoDialog({ isOpen, onClose }: CreateRepoDialogProps) {
 
   // Whether the current selection differs from the resolved defaults
   const hasCustomSelection = useMemo(() => {
-    const resolvedDomains = resolvedServers.map((s) => s.domain).sort();
-    const current = [...selectedDomains].sort();
+    const resolvedAddresses = resolvedServers
+      .map((server) => server.serviceAddress)
+      .sort();
+    const current = [...selectedAddresses].sort();
     return (
-      current.length !== resolvedDomains.length ||
-      current.some((d, i) => d !== resolvedDomains[i])
+      current.length !== resolvedAddresses.length ||
+      current.some((address, index) => address !== resolvedAddresses[index])
     );
-  }, [resolvedServers, selectedDomains]);
+  }, [resolvedServers, selectedAddresses]);
 
   // Label for the advanced trigger
   const advancedLabel = useMemo(() => {
-    if (selectedDomains.length === 0) return "No servers selected";
-    if (selectedDomains.length === 1) return selectedDomains[0];
-    return `${selectedDomains.length} servers`;
-  }, [selectedDomains]);
+    if (selectedAddresses.length === 0) return "No servers selected";
+    if (selectedAddresses.length === 1) return selectedAddresses[0];
+    return `${selectedAddresses.length} servers`;
+  }, [selectedAddresses]);
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && handleClose()}>
@@ -424,6 +472,26 @@ export function CreateRepoDialog({ isOpen, onClose }: CreateRepoDialogProps) {
               </div>
             </div>
 
+            <label className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-border/60 px-3 py-3">
+              <Checkbox
+                checked={privateRepository}
+                onCheckedChange={(value) => {
+                  setPrivateRepository(!!value);
+                  setSelectedAddresses([]);
+                  setSaveAsDefaults(false);
+                }}
+                id="private-repository"
+                className="mt-0.5"
+              />
+              <div className="space-y-0.5">
+                <span className="text-sm font-medium">Private repository</span>
+                <p className="text-xs text-muted-foreground">
+                  Create on one GRASP-08 service from your encrypted Private Git
+                  services list.
+                </p>
+              </div>
+            </label>
+
             {/* ── Advanced / Grasp servers ──────────────────────────── */}
             <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
               <CollapsibleTrigger asChild>
@@ -437,11 +505,17 @@ export function CreateRepoDialog({ isOpen, onClose }: CreateRepoDialogProps) {
                     ) : (
                       <ChevronRight className="h-3.5 w-3.5" />
                     )}
-                    GRASP servers
+                    {privateRepository
+                      ? "Private GRASP-08 service"
+                      : "GRASP servers"}
                   </span>
                   {!advancedOpen && (
                     <span className="text-xs font-mono text-muted-foreground/70 flex items-center gap-1">
-                      {serversLoading ? (
+                      {(
+                        privateRepository
+                          ? privateRelayState.status === "loading"
+                          : serversLoading
+                      ) ? (
                         <Loader2 className="h-3 w-3 animate-spin" />
                       ) : (
                         <>
@@ -457,40 +531,117 @@ export function CreateRepoDialog({ isOpen, onClose }: CreateRepoDialogProps) {
               </CollapsibleTrigger>
 
               <CollapsibleContent className="space-y-3 pt-2">
-                {serversLoading ? (
+                {(
+                  privateRepository
+                    ? privateRelayState.status === "loading"
+                    : serversLoading
+                ) ? (
                   <div className="flex items-center gap-2 text-sm text-muted-foreground px-1">
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
                     Loading your server list...
                   </div>
                 ) : (
                   <>
-                    <GraspServerSelector
-                      selectedDomains={selectedDomains}
-                      onSelectedDomainsChange={setSelectedDomains}
-                      resolvedServers={resolvedServers}
-                      isFromUserList={isFromUserList}
-                      showTitle={false}
-                    />
+                    {privateRepository ? (
+                      privateRelayState.status !== "ready" ? (
+                        <div
+                          className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2.5"
+                          role="alert"
+                        >
+                          <p className="text-sm font-medium text-amber-700 dark:text-amber-300">
+                            Private services unavailable
+                          </p>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            {privateRelayState.error ??
+                              "BIES Code could not safely decrypt your Private Git services list."}
+                          </p>
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="h-8 text-xs"
+                              onClick={retryPrivateRelays}
+                            >
+                              Retry decryption
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              className="h-8 text-xs"
+                              asChild
+                            >
+                              <Link to="/settings#private-git-services">
+                                Open settings
+                              </Link>
+                            </Button>
+                          </div>
+                          <p className="mt-2 text-xs text-muted-foreground">
+                            Only private repository creation is blocked. Switch
+                            off Private repository to create publicly.
+                          </p>
+                        </div>
+                      ) : privateServers.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">
+                          Add a GRASP-08 service in Settings before creating a
+                          private repository.
+                        </p>
+                      ) : (
+                        <div className="space-y-2">
+                          {privateServers.map((server) => (
+                            <label
+                              key={server.wsUrl}
+                              className="flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-sm"
+                            >
+                              <input
+                                type="radio"
+                                name="private-grasp-service"
+                                checked={selectedAddresses.includes(
+                                  server.serviceAddress,
+                                )}
+                                onChange={() =>
+                                  setSelectedAddresses([server.serviceAddress])
+                                }
+                              />
+                              <span className="font-mono text-xs">
+                                {server.serviceAddress}
+                              </span>
+                            </label>
+                          ))}
+                        </div>
+                      )
+                    ) : (
+                      <GraspServerSelector
+                        selectedAddresses={selectedAddresses}
+                        onSelectedAddressesChange={setSelectedAddresses}
+                        resolvedServers={resolvedServers}
+                        isFromUserList={isFromUserList}
+                        showTitle={false}
+                      />
+                    )}
 
                     {/* Save as defaults */}
-                    <label className="flex items-start gap-2.5 cursor-pointer rounded-md px-2.5 py-2 hover:bg-muted/40 transition-colors border border-border/40">
-                      <Checkbox
-                        checked={saveAsDefaults}
-                        onCheckedChange={(v) => setSaveAsDefaults(!!v)}
-                        id="save-defaults"
-                        className="mt-0.5"
-                      />
-                      <div className="space-y-0.5">
-                        <span className="text-sm font-medium">
-                          Save as my Grasp defaults
-                        </span>
-                        <p className="text-xs text-muted-foreground">
-                          {isFromUserList
-                            ? "Overwrite your saved server list with this selection."
-                            : "Save this selection so future repositories use these servers by default."}
-                        </p>
-                      </div>
-                    </label>
+                    {!privateRepository && (
+                      <label className="flex items-start gap-2.5 cursor-pointer rounded-md px-2.5 py-2 hover:bg-muted/40 transition-colors border border-border/40">
+                        <Checkbox
+                          checked={saveAsDefaults}
+                          onCheckedChange={(v) => setSaveAsDefaults(!!v)}
+                          id="save-defaults"
+                          className="mt-0.5"
+                        />
+                        <div className="space-y-0.5">
+                          <span className="text-sm font-medium">
+                            Save as my Grasp defaults
+                          </span>
+                          <p className="text-xs text-muted-foreground">
+                            {isFromUserList
+                              ? "Overwrite your saved server list with this selection."
+                              : "Save this selection so future repositories use these servers by default."}
+                          </p>
+                        </div>
+                      </label>
+                    )}
                   </>
                 )}
               </CollapsibleContent>
@@ -527,7 +678,10 @@ export function CreateRepoDialog({ isOpen, onClose }: CreateRepoDialogProps) {
                     {key === "pushing" && selectedServers.length > 0 && (
                       <span className="text-muted-foreground">
                         {" "}
-                        to {selectedServers.map((s) => s.domain).join(", ")}
+                        to{" "}
+                        {selectedServers
+                          .map((server) => server.serviceAddress)
+                          .join(", ")}
                       </span>
                     )}
                   </span>
@@ -547,9 +701,7 @@ export function CreateRepoDialog({ isOpen, onClose }: CreateRepoDialogProps) {
                   </div>
                 </div>
 
-                {state.publishedAt && (
-                  <PurgatoryCountdown publishedAt={state.publishedAt} />
-                )}
+                {state.publishedAt && <AcceptedEventsRetryNotice />}
 
                 <div className="flex justify-end gap-2">
                   <Button variant="outline" onClick={handleClose}>

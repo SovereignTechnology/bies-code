@@ -252,11 +252,11 @@ export const nostrConnectRelaysCustomised$ = isCustomised$(
 // ---------------------------------------------------------------------------
 
 /**
- * Default Grasp server domains used when a user has no kind:10317 grasp list.
+ * Default GRASP service addresses used when a user has no kind:10317 list.
  * Invitation acceptance backfills to three servers for redundancy.
  *
- * These are bare domains — the WebSocket URL is `wss://<domain>` and the
- * git HTTP URL is `https://<domain>/<npub>/<repo-id>.git`.
+ * Secure service addresses omit their scheme and may include a mount path.
+ * Plaintext services retain an `http://` prefix.
  */
 export const DEFAULT_GRASP_SERVERS: readonly string[] = [
   "git.buildinelsalvador.com",

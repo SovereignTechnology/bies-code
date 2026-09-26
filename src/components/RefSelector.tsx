@@ -37,11 +37,15 @@ import {
 import type { NostrEvent } from "nostr-tools";
 import { formatDistanceStrict } from "date-fns";
 import { cn, safeFormatDistanceToNow } from "@/lib/utils";
-import { deriveEffectiveSource } from "@/lib/sourceUtils";
 import { useMobilePopoverFullWidth } from "@/hooks/useMobilePopoverFullWidth";
 import type { GitRef } from "@/hooks/useGitExplorer";
 import type { RepositoryState } from "@/casts/RepositoryState";
-import type { PoolWarning, UrlState } from "@/lib/git-grasp-pool/types";
+import type {
+  PoolWarning,
+  ResolvedRefMap,
+  UrlState,
+  ViewSource,
+} from "@/lib/git-grasp-pool/types";
 import type { GitGraspPool } from "@/lib/git-grasp-pool";
 import { type RefWithStatus, compareTagsNewestFirst } from "@/lib/refStatus";
 import { useRefsWithStatus } from "@/hooks/useRefsWithStatus";
@@ -104,6 +108,10 @@ export interface RefSelectorProps {
    * which server the data is coming from.
    */
   winnerUrl?: string | null;
+  /** Pool-owned display preference. */
+  viewSource: ViewSource;
+  /** Pool-resolved display commits for every known ref. */
+  effectiveRefs: ResolvedRefMap;
   /**
    * Unix timestamp (seconds) of the Nostr state event — used to show
    * how stale the signed state is relative to what git servers have.
@@ -690,7 +698,6 @@ function SourceHeader({
   repoRelayEose,
   stateBehindGit,
   poolWarning,
-  winnerUrl,
   mismatchCount,
   isNoState,
   refsWithStatus,
@@ -701,6 +708,7 @@ function SourceHeader({
   urlStates,
   pool,
   selectedSource,
+  effectiveSource,
   onSelectSource,
   diffSummaryExternal,
   relayStateMap,
@@ -712,7 +720,6 @@ function SourceHeader({
   repoRelayEose: boolean;
   stateBehindGit: boolean;
   poolWarning?: PoolWarning | null;
-  winnerUrl?: string | null;
   mismatchCount: number;
   isNoState: boolean;
   refsWithStatus: RefWithStatus[];
@@ -723,6 +730,7 @@ function SourceHeader({
   urlStates: Record<string, UrlState>;
   pool?: GitGraspPool | null;
   selectedSource: string;
+  effectiveSource: string;
   onSelectSource: (source: string) => void;
   /** When true, DiffSummaryBar is rendered externally (inside ScrollArea) — skip it here */
   diffSummaryExternal?: boolean;
@@ -745,16 +753,6 @@ function SourceHeader({
   const isLoading = repoState === undefined || !repoRelayEose;
   const hasProblems = mismatchCount > 0 || stateBehindGit;
 
-  // Resolve "default" → "nostr" or a concrete git server URL.
-  const aheadServerUrl =
-    poolWarning?.kind === "state-behind-git" ? poolWarning.gitServerUrl : null;
-  const effectiveSource = deriveEffectiveSource(
-    selectedSource,
-    stateBehindGit,
-    isNoState,
-    winnerUrl,
-    aheadServerUrl,
-  );
   const effectiveSourceIsGitServer = effectiveSource !== "nostr";
 
   // A URL (not "default"/"nostr") means the user manually picked a git server
@@ -1031,6 +1029,8 @@ export function RefSelector({
   stateBehindGit = false,
   poolWarning,
   winnerUrl,
+  viewSource,
+  effectiveRefs,
   stateCreatedAt,
   urlStates = {},
   cloneUrls = [],
@@ -1047,6 +1047,10 @@ export function RefSelector({
   // Controlled when selectedSourceProp is provided; falls back to "default".
   const selectedSource = selectedSourceProp ?? "default";
   const setSelectedSource = (src: string) => onSourceChange?.(src);
+  const selectedRef = refs.find((ref) => ref.name === currentRef);
+  const selectedRefFullName = selectedRef
+    ? `${selectedRef.isBranch ? "refs/heads/" : "refs/tags/"}${selectedRef.name}`
+    : undefined;
 
   // Resolve effective source and compute per-ref status against it.
   const {
@@ -1057,12 +1061,13 @@ export function RefSelector({
     mismatchCount,
   } = useRefsWithStatus({
     refs,
-    selectedSource,
     repoState,
     repoRelayEose,
     relayStateMap,
     stateBehindGit,
-    poolWarning,
+    viewSource,
+    effectiveRefs,
+    currentRefFullName: selectedRefFullName,
     winnerUrl,
     urlStates,
     cloneUrls,
@@ -1302,7 +1307,6 @@ export function RefSelector({
           repoRelayEose={repoRelayEose}
           stateBehindGit={stateBehindGit}
           poolWarning={poolWarning}
-          winnerUrl={winnerUrl}
           mismatchCount={mismatchCount}
           isNoState={isNoState}
           refsWithStatus={refsWithStatus}
@@ -1313,6 +1317,7 @@ export function RefSelector({
           urlStates={urlStates}
           pool={pool}
           selectedSource={selectedSource}
+          effectiveSource={effectiveSource}
           onSelectSource={setSelectedSource}
           diffSummaryExternal
           relayStateMap={relayStateMap}
@@ -1395,7 +1400,6 @@ export function RefSelector({
                       refWithStatus={branch}
                       isSelected={branch.name === currentRef}
                       onSelect={() => handleSelect(branch.name)}
-                      effectiveSource={effectiveSource}
                       pool={pool}
                       urlStates={urlStates}
                       cloneUrls={cloneUrls}
@@ -1426,7 +1430,6 @@ export function RefSelector({
                       refWithStatus={tag}
                       isSelected={tag.name === currentRef}
                       onSelect={() => handleSelect(tag.name)}
-                      effectiveSource={effectiveSource}
                       pool={pool}
                       urlStates={urlStates}
                       cloneUrls={cloneUrls}

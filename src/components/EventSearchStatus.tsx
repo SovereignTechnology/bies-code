@@ -1,3 +1,6 @@
+import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
+import { useErrorRetry } from "@/hooks/useErrorRetry";
+import { ErrorRetryAction } from "@/components/ErrorRetryAction";
 /**
  * EventSearchStatus — shared UI component for displaying event search state.
  *
@@ -27,7 +30,6 @@ import {
   XCircle,
   WifiOff,
   Clock,
-  RotateCcw,
 } from "lucide-react";
 import type {
   EventSearchState,
@@ -175,13 +177,14 @@ export function EventSearchStatus({
   searchMoreActive,
   onRetry,
 }: EventSearchStatusProps) {
+  const copyToClipboard = useCopyToClipboard();
   const [copied, setCopied] = useState(false);
 
   const nevent = eventId ? eventIdToNevent(eventId) : undefined;
 
   function handleCopy() {
     if (!nevent) return;
-    navigator.clipboard.writeText(nevent).then(() => {
+    void copyToClipboard(nevent, () => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     });
@@ -191,6 +194,18 @@ export function EventSearchStatus({
     !search.concludedNotFound &&
     !search.deleted &&
     !search.vanished;
+
+  const retrySearch = onRetry ?? search.retry;
+  const recovery = useErrorRetry({
+    resourceKey: eventId ?? itemLabel,
+    failed:
+      !!retrySearch &&
+      search.concludedNotFound &&
+      !search.deleted &&
+      !search.vanished,
+    busy: isSearching,
+    onRetry: () => retrySearch?.(),
+  });
 
   // Deletion check is running: settled, no active relay group, and not yet concluded
   const isDeletionChecking =
@@ -264,6 +279,15 @@ export function EventSearchStatus({
           )}
         </div>
 
+        {retrySearch &&
+          search.concludedNotFound &&
+          !search.deleted &&
+          !search.vanished && (
+            <div className="flex justify-center">
+              <ErrorRetryAction recovery={recovery} />
+            </div>
+          )}
+
         {/* Event ID */}
         {nevent && (
           <div className="flex items-center justify-between gap-2 rounded-md border border-border/50 bg-muted/40 px-3 py-2">
@@ -289,17 +313,6 @@ export function EventSearchStatus({
         {/* Relay status grouped by label */}
         {groups.length > 0 && (
           <Card className="relative">
-            {onRetry && (
-              <Button
-                variant="ghost"
-                size="icon"
-                className="absolute top-2 right-2 h-6 w-6 text-muted-foreground hover:text-foreground"
-                onClick={onRetry}
-                title="Retry all relays"
-              >
-                <RotateCcw className="h-3.5 w-3.5" />
-              </Button>
-            )}
             <CardContent className="p-4 space-y-4">
               {groups.map((group) => (
                 <div key={group.label} className="space-y-2">

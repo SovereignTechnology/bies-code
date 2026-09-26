@@ -3,7 +3,7 @@ import {
   getOrComputeCachedValue,
   hasNameValueTag,
 } from "applesauce-core/helpers";
-import { getTagValue, KnownEvent } from "applesauce-core/helpers/event";
+import { KnownEvent } from "applesauce-core/helpers/event";
 import type { NostrEvent } from "nostr-tools";
 import {
   PATCH_KIND,
@@ -12,6 +12,7 @@ import {
   extractPatchDiff,
   PATCH_CHAIN_TAGS,
   subjectIsCoverLetter,
+  getRootRepositoryCoordinates,
 } from "@/lib/nip34";
 
 type PatchEvent = KnownEvent<typeof PATCH_KIND>;
@@ -66,15 +67,17 @@ export class Patch extends EventCast<PatchEvent> {
   }
 
   get repoCoord(): string | undefined {
-    return getOrComputeCachedValue(this.event, RepoCoordSymbol, () =>
-      getTagValue(this.event, "a"),
+    return getOrComputeCachedValue(
+      this.event,
+      RepoCoordSymbol,
+      () => getRootRepositoryCoordinates(this.event)[0],
     );
   }
 
-  /** All repository coordinates from #a tags (a patch may tag multiple repos). */
+  /** Repository root coordinates, excluding legacy `a`-tag mentions. */
   get repoCoords(): string[] {
     return getOrComputeCachedValue(this.event, RepoCoordsSymbol, () =>
-      this.event.tags.filter(([t]) => t === "a").map(([, v]) => v),
+      getRootRepositoryCoordinates(this.event),
     );
   }
 

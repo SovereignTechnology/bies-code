@@ -1,3 +1,6 @@
+import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
+import { useErrorRetry } from "@/hooks/useErrorRetry";
+import { ErrorRetryAction } from "@/components/ErrorRetryAction";
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import {
   Tooltip,
@@ -22,7 +25,6 @@ import {
   Copy,
   ChevronDown,
 } from "lucide-react";
-import { deriveEffectiveSource } from "@/lib/sourceUtils";
 import { useMobilePopoverFullWidth } from "@/hooks/useMobilePopoverFullWidth";
 import { nip19 } from "nostr-tools";
 import type { NostrEvent } from "nostr-tools";
@@ -303,6 +305,7 @@ function SourceServerRow({
   /** True when the nostr state includes the current ref, false when it doesn't, undefined when unknown */
   currentRefInNostrState?: boolean;
 }) {
+  const copyToClipboard = useCopyToClipboard();
   const [copied, setCopied] = useState(false);
   const [serverCommitTs, setServerCommitTs] = useState<number | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -439,9 +442,10 @@ function SourceServerRow({
 
   const handleCopy = (e: React.MouseEvent) => {
     e.stopPropagation();
-    navigator.clipboard.writeText(url);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
+    void copyToClipboard(url, () => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
   };
 
   const npub = isGrasp ? (graspCloneUrlNpub(url) ?? undefined) : undefined;
@@ -760,6 +764,15 @@ export function SourceSelector({
       ? poolWarning.gitCommitterDate
       : undefined;
 
+  const hasReadErrors = Object.values(urlStates).some(
+    (state) => state.status === "error" || state.status === "permanent-failure",
+  );
+  const recovery = useErrorRetry({
+    resourceKey: pool,
+    failed: hasReadErrors,
+    busy: !!pool?.getState().loading || !!pool?.getState().pulling,
+    onRetry: () => pool?.retryReads(),
+  });
   const usesGrasp = graspCloneUrls.length > 0;
   const graspUrls = cloneUrls.filter((u) => graspCloneUrls.includes(u));
   const otherUrls = cloneUrls.filter((u) =>
@@ -892,6 +905,11 @@ export function SourceSelector({
 
   return (
     <div className={outerClass}>
+      {pool && hasReadErrors && (
+        <div className="px-4 py-3">
+          <ErrorRetryAction recovery={recovery} />
+        </div>
+      )}
       {/* Header */}
       <div className="px-4 py-2.5 border-b border-border/40">
         <p className="text-xs font-semibold text-foreground">Explorer source</p>
@@ -1118,12 +1136,8 @@ export function SourceSelector({
 // ---------------------------------------------------------------------------
 
 export interface SourceSelectorDropdownProps extends SourceSelectorProps {
-  /**
-   * Pool's currently-winning git server URL. Required to resolve the
-   * "default" sentinel into a concrete effective source for the trigger
-   * label.
-   */
-  winnerUrl?: string | null;
+  /** Pool-resolved source used for the default-branch trigger label. */
+  effectiveSource: string;
   /** Popover content alignment (defaults to "end" — right-aligned). */
   contentAlign?: "start" | "end" | "center";
   className?: string;
@@ -1140,7 +1154,7 @@ export interface SourceSelectorDropdownProps extends SourceSelectorProps {
  * what's authoritative without opening the panel.
  */
 export function SourceSelectorDropdown({
-  winnerUrl,
+  effectiveSource,
   contentAlign = "end",
   className,
   ...selectorProps
@@ -1150,7 +1164,6 @@ export function SourceSelectorDropdown({
     repoState,
     repoRelayEose,
     stateBehindGit,
-    poolWarning,
     onSelectSource,
     onRefRevertToDefault,
   } = selectorProps;
@@ -1160,17 +1173,6 @@ export function SourceSelectorDropdown({
     useMobilePopoverFullWidth<HTMLButtonElement>({ open, align: contentAlign });
 
   const isLoading = repoState === undefined || !repoRelayEose;
-  const isNoState = repoRelayEose && repoState === null;
-
-  const aheadServerUrl =
-    poolWarning?.kind === "state-behind-git" ? poolWarning.gitServerUrl : null;
-  const effectiveSource = deriveEffectiveSource(
-    selectedSource,
-    stateBehindGit,
-    isNoState,
-    winnerUrl,
-    aheadServerUrl,
-  );
   const effectiveSourceIsGitServer = effectiveSource !== "nostr";
   const isManualGitSource =
     selectedSource !== "default" && selectedSource !== "nostr";

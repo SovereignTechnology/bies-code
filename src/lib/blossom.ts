@@ -4,7 +4,7 @@
  * Implements a subset of the Blossom protocol (BUD-01, BUD-02, BUD-04):
  *   - Upload to multiple servers simultaneously (Promise.any — fastest wins)
  *   - Mirror the blob to all remaining servers in the background (BUD-04)
- *   - Per-server 30-second timeout via AbortSignal
+ *   - Reports stalled uploads without imposing a size-dependent timeout
  *   - Returns NIP-94 tags (url, x, ox, size, m) for imeta injection
  *   - Appends file extension to content-addressed URLs if missing
  *   - Computes image dimensions and blurhash for NIP-94 imeta tags
@@ -31,6 +31,17 @@ export interface BlossomSigner {
 /** NIP-94 tag tuple: ["url" | "x" | "ox" | "size" | "m" | "dim" | "blurhash", value] */
 export type Nip94Tags = [["url", string], ...string[][]];
 
+export interface BlossomUploadOptions {
+  /** Reports the fastest in-flight server upload as an integer percentage. */
+  onProgress?: (percentage: number) => void;
+  /** Reports when every active server has made no progress for 30 seconds. */
+  onStalled?: (stalled: boolean) => void;
+  /** Upload the exact bytes supplied instead of resizing/re-encoding images. */
+  preserveOriginal?: boolean;
+  /** Cancels hashing, signing follow-up, and all active server uploads. */
+  signal?: AbortSignal;
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -47,10 +58,21 @@ function toBase64(str: string): string {
   return btoa(str);
 }
 
+function abortError(): DOMException {
+  return new DOMException("Upload cancelled", "AbortError");
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw abortError();
+}
+
 /** Compute SHA-256 of a File and return the hex digest. */
-async function sha256Hex(file: File): Promise<string> {
+async function sha256Hex(file: File, signal?: AbortSignal): Promise<string> {
+  throwIfAborted(signal);
   const buf = await file.arrayBuffer();
+  throwIfAborted(signal);
   const digest = await crypto.subtle.digest("SHA-256", buf);
+  throwIfAborted(signal);
   return toHex(new Uint8Array(digest));
 }
 
@@ -255,25 +277,140 @@ function parseBlobDescriptor(json: unknown): BlobDescriptor {
 // Core upload
 // ---------------------------------------------------------------------------
 
+function uploadToServer(
+  file: File,
+  server: string,
+  authorization: string,
+  onProgress?: (percentage: number) => void,
+  onStalled?: (stalled: boolean) => void,
+  signal?: AbortSignal,
+): Promise<Nip94Tags> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    let settled = false;
+    let stallTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const cleanup = () => {
+      if (stallTimer !== undefined) clearTimeout(stallTimer);
+      signal?.removeEventListener("abort", handleAbort);
+      onStalled?.(false);
+    };
+    const resolveOnce = (tags: Nip94Tags) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(tags);
+    };
+    const rejectOnce = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+    const markActive = () => {
+      onStalled?.(false);
+      if (stallTimer !== undefined) clearTimeout(stallTimer);
+      stallTimer = setTimeout(() => onStalled?.(true), 30_000);
+    };
+    function handleAbort() {
+      xhr.abort();
+      rejectOnce(abortError());
+    }
+
+    if (signal?.aborted) {
+      rejectOnce(abortError());
+      return;
+    }
+
+    xhr.open("PUT", new URL("/upload", server));
+    xhr.setRequestHeader("authorization", authorization);
+    xhr.setRequestHeader(
+      "content-type",
+      file.type || "application/octet-stream",
+    );
+
+    xhr.upload.addEventListener("progress", (event) => {
+      markActive();
+      if (!event.lengthComputable || event.total <= 0) return;
+      onProgress?.(Math.round((event.loaded / event.total) * 100));
+    });
+    xhr.addEventListener("error", () =>
+      rejectOnce(new Error("Blossom upload failed: network error")),
+    );
+    xhr.addEventListener("abort", () => rejectOnce(abortError()));
+    xhr.addEventListener("load", () => {
+      if (xhr.status < 200 || xhr.status >= 300) {
+        rejectOnce(
+          new Error(
+            `Blossom upload failed (${xhr.status}): ${xhr.responseText}`,
+          ),
+        );
+        return;
+      }
+
+      let json: unknown;
+      try {
+        json = JSON.parse(xhr.responseText);
+      } catch {
+        rejectOnce(
+          new Error(
+            `Blossom server returned non-JSON response: ${xhr.responseText}`,
+          ),
+        );
+        return;
+      }
+
+      try {
+        const data = parseBlobDescriptor(json);
+        const result: Nip94Tags = [
+          ["url", data.url],
+          ["x", data.sha256],
+          ["ox", data.sha256],
+          ["size", data.size.toString()],
+        ];
+        if (data.type) result.push(["m", data.type]);
+        resolveOnce(result);
+      } catch (error) {
+        rejectOnce(
+          error instanceof Error
+            ? error
+            : new Error("Invalid Blossom response"),
+        );
+      }
+    });
+
+    signal?.addEventListener("abort", handleAbort, { once: true });
+    markActive();
+    xhr.send(file);
+  });
+}
+
 /**
  * Upload a file to one or more Blossom servers.
  *
  * Uses `Promise.any` so the first successful server wins. Each server gets a
- * 30-second timeout. Returns NIP-94 tags including dim + blurhash for images.
+ * progress-based stall warning but no fixed timeout, allowing large artifacts
+ * to finish on slow connections. Returns NIP-94 tags including dim + blurhash
+ * for images.
  */
 export async function blossomUpload(
   file: File,
   servers: string[],
   signer: BlossomSigner,
+  options: BlossomUploadOptions = {},
 ): Promise<Nip94Tags> {
   if (servers.length === 0) {
     throw new Error("No Blossom servers configured");
   }
 
-  // Resize images larger than 1920px before uploading
-  file = await resizeImage(file);
+  // Compose images benefit from resizing, while release artifacts must remain
+  // byte-for-byte identical so their published hash and metadata describe the
+  // file the publisher selected.
+  throwIfAborted(options.signal);
+  if (!options.preserveOriginal) file = await resizeImage(file);
+  throwIfAborted(options.signal);
 
-  const x = await sha256Hex(file);
+  const x = await sha256Hex(file, options.signal);
   const now = Date.now();
   const expiration = now + 60_000;
 
@@ -288,51 +425,70 @@ export async function blossomUpload(
       ["expiration", Math.floor(expiration / 1000).toString()],
     ],
   });
+  throwIfAborted(options.signal);
 
   // Encode auth header: base64(JSON.stringify(event))
   const authorization = `Nostr ${toBase64(JSON.stringify(event))}`;
 
-  const tags = await Promise.any(
-    servers.map(async (server) => {
-      const url = new URL("/upload", server);
-      const signal = AbortSignal.timeout(30_000);
-
-      const response = await fetch(url, {
-        method: "PUT",
-        body: file,
-        headers: {
-          authorization,
-          "content-type": file.type,
-        },
-        signal,
-      });
-
-      const text = await response.text();
-      if (!response.ok) {
-        throw new Error(`Blossom upload failed (${response.status}): ${text}`);
-      }
-
-      let json: unknown;
-      try {
-        json = JSON.parse(text);
-      } catch {
-        throw new Error(`Blossom server returned non-JSON response: ${text}`);
-      }
-
-      const data = parseBlobDescriptor(json);
-
-      const result: Nip94Tags = [
-        ["url", data.url],
-        ["x", data.sha256],
-        ["ox", data.sha256],
-        ["size", data.size.toString()],
-      ];
-
-      if (data.type) result.push(["m", data.type]);
-
-      return result;
-    }),
+  const serverProgress = new Map<string, number>();
+  const serverStalled = new Map(servers.map((server) => [server, false]));
+  const activeServers = new Set(servers);
+  const uploadControllers = new Map(
+    servers.map((server) => [server, new AbortController()]),
   );
+  let uploadSettled = false;
+  options.onProgress?.(0);
+  options.onStalled?.(false);
+
+  const reportStalled = () => {
+    options.onStalled?.(
+      activeServers.size > 0 &&
+        [...activeServers].every((server) => serverStalled.get(server)),
+    );
+  };
+  const abortUploads = () => {
+    for (const controller of uploadControllers.values()) controller.abort();
+  };
+  options.signal?.addEventListener("abort", abortUploads, { once: true });
+
+  let tags: Nip94Tags;
+  try {
+    tags = await Promise.any(
+      servers.map((server) =>
+        uploadToServer(
+          file,
+          server,
+          authorization,
+          (percentage) => {
+            if (uploadSettled) return;
+            serverProgress.set(server, percentage);
+            options.onProgress?.(Math.max(...serverProgress.values()));
+          },
+          (stalled) => {
+            if (uploadSettled) return;
+            serverStalled.set(server, stalled);
+            reportStalled();
+          },
+          uploadControllers.get(server)?.signal,
+        ).catch((error: unknown) => {
+          activeServers.delete(server);
+          reportStalled();
+          throw error;
+        }),
+      ),
+    );
+  } catch (error) {
+    if (options.signal?.aborted) throw abortError();
+    throw error;
+  } finally {
+    uploadSettled = true;
+    abortUploads();
+    options.signal?.removeEventListener("abort", abortUploads);
+    options.onStalled?.(false);
+  }
+
+  throwIfAborted(options.signal);
+  options.onProgress?.(100);
 
   // Fix up the URL: append extension if the content-addressed path lacks one
   const ext = getFileExtension(file.name);
@@ -345,6 +501,7 @@ export async function blossomUpload(
 
   // Compute image metadata (dim + blurhash) and append to tags
   const { dim, blurhash } = await getImageMeta(file);
+  throwIfAborted(options.signal);
   if (dim) tags.push(["dim", dim]);
   if (blurhash) tags.push(["blurhash", blurhash]);
 
@@ -412,3 +569,19 @@ export const DEFAULT_BLOSSOM_SERVERS = [
   "https://blossom.dreamith.to",
   "https://blossom.primal.net",
 ];
+
+/** Build a BUD-01 content-addressed download URL for a Blossom server. */
+export function blossomBlobUrl(
+  server: string,
+  sha256: string,
+): string | undefined {
+  if (!/^[0-9a-f]{64}$/i.test(sha256)) return undefined;
+  try {
+    const url = new URL(`/${sha256}`, server);
+    return url.protocol === "https:" || url.protocol === "http:"
+      ? url.href
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}

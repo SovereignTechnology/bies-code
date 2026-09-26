@@ -1,3 +1,5 @@
+import { ErrorRetryAction } from "@/components/ErrorRetryAction";
+import type { ErrorRetryState } from "@/hooks/useErrorRetry";
 import { useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
 import { X } from "lucide-react";
@@ -22,6 +24,7 @@ import { cn } from "@/lib/utils";
 import type { UpstreamNip05Status } from "@/hooks/useResolvedUpstreamNip05";
 
 interface SubordinateForkFieldProps {
+  recovery?: ErrorRetryState;
   upstream: RepoUpstream;
   upstreamInput: string;
   pendingNip05?: PendingNip05Upstream;
@@ -82,6 +85,7 @@ export function SubordinateForkField({
   upstreamInput,
   pendingNip05,
   nip05Status,
+  recovery,
   editorOpen,
   inputBlurred,
   focusRequest,
@@ -211,6 +215,9 @@ export function SubordinateForkField({
             {showInvalidInput ? (
               <p className="text-[11px] font-medium text-destructive">
                 {inputErrorMessage}
+                {nip05Status === "error" && recovery && (
+                  <ErrorRetryAction recovery={recovery} />
+                )}
               </p>
             ) : isResolvingUpstreamNip05 && pendingNip05 ? (
               <p className="text-[11px] text-muted-foreground leading-relaxed">
@@ -223,10 +230,9 @@ export function SubordinateForkField({
                 <code className="font-mono">nostr://npub1…/repo</code>,{" "}
                 <code className="font-mono">nostr://nip05/relay/repo</code>,{" "}
                 <code className="font-mono">git.buildinelsalvador.com</code>{" "}
-                repo URLs,{" "}
-                <code className="font-mono">npub1…/repo</code>, and repository
-                coordinates. The checkbox checks itself when a valid reference
-                is detected.
+                repo URLs, <code className="font-mono">npub1…/repo</code>, and
+                repository coordinates. The checkbox checks itself when a valid
+                reference is detected.
               </p>
             )}
           </div>

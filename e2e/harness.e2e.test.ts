@@ -31,6 +31,10 @@ import {
   REPO_STATE_KIND,
 } from "./harness";
 import { getReceivePackRefs } from "@/lib/git-push";
+import {
+  graspRepositoryCloneUrl,
+  normalizeGraspServiceAddress,
+} from "@/lib/grasp";
 
 // Skip the entire suite (cleanly) when there's no ngit-grasp binary.
 const describeIfGrasp = graspBinaryAvailable() ? describe : describe.skip;
@@ -185,6 +189,46 @@ describeIfGrasp("e2e harness — smoke test", () => {
     } finally {
       relayB.close();
       await serverB.stop();
+    }
+  });
+
+  it("step 6: path-mounted services accept matching relay and clone URLs", async () => {
+    const mountedServer = await GraspServer.start({
+      role: "harness-mounted",
+      basePath: "/services/grasp",
+    });
+    const mountedRelay = await RelayClient.connect(mountedServer.relayUrl);
+
+    try {
+      const maintainer = new TestSigner();
+      const serviceAddress = normalizeGraspServiceAddress(
+        mountedServer.relayUrl,
+      );
+      const cloneUrl = graspRepositoryCloneUrl(
+        serviceAddress,
+        maintainer.npub,
+        "mounted-smoke",
+      );
+      expect(cloneUrl).toBe(
+        mountedServer.cloneUrl(maintainer.npub, "mounted-smoke"),
+      );
+
+      const repo = await seedRepo(mountedServer, mountedRelay, maintainer, {
+        identifier: "mounted-smoke",
+        name: "Mounted Harness Smoke",
+        files: { "README.md": "# mounted harness smoke\n" },
+      });
+
+      expect(repo.announcement.tags).toContainEqual(["clone", cloneUrl]);
+      expect(repo.announcement.tags).toContainEqual([
+        "relays",
+        mountedServer.relayUrl,
+      ]);
+      const refs = await getReceivePackRefs(cloneUrl);
+      expect(refs.refs[`refs/heads/${repo.branch}`]).toBe(repo.headCommit);
+    } finally {
+      mountedRelay.close();
+      await mountedServer.stop();
     }
   });
 });

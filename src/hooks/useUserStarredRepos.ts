@@ -29,11 +29,7 @@ import { onlyEvents } from "applesauce-relay";
 import { resilientSubscription } from "@/lib/resilientSubscription";
 import { normalizeUrl } from "@/lib/url";
 
-import {
-  REPO_KIND,
-  groupIntoResolvedRepos,
-  type ResolvedRepo,
-} from "@/lib/nip34";
+import { type ResolvedRepo } from "@/lib/nip34";
 import type { Filter } from "applesauce-core/helpers";
 import type { NostrEvent } from "nostr-tools";
 import type { Observable } from "rxjs";
@@ -45,6 +41,11 @@ import {
   distinctUntilChanged,
   startWith,
 } from "rxjs";
+import {
+  RepositorySelectionModel,
+  repositoryCoordinateFilters,
+  repositorySelectionKey,
+} from "@/models/RepositorySelectionModel";
 
 /** kind:7 — NIP-25 reaction */
 const REACTION_KIND = 7;
@@ -118,20 +119,10 @@ export function useUserStarredRepos(
       switchMap((coords) => {
         if (coords.length === 0) return of(undefined);
 
-        const coordPubkeys = [
-          ...new Set(
-            coords
-              .map((c) => c.split(":")[1])
-              .filter((pk): pk is string => !!pk),
-          ),
-        ];
+        const filters = repositoryCoordinateFilters(coords);
+        if (filters.length === 0) return of(undefined);
 
-        const repoFilter: Filter = {
-          kinds: [REPO_KIND],
-          authors: coordPubkeys,
-        };
-
-        return resilientSubscription(pool, gitIndexRelays, [repoFilter]).pipe(
+        return resilientSubscription(pool, gitIndexRelays, filters).pipe(
           onlyEvents(),
           mapEventsToStore(store),
         );
@@ -157,33 +148,12 @@ export function useUserStarredRepos(
       ),
       switchMap((coords) => {
         if (coords.length === 0) return of([] as ResolvedRepo[]);
-
-        const coordSet = new Set(coords);
-        const coordPubkeys = [
-          ...new Set(
-            coords
-              .map((c) => c.split(":")[1])
-              .filter((pk): pk is string => !!pk),
-          ),
-        ];
-
-        const repoFilter: Filter = {
-          kinds: [REPO_KIND],
-          authors: coordPubkeys,
-        };
-
-        return (
-          store.timeline([repoFilter]) as unknown as Observable<NostrEvent[]>
-        ).pipe(
-          map((events) => {
-            const relevant = events.filter((ev) => {
-              const d = ev.tags.find(([t]) => t === "d")?.[1];
-              if (!d) return false;
-              return coordSet.has(`${REPO_KIND}:${ev.pubkey}:${d}`);
-            });
-            return groupIntoResolvedRepos(relevant);
-          }),
-        );
+        return store.model(
+          RepositorySelectionModel,
+          repositorySelectionKey(coords),
+          undefined,
+          false,
+        ) as unknown as Observable<ResolvedRepo[]>;
       }),
     );
   }, [pubkey, store]);

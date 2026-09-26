@@ -1,3 +1,4 @@
+import { useRecoveryToast } from "@/hooks/useRecoveryToast";
 /**
  * PushEventComponents — timeline nodes for patch-set pushes and PR Updates.
  *
@@ -30,7 +31,16 @@ import type { PR } from "@/casts/PR";
 import type { PRUpdate } from "@/casts/PRUpdate";
 import type { PatchRevision } from "@/hooks/usePatchChain";
 import type { NostrEvent } from "nostr-tools";
-import type { GitGraspPool, PoolState } from "@/lib/git-grasp-pool";
+import {
+  selectCommitRange,
+  type GitGraspPool,
+  type PoolState,
+} from "@/lib/git-grasp-pool";
+import {
+  CompactCommitGraphList,
+  type CompactCommitGraphRowData,
+} from "@/components/CommitList";
+import { buildLinearGraphCommits } from "@/lib/commit-graph";
 import { useCommitHistory } from "@/hooks/useGitExplorer";
 import { usePRMergeBase } from "@/hooks/usePRMergeBase";
 import { useActiveAccount } from "applesauce-react/hooks";
@@ -50,62 +60,12 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { NsitePreviewLink } from "@/components/ci/PRNsitePreview";
+import type { NsitePreview } from "@/lib/ciOutputs";
 
 // ---------------------------------------------------------------------------
 // Shared helpers
 // ---------------------------------------------------------------------------
-
-function CommitRow({
-  shortHash,
-  subject,
-  href,
-  superseded,
-}: {
-  shortHash: string;
-  subject: string;
-  href?: string;
-  superseded?: boolean;
-}) {
-  const inner = (
-    <>
-      <span
-        className={cn(
-          "font-mono text-[11px] shrink-0",
-          superseded
-            ? "line-through text-muted-foreground/50"
-            : "text-muted-foreground/70",
-        )}
-      >
-        {shortHash}
-      </span>
-      <span
-        className={cn(
-          "text-sm truncate",
-          superseded ? "line-through text-foreground/40" : "text-foreground/80",
-        )}
-      >
-        {subject}
-      </span>
-    </>
-  );
-
-  if (href) {
-    return (
-      <Link
-        to={href}
-        className="flex items-center gap-2 py-0.5 min-w-0 rounded px-1 -mx-1 transition-colors hover:bg-muted/40"
-      >
-        {inner}
-      </Link>
-    );
-  }
-
-  return (
-    <div className="flex items-center gap-2 py-0.5 min-w-0 rounded px-1 -mx-1">
-      {inner}
-    </div>
-  );
-}
 
 function commitIsSuperseded(
   hash: string,
@@ -133,7 +93,10 @@ const EMPTY_POOL_STATE: PoolState = {
   readmeFilename: null,
   defaultBranch: null,
   warning: null,
+  authoritativeRefs: {},
   authoritativeHead: null,
+  viewSource: "authoritative",
+  effectiveRefs: {},
   error: null,
   lastCheckedAt: null,
   crossRefDiscrepancies: [],
@@ -197,6 +160,10 @@ export function PatchSetPushEvent({
           pubkey: p.event.pubkey,
           createdAt: p.event.created_at,
           commitId: p.commitId,
+          // Graph key — patches without a commit tag fall back to the
+          // (equally unique) event ID.
+          hash: p.commitId ?? p.id,
+          parentCommitId: p.parentCommitId,
           // nevent1 of the patch event ID is the canonical URL segment.
           // The router decodes it back to the event ID for patchMatch.
           linkSegment: eventIdToNevent(p.event.id, relayHints),
@@ -214,8 +181,11 @@ export function PatchSetPushEvent({
   const PUSH_WINDOW_SECS = 300; // 5 minutes
   const commitGroups = useMemo(() => {
     type C = (typeof patchCommits)[number];
-    const groups: Array<{ pubkey: string; commits: C[] }> = [];
-    for (const c of patchCommits) {
+    // startIndex tracks the group's position in the flat chain so the
+    // group's oldest commit can name its parent across the group boundary.
+    const groups: Array<{ pubkey: string; commits: C[]; startIndex: number }> =
+      [];
+    patchCommits.forEach((c, index) => {
       const last = groups[groups.length - 1];
       const withinWindow =
         last &&
@@ -224,9 +194,9 @@ export function PatchSetPushEvent({
       if (withinWindow) {
         last.commits.push(c);
       } else {
-        groups.push({ pubkey: c.pubkey, commits: [c] });
+        groups.push({ pubkey: c.pubkey, commits: [c], startIndex: index });
       }
-    }
+    });
     return groups;
   }, [patchCommits]);
 
@@ -324,21 +294,31 @@ export function PatchSetPushEvent({
                 </div>
 
                 {/* Commits for this group */}
-                <div className="rounded-md border border-border/50 bg-muted/20 px-3 py-1.5 divide-y divide-border/30">
-                  {group.commits.map((c) => (
-                    <CommitRow
-                      key={c.id}
-                      shortHash={c.shortHash}
-                      subject={c.subject}
-                      superseded={superseded}
-                      href={
-                        basePath
-                          ? `${basePath}/commit/${c.linkSegment}`
-                          : undefined
-                      }
-                    />
-                  ))}
-                </div>
+                <CompactCommitGraphList
+                  rows={group.commits.map((c) => ({
+                    key: c.id,
+                    hash: c.hash,
+                    shortHash: c.shortHash,
+                    subject: c.subject,
+                    superseded,
+                    href: basePath
+                      ? `${basePath}/commit/${c.linkSegment}`
+                      : undefined,
+                  }))}
+                  graphCommits={buildLinearGraphCommits(
+                    group.commits,
+                    // The oldest commit's parent: the previous group's tip,
+                    // or (for the first group) the chain's parent-commit tag.
+                    group.startIndex > 0
+                      ? patchCommits[group.startIndex - 1].hash
+                      : patchCommits[0]?.parentCommitId,
+                  )}
+                  // Later groups sit on top of this window; the final group
+                  // is the revision's tip, with nothing built above it.
+                  continuesAbove={groupIdx < commitGroups.length - 1}
+                  // A patch chain always applies onto a base below it.
+                  continuesBelow
+                />
               </div>
             </div>
           );
@@ -381,12 +361,14 @@ export function PROpenPushEvent({
     addSuffix: true,
   });
 
-  const rows = useMemo(() => {
+  const rows = useMemo<CompactCommitGraphRowData[]>(() => {
     if (commits && commits.length > 0) {
       return commits.map((c) => ({
         key: c.hash,
+        hash: c.hash,
         shortHash: c.hash.slice(0, 7),
         subject: c.subject,
+        superseded: commitIsSuperseded(c.hash, superseded, latestCommitIds),
         href: basePath ? `${basePath}/commit/${c.hash}` : undefined,
       }));
     }
@@ -394,14 +376,26 @@ export function PROpenPushEvent({
       return [
         {
           key: pr.tipCommitId,
+          hash: pr.tipCommitId,
           shortHash: pr.tipCommitId.slice(0, 7),
           subject: "(commits not yet loaded)",
+          superseded: commitIsSuperseded(
+            pr.tipCommitId,
+            superseded,
+            latestCommitIds,
+          ),
           href: undefined,
         },
       ];
     }
     return [];
-  }, [commits, pr.tipCommitId, basePath]);
+  }, [commits, pr.tipCommitId, basePath, superseded, latestCommitIds]);
+
+  // Fast-forward nuance: when a later push kept this push's tip in its
+  // history, later commits were built on top — the window continues above.
+  const tipCommitId = pr.tipCommitId ?? rows[rows.length - 1]?.hash;
+  const continuesAbove =
+    superseded && !!tipCommitId && (latestCommitIds?.has(tipCommitId) ?? false);
 
   return (
     <div className="relative flex gap-3 py-2 pl-1">
@@ -439,21 +433,13 @@ export function PROpenPushEvent({
 
         {/* Commit list */}
         {rows.length > 0 && (
-          <div className="rounded-md border border-border/50 bg-muted/20 px-3 py-1.5 divide-y divide-border/30">
-            {rows.map((r) => (
-              <CommitRow
-                key={r.key}
-                shortHash={r.shortHash}
-                subject={r.subject}
-                superseded={commitIsSuperseded(
-                  r.key,
-                  superseded,
-                  latestCommitIds,
-                )}
-                href={r.href}
-              />
-            ))}
-          </div>
+          <CompactCommitGraphList
+            rows={rows}
+            graphCommits={buildLinearGraphCommits(rows)}
+            continuesAbove={continuesAbove}
+            // The PR's merge base always lies below the pushed window.
+            continuesBelow
+          />
         )}
       </div>
     </div>
@@ -506,6 +492,8 @@ export function PRUpdatePushEvent({
   repoCoords,
   previousTipCommitId,
   latestCommitIds,
+  nsitePreview,
+  mergeSourceNames,
 }: {
   update: PRUpdate | PRUpdateLike;
   superseded: boolean;
@@ -533,6 +521,10 @@ export function PRUpdatePushEvent({
   previousTipCommitId?: string;
   /** Commit IDs present in the latest PR version. Used to avoid striking through retained commits. */
   latestCommitIds?: ReadonlySet<string>;
+  /** Successful nsite preview produced for this update's tip commit. */
+  nsitePreview?: NsitePreview;
+  /** Graph-resolved source branch per merge commit hash. */
+  mergeSourceNames?: Map<string, string>;
 }) {
   const timeAgo = formatDistanceToNow(
     new Date(update.event.created_at * 1000),
@@ -548,6 +540,7 @@ export function PRUpdatePushEvent({
   const activeAccount = useActiveAccount();
   const isOwn = !!activeAccount && activeAccount.pubkey === update.event.pubkey;
 
+  const { toast: deletionToast } = useRecoveryToast();
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteReason, setDeleteReason] = useState("");
   const [deleting, setDeleting] = useState(false);
@@ -563,13 +556,24 @@ export function PRUpdatePushEvent({
         deleteReason.trim() || undefined,
       );
     } catch (err) {
-      console.error("[PRUpdatePushEvent] failed to delete event:", err);
+      deletionToast({
+        title: "Could not delete event",
+        description: err instanceof Error ? err.message : "Request failed",
+        variant: "destructive",
+        recovery: {
+          label: "Review deletion",
+          action: () => {
+            setDeleteReason(deleteReason);
+            setDeleteOpen(true);
+          },
+        },
+      });
     } finally {
       setDeleting(false);
       setDeleteOpen(false);
       setDeleteReason("");
     }
-  }, [deleting, update.event, repoCoords, deleteReason]);
+  }, [deletionToast, deleting, update.event, repoCoords, deleteReason]);
 
   const deleteReasonId = `delete-pr-update-${update.event.id.slice(0, 8)}-reason`;
 
@@ -595,19 +599,14 @@ export function PRUpdatePushEvent({
     effectiveMergeBase,
   );
 
-  // Trim commits up to (but not including) the merge base.
+  // Subtract every commit reachable from the merge base. Array order cannot
+  // establish this range because histories are timestamp-sorted.
   const loadedCommits = useMemo(() => {
     if (!commitHistory.commits.length) return [];
-    const trimmed = (() => {
-      if (!effectiveMergeBase) return commitHistory.commits;
-      const idx = commitHistory.commits.findIndex(
-        (c) => c.hash === effectiveMergeBase,
-      );
-      return idx === -1
-        ? commitHistory.commits
-        : commitHistory.commits.slice(0, idx);
-    })();
-    return [...trimmed].reverse();
+    return selectCommitRange(
+      commitHistory.commits,
+      effectiveMergeBase,
+    ).reverse();
   }, [commitHistory.commits, effectiveMergeBase]);
 
   // Detect fast-forward: the previous tip is reachable from the new tip, i.e.
@@ -627,7 +626,7 @@ export function PRUpdatePushEvent({
     return idx === -1 ? loadedCommits : loadedCommits.slice(idx + 1);
   }, [isFastForward, previousTipCommitId, loadedCommits]);
 
-  const rows = useMemo(() => {
+  const rows = useMemo<CompactCommitGraphRowData[]>(() => {
     // Prefer explicitly passed commits, then git-loaded commits.
     const source =
       commits && commits.length > 0
@@ -645,6 +644,7 @@ export function PRUpdatePushEvent({
         hash: c.hash,
         shortHash: c.hash.slice(0, 7),
         subject: c.subject,
+        superseded: commitIsSuperseded(c.hash, superseded, latestCommitIds),
         href: basePath ? `${basePath}/commit/${c.hash}` : undefined,
       }));
     }
@@ -658,6 +658,11 @@ export function PRUpdatePushEvent({
           subject: commitHistory.loading
             ? "Loading commits…"
             : "(commits not available)",
+          superseded: commitIsSuperseded(
+            update.tipCommitId,
+            superseded,
+            latestCommitIds,
+          ),
           href: basePath
             ? `${basePath}/commit/${update.tipCommitId}`
             : undefined,
@@ -671,7 +676,25 @@ export function PRUpdatePushEvent({
     commitHistory.loading,
     update.tipCommitId,
     basePath,
+    superseded,
+    latestCommitIds,
   ]);
+
+  // Parent links for the graph: git-loaded commits carry real parents (the
+  // merge base or previous tip lies outside the window → natural stub);
+  // bare hash + subject rows get a synthetic linear chain instead.
+  const usingLoadedCommits =
+    (!commits || commits.length === 0) && displayCommits.length > 0;
+  const graphCommits = useMemo(
+    () => (usingLoadedCommits ? displayCommits : buildLinearGraphCommits(rows)),
+    [usingLoadedCommits, displayCommits, rows],
+  );
+  // Fast-forward nuance: when a later push kept this update's tip in its
+  // history, later commits were built on top — the window continues above.
+  const continuesAbove =
+    superseded &&
+    !!update.tipCommitId &&
+    (latestCommitIds?.has(update.tipCommitId) ?? false);
 
   return (
     <>
@@ -733,21 +756,22 @@ export function PRUpdatePushEvent({
 
           {/* Commit list */}
           {rows.length > 0 && (
-            <div className="rounded-md border border-border/50 bg-muted/20 px-3 py-1.5 divide-y divide-border/30">
-              {rows.map((r) => (
-                <CommitRow
-                  key={r.key}
-                  shortHash={r.shortHash}
-                  subject={r.subject}
-                  superseded={commitIsSuperseded(
-                    r.hash,
-                    superseded,
-                    latestCommitIds,
-                  )}
-                  href={r.href}
-                />
-              ))}
-            </div>
+            <>
+              <CompactCommitGraphList
+                rows={rows}
+                graphCommits={graphCommits}
+                continuesAbove={continuesAbove}
+                // Loaded git commits reach the window boundary with real
+                // parent links; synthetic chains need the explicit signal
+                // that the merge base lies below.
+                continuesBelow={!usingLoadedCommits}
+                collapseMergedCommits={usingLoadedCommits}
+                mergeSourceNames={mergeSourceNames}
+              />
+              {nsitePreview && (
+                <NsitePreviewLink preview={nsitePreview} className="mt-2" />
+              )}
+            </>
           )}
         </div>
       </div>

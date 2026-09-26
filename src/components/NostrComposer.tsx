@@ -1,3 +1,4 @@
+import { ManualRetryAction } from "@/components/ErrorRetryAction";
 /**
  * NostrComposer — a drop-in replacement for <Textarea> with nostr-aware features:
  *
@@ -18,13 +19,14 @@ import {
   useRef,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useState,
   useImperativeHandle,
   forwardRef,
 } from "react";
 import { nip19 } from "nostr-tools";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, Loader2 } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { UserAvatar } from "@/components/UserAvatar";
 import { CommentContent } from "@/components/CommentContent";
@@ -69,9 +71,11 @@ export interface NostrComposerProps {
   className?: string;
   minRows?: number;
   /** Controlled preview mode — owned by the parent */
-  activeTab?: "write" | "preview";
-  onTabChange?: (tab: "write" | "preview") => void;
+  activeTab?: ComposerTab;
+  onTabChange?: (tab: ComposerTab) => void;
   onFocusChange?: (focused: boolean) => void;
+  /** Called whenever a Blossom upload starts or finishes. */
+  onUploadingChange?: (isUploading: boolean) => void;
   /** Pubkeys to surface first in @ mention results */
   priorityPubkeys?: string[];
   /**
@@ -86,6 +90,54 @@ export interface NostrComposerProps {
   maxHeight?: string;
   /** Auto-focus the textarea on mount */
   autoFocus?: boolean;
+}
+
+const COMPOSER_TABS = ["write", "preview"] as const;
+
+export type ComposerTab = (typeof COMPOSER_TABS)[number];
+
+interface ComposerModeToggleProps {
+  value: string;
+  activeTab: ComposerTab;
+  onTabChange: (tab: ComposerTab) => void;
+  className?: string;
+}
+
+/** Shared Write/Preview control for every NostrComposer surface. */
+export function ComposerModeToggle({
+  value,
+  activeTab,
+  onTabChange,
+  className,
+}: ComposerModeToggleProps) {
+  // Keep the control available in Preview if the value is cleared externally,
+  // so the editor can never become stranded there.
+  if (activeTab !== "preview" && value.trim().length === 0) return null;
+
+  return (
+    <div
+      role="group"
+      aria-label="Composer mode"
+      className={cn("flex items-center gap-0.5", className)}
+    >
+      {COMPOSER_TABS.map((tab) => (
+        <button
+          key={tab}
+          type="button"
+          aria-pressed={activeTab === tab}
+          onClick={() => onTabChange(tab)}
+          className={cn(
+            "rounded px-2 py-0.5 text-xs font-medium capitalize transition-colors",
+            activeTab === tab
+              ? "bg-muted text-foreground"
+              : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          {tab}
+        </button>
+      ))}
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -108,6 +160,7 @@ export const NostrComposer = forwardRef<
     activeTab: activeTabProp,
     onTabChange,
     onFocusChange,
+    onUploadingChange,
     priorityPubkeys,
     onUploadedTags,
     autoFocus,
@@ -116,11 +169,34 @@ export const NostrComposer = forwardRef<
 ) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [internalTab, setInternalTab] = useState<"write" | "preview">("write");
+  const [internalTab, setInternalTab] = useState<ComposerTab>("write");
   const activeTab = activeTabProp ?? internalTab;
   const _setActiveTab = onTabChange ?? setInternalTab;
 
-  const { uploadFile, isUploading } = useBlossomUpload();
+  const { uploadFile, isUploading, error: uploadError } = useBlossomUpload();
+  const [failedFile, setFailedFile] = useState<File>();
+  const pendingUploads = useRef(new Set<AbortController>());
+  const previousValue = useRef(value);
+
+  useLayoutEffect(() => {
+    // Clearing the editor also invalidates attachments still in flight.
+    if (previousValue.current.trim() && !value.trim()) {
+      pendingUploads.current.forEach((controller) => controller.abort());
+    }
+    previousValue.current = value;
+  }, [value]);
+
+  useLayoutEffect(() => {
+    const pending = pendingUploads.current;
+    return () => {
+      pending.forEach((controller) => controller.abort());
+      pending.clear();
+    };
+  }, []);
+
+  useEffect(() => {
+    onUploadingChange?.(isUploading);
+  }, [isUploading, onUploadingChange]);
 
   // Expose triggerAttach + isUploading to parents
   useImperativeHandle(
@@ -196,19 +272,43 @@ export const NostrComposer = forwardRef<
     [value, onChange],
   );
 
+  // Upload completion uses the current text/cursor, never the text at upload start.
+  const uploadResult = useRef({ insertUrl, onUploadedTags });
+  useLayoutEffect(() => {
+    uploadResult.current = { insertUrl, onUploadedTags };
+  }, [insertUrl, onUploadedTags]);
+
+  const attachFile = useCallback(
+    async (file: File) => {
+      const controller = new AbortController();
+      pendingUploads.current.add(controller);
+      try {
+        const tags = await uploadFile(file, { signal: controller.signal });
+        // Transport cancellation may arrive after completion, so also guard writes.
+        if (controller.signal.aborted) return;
+        if (tags) {
+          uploadResult.current.insertUrl(tags[0][1]);
+          uploadResult.current.onUploadedTags?.(tags);
+          setFailedFile(undefined);
+        } else {
+          setFailedFile(file);
+        }
+      } finally {
+        pendingUploads.current.delete(controller);
+      }
+    },
+    [uploadFile],
+  );
+
   // Handle file selected via the hidden file input
   const handleFileChange = useCallback(
     async (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
       if (!file) return;
       e.target.value = "";
-      const tags = await uploadFile(file);
-      if (tags) {
-        insertUrl(tags[0][1]);
-        onUploadedTags?.(tags);
-      }
+      await attachFile(file);
     },
-    [uploadFile, insertUrl, onUploadedTags],
+    [attachFile],
   );
 
   // Handle paste — intercept image data from clipboard
@@ -220,14 +320,9 @@ export const NostrComposer = forwardRef<
 
       e.preventDefault();
       const file = imageItem.getAsFile();
-      if (!file) return;
-      const tags = await uploadFile(file);
-      if (tags) {
-        insertUrl(tags[0][1]);
-        onUploadedTags?.(tags);
-      }
+      if (file) await attachFile(file);
     },
-    [uploadFile, insertUrl, onUploadedTags],
+    [attachFile],
   );
 
   // Extract unique nostr: identifiers from value for preview chips
@@ -297,6 +392,28 @@ export const NostrComposer = forwardRef<
         )}
       </div>
 
+      {isUploading && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="flex items-center gap-2 rounded-md border border-blue-500/30 bg-blue-500/10 px-3 py-2 text-sm text-muted-foreground"
+        >
+          <Loader2 className="h-4 w-4 shrink-0 motion-safe:animate-spin" />
+          <span>Uploading attachment…</span>
+        </div>
+      )}
+
+      {uploadError && failedFile && (
+        <div className="space-y-2 rounded-md border border-destructive/40 p-3">
+          <p role="alert" className="text-sm text-destructive">
+            {uploadError}
+          </p>
+          <ManualRetryAction
+            busy={isUploading}
+            onRetry={() => attachFile(failedFile)}
+          />
+        </div>
+      )}
       {/* nsec guard */}
       {hasNsec && (
         <div className="flex items-center gap-2 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive">

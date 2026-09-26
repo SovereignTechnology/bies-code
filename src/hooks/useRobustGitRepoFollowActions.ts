@@ -3,8 +3,8 @@
  * repositories follow list (kind:10018).
  *
  * Thin wrapper around useRobustReplaceableAction that provides a convenient
- * follow/unfollow API. All connectivity checks, freshness prefetching, and
- * error handling are delegated to the generic hook.
+ * follow/unfollow API. All warm-coverage, local-cache, and error handling
+ * safeguards are delegated to the generic hook.
  *
  * Unlike the social follow (kind:3), we do NOT warn when no existing list is
  * found — kind:10018 is new and most users won't have one yet, so silently
@@ -17,8 +17,8 @@ import { useCallback } from "react";
 import { useAction } from "@/hooks/useAction";
 import { useRobustReplaceableAction } from "@/hooks/useRobustReplaceableAction";
 import {
-  AddGitRepo,
-  RemoveGitRepo,
+  AddGitRepoFromPreflight,
+  RemoveGitRepoFromPreflight,
   GIT_REPOS_KIND,
 } from "@/actions/gitRepoFollowActions";
 
@@ -36,18 +36,23 @@ export interface RobustGitRepoFollowActionsResult {
 }
 
 export function useRobustGitRepoFollowActions(): RobustGitRepoFollowActionsResult {
-  const { run: addRepo } = useAction(AddGitRepo);
-  const { run: removeRepo } = useAction(RemoveGitRepo);
+  const { run: addRepo } = useAction(AddGitRepoFromPreflight);
+  const { run: removeRepo } = useAction(RemoveGitRepoFromPreflight);
   const { execute, pending } = useRobustReplaceableAction();
 
   const followRepo = useCallback(
-    (...coords: string[]) => execute(GIT_REPOS_KIND, () => addRepo(...coords)),
+    (...coords: string[]) =>
+      execute(GIT_REPOS_KIND, ({ event, outboxes }) =>
+        addRepo(event, outboxes, ...coords),
+      ),
     [execute, addRepo],
   );
 
   const unfollowRepo = useCallback(
     (...coords: string[]) =>
-      execute(GIT_REPOS_KIND, () => removeRepo(...coords)),
+      execute(GIT_REPOS_KIND, ({ event, outboxes }) =>
+        removeRepo(event, outboxes, ...coords),
+      ),
     [execute, removeRepo],
   );
 

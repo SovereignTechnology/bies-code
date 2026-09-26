@@ -25,17 +25,26 @@ interface ProfileHoverCardProps {
   children: React.ReactNode;
   /** Pass true when the child is already a single forwardRef element (e.g. a Link) */
   asChild?: boolean;
+  /** Override profile navigation for identities with a contextual detail page. */
+  profilePath?: string;
 }
 
 /**
  * Inner body — only mounted when the card is open so we don't pay the
  * profile-load cost for every avatar on the page.
  */
-function ProfileHoverCardBody({ pubkey }: { pubkey: string }) {
+function ProfileHoverCardBody({
+  pubkey,
+  profilePath,
+}: {
+  pubkey: string;
+  profilePath?: string;
+}) {
   useLoadProfile(pubkey);
   const profile = useProfile(pubkey);
   const { name: displayName, isPlaceholder } = useUserDisplayName(pubkey);
   const userPath = useUserPath(pubkey);
+  const destination = profilePath ?? userPath;
   const account = useActiveAccount();
   const isFollowing = useIsFollowing(pubkey);
   const isGitFollowing = useIsGitAuthorFollowing(pubkey);
@@ -70,7 +79,7 @@ function ProfileHoverCardBody({ pubkey }: { pubkey: string }) {
       <div className="px-4 pb-4">
         {/* Avatar row — overlaps banner */}
         <div className="-mt-7 mb-2">
-          <Link to={userPath} onClick={(e) => e.stopPropagation()}>
+          <Link to={destination} onClick={(e) => e.stopPropagation()}>
             <AvatarWithBadges
               size="lg"
               showSocial={!!isFollowing}
@@ -91,7 +100,7 @@ function ProfileHoverCardBody({ pubkey }: { pubkey: string }) {
 
         {/* Display name */}
         <Link
-          to={userPath}
+          to={destination}
           className="font-semibold text-[14px] hover:underline block truncate leading-tight"
           onClick={(e) => e.stopPropagation()}
         >
@@ -206,6 +215,7 @@ export function ProfileHoverCard({
   pubkey,
   children,
   asChild,
+  profilePath,
 }: ProfileHoverCardProps) {
   return (
     <HoverCard openDelay={300} closeDelay={150}>
@@ -226,7 +236,7 @@ export function ProfileHoverCard({
         className="w-72 p-0 rounded-2xl overflow-hidden border border-border shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <ProfileHoverCardBody pubkey={pubkey} />
+        <ProfileHoverCardBody pubkey={pubkey} profilePath={profilePath} />
       </HoverCardContent>
     </HoverCard>
   );

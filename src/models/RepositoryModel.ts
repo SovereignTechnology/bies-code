@@ -3,21 +3,22 @@ import type { Model } from "applesauce-core/event-store";
 import {
   REPO_KIND,
   resolveChain,
-  getRepoMaintainers,
+  getRepoHistorySubjects,
+  getRepoRoleSubjects,
   type ResolvedRepo,
 } from "@/lib/nip34";
 import type { NostrEvent } from "nostr-tools";
 
 /**
- * RepositoryModel — reactively resolves the full maintainer chain for a
- * single repository starting from a selected maintainer pubkey + d-tag.
+ * RepositoryModel — reactively resolves a selected coordinate through the
+ * deterministic repository-component index.
  *
  * How it works:
  * 1. Subscribe to the selected maintainer's announcement via store.addressable()
  * 2. Read the maintainers tag and subscribe to each listed pubkey's announcement
  * 3. For each of those, read their maintainers tags and subscribe further
  * 4. Repeat until no new pubkeys are discovered (fixed point)
- * 5. Re-emit a ResolvedRepo whenever any announcement in the chain changes
+ * 5. Re-index the hydrated closure whenever any announcement changes
  *
  * The EventStore's eventLoader (wired to addressLoader in nostr.ts) will
  * automatically fetch any co-maintainer announcements that aren't in the
@@ -34,29 +35,72 @@ import type { NostrEvent } from "nostr-tools";
 export function RepositoryModel(
   selectedMaintainer: string,
   dTag: string,
+  deletionEvents?: Observable<NostrEvent[]>,
 ): Model<ResolvedRepo | undefined> {
   return (store) =>
     new Observable<ResolvedRepo | undefined>((observer) => {
       // Track which pubkeys we're currently subscribed to
-      const subscribed = new Set<string>();
+      const subscriptionsByPubkey = new Map<string, boolean>();
       // All inner subscriptions — collected so the teardown can unsubscribe them
       const subs = new Subscription();
       // Latest announcement event per pubkey
       const latestByPubkey = new Map<string, NostrEvent | undefined>();
+      const retainedAnnouncements = new Map<string, NostrEvent>();
+      let deletions: NostrEvent[] = [];
 
       // Emit a resolved repo from the current snapshot
       function emit() {
         const events = Array.from(latestByPubkey.values()).filter(
           (ev): ev is NostrEvent => ev !== undefined,
         );
-        observer.next(resolveChain(events, selectedMaintainer, dTag));
+        const currentIds = new Set(events.map(({ id }) => id));
+        const deletedEvents = [...retainedAnnouncements.values()].filter(
+          (event) =>
+            !currentIds.has(event.id) &&
+            deletions.some(
+              (deletion) =>
+                deletion.pubkey === event.pubkey &&
+                deletion.created_at >= event.created_at &&
+                deletion.tags.some(
+                  ([name, value]) =>
+                    (name === "e" && value === event.id) ||
+                    (name === "a" &&
+                      value === `${REPO_KIND}:${event.pubkey}:${dTag}`),
+                ),
+            ),
+        );
+        observer.next(
+          resolveChain(
+            [...events, ...deletedEvents, ...deletions],
+            selectedMaintainer,
+            dTag,
+          ),
+        );
       }
 
       // Subscribe to a pubkey's announcement and recursively subscribe to
       // any newly-discovered maintainers
-      function subscribe(pubkey: string) {
-        if (subscribed.has(pubkey)) return;
-        subscribed.add(pubkey);
+      function subscribe(pubkey: string, traverseCurrentGraph: boolean) {
+        const previousMode = subscriptionsByPubkey.get(pubkey);
+        if (previousMode !== undefined) {
+          if (traverseCurrentGraph && !previousMode) {
+            subscriptionsByPubkey.set(pubkey, true);
+            const event = latestByPubkey.get(pubkey);
+            if (event) discoverFrom(event, true);
+          }
+          return;
+        }
+        subscriptionsByPubkey.set(pubkey, traverseCurrentGraph);
+
+        function discoverFrom(ev: NostrEvent, traverse: boolean) {
+          if (!traverse) return;
+          for (const subject of getRepoRoleSubjects(ev)) {
+            subscribe(subject, true);
+          }
+          for (const subject of getRepoHistorySubjects(ev)) {
+            subscribe(subject, false);
+          }
+        }
 
         subs.add(
           store
@@ -66,13 +110,12 @@ export function RepositoryModel(
               latestByPubkey.set(pubkey, ev ?? undefined);
 
               if (ev) {
+                retainedAnnouncements.set(pubkey, ev);
                 // Subscribe to any newly-discovered co-maintainers.
                 // store.addressable() emits synchronously, so all their
                 // initial states are populated in latestByPubkey before
                 // the loop returns — emit() sees the full picture.
-                for (const mp of getRepoMaintainers(ev)) {
-                  if (!subscribed.has(mp)) subscribe(mp);
-                }
+                discoverFrom(ev, subscriptionsByPubkey.get(pubkey) ?? false);
                 emit();
               } else {
                 // Announcement absent or removed — only re-emit if this is
@@ -85,7 +128,15 @@ export function RepositoryModel(
       }
 
       // Start from the selected maintainer
-      subscribe(selectedMaintainer);
+      subscribe(selectedMaintainer, true);
+      if (deletionEvents) {
+        subs.add(
+          deletionEvents.subscribe((events) => {
+            deletions = events;
+            emit();
+          }),
+        );
+      }
 
       return () => {
         // Unsubscribe all inner store.addressable() subscriptions collected
@@ -94,3 +145,19 @@ export function RepositoryModel(
       };
     });
 }
+
+/**
+ * Cache by stable coordinate scalars and deletion-awareness mode. Hashing the
+ * Observable argument itself is unsafe because RxJS subscriber state is
+ * mutable, which would create duplicate model trees for the same repository.
+ */
+RepositoryModel.getKey = (
+  selectedMaintainer: string,
+  dTag: string,
+  deletionEvents?: Observable<NostrEvent[]>,
+) =>
+  JSON.stringify([
+    selectedMaintainer,
+    dTag,
+    deletionEvents ? "deletion-aware" : "current-only",
+  ]);

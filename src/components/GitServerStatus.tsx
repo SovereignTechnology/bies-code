@@ -1,3 +1,6 @@
+import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
+import { useErrorRetry } from "@/hooks/useErrorRetry";
+import { ErrorRetryAction } from "@/components/ErrorRetryAction";
 import React, { useState, useMemo, useEffect, useRef } from "react";
 import {
   Popover,
@@ -410,6 +413,7 @@ function ServerRow({
   gitCommitterDate?: number;
   pool?: GitGraspPool | null;
 }) {
+  const copyToClipboard = useCopyToClipboard();
   const missingHead = serverStatus.missingHead ?? false;
   const [copied, setCopied] = useState(false);
 
@@ -463,9 +467,10 @@ function ServerRow({
           : "diverged";
 
   const handleCopy = () => {
-    navigator.clipboard.writeText(serverStatus.url);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
+    void copyToClipboard(serverStatus.url, () => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
   };
 
   const npub = isGrasp
@@ -856,6 +861,15 @@ function GitServerPanel({
   gitCommitterDate?: number;
   pool?: GitGraspPool | null;
 }) {
+  const hasReadErrors = Object.values(urlStates).some(
+    (state) => state.status === "error" || state.status === "permanent-failure",
+  );
+  const recovery = useErrorRetry({
+    resourceKey: pool,
+    failed: hasReadErrors,
+    busy: !!pool?.getState().loading || !!pool?.getState().pulling,
+    onRetry: () => pool?.retryReads(),
+  });
   const usesGrasp = graspCloneUrls.length > 0;
 
   const graspStatuses = useMemo(
@@ -875,12 +889,15 @@ function GitServerPanel({
 
   return (
     <div className="w-full p-0">
+      {pool && hasReadErrors && (
+        <div className="px-4 py-3">
+          <ErrorRetryAction recovery={recovery} />
+        </div>
+      )}
       {/* Header */}
       <div className="px-4 py-3 border-b border-border/40">
         <div className="flex items-center gap-2">
-          {usesGrasp && (
-            <GraspLogo className="h-4 w-4 shrink-0 text-primary" />
-          )}
+          {usesGrasp && <GraspLogo className="h-4 w-4 shrink-0 text-primary" />}
           <p className="text-sm font-semibold text-foreground">
             {!usesGrasp
               ? "Git Servers"
@@ -1074,7 +1091,7 @@ export function GitServerStatus({
       </PopoverTrigger>
 
       <PopoverContent
-        className="p-0 overflow-hidden w-[560px]"
+        className="w-[calc(100vw-2rem)] max-w-[560px] overflow-hidden p-0"
         align="end"
         sideOffset={6}
       >

@@ -2,7 +2,7 @@ import { useActiveAccount } from "applesauce-react/hooks";
 import { Link } from "react-router-dom";
 import { Dashboard } from "./Dashboard";
 import RepositoriesPage from "./RepositoriesPage";
-import { RelayStatusBanner } from "./RelayPage";
+import { GraspServiceOverview } from "./RelayPage";
 
 const NODE_RELAY_URL = "wss://git.buildinelsalvador.com";
 const NODE_RELAY_LABEL = "git.buildinelsalvador.com";
@@ -31,7 +31,12 @@ const Index = () => {
       <RepositoriesPage
         relayOverride={[NODE_RELAY_URL]}
         relayLabel={NODE_RELAY_LABEL}
-        relayStatusBanner={<RelayStatusBanner relayUrl={NODE_RELAY_URL} />}
+        relayStatusBanner={
+          <GraspServiceOverview
+            relayUrl={NODE_RELAY_URL}
+            domain={NODE_RELAY_LABEL}
+          />
+        }
         seoTitle="BIES Code - Decentralized Git"
       />
     </div>

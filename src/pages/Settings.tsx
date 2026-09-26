@@ -1,5 +1,6 @@
 import type React from "react";
 import { useState, useCallback, useEffect, useRef } from "react";
+import { useLocation } from "react-router-dom";
 import { useSeoMeta } from "@unhead/react";
 import {
   Card,
@@ -30,7 +31,12 @@ import {
   DEFAULT_NOSTR_CONNECT_RELAYS,
   type RelayCurationMode,
 } from "@/services/settings";
-import { validateGraspServer } from "@/lib/grasp";
+import {
+  graspServiceAddressToRelayUrl,
+  isValidGraspServiceAddress,
+  normalizeGraspServiceAddress,
+  validateGraspServer,
+} from "@/lib/grasp";
 import { use$ } from "@/hooks/use$";
 import { useAccount } from "@/hooks/useAccount";
 import { useUser } from "@/hooks/useUser";
@@ -45,15 +51,23 @@ import {
 } from "@/services/wallet";
 import { NwcQrConnect } from "@/components/zap/NwcQrConnect";
 import { useGraspServers } from "@/hooks/useGraspServers";
-import { usePublish } from "@/hooks/usePublish";
-import { useRobustReplaceableAction } from "@/hooks/useRobustReplaceableAction";
-import { useToast } from "@/hooks/useToast";
+import { usePrivateGitRelays } from "@/hooks/usePrivateGitRelays";
+import { normalizePrivateGitRelayUrls } from "@/lib/private-git-relays";
 import {
-  AddInboxRelay,
-  AddOutboxRelay,
-  RemoveInboxRelay,
-  RemoveOutboxRelay,
-} from "applesauce-actions/actions/mailboxes";
+  useRobustReplaceableAction,
+  type ReplaceablePreflightSnapshot,
+} from "@/hooks/useRobustReplaceableAction";
+import { useRecoveryToast as useToast } from "@/hooks/useRecoveryToast";
+import {
+  AddInboxRelayFromPreflight,
+  AddOutboxRelayFromPreflight,
+  RemoveInboxRelayFromPreflight,
+  RemoveOutboxRelayFromPreflight,
+} from "@/actions/preflightReplaceableActions";
+import {
+  GRASP_LIST_KIND,
+  ReplaceGraspListFromPreflight,
+} from "@/actions/graspListActions";
 import { runner } from "@/services/actions";
 import { cn } from "@/lib/utils";
 import {
@@ -262,11 +276,14 @@ function OutboxRelaysSection() {
 
   if (!account) return null;
 
-  const safeRun = async (action: () => Promise<void>) => {
+  const safeRun = async (
+    action: (snapshot: ReplaceablePreflightSnapshot) => Promise<void>,
+  ) => {
     try {
       await execute(MAILBOXES_KIND, action);
     } catch (err) {
       toast({
+        recovery: { action: () => safeRun(action) },
         title: "Failed to update relay list",
         description:
           err instanceof Error ? err.message : "An unexpected error occurred.",
@@ -290,13 +307,19 @@ function OutboxRelaysSection() {
               key={index}
               relay={outbox}
               onRemove={() =>
-                safeRun(() => runner.run(RemoveOutboxRelay, outbox))
+                safeRun(({ event }) =>
+                  runner.run(RemoveOutboxRelayFromPreflight, event, outbox),
+                )
               }
             />
           ))}
         </div>
         <NewRelayForm
-          onAdd={(relay) => safeRun(() => runner.run(AddOutboxRelay, relay))}
+          onAdd={(relay) =>
+            safeRun(({ event }) =>
+              runner.run(AddOutboxRelayFromPreflight, event, relay),
+            )
+          }
         />
       </CardContent>
     </Card>
@@ -312,11 +335,14 @@ function InboxRelaysSection() {
 
   if (!account) return null;
 
-  const safeRun = async (action: () => Promise<void>) => {
+  const safeRun = async (
+    action: (snapshot: ReplaceablePreflightSnapshot) => Promise<void>,
+  ) => {
     try {
       await execute(MAILBOXES_KIND, action);
     } catch (err) {
       toast({
+        recovery: { action: () => safeRun(action) },
         title: "Failed to update relay list",
         description:
           err instanceof Error ? err.message : "An unexpected error occurred.",
@@ -340,26 +366,30 @@ function InboxRelaysSection() {
               key={index}
               relay={inbox}
               onRemove={() =>
-                safeRun(() => runner.run(RemoveInboxRelay, inbox))
+                safeRun(({ event }) =>
+                  runner.run(RemoveInboxRelayFromPreflight, event, inbox),
+                )
               }
             />
           ))}
         </div>
         <NewRelayForm
-          onAdd={(relay) => safeRun(() => runner.run(AddInboxRelay, relay))}
+          onAdd={(relay) =>
+            safeRun(({ event }) =>
+              runner.run(AddInboxRelayFromPreflight, event, relay),
+            )
+          }
         />
       </CardContent>
     </Card>
   );
 }
 
-const GRASP_LIST_KIND = 10317;
-
 function GraspRelaysSection() {
   const account = useAccount();
   const pubkey = account?.pubkey;
-  const { servers, isFromUserList, isLoading } = useGraspServers(pubkey);
-  const { publishEvent } = usePublish();
+  const { servers, isFromUserList, isLoading, sourceEvent } =
+    useGraspServers(pubkey);
   const { execute } = useRobustReplaceableAction();
   const { toast } = useToast();
 
@@ -368,7 +398,8 @@ function GraspRelaysSection() {
   // ---------------------------------------------------------------------------
 
   // null = no draft open (showing published state)
-  const [draftDomains, setDraftDomains] = useState<string[] | null>(null);
+  const [draftAddresses, setDraftAddresses] = useState<string[] | null>(null);
+  const draftBaseEventId = useRef<string | null>(null);
 
   // Sync draft when the published list changes from underneath us (e.g. first
   // load), but only if the user hasn't started editing yet.
@@ -381,26 +412,35 @@ function GraspRelaysSection() {
     }
   }, [servers]);
 
-  const activeDomains = draftDomains ?? servers.map((s) => s.domain);
+  const activeAddresses =
+    draftAddresses ?? servers.map((server) => server.serviceAddress);
 
   const isDirty =
-    draftDomains !== null &&
-    (draftDomains.length !== servers.length ||
-      draftDomains.some((d, i) => d !== servers[i]?.domain));
+    draftAddresses !== null &&
+    (draftAddresses.length !== servers.length ||
+      draftAddresses.some(
+        (address, index) => address !== servers[index]?.serviceAddress,
+      ));
 
   const openDraft = useCallback(
-    (initial: string[]) => setDraftDomains([...initial]),
-    [],
+    (initial: string[]) => {
+      draftBaseEventId.current = sourceEvent?.id ?? null;
+      setDraftAddresses([...initial]);
+    },
+    [sourceEvent?.id],
   );
 
-  const discardDraft = useCallback(() => setDraftDomains(null), []);
+  const discardDraft = useCallback(() => {
+    draftBaseEventId.current = null;
+    setDraftAddresses(null);
+  }, []);
 
   // ---------------------------------------------------------------------------
   // Add-server input with 1.5 s debounce auto-validation
   // ---------------------------------------------------------------------------
 
-  const [customDomain, setCustomDomain] = useState("");
-  const [customDomainError, setCustomDomainError] = useState<
+  const [customAddress, setCustomAddress] = useState("");
+  const [customAddressError, setCustomAddressError] = useState<
     string | undefined
   >();
   // "idle" | "validating" | "valid" | "invalid"
@@ -409,36 +449,32 @@ function GraspRelaysSection() {
   >("idle");
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const runValidation = useCallback(async (domain: string) => {
+  const runValidation = useCallback(async (address: string) => {
     setValidationState("validating");
-    setCustomDomainError(undefined);
-    const err = await validateGraspServer(domain);
+    setCustomAddressError(undefined);
+    const err = await validateGraspServer(address);
     if (err) {
       setValidationState("invalid");
-      setCustomDomainError(err);
+      setCustomAddressError(err);
     } else {
       setValidationState("valid");
     }
   }, []);
 
-  const handleDomainChange = useCallback(
+  const handleAddressChange = useCallback(
     (raw: string) => {
-      setCustomDomain(raw);
-      setCustomDomainError(undefined);
+      setCustomAddress(raw);
+      setCustomAddressError(undefined);
       setValidationState("idle");
 
       if (debounceRef.current) clearTimeout(debounceRef.current);
 
-      const domain = raw
-        .trim()
-        .toLowerCase()
-        .replace(/^wss?:\/\//, "")
-        .replace(/\/+$/, "");
+      const address = normalizeGraspServiceAddress(raw);
 
-      if (!domain || !/^[a-z0-9.-]+\.[a-z]{2,}$/.test(domain)) return;
+      if (!address || !isValidGraspServiceAddress(address)) return;
 
       debounceRef.current = setTimeout(() => {
-        void runValidation(domain);
+        void runValidation(address);
       }, 1500);
     },
     [runValidation],
@@ -451,20 +487,20 @@ function GraspRelaysSection() {
     };
   }, []);
 
-  const handleAddDomain = useCallback(async () => {
-    const raw = customDomain.trim().toLowerCase();
-    if (!raw) return;
+  const handleAddAddress = useCallback(async () => {
+    const address = normalizeGraspServiceAddress(customAddress);
+    if (!address) return;
 
-    const domain = raw.replace(/^wss?:\/\//, "").replace(/\/+$/, "");
-
-    if (!domain || !/^[a-z0-9.-]+\.[a-z]{2,}$/.test(domain)) {
-      setCustomDomainError("Enter a valid domain (e.g. relay.example.com)");
+    if (!isValidGraspServiceAddress(address)) {
+      setCustomAddressError(
+        "Enter a valid service address (e.g. relay.example.com/grasp)",
+      );
       setValidationState("invalid");
       return;
     }
 
-    if (activeDomains.includes(domain)) {
-      setCustomDomainError("Already in the list");
+    if (activeAddresses.includes(address)) {
+      setCustomAddressError("Already in the list");
       setValidationState("invalid");
       return;
     }
@@ -473,30 +509,44 @@ function GraspRelaysSection() {
     if (debounceRef.current) clearTimeout(debounceRef.current);
 
     if (validationState !== "valid") {
-      await runValidation(domain);
+      await runValidation(address);
       // Re-read state via closure won't work — check error after await
-      const err = await validateGraspServer(domain);
+      const err = await validateGraspServer(address);
       if (err) return; // runValidation already set the error
     }
 
     // Open draft if not already open, then append
-    setDraftDomains((prev) => {
-      const base = prev ?? servers.map((s) => s.domain);
-      return [...base, domain];
+    if (draftAddresses === null) {
+      draftBaseEventId.current = sourceEvent?.id ?? null;
+    }
+    setDraftAddresses((previous) => {
+      const base = previous ?? servers.map((server) => server.serviceAddress);
+      return [...base, address];
     });
-    setCustomDomain("");
-    setCustomDomainError(undefined);
+    setCustomAddress("");
+    setCustomAddressError(undefined);
     setValidationState("idle");
-  }, [customDomain, activeDomains, validationState, runValidation, servers]);
+  }, [
+    customAddress,
+    activeAddresses,
+    validationState,
+    runValidation,
+    servers,
+    draftAddresses,
+    sourceEvent?.id,
+  ]);
 
-  const handleRemoveDomain = useCallback(
-    (domain: string) => {
-      setDraftDomains((prev) => {
-        const base = prev ?? servers.map((s) => s.domain);
-        return base.filter((d) => d !== domain);
+  const handleRemoveAddress = useCallback(
+    (address: string) => {
+      if (draftAddresses === null) {
+        draftBaseEventId.current = sourceEvent?.id ?? null;
+      }
+      setDraftAddresses((previous) => {
+        const base = previous ?? servers.map((server) => server.serviceAddress);
+        return base.filter((candidate) => candidate !== address);
       });
     },
-    [servers],
+    [draftAddresses, servers, sourceEvent?.id],
   );
 
   // ---------------------------------------------------------------------------
@@ -506,22 +556,28 @@ function GraspRelaysSection() {
   const [publishing, setPublishing] = useState(false);
 
   const publishGraspList = useCallback(
-    async (domains: string[]) => {
+    async (addresses: string[], expectedEventId: string | null) => {
       if (!account) return;
       setPublishing(true);
       try {
-        await execute(GRASP_LIST_KIND, async () => {
-          const tags = domains.map((d) => ["g", `wss://${d}`]);
-          await publishEvent({
-            kind: GRASP_LIST_KIND,
-            content: "",
-            tags,
-            created_at: Math.floor(Date.now() / 1000),
-          });
-        });
-        setDraftDomains(null); // close draft on success
+        await execute(
+          GRASP_LIST_KIND,
+          ({ event, outboxes }) =>
+            runner.run(
+              ReplaceGraspListFromPreflight,
+              event,
+              outboxes,
+              addresses.map(graspServiceAddressToRelayUrl),
+            ),
+          { expectedEventId },
+        );
+        draftBaseEventId.current = null;
+        setDraftAddresses(null); // close draft on success
       } catch (err) {
         toast({
+          recovery: {
+            action: () => publishGraspList(addresses, expectedEventId),
+          },
           title: "Failed to update grasp server list",
           description:
             err instanceof Error
@@ -533,16 +589,21 @@ function GraspRelaysSection() {
         setPublishing(false);
       }
     },
-    [account, publishEvent, execute, toast],
+    [account, execute, toast],
   );
 
   const handleSave = useCallback(async () => {
-    await publishGraspList(draftDomains ?? activeDomains);
-  }, [publishGraspList, draftDomains, activeDomains]);
+    await publishGraspList(
+      draftAddresses ?? activeAddresses,
+      draftAddresses === null
+        ? (sourceEvent?.id ?? null)
+        : draftBaseEventId.current,
+    );
+  }, [publishGraspList, draftAddresses, activeAddresses, sourceEvent?.id]);
 
   const handleSaveDefaults = useCallback(async () => {
-    await publishGraspList([...DEFAULT_GRASP_SERVERS]);
-  }, [publishGraspList]);
+    await publishGraspList([...DEFAULT_GRASP_SERVERS], sourceEvent?.id ?? null);
+  }, [publishGraspList, sourceEvent?.id]);
 
   // ---------------------------------------------------------------------------
   // Render helpers
@@ -551,14 +612,17 @@ function GraspRelaysSection() {
   const isInputBusy = validationState === "validating" || publishing;
 
   // The list to render — draft if open, otherwise published
-  const displayDomains = draftDomains ?? servers.map((s) => s.domain);
+  const displayAddresses =
+    draftAddresses ?? servers.map((server) => server.serviceAddress);
 
   // True when the user has a published list that differs from the defaults
-  const publishedDomains = servers.map((s) => s.domain);
+  const publishedAddresses = servers.map((server) => server.serviceAddress);
   const graspIsNonDefault =
     isFromUserList &&
-    (publishedDomains.length !== DEFAULT_GRASP_SERVERS.length ||
-      publishedDomains.some((d, i) => d !== DEFAULT_GRASP_SERVERS[i]));
+    (publishedAddresses.length !== DEFAULT_GRASP_SERVERS.length ||
+      publishedAddresses.some(
+        (address, index) => address !== DEFAULT_GRASP_SERVERS[index],
+      ));
 
   return (
     <Card>
@@ -598,7 +662,7 @@ function GraspRelaysSection() {
         ) : (
           <>
             {/* No user list notice */}
-            {!isFromUserList && draftDomains === null && (
+            {!isFromUserList && draftAddresses === null && (
               <div className="rounded-lg border border-blue-500/20 bg-blue-500/5 px-3 py-2.5 flex items-start gap-2">
                 <Info className="h-4 w-4 text-blue-500 mt-0.5 shrink-0" />
                 <div className="flex-1 space-y-2">
@@ -627,20 +691,21 @@ function GraspRelaysSection() {
 
             {/* Server list (draft or published) */}
             <div className="space-y-2">
-              {displayDomains.map((domain) => {
-                const isDefault = DEFAULT_GRASP_SERVERS.includes(domain);
+              {displayAddresses.map((address) => {
+                const isDefault = DEFAULT_GRASP_SERVERS.includes(address);
                 const isUserPublished =
-                  isFromUserList && servers.some((s) => s.domain === domain);
+                  isFromUserList &&
+                  servers.some((server) => server.serviceAddress === address);
                 const isDraftOnly =
-                  draftDomains !== null &&
-                  !servers.some((s) => s.domain === domain);
+                  draftAddresses !== null &&
+                  !servers.some((server) => server.serviceAddress === address);
                 return (
                   <div
-                    key={domain}
+                    key={address}
                     className="flex items-center gap-2 rounded-md border border-border/50 bg-muted/20 px-3 py-2"
                   >
                     <Server className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                    <span className="text-sm font-mono flex-1">{domain}</span>
+                    <span className="text-sm font-mono flex-1">{address}</span>
                     {isDraftOnly && (
                       <Badge
                         variant="secondary"
@@ -661,13 +726,15 @@ function GraspRelaysSection() {
                       <button
                         type="button"
                         onClick={() => {
-                          if (draftDomains === null) {
-                            openDraft(servers.map((s) => s.domain));
+                          if (draftAddresses === null) {
+                            openDraft(
+                              servers.map((server) => server.serviceAddress),
+                            );
                           }
-                          handleRemoveDomain(domain);
+                          handleRemoveAddress(address);
                         }}
                         className="text-xs text-muted-foreground hover:text-destructive transition-colors px-1"
-                        aria-label={`Remove ${domain}`}
+                        aria-label={`Remove ${address}`}
                       >
                         ✕
                       </button>
@@ -675,7 +742,7 @@ function GraspRelaysSection() {
                   </div>
                 );
               })}
-              {displayDomains.length === 0 && (
+              {displayAddresses.length === 0 && (
                 <p className="text-xs text-amber-600 dark:text-amber-400">
                   No servers selected — add at least one before saving.
                 </p>
@@ -687,14 +754,14 @@ function GraspRelaysSection() {
               <div className="space-y-1.5">
                 <div className="flex gap-2">
                   <Input
-                    placeholder="relay.example.com"
-                    value={customDomain}
+                    placeholder="relay.example.com/grasp"
+                    value={customAddress}
                     disabled={isInputBusy}
-                    onChange={(e) => handleDomainChange(e.target.value)}
+                    onChange={(e) => handleAddressChange(e.target.value)}
                     onKeyDown={(e) => {
                       if (e.key === "Enter") {
                         e.preventDefault();
-                        void handleAddDomain();
+                        void handleAddAddress();
                       }
                     }}
                     className={cn(
@@ -708,8 +775,8 @@ function GraspRelaysSection() {
                     type="button"
                     variant="outline"
                     size="sm"
-                    onClick={() => void handleAddDomain()}
-                    disabled={isInputBusy || !customDomain.trim()}
+                    onClick={() => void handleAddAddress()}
+                    disabled={isInputBusy || !customAddress.trim()}
                     className="h-8 px-2.5 shrink-0"
                   >
                     {validationState === "validating" ? (
@@ -719,12 +786,12 @@ function GraspRelaysSection() {
                     )}
                   </Button>
                 </div>
-                {customDomainError && (
+                {customAddressError && (
                   <p className="text-xs text-red-500 px-0.5">
-                    {customDomainError}
+                    {customAddressError}
                   </p>
                 )}
-                {validationState === "valid" && !customDomainError && (
+                {validationState === "valid" && !customAddressError && (
                   <p className="text-xs text-green-600 dark:text-green-400 px-0.5">
                     Server supports GRASP-01
                   </p>
@@ -749,7 +816,7 @@ function GraspRelaysSection() {
                   type="button"
                   size="sm"
                   onClick={() => void handleSave()}
-                  disabled={publishing || displayDomains.length === 0}
+                  disabled={publishing || displayAddresses.length === 0}
                   className="h-8 text-xs"
                 >
                   {publishing ? (
@@ -764,6 +831,318 @@ function GraspRelaysSection() {
               <p className="text-xs text-muted-foreground">
                 Log in to manage your GRASP server list.
               </p>
+            )}
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function privateRelayInputToUrl(value: string): string {
+  const trimmed = value.trim();
+  const relayUrl = /^wss?:\/\//i.test(trimmed)
+    ? trimmed
+    : graspServiceAddressToRelayUrl(normalizeGraspServiceAddress(trimmed));
+  return normalizePrivateGitRelayUrls([relayUrl])[0];
+}
+
+function PrivateGitRelaysSection() {
+  const account = useAccount();
+  const { state, retry, save } = usePrivateGitRelays();
+  const { toast } = useToast();
+  const [draft, setDraft] = useState<{
+    baseEventId?: string;
+    base: string[];
+    next: string[];
+  } | null>(null);
+  const [input, setInput] = useState("");
+  const [inputError, setInputError] = useState<string>();
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setDraft(null);
+    setInput("");
+    setInputError(undefined);
+    setSaving(false);
+  }, [state.generation, state.sourceEvent?.id]);
+
+  const published = state.relayUrls;
+  const displayed = draft?.next ?? published;
+  const dirty =
+    draft !== null &&
+    (!state.sourceEvent ||
+      draft.base.length !== draft.next.length ||
+      draft.base.some((url, index) => url !== draft.next[index]));
+
+  const edit = useCallback(
+    (update: (urls: string[]) => string[]) => {
+      setDraft((current) => {
+        const base = current?.base ?? [...published];
+        const next = update(current?.next ?? [...published]);
+        return {
+          baseEventId: current?.baseEventId ?? state.sourceEvent?.id,
+          base,
+          next: [...new Set(next)].sort(),
+        };
+      });
+    },
+    [published, state.sourceEvent?.id],
+  );
+
+  const add = useCallback(() => {
+    try {
+      const relayUrl = privateRelayInputToUrl(input);
+      if (displayed.includes(relayUrl)) {
+        setInputError("Already in the list");
+        return;
+      }
+      edit((urls) => [...urls, relayUrl]);
+      setInput("");
+      setInputError(undefined);
+    } catch {
+      setInputError(
+        "Enter a ws:// or wss:// relay URL, or a Git service address",
+      );
+    }
+  }, [displayed, edit, input]);
+
+  const persist = useCallback(async () => {
+    if (!draft) return;
+    setSaving(true);
+    try {
+      await save(draft.next, draft.baseEventId);
+      setDraft(null);
+      toast({
+        title: "Private Git service list updated",
+        variant: "success",
+      });
+    } catch (error) {
+      toast({
+        recovery: { action: () => persist() },
+        title: "Failed to update private Git services",
+        description:
+          error instanceof Error
+            ? error.message
+            : "An unexpected error occurred.",
+        variant: "destructive",
+      });
+    } finally {
+      setSaving(false);
+    }
+  }, [draft, save, toast]);
+
+  return (
+    <Card id="private-git-services" className="scroll-mt-20">
+      <CardHeader>
+        <CardTitle>Private Git services</CardTitle>
+        <CardDescription>
+          GRASP-08, Buzz, and other private repository relays. This list is
+          encrypted to your active Nostr account and its entries are never
+          published as public tags.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {!account ? (
+          <p className="text-xs text-muted-foreground">
+            Log in to decrypt and manage your private Git service list.
+          </p>
+        ) : state.status === "loading" ? (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            Checking and decrypting your private service list...
+          </div>
+        ) : state.status === "unavailable" ? (
+          <>
+            <div
+              className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2.5"
+              role="alert"
+            >
+              <p className="text-sm font-medium">Private list unavailable</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {state.error ??
+                  "The list could not be read safely. Editing is disabled so an unknown list is never replaced with an empty one."}
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="mt-3 h-8 text-xs"
+                onClick={retry}
+              >
+                <RotateCcw className="mr-1.5 h-3 w-3" />
+                Retry now
+              </Button>
+            </div>
+            {state.relayUrls.length > 0 && (
+              <div className="space-y-2">
+                <p className="text-xs text-muted-foreground">
+                  Continuing to use the last successfully decrypted services for
+                  private repository reads. Editing stays disabled until the
+                  current list can be decrypted.
+                </p>
+                {state.relayUrls.map((relayUrl) => (
+                  <div
+                    key={relayUrl}
+                    className="flex items-center gap-2 rounded-md border border-border/50 bg-muted/20 px-3 py-2"
+                  >
+                    <Shield className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                    <span className="min-w-0 flex-1 truncate font-mono text-sm">
+                      {relayUrl}
+                    </span>
+                    <Badge variant="secondary" className="text-[10px]">
+                      last decrypted
+                    </Badge>
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
+        ) : (
+          <>
+            <div className="space-y-2">
+              {displayed.map((relayUrl) => {
+                const isDraftOnly =
+                  draft !== null && !draft.base.includes(relayUrl);
+                return (
+                  <div
+                    key={relayUrl}
+                    className="flex items-center gap-2 rounded-md border border-border/50 bg-muted/20 px-3 py-2"
+                  >
+                    <Shield className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                    <span className="min-w-0 flex-1 truncate font-mono text-sm">
+                      {relayUrl}
+                    </span>
+                    {isDraftOnly && (
+                      <Badge
+                        variant="secondary"
+                        className="h-4 px-1.5 py-0 text-[10px]"
+                      >
+                        new
+                      </Badge>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        edit((urls) =>
+                          urls.filter((candidate) => candidate !== relayUrl),
+                        )
+                      }
+                      disabled={saving}
+                      className="px-1 text-xs text-muted-foreground transition-colors hover:text-destructive disabled:opacity-50"
+                      aria-label={`Remove ${relayUrl}`}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                );
+              })}
+              {displayed.length === 0 && (
+                <div className="rounded-lg border border-dashed px-4 py-6 text-center">
+                  <p className="text-sm text-muted-foreground">
+                    Your encrypted private Git service list is empty.
+                  </p>
+                  {!state.sourceEvent && draft === null && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="mt-3 h-8 text-xs"
+                      onClick={() =>
+                        setDraft({
+                          baseEventId: state.sourceEvent?.id,
+                          base: [],
+                          next: [],
+                        })
+                      }
+                      disabled={saving}
+                    >
+                      Publish encrypted empty list
+                    </Button>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-1.5">
+              <div className="flex gap-2">
+                <Input
+                  value={input}
+                  onChange={(event) => {
+                    setInput(event.target.value);
+                    setInputError(undefined);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      add();
+                    }
+                  }}
+                  disabled={saving}
+                  placeholder="wss://private.example/relay"
+                  className={cn(
+                    "h-8 font-mono text-sm",
+                    inputError && "border-destructive",
+                  )}
+                  aria-invalid={Boolean(inputError)}
+                  aria-describedby={
+                    inputError ? "private-git-relay-input-error" : undefined
+                  }
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={add}
+                  disabled={saving || !input.trim()}
+                  className="h-8 shrink-0 px-2.5"
+                  aria-label="Add private Git service"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+              {inputError && (
+                <p
+                  id="private-git-relay-input-error"
+                  className="px-0.5 text-xs text-destructive"
+                  role="alert"
+                  aria-live="polite"
+                >
+                  {inputError}
+                </p>
+              )}
+              {displayed.length === 0 && (
+                <p className="px-0.5 text-xs text-muted-foreground">
+                  Saving an empty list publishes an encrypted [] replacement.
+                </p>
+              )}
+            </div>
+
+            {dirty && (
+              <div className="flex items-center justify-end gap-2 border-t pt-1">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setDraft(null)}
+                  disabled={saving}
+                  className="h-8 text-xs"
+                >
+                  Discard
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => void persist()}
+                  disabled={saving}
+                  className="h-8 text-xs"
+                >
+                  {saving && (
+                    <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+                  )}
+                  Save encrypted list
+                </Button>
+              </div>
             )}
           </>
         )}
@@ -1050,6 +1429,13 @@ function LightningWalletSection() {
 }
 
 export default function Settings() {
+  const { hash } = useLocation();
+
+  useEffect(() => {
+    if (hash !== "#private-git-services") return;
+    document.getElementById("private-git-services")?.scrollIntoView();
+  }, [hash]);
+
   useSeoMeta({
     title: "Settings - BIES Code",
     description: "Manage relay configurations and application settings.",
@@ -1071,6 +1457,7 @@ export default function Settings() {
       <RelayCurationSection />
       <LightningWalletSection />
       <GraspRelaysSection />
+      <PrivateGitRelaysSection />
       <DiscoveryRelaysSection />
       <DefaultNostrConnectRelaysSection />
       <OutboxRelaysSection />

@@ -1,3 +1,4 @@
+import { useLocation } from "react-router-dom";
 import { useSeoMeta } from "@unhead/react";
 import { useRepoContext } from "./RepoContext";
 import { useProfile } from "@/hooks/useProfile";
@@ -10,8 +11,10 @@ import { CIChecksPanel } from "@/components/ci/CIChecksPanel";
 import { isNonHttpUrl } from "@/lib/git-grasp-pool";
 import { IncompatibleProtocolError } from "@/components/IncompatibleProtocolError";
 import { useActiveAccount } from "applesauce-react/hooks";
+import { useRepositoryCITrust } from "@/hooks/useRepositoryCITrust";
 
 export default function RepoCommitPage() {
+  const location = useLocation();
   const { cloneUrls, commitId, resolved, pubkey, repoId, basePath } =
     useRepoContext();
   const repo = resolved?.repo;
@@ -30,11 +33,18 @@ export default function RepoCommitPage() {
     twitterCard: repoOwnerProfile?.picture ? "summary" : "summary_large_image",
   });
 
-  const { pool } = useGitPool(cloneUrls);
+  const { pool } = useGitPool(cloneUrls, { private: repo?.isPrivate });
 
   // CI checks (ngit-ci kinds 9841/9842) for this commit — shown between the
   // commit header and the diff.
-  const ci = useCIForCommit(commitId, resolved?.repoRelayGroup);
+  const ci = useCIForCommit(
+    commitId,
+    repo?.isPrivate ? undefined : resolved?.repoRelayGroup,
+  );
+  const { coordinatorState, trust } = useRepositoryCITrust(
+    repo?.isPrivate ? undefined : repo,
+    ci?.runs,
+  );
 
   if (!commitId) {
     return (
@@ -76,6 +86,8 @@ export default function RepoCommitPage() {
         headerExtra={
           ci && ci.runs.length > 0 ? (
             <CIChecksPanel
+              key={`${commitId}:${location.key}`}
+              expandOnArrival={location.hash === "#checks"}
               checks={{
                 runs: ci.runs,
                 currentRuns: ci.runs,
@@ -83,6 +95,15 @@ export default function RepoCommitPage() {
                 status: ci.status,
               }}
               canRetry={isMaintainer}
+              trustContext={
+                repo
+                  ? {
+                      repo,
+                      trust,
+                      serviceControls: coordinatorState?.serviceControls,
+                    }
+                  : undefined
+              }
             />
           ) : undefined
         }
